@@ -14,6 +14,9 @@
  * - `encodeTranscript` joins an array of lines instead of growing a string
  *   with `+=` in its loop (rule 12.4: string growth in a loop is the
  *   pattern that exhausted a vat's heap in the survey, reuse.md:296);
+ * - M8 (`designs/m8-interfaces.md` 5.5, S-17): a `tool-result` may carry
+ *   `incomplete: true` and a `compaction` record an `epoch` and a
+ *   `directive`, as the harness's projection writes its markers;
  * - nothing else. Record keys are already a fixed vocabulary (the
  *   `RECORD_FIELDS` table) and pairing is keyed by a `Map`, so the module
  *   meets rule 12.10 as written.
@@ -55,8 +58,8 @@ const MESSAGE_ROLES = harden(['user', 'assistant']);
 const RECORD_FIELDS = harden({
   message: harden(['kind', 'role', 'content', 'providerContext']),
   'tool-call': harden(['kind', 'id', 'name', 'args']),
-  'tool-result': harden(['kind', 'id', 'content', 'failed']),
-  compaction: harden(['kind', 'summary', 'retainedTail']),
+  'tool-result': harden(['kind', 'id', 'content', 'failed', 'incomplete']),
+  compaction: harden(['kind', 'summary', 'retainedTail', 'epoch', 'directive']),
   'native-context': harden(['kind', 'format', 'payload', 'context']),
 });
 
@@ -64,8 +67,8 @@ const RECORD_FIELDS = harden({
 const OPTIONAL_FIELDS = harden({
   message: harden(['providerContext']),
   'tool-call': harden([]),
-  'tool-result': harden(['failed']),
-  compaction: harden(['retainedTail']),
+  'tool-result': harden(['failed', 'incomplete']),
+  compaction: harden(['retainedTail', 'epoch', 'directive']),
   'native-context': harden([]),
 });
 
@@ -74,9 +77,9 @@ const KINDS = harden(Object.keys(RECORD_FIELDS));
 /**
  * @typedef {{ kind: 'message', role: 'user' | 'assistant', content: string, providerContext?: {format: string, payload: string} }} TranscriptMessage
  * @typedef {{ kind: 'tool-call', id: string, name: string, args: string }} TranscriptToolCall
- * @typedef {{ kind: 'tool-result', id: string, content: string, failed?: boolean }} TranscriptToolResult
+ * @typedef {{ kind: 'tool-result', id: string, content: string, failed?: boolean, incomplete?: boolean }} TranscriptToolResult
  * @typedef {TranscriptMessage | TranscriptToolCall | TranscriptToolResult} TranscriptContextRecord
- * @typedef {{ kind: 'compaction', summary: string, retainedTail?: readonly TranscriptContextRecord[] }} TranscriptCompaction
+ * @typedef {{ kind: 'compaction', summary: string, retainedTail?: readonly TranscriptContextRecord[], epoch?: number, directive?: string }} TranscriptCompaction
  * @typedef {{ kind: 'native-context', format: string, payload: string, context: readonly (TranscriptContextRecord | {kind: 'compaction', summary: string})[] }} TranscriptNativeContext
  * @typedef {TranscriptMessage | TranscriptToolCall | TranscriptToolResult | TranscriptCompaction | TranscriptNativeContext} TranscriptRecord
  */
@@ -144,11 +147,23 @@ export const assertTranscriptRecord = candidate => {
     typeof record.failed === 'boolean' ||
       Fail`transcript tool-result ${q('failed')} must be a boolean`;
   }
+  // The harness's projection (M8, `designs/m8-interfaces.md` 5.5): a result
+  // of a turn that did not complete, and the compaction marker's epoch.
+  if (kind === 'tool-result' && Object.hasOwn(record, 'incomplete')) {
+    record.incomplete === true ||
+      Fail`transcript tool-result ${q('incomplete')} must be true`;
+  }
+  if (kind === 'compaction' && Object.hasOwn(record, 'epoch')) {
+    (Number.isSafeInteger(record.epoch) && Number(record.epoch) > 0) ||
+      Fail`transcript compaction ${q('epoch')} must be a positive integer`;
+  }
   const textFields = fields.filter(
     key =>
       ![
         'kind',
         'failed',
+        'incomplete',
+        'epoch',
         'role',
         'retainedTail',
         'context',

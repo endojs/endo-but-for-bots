@@ -150,7 +150,8 @@ export const makePoolProvider = ({
         now,
         label,
         unreachable: unexpected,
-        stream: async function* poolStream({ projection, signal }) {
+        // M8 (S-15): `tools` replaces the request's (the summary call).
+        stream: async function* poolStream({ projection, signal, tools }) {
           const pool = await subscriptions.pool(backend, spec);
           if (pool.state === 'retired')
             throw new ProviderFailure(subscriptionTexts.retired);
@@ -171,7 +172,7 @@ export const makePoolProvider = ({
               : { reasoningEffort: options.reasoningEffort }),
             ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
             ...(system === undefined ? {} : { system }),
-            tools: req.tools ?? [],
+            tools: tools ?? req.tools ?? [],
           });
           const core = /** @type {any} */ (pool.core);
           const ticket = core.forSession(owner);

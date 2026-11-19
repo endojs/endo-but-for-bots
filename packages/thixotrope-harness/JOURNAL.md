@@ -15992,4 +15992,498 @@ wait for the adapter's removal: the manager marks the record released (every cal
 once) and a failed removal is retried at the next attach, rather than holding the delete record at
 step 1 as contract 4.6 says. Commands over 60 s: none (the longest: `tsc` about 3 s, the perf
 script about 35 s).
+### J-12240 2026-11-19 W8.6 image wire translation - built
+Evidence: `877de82567` (`AH/providers/images.js`, first commit: `encodeImageEnvelope`,
+`imageReceiptText`, `imageOf`, `selectImages`, `toolResultImages`, the three wire forms),
+`1f32ef0315` (S-19 in `openrouter.js`, `subscriptions/responses.js`), `10e9b9d6c2` (S-19 and
+S-20 in `anthropic.js`), `01ca519ee9` (`test/adapter/image-wire.test.js`, 11 tests).
+Reading: a `tool-result` is an image only when it did not fail, its call (same id, earlier in the
+same transcript array) is named `viewImage`, and its content is a valid envelope (hosted-agent
+`validate`'s checks: two keys, mime in `imageMediaTypes`, alphabet, padding, 2 MiB); everything
+else, a malformed envelope included, is text and never throws. Per request: the newest 20
+non-incomplete image results go natively; older ones `omittedReceipt`, incomplete ones
+`incompleteReceipt`. Messages API (Anthropic API and Claude pool share `anthropicMessages`): an
+`image` block with base64 source as the `tool_result` content; Responses (Codex pool): an
+`input_image` data URL as the `function_call_output` output; chat (OpenRouter): the receipt in the
+`tool` message and one user message after the run of tool messages with a text label and an
+`image_url` per image (lal's form, one message instead of one per image). Each builder makes
+one `toolResultImages(transcript)` per request and asks it once at its `tool-result` branch, so a
+transcript without `viewImage` results sends byte-for-byte what it sent before (the provider wire
+golden is unchanged for every round). Signature difference from contract 16: the wire forms take
+the `{ text, image? }` form that `toolResultImages` answers, not `(entry, image)`, and
+`chatImageMessages` takes the waiting `[{ id, image }]`, because the receipt variant (omitted or
+incomplete) is decided once per request; no other unit calls them.
+Fit: good. The projection being a plain transcript in Node made this a translation at three
+branches; nothing touches a vat.
+
+### J-12241 2026-11-19 W8.6 the Anthropic catalogue window - built
+Evidence: `10e9b9d6c2`; `m2-w22-catalog.test.js` "an Anthropic row without a context length gets
+the 200,000-token window"; `provider-wire-golden.json` catalogue anthropic rows.
+Reading: `anthropicKind.readModels` maps every read row to `contextLength ??
+contextLimits.anthropicContextTokens` (S-20), so `listModels` rows and `resolveModel` answer
+200,000 and a creation stores it (D-M8-12). Two pinned expectations moved with it, by design:
+the existing Anthropic `resolveModel` assertion and the golden file's two Anthropic catalogue
+rows (each gains `contextLength: 200000`; hand-edited, not regenerated, so no other entry moved).
+The golden file is not in W8.6's owned list: a necessary consequence of S-20.
+Fit: good.
+
+### J-12242 2026-11-19 W8.6 request build cost with images - measured
+Evidence: `01ca519ee9`; a scratch script through `perf/_window.mjs` `runWindow` and
+`perf/_harness.mjs` `summarize`, 10 s windows, Node only, machine under load from three other
+lanes. Body = `JSON.stringify` of the wire's messages, as the providers send it.
+Reading (median ms): one new 2 MiB PNG envelope (no decode cache hit): Messages 6.7 (p95 7.4,
+n 766), Responses 6.8 (p95 7.9, n 744), chat 6.8 (p95 7.8, n 728); twenty 2 MiB images warm:
+130-135 ms (n 74-75), about 6.6 ms per image, nearly all of it the body's stringify of 56 MB.
+Budget `images.requestBuild` <= 15 ms per 2 MiB image: met on all three wires (W8.7 records
+the row). The decode cache (at most 20 envelopes, keyed by the string) saves the parse and
+alphabet check, not the stringify.
+Fit: neutral: base64 in JSON is the wire's own cost; the harness adds little to it.
+
+### J-12243 2026-11-19 W8.6 retained state and bundle - measured
+Evidence: `877de82567`; `node scripts/bundle-guest.mjs` in the shared worktree.
+Reading: retained state of `images.js`: the decode cache (<= 20 entries, the envelope strings
+the context cache already holds, so no new copies) and a `WeakMap` of call names per
+transcript array. No vat module changed: the session program does not include any W8.6 file
+(W8.6 adds 0 bytes; the measured 239,290 includes W8.1's uncommitted work in this worktree).
+Fit: good.
+
+### J-12244 2026-11-19 W8.6 time record - process
+Evidence: first command 2026-11-19T02:23:30Z.
+Reading: over 60 s: the request build measurement 71 s. Adapter tests run directly
+(image-wire, provider-wire-golden, catalog, both API providers, both pool wires, pool,
+provider, manager, fake server: 129 passed). No supervisor started; nothing pushed; no change to
+`packages/thixotrope` or `rust/**`.
+Fit: neutral.
+
+### J-1050 2026-11-19 W8.2 the compaction plan, summary request and hook - built
+Evidence: `4c3738b997`; `resources/agent-host/impl/providers/compaction.js`; tests
+`test/adapter/compaction-plan.test.js` (10), `compaction-summary.test.js` (7),
+`compaction-hook.test.js` (4), helper `test/adapter/_compaction-records.js` (records from the
+real record log, so every record passes its guard).
+Reading: `planCompaction`, `summaryRequest`, `checkSummary`, `compactionHook`, `wireBytes` as
+contract 16 signs them. Refusals answer `{ refuse }` with `compactionSkipTexts`; `summaryRequest`
+passes a plan's refusal through, so the round can chain plan and request. The plan answers two
+fields more than 16 lists, `system` and `tools` (as given), because `checkSummary({ plan,
+summary, toolCalls })` must size the next context with them. Image results are sized as their
+receipt plus `imageSizingBytes` through W8.6's `imageReceiptText` (imported, not copied); only
+results starting with `IMAGE_ENVELOPE_PREFIX` are asked, so a history without images pays one
+`startsWith` per tool result. The previous summary's directive leads the prefix with its summary
+(the plan takes the highest-epoch marker of the whole transcript, sealed part included, since the
+marker may lie after the new boundary). No guest file: the session program is unchanged.
+Fit: good (pure functions over hardened projections).
+
+### J-1051 2026-11-19 W8.2 compaction.plan - measured (under load)
+Evidence: `4c3738b997`; scratch window script over `perf/_window.mjs` `runWindow`/`windowMs`,
+PERF_WINDOW_SCALE 0.25 (15 s windows), load average 8-10 (three other lanes running).
+Reading: `planCompaction` + `summaryRequest`, 400 completed turns (2,803 kept records, 725 KB
+original, request 391 KB): median 9.8 ms, p95 14.7, max 53, n 1,313 (budget 50 ms median).
+1,600 turns (11,203 records, 2.9 MB): median 36.7 ms, p95 41.1, n 393: linear in the kept
+records (three projections and one sizing pass, the group walk stops at the budget).
+Fit: good. The row itself is W8.7's (`perf/compaction.perf.mjs`).
+
+### J-1052 2026-11-19 W8.2 findings for the wiring and the perf file - finding
+Evidence: `4c3738b997`; `projection.js` at `6493d955c7`; `perf/_window.mjs` `runWindow`.
+Reading: (1) The base projection leaves out a settled turn that has no `dispatched` record
+(R4-32's never-dispatched rule); a turn cut by a boundary at a `round-settled` of round > 0 has
+none in the kept records, so after such a compaction its remaining rounds would vanish from the
+context once the turn settles. The plan works around it in its own slices (a `dispatched` marker
+for each turn whose `turn-started` lies before the slice; test "a settled turn cut at a later
+round keeps its remainder in the tail"); the cache's projection needs the same rule (seam S-10,
+W8.3). (2) `projection-hooks.js` importing `compactionHook` closes a cycle
+(`compaction.js` -> `projection.js` -> `projection-hooks.js` -> `compaction.js`); the hook is a
+function declaration so it is bound whichever module loads first; a `const` would throw a TDZ
+error when `compaction.js` is imported first. (3) `runWindow` keeps every operation's result:
+an op that answers a plan (about 1 MB) held 1 GB after 950 samples and gave 10-13 s pauses; the
+perf file must answer nothing from the op.
+Fit: neutral (two harness facts, one projection gap for W8.3).
+
+### J-1053 2026-11-19 W8.2 time record - process
+Evidence: first command 2026-11-19T02:23:30Z.
+Reading: no command over 60 s (the longest, a 25 s measurement window). Commits `4c3738b997`
+and this journal commit; nothing pushed; no change to `packages/thixotrope`, `rust/**` or a
+shared file.
+Fit: neutral.
+
+### J-1030 2026-11-19 W8.1 session compaction built - built
+Evidence: `334d31ae56`, `d329e76af3`; `guest/session/compaction.js`; seams S-5 (`turn.js`), S-6
+(`session.js`), S-7 (`runtime-parts.js` slot lines), S-8 (`turn-import.js`), S-9 (`archive.js`).
+Reading: the `compaction` part decides in `beforeRound` (rules 1-6 of m8-interfaces 4.1),
+appends `compaction-started`, writes `active.compactionAsk` and emits `compacting context`; the
+runner puts the ask into the round request, carries `window.baseFields()` in every `base`, and
+answers `TurnSink.compacted` (crank Y) with the cache's next `{ base, append }` through one
+`sendSince` shared with `roundRequest` (no copy). The part checks the boundary (D-M8-4) and
+records `compaction` (with the turn input as directive when the cut lies inside the turn) or
+`compaction-skipped`. The context window is made in `makeSession` over the record log and
+reaches the runtime (`contextWindow`), the archive (`epoch`), the context source (`boundary`) and
+the import (`observe`). Tests: `context-guards`, `compaction-decision`, `compaction-sink`,
+`compaction-import` (21 tests); the session suites (570 tests over m1a, m1b, m2, m5, turn,
+session, runtime-parts, guards-split) pass unchanged except the two pinned part lists.
+Fit: good. A part writing the ask field of the runner's mutable turn record and the runner
+reading it when it builds the request is enough for D-M8-1: the summary round needs no part-API
+change and no extra crank (crank X sends the ask inside `startRound`; crank Y is the only new
+session delivery).
+
+### J-1031 2026-11-19 W8.1 session program bytes - measured
+Evidence: `node scripts/bundle-guest.mjs` at `6493d955c7` and at `d329e76af3`.
+Reading: session program 233,126 -> 239,354 bytes (+6,228 of M8's 7,000; 776 left for W8.4).
+Per module, comments stripped: `compaction.js` 4,171 (new; the window about 950, the part about
+3,200), `turn.js` +1,375 (crank Y about 600, the `reading` getter about 200, `sendSince`/`baseOf`
+about 150 net, the rest one-line seams), `session.js` +294, `runtime-parts.js` +151,
+`turn-import.js` +59, `archive.js` +27. A first version was 6,602; hoisting the part's functions
+out of the nested `make` (two spaces of indentation per line), inlining `countsOnly` and moving
+the stale-ask clear into the runner saved 374 (later type casts in comments added back 104 line breaks and bytes). The contract's estimate (about 3,800 for W8.1)
+was low: the part's state machine is about 3 KB of plain code after stripping.
+Fit: poor for the budget, neutral otherwise: whitespace and newlines left by stripped comments
+count (about 980 bytes of indentation and 100 of comment line breaks in `compaction.js`).
+
+### J-1032 2026-11-19 W8.1 differences from the contract - finding
+Evidence: `334d31ae56`; `test/unit/m1a-recovery.test.js` "the recovery steps are the exec and
+packages parts, in that order".
+Reading: (1) the part has no `onRecover` (4.6 lists one): recovery settles the turn, so
+`onSettle` clears the state, and the existing recovery-step test pins `['exec', 'packages']`;
+state left by a recovery that settles nothing belongs to a turn no longer current and is dropped
+by the turn-id check. (2) `ContextWindow` gains `seenAt()` (the runner's `lastKnownTime`, wired
+lazily in `makeSession`) because the part needs `CompactionStarted.at` at round r > 0 and may hold
+neither the runner nor the record log. (3) The runner clears `active.compactionAsk` in `invoke`
+before `beforeRound`: an ask is for one round; an ask the adapter left unanswered (an adapter
+without W8.3 streams the round) ends the turn's asks instead of riding on every later request.
+(4) `makeTurnRunner` and `makeTurnImport` take `window` as an option with a default (a window over
+the runner's records; none for the import), so tests that make them alone are unchanged.
+(5) `runtime-parts.test.js`'s WX.1 test listed `compaction` among the parts without a getter;
+the commit that registers the part removes it from that list.
+Fit: neutral.
+
+### J-1033 2026-11-19 W8.1 time record - process
+Evidence: first command 2026-11-19T02:23:29Z.
+Reading: no command over 60 s (the longest, the 570-test session run, about 6 s). No
+integration file, no supervisor, no perf run (W8.1 has no perf row). Commits `334d31ae56`,
+`d329e76af3` and this journal commit; nothing pushed.
+Fit: neutral.
+
+### J-12220 2026-11-19 W8.5 the viewImage adapter tool built - built
+Evidence: `28fe58a0aa` (first commit: the `makeImageTool`, `imageTypeOf` and `imageGuards`
+exports, refusing with `notReadable`), `f3aa873bb5`; `resources/agent-host/impl/tools/view-image.js`;
+`test/adapter/image-tool.test.js` (26 tests, about 1 s).
+Reading: `ImageTool.view({ opId, target, path? })` parses the model's raw path text (a JSON array
+of 1-64 strings of 1-255 units, no `.`/`..`, `/`, `\` or NUL; then the `ImagePath` guard) before
+any call on the target; descends through `openImage(path)` (M6's `Git`/`GitReader`, seam X-1;
+the test fake is built from the environments `GitReader` guard) or `lookup(path)`; calls `size()`
+when listed (over 2 MiB refuses before a read); reads `readBase64` pages into one 2 MiB buffer,
+asking `min(readPageBytes, max + 1 - offset)` so a larger source stops after 2 MiB + 1 bytes and
+a source that honours its ask is refused `tooLarge` there; checks each page (record, string, base64
+alphabet with end padding, length for the ask, decoded length) before decoding; advances by what a
+page decoded (15,360-byte vat pages read to the end); counts empty pages (64 pass, the 65th
+refuses); bounds descent and read together by `readTimeoutMs` through `timers.after`; checks PNG,
+JPEG, WebP magic; stages `encodeImageEnvelope` (W8.6's export, not copied) with the session as
+owner and answers `{ status: 'ok', text: { ...staged, preview: receipt } }`. Every refusal is a
+`failed` outcome with the fixed text; a retired break (exact `HUB_RETIRED_MESSAGE`) from the
+target or the source is `sourceLost`; only a defect rejects. The exo keeps no state. Kill points
+I1-I3 are shown with the blob store's trace hook copying the directory at `rename` and `bind`
+into a second directory, then a new store over it sweeping: I1 nothing on disk while pages are
+read, I2 one `.part` deleted at the next start, I3 one committed unnamed file kept (M13 sweep).
+Fit: good. The adapter is the right place for bytes: one buffer, a fixed page protocol and a
+timer, no vat delivery; the only per-view crank in the session is the tool result it already had.
+
+### J-12221 2026-11-19 W8.5 adapter-only view latency - measured
+Evidence: `592793f9b0`; a scratch script over `perf/_window.mjs` `runWindow` (not a committed perf
+file: the `images.*` rows are W8.7's), `PERF_WINDOW_SCALE=0.17` (10.2 s windows), under the shared
+run lock, load average 6.5-6.7 (other lanes running). In process, a Node `ImageSource` exo built
+with the guard, real blob store with fsync, each staged blob discarded after the sample.
+Reading: `imageTool.view.adapterOnly.1MiB` median 16.2 ms, p95 23.6, n 590;
+`...2MiB` median 23.0 ms, p95 37.1, n 394; `...1MiB.vatPages` (15,360-byte pages, 69 calls)
+median 20.1 ms, p95 31.9, n 460. These exclude the hub hops of a real source and the session's
+result crank, which the `images.view` budget (400 ms) is mostly made of; the tool itself is under
+6 % of that budget.
+Fit: good.
+
+### J-12222 2026-11-19 W8.5 byte-array probe P-B1..P-B4 - measured
+Evidence: `test/spikes/byte-array-passing.test.js` at `592793f9b0` (rows from the identical file
+uncommitted at `79e7c58e37-dirty`), `THIX_HARNESS_SPIKES=1 node scripts/run-lock.mjs --shared`,
+crank budget 50,000,000, one supervisor in throwaway state (`_spike.js` `startHost`), load average
+5.2-5.8, 37 s for the file. Four runs; the rows below are the fourth, the first three agree on
+timings within 10 %.
+Reading:
+- P-B1 (Node answer into a vat): passable **yes**; 1,024 bytes, byte 0 read back, frozen
+  `[object Uint8Array]`, 48.9 ms for the call round trip.
+- P-B2 (built in a vat, answered out): passable **yes** for both `new Uint8Array(buf.sliceToImmutable())`
+  and `Uint8Array.fromBase64(s)` then the same (pass style `byteArray`, 1,024 bytes, first and last
+  bytes right), 25-36 ms. In the vat `Uint8Array.fromBase64` decodes correctly (CC-002 holds).
+- P-B3 (toward the vat, ms per call, median of 3): ByteArray 16 KiB 257.9 ms (15.7 us/byte),
+  32 KiB 427 (13.0), 48 KiB 609.9 (12.4), 60 KiB 770.6 (12.5); 64 KiB refused by the hub with
+  "the message exceeds the inbound frame ceiling of its target" (CC-027), the vat alive after.
+  Base64 text of the same raw bytes: 16 KiB 309.3 ms (18.9 us per raw byte), 32 KiB 547.8 (16.7),
+  45 KiB 756.7 (16.4). Per raw byte a ByteArray costs about 75 % of base64 text toward a vat;
+  per wire unit the two are the same (about 12.5 us). The inbound cost is per byte as fact 2 says
+  (expected about 10 us; measured 12-16 us under load).
+- P-B4 (eight 128 KiB pages between two Node control clients through the hub; a vat only relays
+  the reference): ByteArray 95.6 ms per page (788 ms for 1 MiB), base64 text 132.5 ms per page
+  (1,072 ms): ByteArray 28 % faster. The relay vat's journal grew 0 bytes (no page passed through
+  it). `hub-log.jsonl` grew 0 bytes after each page and 47,127 bytes in all 2 s after 2 MiB had
+  moved (16 pages): about 23 KB per MiB, not proportional to the payload (session-row rewrites),
+  so control-client frames are not persisted.
+Decision (6.6's rule): P-B4 ByteArray >= 20 % faster and P-B2 yes: propose `readBytes(range) ->
+ByteArray` on `ImageSource` to the owner as a later widening (not built in M8). CC-100 stays
+asked: this probe cannot confirm its +2.9-3.0 MB per MiB, because the peers here are control
+clients, a session kind whose frames are not persisted; the spike's number was measured between
+resource adapters, the path M6's X-1 pages take. The survey disagreement (J-0023 against
+`spike-dataref/design-ocapn.md` 7.3) is settled for this build: a ByteArray is passable into and
+out of an Ironhorse vat, as an answer and as an argument, up to the frame ceiling.
+Fit: good for the question asked; the probe is cheap (37 s, one supervisor).
+
+### J-12223 2026-11-19 W8.5 findings and differences from the contract - finding
+Evidence: `f3aa873bb5`, `592793f9b0`.
+Reading: (1) The image guard table lives in `AH/tools/view-image.js` as `imageGuards` (a
+`lazyTable` over `image-guards.js`'s builders with `guest/lib/interfaces.js` `shapes` below it);
+the contract left its place open ("the adapter builds them with `lazyTable` until the fold"). An
+adapter-side `ImageSource` (M6's X-1) can import it instead of building a second table. (2) The
+deadline covers the descent as well as the read (6.2 says "the whole read"): a hanging
+`openImage` or `lookup` must not hold the round either. (3) A source's rejected `size()` and a
+non-count answer are `badPage`; a rejected `readBase64` is `badPage` (6.2 names no text for
+them). (4) A guard-built source cannot omit `size` (the guard lists it) and cannot answer a
+hostile page (its own return guard refuses it), so the no-size and hostile cases use `Far`
+objects, named in the test's header. (5) `Buffer.from` of a ByteArray over the emulated immutable
+buffer reads zeros in Node: the first spike run sent 1,024 zero bytes as base64 that way. Node
+code that turns a ByteArray into a `Buffer` must copy through `.slice()` or keep the mutable
+source; a later `readBytes` in the adapter would need this.
+Fit: neutral; (5) is a trap for any adapter code that receives ByteArrays.
+
+### J-12224 2026-11-19 W8.5 time record - process
+Evidence: first command 2026-11-19T02:23:30Z.
+Reading: no command over 60 s (the longest: each spike run 37-40 s under the shared lock; the
+view smoke 31 s; the package typecheck 3 s). One supervisor per spike run, none exclusive.
+Commits `28fe58a0aa`, `f3aa873bb5`, `592793f9b0` and this journal commit; nothing pushed.
+Fit: neutral.
+
+### J-1070 2026-11-19 W8.4 the viewImage session entry built, not registered - built
+Evidence: `7255a27223`; `guest/session/tools/view-image.js`; `test/unit/view-image-entry.test.js`
+(6 tests, under 1 s).
+Reading: `viewImageEntry` (`site: 'adapter'`, the contract's description, offered when the ports
+carry a `viewImage` tool) reads the closed arguments with the object tools' exported `readArgs`
+(staged arguments refused as too large, unknown keys answer the R3-26 text with the closed
+names), checks `petName` (1-256 units), resolves it through `labelsOf(context).get` (unknown:
+`unknownLabel`; a stored JSON value: `badPetName`), and calls `E(tool).view({ opId, target,
+path? })` with the bound object and the model's raw `path` span (never parsed in the vat). An ok
+outcome calls `runtime.compaction.imageSeen(turnId)` (guarded: the M5 stand-in tables give an
+empty part); a failed outcome passes through unchanged; a rejection is left to the turn runner,
+whose `onToolError` runs recovery for an adapter-site restart signal. The fake `ImageTool` in
+the test is built with the adapter's `imageGuards.ImageTool`. The entry is NOT in `toolTable`:
+registering it does not fit the lane's session-program cap (J-1071), so the two slot lines in
+`tool-table.js` and the pinned name lists of `m5-w53-labels.test.js` wait for the PM.
+Fit: good for the behaviour (the vat passes an object and the model's text; no byte, mime type or
+parsed path enters it); poor for the bundle budget.
+
+### J-1071 2026-11-19 W8.4 session program bytes - measured
+Evidence: `node scripts/bundle-guest.mjs session` at `7255a27223` (239,354 bytes, the entry not
+imported) and on scratch copies of `guest/` with `--guest-root`.
+Reading: the M8 lane's 7,000 over 233,126 leaves 772 bytes after W8.1 (239,354). Registered as
+committed (two lines in `tool-table.js`): 244,311 bytes, +4,957 (lane total +11,185, 4,185 over
+its 7,000). Per module, comments stripped: `tools/view-image.js` 1,779, `guards/images.js` 1,570
+(first import into the session program: the description alone is about 1,100); the rest, about
+1,600, is the bundler's per-module wrapper (two new modules, about 800 each). A variant with the
+vat's three constants (description, `badPetName`, the 256 bound) inlined into the entry, so
+`guards/images.js` stays out of the bundle: 242,675 bytes, +3,321, still 2,549 over. No
+behaviour-preserving variant fits 772: the model-facing description must be in the vat
+(`ToolTableEntry.describe()` takes no ports, so it cannot be read from the port record). Note:
+`milestones.md` (the WX.1 caps paragraph) gives the context-window lane 3,500 over 233,126; this
+unit's task gave 7,000; W8.1's +6,228 already passes the former.
+Fit: poor. The per-module wrapper (about 800 bytes) makes a small vat module cost about twice
+its stripped source.
+
+### J-1072 2026-11-19 W8.4 differences from the contract - finding
+Evidence: `7255a27223`; `test/unit/m5-w53-args.test.js` "the specs follow the contract names, in
+order"; `test/unit/m5-w53-labels.test.js` (the pinned `toolTable` and `builtInToolNames` lists).
+Reading: (1) S-10d not applied: `argSpecs` in `tool-args.js` is pinned field for field to
+`toolArgumentNames` of the shared guards, which has no `viewImage` entry (and may not be edited
+by a lane), so `argSpecs.viewImage` would throw in that test; the spec lives in the entry module
+(two fields, the names of `viewImageArgumentNames`). (2) S-10b not applied: the cap (J-1071).
+When it is applied, `m5-w53-labels.test.js` must add `viewImage` after `adoptTool` in both pinned
+lists in the same commit. (3) The retired-break case is proven at the entry (it rejects with the
+break unchanged, `isRestartSignal` holds, `site` is `adapter`), not in a session run: the session
+test helpers (`_m2-queue-session.js`, the W5.3 file-local maker) offer no port tools or
+endowments; W8.7's "kill while reading" covers it end to end.
+Fit: neutral.
+
+### J-1073 2026-11-19 W8.4 time record - process
+Evidence: first command 2026-11-19T02:36:54Z, last 2026-11-19T02:42:46Z.
+Reading: no command over 60 s (the package typecheck about 2 s; the unit test under 1 s). No
+integration file, supervisor or perf run (W8.4 has no perf row). Commit `7255a27223` and this
+journal commit; nothing pushed.
+Fit: neutral.
+
+### J-12200 2026-11-19 W8.3 the adapter's compaction step and its seams - built
+Evidence: `546ad9fab5` (behaviour), `f419a604f6` (tests); new
+`resources/agent-host/impl/providers/compaction-round.js`; seams S-10 (`projection.js`), S-11
+(`projection-hooks.js`), S-12 (`archive/store.js`), S-13 (`context-cache.js`), S-14
+(`endpoint.js`, `index.js`), S-15 (`round.js`, `api.js`, `subscriptions/provider.js`), S-16
+(`scripted.js`), S-17 (`guest/lib/transcript-records.js`), S-18 (`index.js`). New tests:
+`test/adapter/compaction-round.test.js` (14), `context-cache-compaction.test.js` (6),
+`compaction-scripted.test.js` (2), `image-tool-offered.test.js` (1), helper
+`test/adapter/_compaction-session.js`.
+Reading: a round whose request carries `compaction` runs step 2b after dispatch: the plan over
+the cache's plan input (`planInputOf`, kept once per projection when the endpoint prepares a
+request with an ask), the summary on the backend's own stream with `tools: []` (deltas not
+published, a tool call refuses, the text kept to one piece past `summaryMaxBytes`), the checks,
+the summary staged pending and named right before `compacted`, then `prepare` again with the
+session's `{ base, append }`. Skips report `skipped` and stream uncompacted; a failed summary
+call fails the round with the provider's fixed text; a stop, `go: false` or a break sends
+nothing more. The cache rebases in place (records and texts below the boundary and the whole
+sealed part dropped, then an ordinary append; `archive.compacted` off the path) and, on a
+rebuild with `epoch > 0`, reconciles the manifest first and starts the tail at max(`sealedTo`,
+boundary); `store.compacted` returns at once when the manifest agrees. The projection turns a
+`compaction` record into a marker at the end of its turn, marks results of turns settled other
+than `completed` `incomplete`, and counts a turn cut by the boundary as dispatched. Every kind's
+ports carry `viewImage` after the kind's tools. The scripted double answers `scriptedSummary`
+with no usage and logs its `context` line after the compaction (one line per round).
+Tests (direct, `THIX_AGENT=W8.3`): the four new files 23 tests and the affected suites
+(projection, cache, archive store, plan, hook, summary, oracle, scripted, Anthropic, OpenRouter,
+pools, wires, images, agent host, catalogue) 275 tests in one run, 62 s; all pass.
+Fit: good (see J-12203).
+
+### J-12201 2026-11-19 W8.3 cache prepares around a compaction - measured
+Evidence: scratch script over `perf/_window.mjs` `runWindow`/`windowMs` and `perf/_harness.mjs`
+`summarize` at `f419a604f6`, Node only (no supervisor), `PERF_WINDOW_SCALE=0.15` (9 s windows),
+a 400-turn session (about 2,800 records, about 1.1 KB of text a turn), under load from other
+lanes (load average 2.3-2.7).
+Reading: `cache.prepare.inStep` (one record appended, no ask) median 2.34 ms, p95 3.90, n 2,000;
+`cache.prepare.planInput` (the same with the plan input kept) median 3.30 ms, p95 4.97, n 2,000:
++1.0 ms on compaction rounds only (the slice and harden of the kept records); the rebase prepare
+after `compacted` median 2.16 ms, p95 4.63, n 398, 0 vat pages, 398 rebases, 1 rebuild (the
+first prepare) - inside the contract's `compaction.prepareAfter` budget (15 ms, 0 pages) with
+room. Rounds that do not compact are unchanged: no new message, crank or page; the only cost on
+them is one `next.compaction` read in the endpoint. Session program: W8.3 adds 0 bytes (no vat
+module changed; `transcript-records.js` is not in the session bundle); `node
+scripts/bundle-guest.mjs session` answers 239,354 at `f419a604f6`, the same as at W8.4's
+`7255a27223`.
+Fit: good.
+
+### J-12202 2026-11-19 W8.3 differences from the contract - finding
+Evidence: `546ad9fab5`, `f419a604f6`; `corepack yarn eslint` (`import/no-cycle` is on).
+Reading: (1) Import cycles. `projection.js -> projection-hooks.js -> compaction.js ->
+projection.js` (S-11) fails `import/no-cycle`; `projection.js` no longer imports the hook table:
+`projectRecords`' default `hooks` is now `[]` (every product caller already passed its hooks;
+the context cache runs `projectionHooks` once over sealed part and tail), so only tests that
+relied on the empty default see the change, with identical output for transcripts without
+markers. `round.js <-> compaction-round.js` likewise: `compactBeforeRound` does not import
+`round.js`; its caller resolves the system text (`systemTextOf`) and passes `system` and
+`failureOf(error)` (a `ProviderFailure`'s reason, else the kind's unexpected text). (2) The
+signature therefore has three options beyond the contract's: `system`, `failureOf`, and
+`label` (with it the result carries `servedBy`; the scripted double passes none). (3) The
+summary is staged with `stagePending` and named (`commit`) right before `compacted`, not with
+`stage`: a stop between the two deletes the `.part` (K3) instead of leaving a named orphan. (4)
+K3 and K4 are driven by faults of the fake session (`beforeCompacted`/`afterCompacted` in
+`_compaction-session.js`) and the blob store's trace hook, not by a fault hook in
+`compaction-round.js` (rule 4: no product branch only tests take). (5) A plan that throws (a
+defect) is reported `skipped` with `notCached` and logged `compaction-plan-failed` by error
+class. (6) Existing tests changed by the seams: `m1b-context-cache.test.js` pins
+`projectionHooks` to `[compactionHook]`; `m1a-agent-host.test.js` and
+`m4-provider-wiring.test.js` expect `viewImage` after the kind's tools. (7) `incomplete` changes
+the projection of every tool result of a failed, cancelled or outcome-unknown turn: a
+`context.jsonl` written before M8 lacks it, so a rebuild from it differs from an incremental
+projection by that flag until the file is rewritten; only the image receipts read it, and no
+image result predates M8. (8) The plan's own `dispatched` marker in `compaction.js`
+`projectSlice` is now redundant with the projection's cut-turn rule (W8.2's file, left).
+Fit: neutral.
+
+### J-12203 2026-11-19 W8.3 fit - finding
+Evidence: `context-cache-compaction.test.js` (the property: 3 seeds x 40 turns, 15-19 compactions
+each, every one a rebase, 78-87 comparisons of incremental, rebuild and oracle per seed),
+J-12201.
+Reading: what suits Thixotrope: the vat's base is the one truth and every adapter structure is a
+cache of it (the entry, the manifest, `context.jsonl`), so a restart at any of K3-K6 is a
+rebuild that reconciles, never a repair; the answered `compacted` call carries the next
+`{ base, append }`, so the rebase needs no vat page and the summary costs exactly one extra
+session delivery. What does not: the archive's `context.jsonl` stores per-segment projections,
+so a projection change (here `incomplete`) silently differs from files written before it; and
+the shared index makes the import graph a hazard (two cycles the contract's seams implied).
+Fit: good.
+
+### J-12204 2026-11-19 W8.3 time record - process
+Evidence: first command 2026-11-19T02:39:24Z, last 2026-11-19T03:06Z.
+Reading: commands over 60 s: the affected adapter suites (17 files, 62 s; 26 files, 62 s). No
+integration file, supervisor or run lock; no exclusive mode. Commits `546ad9fab5`, `f419a604f6`
+and this journal commit; nothing pushed.
+Fit: neutral.
+
+### J-12260 2026-11-19 W8.7 compaction through the daemon - built
+Evidence: `544da7f5e0`, `c0e2b185d6`; new `test/integration/_compaction.js` (fake provider
+server, a Secret read by an Anthropic API backend, turns through the Composer, the server's view
+of each model request), `compaction.test.js` (2 tests, 101 s held), `compaction-restart.test.js`
+(1 test, 126 s), `compaction-archive.test.js` (2 tests, 184.5 s); all in the regression list
+`context`; `test/integration-runner.test.js` now expects the group lanes' lists in `milestones`.
+Reading: acceptance 1 (Anthropic fake server at 150,000 of 200,000 and scripted at 80 of 100),
+2, 7, 8, 9, 10, 15 and 17 pass end to end, and kill points K1, K2 and K7 (with K5's outcome)
+through SIGKILL of the supervisor. The 300-turn session is imported (`writeSyntheticExport`);
+no test replays turns. One kill serves two sessions at once (K1 scripted and K2 Anthropic). The
+summary call reaches the server with no tools and the R4-36 instruction; the next round's first
+message is the summary as an assistant message; `getUsage()` charges 3,000 + 2,000 input tokens
+and reads the real round's 2,010.
+Fit: good. The vat records and the adapter computes; nothing in the tests needed a vat call
+beyond the public objects.
+
+### J-12261 2026-11-19 W8.7 behaviour found while testing - finding
+Evidence: `compaction-restart.test.js`, `compaction.test.js` at `c0e2b185d6`.
+Reading: (1) After a kill, the session's reading is still the last real round's, so the next
+turn asks again: after K2 it plans again from boundary 0 (the test refuses that summary with an
+empty answer, `invalidSummary`, and checks the round is uncompacted); after K7 the only work
+between the boundary and the new turn is the unanswered turn, and the plan refuses with
+`headroomExceeded` before any summary call (step 5 is checked before step 8's
+`nothingToSummarize`). Correct per contract 4.1 and 5.2, but every turn after a crash at 70 %
+spends one plan. (2) A short history at 75 % (one short turn) also refuses `headroomExceeded`
+with no call: the fixed parts (system prompt and tools) are most of the bytes. (3) No defect was
+found in W8.1-W8.6's code by these runs. Fixed in passing: a type error in
+`test/spikes/byte-array-passing.test.js` (W8.5) that failed the package `tsc`.
+Fit: neutral.
+
+### J-12262 2026-11-19 W8.7 recorded perf pass `context` - measured
+Evidence: `corepack yarn perf:pass context` at `1881601aab`, exclusive, crank budget 50,000,000,
+load 1.9-3.2; templates first in shared slots (m1a 595 s, of it waiting on another lane's
+exclusive `perf-mail`; exec 118, pool 113, m4 112, m5o 117, m3-300 166 s, all rebuilt); files
+790 s of wall, 690.9 s held: compaction 308 s (exit 1), images 52, session 179, turn 131, exec
+116.
+Reading: `compaction.plan` median 8.7 ms, p95 12.4, n 2,002, 400 turns, 679,123 bytes (budget
+50). `compaction.overhead` median 116 ms, p95 290, n 89 compacting turns in 60 s (budget 300;
+plain round-start to request 39 ms). `compaction.record` gate: 89 `compacted` deliveries for 89
+compactions; per turn every other delivery kind equal to a plain turn's (enqueueOnce,
+dispatching, getStatus, roundFinal, fulfill, 1 each); 3.1 extra frames per compacting turn of
+which 1 is `compacted` and about 2.1 GC frames (gc-answers 2.63 against 1.52, gc-exports 1.96
+against 0.93). `compaction.replyToRequest` median 85 ms (crank Y's round trip and the
+re-prepare; the prepare alone 2.16 ms adapter-level, J-12201). `compaction.rebuild` median
+564 ms, n 8, budget 359 x 1.25: miss (J-12263). `images.requestBuild` Messages 8.7 ms,
+Responses 9.1 ms per new 2 MiB image (budget 15). `images.manyInOneRound` 64 image results: 20
+native, 44 receipts, 294 ms, a 56 MB body. Cross-check: `session.program` 239,354 bytes (limit
+270,336), `session.createCold` 7,220 ms (T3-CLOSE 6,379; the group's base grew 20,642 bytes in
+WX.1 and this lane 6,228), `turn.start` 116 ms with 2, 3 and 1 deliveries (start, round,
+lease: unchanged, so a turn that does not compact gains nothing), exec rows pass.
+Fit: good for the plan and the gate; the extra GC frames are a cost of the answered call, not of
+compaction's design.
+
+### J-12263 2026-11-19 W8.7 `compaction.rebuild` miss - finding
+Evidence: J-12262's row; smokes under load 553 and 586 ms.
+Reading: the first prepare after a clean restart of a compacted 300-turn session: 52 ms in the
+first cycle, then 564-587 ms in each later cycle (every cycle adds one plain 6 KB turn).
+Likely cause (not proven): after an accepted compaction the cache's sealed part is empty and
+`context.jsonl` holds nothing past the boundary, so a rebuild pages every kept record from the
+boundary out of the session vat; M2's 200-turn budget assumed the sealed part comes from the
+file. Why the first cycle is fast is not explained. Budget kept; the lane's review should trace
+one rebuild (`timing` of the context line) before the merge.
+Fit: poor here, until traced.
+
+### J-12264 2026-11-19 W8.7 what was not built - finding
+Evidence: J-1071 (W8.4), `guest/session/tool-table.js` slot `viewImage` empty.
+Reading: `view-image.test.js` (acceptance 3, 14's "the turn continues", 16, I4 and "kill while
+reading") and the rows `images.view`, `images.viewFromVat`, `images.frameIntoVat` and
+`images.contextPrepare` need the session's `viewImage` entry in `toolTable`; registering it
+puts the session program at 244,311 bytes (+4,957, the lane at +11,185 of its 7,000). Not
+written: a test gated on a registration that does not exist cannot be checked. `compaction.flat`
+is not measured: it needs the 5,000-turn long-session template, rebuilt after this lane's guest
+change (about 8 minutes in a shared slot).
+Fit: poor for the budget, as J-1071 found.
+
+### J-12265 2026-11-19 W8.7 time record - process
+Evidence: first command 2026-11-19T03:07:04Z.
+Reading: commands over 60 s: integration runs 141 s (first try), 115 s (two files at once),
+112 s, 185 s, 126 s; perf smokes 113 s and about 120 s (shared, PERF_WINDOW_SCALE 0.25); the
+recorded pass 2,008 s with templates (1,218 s of it the templates, most waiting for another
+lane's exclusive run). Commits `544da7f5e0`, `c0e2b185d6`, `1881601aab`, `b894394568` and this
+journal commit; nothing pushed.
 Fit: neutral.

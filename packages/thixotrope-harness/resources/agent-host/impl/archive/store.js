@@ -1508,13 +1508,16 @@ export const makeArchiveStore = ({
         : undefined,
     /**
      * The M8 hook (4.12): a new epoch and compaction boundary; the persisted
-     * projection is rewritten from the boundary.
+     * projection is rewritten from the boundary. A manifest that already
+     * has them is left alone (M8 S-12: the context cache reconciles on
+     * every rebuild of a compacted session).
      * @param {{ key: string, epoch: number, boundary: number }} change
      */
     compacted: async ({ key, epoch, boundary }) => {
       const st = await stateOf(key);
       await queued(st, async () => {
         const manifest = await loadManifest(st);
+        if (manifest.epoch === epoch && manifest.boundary === boundary) return;
         manifest.epoch = epoch;
         manifest.boundary = boundary;
         await writeManifest(st);

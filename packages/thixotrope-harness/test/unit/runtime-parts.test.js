@@ -29,14 +29,14 @@ const runtimeOf = parts =>
     parts: harden(parts),
   });
 
-test('the table: powers, inspector, grants, exec, packages, environment; all required', t => {
+test('the table: powers, inspector, grants, exec, packages, environment, compaction; all required', t => {
   t.deepEqual(
     runtimeParts.map(part => part.name),
-    ['powers', 'inspector', 'grants', 'exec', 'packages', 'environment'],
+    ['powers', 'inspector', 'grants', 'exec', 'packages', 'environment', 'compaction'],
   );
   t.deepEqual(
     [...requiredParts],
-    ['powers', 'inspector', 'grants', 'exec', 'packages', 'environment'],
+    ['powers', 'inspector', 'grants', 'exec', 'packages', 'environment', 'compaction'],
   );
   const runtime = /** @type {any} */ (runtimeOf(runtimeParts));
   for (const name of requiredParts) t.truthy(runtime[name]);
@@ -218,7 +218,7 @@ test('the context window option is the runtime member, undefined by default (WX.
   });
   t.is(runtime.contextWindow, contextWindow);
   // The parts still to come have no getter yet.
-  for (const name of ['compaction', 'inbox', 'subagents']) {
+  for (const name of ['inbox', 'subagents']) {
     t.false(name in runtime, name);
   }
 });

@@ -57,7 +57,8 @@
  * Usage (R4-33): `usageFromAnthropic` of `message_start` merged with
  * `message_delta`; the window is 0 here: a configured window comes from the
  * session's `contextLength` (open decision 13; seam 3 of m2-interfaces.md
- * 2.4), since the API reports none.
+ * 2.4), since the API reports none; the catalogue gives every row
+ * `contextLimits.anthropicContextTokens` for it (`withWindow`, M8).
  *
  * Native context (R4-31): the round's thinking blocks as JSON text
  * `{ v: 1, model, textDigest, blocks }`, staged by the round driver into
@@ -80,8 +81,10 @@ import { createHash } from 'node:crypto';
 import { texts, textOf } from '../../../../guest/lib/interfaces.js';
 import { limits } from '../../../../guest/lib/limits.js';
 import { usageFromAnthropic } from '../../../../guest/lib/token-usage.js';
+import { contextLimits } from '../../../../guest/lib/guards/context.js';
 /* eslint-enable import/no-relative-packages */
 import { NATIVE_CONTEXT_FORMAT } from '../projection.js';
+import { anthropicToolResultContent, toolResultImages } from './images.js';
 import {
   bodyChunks,
   boundedChunks,
@@ -232,7 +235,8 @@ const replayedThinking = (providerContext, model, text) => {
  * projection.js), consecutive messages of one role joined: a user message,
  * an assistant message with its native context's thinking blocks (when they
  * match), its text and the round's `tool_use` blocks, then one user message
- * with the `tool_result` blocks (`is_error` when failed). A `tool_use`
+ * with the `tool_result` blocks (`is_error` when failed; a `viewImage`
+ * result as an image block, `images.js`). A `tool_use`
  * whose result is missing gets `texts.toolOutcomeUnknown` as an error
  * result, since the API refuses a call without its result (R4-32).
  * @param {readonly any[]} transcript
@@ -252,6 +256,8 @@ export const anthropicMessages = (transcript, model) => {
   /** Calls of the latest assistant message still waiting for a result. */
   /** @type {string[]} */
   let waiting = [];
+  // M8: viewImage results as image blocks (images.js, seam S-19).
+  const images = toolResultImages(transcript);
   const answerWaiting = () => {
     if (waiting.length === 0) return;
     const user = open('user');
@@ -298,7 +304,7 @@ export const anthropicMessages = (transcript, model) => {
       // A result without its call is dropped.
       if (at >= 0) {
         waiting.splice(at, 1);
-        const content = String(record.content ?? '');
+        const content = anthropicToolResultContent(images(record));
         open('user').content.push({
           type: 'tool_result',
           tool_use_id: id,
@@ -883,6 +889,18 @@ export const readAnthropicModels = ({ baseUrl, key, fetch, timeoutMs }) =>
   });
 harden(readAnthropicModels);
 
+/**
+ * A catalogue row with a context window: the API's listing reports none, so
+ * a row without one gets `contextLimits.anthropicContextTokens` (open
+ * decision 13, R4-37; contract D-M8-12), which a creation stores as the
+ * session's `contextLength` and compaction reads.
+ * @param {import('./catalog-core.js').CatalogModel} model
+ */
+const withWindow = model =>
+  model.contextLength === undefined
+    ? harden({ ...model, contextLength: contextLimits.anthropicContextTokens })
+    : model;
+
 /** The `backendKinds` entry (`kinds.js`). */
 export const anthropicKind = harden({
   kind: 'anthropic',
@@ -896,6 +914,9 @@ export const anthropicKind = harden({
   /** @type {import('./kinds.js').BackendKind['readModels']} */
   readModels: ({ spec, fetch }) => {
     const baseUrl = providerBaseUrl(spec.baseUrl, ANTHROPIC_BASE_URL);
-    return key => readAnthropicModels({ baseUrl, key, fetch });
+    return key =>
+      readAnthropicModels({ baseUrl, key, fetch }).then(models =>
+        harden(models.map(withWindow)),
+      );
   },
 });

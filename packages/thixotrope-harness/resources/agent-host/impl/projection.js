@@ -20,6 +20,15 @@
  * a `Dispatched` record (never dispatched, `interrupted`) is left out. The
  * turn being run has no `TurnSettled` yet and is always in.
  *
+ * M8 (`designs/m8-interfaces.md` 5.5, D-M8-5): a `compaction` record becomes
+ * a marker `{ kind: 'compaction', epoch, summary, directive? }` at the end
+ * of its turn's output (the hook in `projection-hooks.js` puts the latest
+ * summary first and drops every marker); `compaction-started` and
+ * `compaction-skipped` project to nothing; a tool result of a turn settled
+ * with a status other than `completed` carries `incomplete: true` (R4-32,
+ * read by `providers/images.js`); a turn whose `TurnStarted` lies before
+ * the records (cut by the boundary) counts as dispatched.
+ *
  * Pure: the result depends only on the records (grouped by turn and round)
  * and the texts of their staged fields, so a cache rebuilt from pages
  * projects exactly what the incremental cache does (adapter property test).
@@ -32,7 +41,6 @@
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { isStaged } from '../../../guest/session/staging.js';
 /* eslint-enable import/no-relative-packages */
-import { projectionHooks } from './projection-hooks.js';
 
 /** `providerContext.format` of a replayed native context (opaque payload). */
 export const NATIVE_CONTEXT_FORMAT = 'native-context';
@@ -52,8 +60,11 @@ export const NATIVE_CONTEXT_FORMAT = 'native-context';
  * @property {any} started
  * @property {boolean} dispatched
  * @property {boolean} settled
+ * @property {boolean} incomplete settled with a status other than
+ *   `completed` (R4-32: its image results go as receipts)
  * @property {Map<number, { text?: any, nativeContext?: any, intents?: any[] }>} rounds
  * @property {Map<string, any>} results by op id
+ * @property {any[]} markers its `compaction` records (M8)
  */
 
 /**
@@ -62,9 +73,12 @@ export const NATIVE_CONTEXT_FORMAT = 'native-context';
  * @param {object} options
  * @param {Map<any, string>} options.texts the text of every staged field
  * @param {readonly import('./projection-hooks.js').ProjectionHook[]} [options.hooks]
+ *   run in order over the result (default none: the context cache runs
+ *   `projection-hooks.js`'s table once over the sealed part and the tail;
+ *   M8's hook imports this module, so this module does not import it)
  * @returns {Projection}
  */
-export const projectRecords = (records, { texts, hooks = projectionHooks }) => {
+export const projectRecords = (records, { texts, hooks = [] }) => {
   /** @param {any} field */
   const textOf = field => {
     if (!isStaged(field)) return field;
@@ -78,14 +92,18 @@ export const projectRecords = (records, { texts, hooks = projectionHooks }) => {
   for (const record of records) {
     let group = turns.get(record.turnId);
     if (group === undefined) {
-      // A turn's first record is its TurnStarted (records.js); a turn cut
-      // by the compaction boundary (M8) starts without one.
+      // A turn's first record is its TurnStarted (records.js). A turn cut
+      // by the compaction boundary (M8) starts without one: a boundary is
+      // a TurnStarted or a later round's RoundSettled (D-M8-4), so a cut
+      // turn reached a provider and counts as dispatched.
       group = {
         started: undefined,
-        dispatched: false,
+        dispatched: record.kind !== 'turn-started',
         settled: false,
+        incomplete: false,
         rounds: new Map(),
         results: new Map(),
+        markers: [],
       };
       turns.set(record.turnId, group);
     }
@@ -107,6 +125,10 @@ export const projectRecords = (records, { texts, hooks = projectionHooks }) => {
         break;
       case 'turn-settled':
         group.settled = true;
+        group.incomplete = record.status !== 'completed';
+        break;
+      case 'compaction':
+        group.markers.push(record);
         break;
       case 'partial': {
         const r = round(record.round);
@@ -126,61 +148,77 @@ export const projectRecords = (records, { texts, hooks = projectionHooks }) => {
         group.results.set(record.opId, record);
         break;
       default:
-        // turn-resolved: an acknowledgement, not dialogue.
+        // turn-resolved: an acknowledgement, not dialogue;
+        // compaction-started and compaction-skipped: no context (M8).
         break;
     }
   }
   /** @type {any[]} */
   let transcript = [];
-  // Never-dispatched turns (settled without Dispatched) are left out.
-  const sent = [...turns.values()].filter(g => g.dispatched || !g.settled);
-  for (const group of sent) {
-    if (group.started !== undefined) {
-      transcript.push({
-        kind: 'message',
-        role: 'user',
-        content: textOf(group.started.input),
-      });
-    }
-    const order = [...group.rounds.keys()].sort((a, b) => a - b);
-    for (const n of order) {
-      const r = /** @type {any} */ (group.rounds.get(n));
-      const content = r.text === undefined ? '' : textOf(r.text);
-      const native =
-        r.nativeContext === undefined ? '' : textOf(r.nativeContext);
-      if (content !== '' || native !== '') {
-        /** @type {any} */
-        const message = { kind: 'message', role: 'assistant', content };
-        if (native !== '') {
-          message.providerContext = {
-            format: NATIVE_CONTEXT_FORMAT,
-            payload: native,
-          };
-        }
-        transcript.push(message);
-      }
-      const intents = r.intents ?? [];
-      for (const intent of intents) {
+  for (const group of turns.values()) {
+    // Never-dispatched turns (settled without Dispatched) are left out.
+    if (group.dispatched || !group.settled) {
+      if (group.started !== undefined) {
         transcript.push({
-          kind: 'tool-call',
-          id: intent.opId,
-          name: intent.name,
-          args: textOf(intent.args),
+          kind: 'message',
+          role: 'user',
+          content: textOf(group.started.input),
         });
       }
-      for (const intent of intents) {
-        const result = group.results.get(intent.opId);
-        if (result !== undefined) {
+      const order = [...group.rounds.keys()].sort((a, b) => a - b);
+      for (const n of order) {
+        const r = /** @type {any} */ (group.rounds.get(n));
+        const content = r.text === undefined ? '' : textOf(r.text);
+        const native =
+          r.nativeContext === undefined ? '' : textOf(r.nativeContext);
+        if (content !== '' || native !== '') {
           /** @type {any} */
-          const entry = {
-            kind: 'tool-result',
+          const message = { kind: 'message', role: 'assistant', content };
+          if (native !== '') {
+            message.providerContext = {
+              format: NATIVE_CONTEXT_FORMAT,
+              payload: native,
+            };
+          }
+          transcript.push(message);
+        }
+        const intents = r.intents ?? [];
+        for (const intent of intents) {
+          transcript.push({
+            kind: 'tool-call',
             id: intent.opId,
-            content: textOf(result.result),
-          };
-          if (result.failed) entry.failed = true;
-          transcript.push(entry);
+            name: intent.name,
+            args: textOf(intent.args),
+          });
+        }
+        for (const intent of intents) {
+          const result = group.results.get(intent.opId);
+          if (result !== undefined) {
+            /** @type {any} */
+            const entry = {
+              kind: 'tool-result',
+              id: intent.opId,
+              content: textOf(result.result),
+            };
+            if (result.failed) entry.failed = true;
+            // M8 (R4-32): a result of a turn that did not complete.
+            if (group.incomplete) entry.incomplete = true;
+            transcript.push(entry);
+          }
         }
       }
+    }
+    // M8 (D-M8-5): a compaction marker at the end of its turn's output;
+    // the projection hook moves the latest summary first.
+    for (const marker of group.markers) {
+      transcript.push({
+        kind: 'compaction',
+        epoch: marker.epoch,
+        summary: textOf(marker.summary),
+        ...(marker.directive === undefined
+          ? {}
+          : { directive: textOf(marker.directive) }),
+      });
     }
   }
   for (const hook of hooks) transcript = hook(transcript, { records, texts });

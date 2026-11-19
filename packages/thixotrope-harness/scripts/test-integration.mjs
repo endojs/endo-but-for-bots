@@ -151,7 +151,11 @@ export const regressionLists = Object.freeze({
     'test/integration/environments-stop.test.js',
     'test/browser/environment-ui.test.mjs',
   ]),
-  context: Object.freeze(/** @type {string[]} */ ([])),
+  context: Object.freeze(
+    ['compaction', 'compaction-restart', 'compaction-archive'].map(
+      name => `test/integration/${name}.test.js`,
+    ),
+  ),
   mail: Object.freeze(/** @type {string[]} */ ([])),
   voice: Object.freeze([
     'test/integration/voice-session.test.js',

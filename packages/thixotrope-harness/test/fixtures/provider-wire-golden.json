@@ -394,14 +394,16 @@
             "selectionId": "claude-haiku-4-5",
             "title": "Claude Haiku 4.5",
             "default": false,
-            "reasoningEfforts": []
+            "reasoningEfforts": [],
+            "contextLength": 200000
           },
           {
             "modelId": "claude-sonnet-4-6",
             "selectionId": "claude-sonnet-4-6",
             "title": "Claude Sonnet 4.6",
             "default": false,
-            "reasoningEfforts": []
+            "reasoningEfforts": [],
+            "contextLength": 200000
           }
         ],
         "state": "ok"

@@ -1893,6 +1893,42 @@ append-only or one statement.
 **Deferred:** a forced-compaction switch beyond tests; a `readBytes` image page (probe 6.6);
 images shown to the user (R6-62).
 
+**Outcome of the lane's integration unit (W8.7, 2026-11-19; not a close-out).** Integration files
+(each alone, shared slots): `compaction` 101 s held, `compaction-restart` 126 s, `compaction-archive`
+184.5 s, all passing (regression list `context`). Recorded perf pass `perf:pass context` (exclusive,
+at `1881601aab`, load 1.9-3.2, 690.9 s held, 786 s of wall for the files; J-12262).
+
+| item | result | proved by |
+|---|---|---|
+| 1 crossing 70 % compacts | pass: Anthropic API fake server (150,000 of 200,000) and scripted (80 of 100); summary call without tools, every heading, the round and later turns start with the summary | `compaction.test.js` |
+| 2 kill during the summary call | pass: `outcome-unknown`, no `compaction` record, next request uncompacted | `compaction-restart.test.js` (K2) |
+| 3 viewImage of a 1 MiB PNG end to end | **deferred**: the session entry is not in `toolTable` (session-program cap, J-1071) | - |
+| 4, 5, 6 | unit and adapter tests of W8.1, W8.2 (not rerun through a daemon) | `compaction-decision`, `compaction-plan` |
+| 7 usage | pass: summary tokens charged to the session, reading is the real round's | `compaction.test.js` |
+| 8 phases | pass: `compacting context` then `thinking` | `compaction.test.js` |
+| 9 300 imported turns, kill, restart | pass: boundary at or past `sealedTo`, manifest and `context.jsonl` head at epoch 1, same per-turn digests after the restart, history 304 turns to `t1` | `compaction-archive.test.js` |
+| 10 export and import | pass: the same digests of the next request in the copy | `compaction-archive.test.js` |
+| 11 kill points | K1, K2, K7 (with K5's outcome) through the daemon; K3, K4, K6, I1-I3 adapter-level (W8.3, W8.5); I4 and "kill while reading" deferred with item 3 | `compaction-restart.test.js` |
+| 12, 13 | adapter tests (W8.6) | `image-wire.test.js` |
+| 14 | entry and tool tests (W8.4, W8.5); "the turn continues" in a session deferred with item 3 | - |
+| 15 window | pass: 200,000 in `getUsage().context` | `compaction.test.js` |
+| 16 frames into the vat | **deferred** with item 3 (`images.frameIntoVat`) | - |
+| 17 skipped | pass: `noReduction` after a summary call; also `invalidSummary` and `headroomExceeded` in the restart file | `compaction.test.js` |
+| 19 | the group fold's | - |
+
+| perf row | median (budget) | verdict |
+|---|---|---|
+| `compaction.plan` | 8.7 ms, n 2,002 (50) | pass |
+| `compaction.overhead` | 116 ms, n 89 (300) | pass |
+| `compaction.record` (gate) | 1 `compacted` delivery per compaction, 89 of 89; other deliveries identical to a plain turn | pass |
+| `compaction.replyToRequest` (stands in for `prepareAfter`) | 85 ms, includes crank Y; no budget | recorded; the prepare alone 2.16 ms adapter-level (J-12201) |
+| `compaction.rebuild` | 564 ms, n 8 (359 x 1.25) | **miss 1.57 x** (J-12263) |
+| `compaction.flat` | not measured (5,000-turn template) | deferred |
+| `images.requestBuild` | Messages 8.7 ms, Responses 9.1 ms (15) | pass |
+| `images.manyInOneRound` (probe) | 64 results: 20 native, 44 receipts, 294 ms, 56 MB body | pass |
+| `images.view`, `viewFromVat`, `frameIntoVat`, `contextPrepare` | not measured | deferred with item 3 |
+| `session.program` | 239,354 (270,336) | pass; lane +6,228 of 7,000 |
+
 ---
 
 ## M9. Mail and subagents

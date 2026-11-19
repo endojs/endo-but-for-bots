@@ -34,6 +34,7 @@ import { makeListChannel } from './list-channel.js';
 import { makeEventLog } from './providers/event-log.js';
 import { assertBackendKinds, backendKinds, kindOf } from './providers/kinds.js';
 import { makeEchoTool } from './tools/echo.js';
+import { makeImageTool } from './tools/view-image.js';
 import { makeCatalog } from './providers/catalog.js';
 import { findSecretsFiles, makeSecretStore } from './secrets/store.js';
 import { makeSealKeys } from './secrets/seal.js';
@@ -75,7 +76,16 @@ export const adapterTools = harden([
     makeTool: makeAccountStatusTool,
     description: accountStatusDescription,
   },
+  // M8 (m8-interfaces.md 6.2, S-18): image input; the session's static
+  // entry describes it, so it carries no description here.
+  { name: 'viewImage', makeTool: makeImageTool },
 ]);
+
+/**
+ * Adapter tools every backend kind's ports offer, after the kind's own
+ * (M8 S-18: `viewImage` on every kind).
+ */
+const everyKindTools = harden(['viewImage']);
 
 /** @param {Record<string, unknown>} event */
 const stderrLog = event => {
@@ -350,7 +360,8 @@ export const makeAgentHostImpl = ({
         provider,
         channel,
         timers,
-        prepare: req => contextCache.prepare(session, req, { key: archiveKey }),
+        prepare: (req, options) =>
+          contextCache.prepare(session, req, { key: archiveKey, ...options }),
         owner: session,
         unexpectedFailure: kind.unexpectedFailure,
       });
@@ -360,7 +371,7 @@ export const makeAgentHostImpl = ({
       let toolEntries = toolsOf.get(session);
       if (toolEntries === undefined) {
         toolEntries = harden(
-          kind.tools.map(name => {
+          [...kind.tools, ...everyKindTools].map(name => {
             const entry = tools.find(candidate => candidate.name === name);
             if (entry === undefined)
               throw Error(`No adapter tool ${name} here`);

@@ -27,6 +27,7 @@ import {
   projectRecords,
 } from '../../resources/agent-host/impl/projection.js';
 import { projectionHooks } from '../../resources/agent-host/impl/projection-hooks.js';
+import { compactionHook } from '../../resources/agent-host/impl/providers/compaction.js';
 import { makeEndpoint } from '../../resources/agent-host/impl/endpoint.js';
 import { makeTimers } from '../../resources/agent-host/impl/timers.js';
 import {
@@ -300,8 +301,8 @@ test('projection: user, assistant with native context, calls then results in cal
   t.throws(() => projectRecords(harden(records), { texts: new Map() }), {
     message: /not loaded/,
   });
-  // The hook table is empty (M8 appends) and hooks run in order.
-  t.deepEqual(projectionHooks, []);
+  // The hook table holds M8's compaction hook only, and hooks run in order.
+  t.deepEqual(projectionHooks, [compactionHook]);
   const hooked = projectRecords(harden(records), {
     texts: textsMap,
     hooks: [tr => tr.slice(0, 1), tr => [...tr, tr.length]],
