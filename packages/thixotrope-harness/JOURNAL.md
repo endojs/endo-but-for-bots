@@ -15131,3 +15131,81 @@ started a supervisor or a browser; no run lock taken. `lint:duplicates` 1.68 %. 
 in this unit's files (errors remain in other units' files in this worktree, uncommitted or
 theirs). Commits as listed in J-12640 and this journal commit; nothing pushed.
 Fit: neutral.
+
+### J-12660 2026-11-19 W11.7 factory Voice, configureSpeech and the voice step - built
+Evidence: `77d6929e5b`, `eb0abc3d2e`, `4d1b8c860d`.
+Reading: `guest/factory/voice.js` `makeVoice({ catalog, create, rows, settings, starts })`
+answers `{ facet, configureSpeech }` (contract 3.1): preferences (a five-field record, numbers
+finite and in `ttsRanges`, refused as one crank before any change), the shortcut preset (the
+chosen one while `catalog.recordOf` accepts it, else the built-in `voice`; a stale catalogue
+revision answers `presetStale`, a foreign or deleted preset `presetNotUsable`), launch claims
+(a `Map` by invocation id, at most 32, the oldest forgotten; a claim is replaced, never mutated,
+so a creation that finishes after its claim was re-run or forgotten writes nothing), G-11 by
+`E(backend).resolveModel(modelId)` and the speech settings (both `off`, revision 0, until the
+root writes them; the estimate is string units x 3 against `frameBytes - 2,048`, an empty
+command or a default speed out of range is `speechSettingsInvalid`; a given `revision` is
+ignored, the factory numbers its own). Seams H2 (`factory.js`: import, one `makeVoice` call
+after `createSession`, `getVoice`, `configureSpeech` in the kit) and H2b (`main.js` one line,
+`root.js` `needSpeech()` keeping `speechNotWired` for a root without the kit).
+`scripts/provision-steps/70-voice.js`: `options.voice = { speech?, voiceBackend?, voiceModelId? }`,
+a provider key by `keyLabel` (one Secret by label, `secretsByLabel` imported from
+`40-subscriptions.js`, a fresh `makeReadGrant()` only when the settings change), the Moonshine
+command as the `process` speech-in default (`moonshineCommand(language)`, language `en`), the
+built-in `voice` preset's backend (by label in `listBackends()`) and model saved with
+`Preset.save` unless already pinned; idempotent (a second run is `skipped`, no new grant).
+Tests: `test/unit/factory-voice.test.js` 11 and `voice-provision-step.test.js` 4 (about 2 s);
+`test/integration/voice-session.test.js` (acceptance 8, 9, 13, 14, 19, 22; 151.0 s wall with a
+template rebuild, 76 s and 16 s of test) and `voice-restart.test.js` (K11-3, K11-4, K11-5;
+96.8 s wall, 37.5 s of test), both in the `voice` regression list.
+Fit: good.
+
+### J-12661 2026-11-19 W11.7 bundles and install.factory - measured
+Evidence: `node scripts/bundle-guest.mjs` at `6493d955c7` and `4d1b8c860d`; `perf/session.perf.mjs`
+at `4d1b8c860d` (`--shared`, `INSTALL_N=2`, `PERF_WINDOW_SCALE=0.2`, load average 5.3-6.7 with
+three other lanes' agents busy).
+Reading: session program 233,126 bytes before and after, digest `06aceb9a1412` unchanged; exec
+64,500 bytes, digest `6f1d6d607b6b` unchanged (D-M11-24: M11 adds 0 session bytes). Factory
+program 192,892 -> 199,356 bytes (+6,464, under the contract's 8-12 KB estimate since WX.1 had
+already put the guards in). `install.factory` median 7,833 ms (7,678-7,833, n 2; budget 15 s;
+earlier records 6.3-7.3 s at lower load), `session.createCold` 6,720 ms median (n 3, a smoke
+window). In the integration test, through one control client: `setPreferences` 26 ms,
+a duplicate launch 44.5 ms, `startVoiceSession` 7.8 s (cold: the m1a template has no spares;
+`voice.startSession`'s 950 ms budget is with a pool and is W11.9's row). Single samples, not
+windows: recorded, not budget evidence.
+Fit: neutral.
+
+### J-12662 2026-11-19 W11.7 launch claims ride on orthogonal persistence - finding
+Evidence: `voice-restart.test.js` at `4d1b8c860d`, its `voice-restart` row
+(`preferencesAfterKill: old`, `cutLaunch: re-run`, `extraSessions: 0`).
+Reading: R6-60's idempotent launch needs no store: a claim in the factory heap, stamped with
+`starts.current()`, survives a SIGKILL with the crank that wrote it, and the start count tells a
+claim cut off by a restart from one still running without a clock or a lease. K11-4's kill
+landed before the claim's creation made its vat; the redelivered launch re-ran it and the start
+listener had rolled the half-made row back: no extra session. The other branch (creation
+completed by recovery, then a redelivery answering `duplicate`) is reachable only by timing and
+was not hit in this run; the unit test covers the re-run racing an old continuation (the
+re-run keeps the claim). K11-3's kill also landed before the write (old record); the new-record
+branch was not observed. The cost the contract names stays: a launch interrupted inside the
+creation window may leave one extra listed session (O-8).
+Fit: good (the start count is the right handle; nothing here needed a core change).
+
+### J-12663 2026-11-19 W11.7 contract differences - finding
+Evidence: contract 1.4, 14.2, section 12 W11.7 row; `factory-voice.test.js`.
+Reading: (1) "the refusal at 22,529 bytes": an estimate of units x 3 is a multiple of three, so
+the test refuses 7,510 units (22,530) and keeps 7,509 (22,527) around the 22,528 bound.
+(2) The step's key field is named `keyLabel` (the contract says "with a key label"); a `key`
+given in the options is refused, so no value can be passed by mistake. (3) `startVoiceSession`
+with a G-11 fallback but no factory default backend or model leaves that field to the preset,
+so the creation then fails on the missing model, as `createSession` would. (4) The voice
+provisioning step needed one line in the shared pin `test/unit/m1a-provision-steps.test.js`
+(`'voice'` in both lists, below WX.1's reserved comment), and the comment above `getMail` in
+`factory.js` was reworded (it said voice refused): both touch lines next to the M6 and M9 lanes'.
+Fit: neutral.
+
+### J-12664 2026-11-19 W11.7 time record - process
+Evidence: first command 2026-11-19T02:22:38Z, last 2026-11-19T02:39:48Z.
+Reading: over 60 s: `voice-session.test.js` 151.0 s and `voice-restart.test.js` 96.8 s (both
+`test:integration`, shared slots), `perf/session.perf.mjs` smoke 116 s (`run-lock --shared`).
+Unit tests about 2-5 s, `lint:types` about 3 s (no error in this unit's files; errors remain in
+other units' files), `lint:duplicates` 1.67 %. Nothing pushed.
+Fit: neutral.
