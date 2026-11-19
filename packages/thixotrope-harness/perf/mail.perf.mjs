@@ -373,47 +373,53 @@ await runPerf('mail', async ({ provision }) => {
           ...windowFields(rate.w),
         });
         if (perSecond < 3) process.exitCode = 1;
-        continue;
-      }
-      const snapshot = async () => {
-        const { hub } = await trafficRun.client.call('status');
-        const disk = await hubDiskBytes(trafficRun.root);
-        if (!disk) throw Error('Missing persisted hub image and log');
-        const { seq, compactions, appends, logRecords, imageChars, logChars } =
-          hub.store;
-        return {
-          ...disk,
-          seq,
-          compactions,
-          appends,
-          logRecords,
-          imageChars,
-          logChars,
+      } else {
+        const snapshot = async () => {
+          const { hub } = await trafficRun.client.call('status');
+          const disk = await hubDiskBytes(trafficRun.root);
+          if (!disk) throw Error('Missing persisted hub image and log');
+          const {
+            seq,
+            compactions,
+            appends,
+            logRecords,
+            imageChars,
+            logChars,
+          } = hub.store;
+          return {
+            ...disk,
+            seq,
+            compactions,
+            appends,
+            logRecords,
+            imageChars,
+            logChars,
+          };
         };
-      };
-      const fresh = await snapshot();
-      const before = fresh.bytes;
-      const growth = await measureThroughput(growthWindow, true);
-      for (let i = 0; i < 32; i += 1) await E(trafficMailbox).rev();
-      const final = await snapshot();
-      const after = final.bytes;
-      const ratio = before && after ? after / before : Infinity;
-      emit({
-        metric: 'mail.hubGrowth',
-        unit: 'ratio',
-        value: ratio,
-        before,
-        after,
-        fresh,
-        final,
-        posts: growth.posts,
-        maxActiveRecipients: growth.maxActive,
-        maxAcknowledgedAwaitingDismissal: growth.ackBacklog,
-        budget: { maximum: 1.25 },
-        pass: ratio <= 1.25,
-        ...windowFields(growth.w),
-      });
-      if (ratio > 1.25) process.exitCode = 1;
+        const fresh = await snapshot();
+        const before = fresh.bytes;
+        const growth = await measureThroughput(growthWindow, true);
+        for (let i = 0; i < 32; i += 1) await E(trafficMailbox).rev();
+        const final = await snapshot();
+        const after = final.bytes;
+        const ratio = before && after ? after / before : Infinity;
+        emit({
+          metric: 'mail.hubGrowth',
+          unit: 'ratio',
+          value: ratio,
+          before,
+          after,
+          fresh,
+          final,
+          posts: growth.posts,
+          maxActiveRecipients: growth.maxActive,
+          maxAcknowledgedAwaitingDismissal: growth.ackBacklog,
+          budget: { maximum: 1.25 },
+          pass: ratio <= 1.25,
+          ...windowFields(growth.w),
+        });
+        if (ratio > 1.25) process.exitCode = 1;
+      }
     } finally {
       for (const { client } of clients) client.close();
     }
