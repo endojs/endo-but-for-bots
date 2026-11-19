@@ -124,6 +124,110 @@ const compactSession = source => {
 };
 
 /**
+ * Link only the module bytes compartment-mapper already admitted. The plugin
+ * has no filesystem fallback. Relative specifiers are the guest convention.
+ * The output remains ESM so compartment-mapper supplies its namespace and
+ * export cells as usual.
+ *
+ * @param {string} entry absolute entry path
+ * @param {Map<string, Uint8Array>} sources admitted absolute paths
+ */
+const linkSession = async (entry, sources) => {
+  // This program exposes immutable constants. Keep the mapper linker for a
+  // different entry contract, particularly live public exports and reexports.
+  const ast = loadParser().parse(new TextDecoder().decode(sources.get(entry)), {
+    sourceType: 'module',
+  });
+  const names = [];
+  for (const statement of ast.program.body) {
+    if (!statement.type.startsWith('Export')) continue;
+    const decl = statement.declaration;
+    if (statement.type !== 'ExportNamedDeclaration' || decl?.kind !== 'const')
+      return undefined;
+    for (const { id } of decl.declarations) {
+      if (id.type !== 'Identifier') return undefined;
+      names.push(id.name);
+    }
+  }
+  if (!names.length) return undefined;
+  const { build } = await import('esbuild');
+  let supported = true;
+  /** @type {Map<string, Set<string>>} */
+  const imports = new Map();
+  const { outputFiles } = await build({
+    entryPoints: [entry],
+    bundle: true,
+    write: false,
+    platform: 'neutral',
+    format: 'iife',
+    globalName: 'linkedSession',
+    target: 'es2022',
+    treeShaking: true,
+    ignoreAnnotations: true,
+    keepNames: true,
+    minifyIdentifiers: true,
+    minifySyntax: true,
+    charset: 'ascii',
+    legalComments: 'none',
+    plugins: [
+      {
+        name: 'admitted-guest-modules',
+        setup(builder) {
+          builder.onResolve({ filter: /.*/ }, args => {
+            const file =
+              args.kind === 'entry-point'
+                ? entry
+                : path.resolve(path.dirname(args.importer), args.path);
+            if (
+              !sources.has(file) ||
+              (args.kind !== 'entry-point' &&
+                (args.kind !== 'import-statement' ||
+                  !/^\.{1,2}\//.test(args.path)))
+            ) {
+              // Keep the mapper program for a resolution form the scope
+              // linker cannot prove identical.
+              supported = false;
+              return { path: args.path, external: true };
+            }
+            if (args.importer) {
+              const edges = imports.get(args.importer) ?? new Set();
+              edges.add(file);
+              imports.set(args.importer, edges);
+            }
+            return { path: file, namespace: 'guest' };
+          });
+          builder.onLoad({ filter: /.*/, namespace: 'guest' }, args => ({
+            contents: sources.get(args.path),
+            loader: 'js',
+          }));
+        },
+      },
+    ],
+  });
+  // Scope hoisting can expose a cycle's uninitialized bindings as undefined.
+  // Retain the original module machinery for graphs with an import cycle.
+  const active = new Set();
+  const done = new Set();
+  /** @param {string} id */
+  const cyclic = id => {
+    if (active.has(id)) return true;
+    if (done.has(id)) return false;
+    active.add(id);
+    const result = [...(imports.get(id) ?? [])].some(cyclic);
+    active.delete(id);
+    done.add(id);
+    return result;
+  };
+  if (!supported || cyclic(entry)) return undefined;
+  // Preserve the mapper namespace. The linked code owns its private scope
+  // and the entry's immutable exports are published under their original names.
+  const publish = names.map(
+    name => `export const ${name} = linkedSession[${JSON.stringify(name)}];`,
+  );
+  return new TextEncoder().encode([outputFiles[0].text, ...publish].join('\n'));
+};
+
+/**
  * A guest module's source without its comments (J-0303): every comment is
  * replaced by the line breaks it held (a block comment on one line by one
  * space), so line numbers stay the same, and white space left at a line's
@@ -304,6 +408,11 @@ export const bundleGuest = async (
     import('@endo/compartment-mapper/node-powers.js'),
   ]);
   const readPowers = makeReadPowers({ fs, url, crypto, path });
+  const optimizedSession =
+    !comments &&
+    path.relative(root, entryPath) === path.join('session', 'main.js');
+  /** @type {Map<string, Uint8Array>} */
+  const sources = new Map();
   /** @type {Set<string>} */
   const modules = new Set();
   /** @type {string[]} */
@@ -325,7 +434,9 @@ export const bundleGuest = async (
     const file = url.fileURLToPath(location);
     if (!isInside(file, root)) return bytes;
     const text = new TextDecoder().decode(bytes);
-    return new TextEncoder().encode(stripComments(text, file));
+    const result = new TextEncoder().encode(stripComments(text, file));
+    if (optimizedSession) sources.set(file, result);
+    return result;
   };
   const recordingPowers = {
     ...readPowers,
@@ -350,11 +461,29 @@ export const bundleGuest = async (
       `Guest bundle ${entryPath} reads modules outside ${root}: ${outside.join(', ')}`,
     );
   let program = source;
-  if (!comments) {
-    program =
-      path.relative(root, entryPath) === path.join('session', 'main.js')
-        ? compactSession(source)
-        : dropIndentation(source, entryPath);
+  if (optimizedSession) {
+    const linked = await linkSession(entryPath, sources);
+    const entryUrl = url.pathToFileURL(entryPath).href;
+    const linkedProgram =
+      linked === undefined
+        ? source
+        : await makeBundle(
+            {
+              ...readPowers,
+              read: location =>
+                location === entryUrl
+                  ? Promise.resolve(linked)
+                  : readPowers.read(location),
+              maybeRead: location =>
+                location === entryUrl
+                  ? Promise.resolve(linked)
+                  : readPowers.maybeRead(location),
+            },
+            entryUrl,
+          );
+    program = compactSession(linkedProgram);
+  } else if (!comments) {
+    program = dropIndentation(source, entryPath);
   }
   const ascii = escapeNonAscii(program);
   const encoded = new TextEncoder().encode(ascii);
