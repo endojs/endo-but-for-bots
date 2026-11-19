@@ -132,8 +132,8 @@ fn the_globals_option_is_read_by_presence() {
     let parts: Vec<&str> = r.split('|').collect();
     assert_eq!(parts[0], "[object Compartment]", "no globals key");
     assert_eq!(parts[1], "[object Compartment]", "empty globals");
-    for i in 2..6 {
-        assert!(parts[i].starts_with("TypeError:"), "{}", parts[i]);
+    for part in &parts[2..6] {
+        assert!(part.starts_with("TypeError:"), "{part}");
     }
     assert_eq!(parts[6], "returned [object Compartment]");
 }
@@ -445,8 +445,8 @@ fn the_global_lexicals_option_is_type_checked() {
     let parts: Vec<&str> = r.split('|').collect();
     assert_eq!(parts[0], "[object Compartment]");
     assert_eq!(parts[1], "[object Compartment]");
-    for i in 2..8 {
-        assert!(parts[i].starts_with("TypeError:"), "{}", parts[i]);
+    for part in &parts[2..8] {
+        assert!(part.starts_with("TypeError:"), "{part}");
     }
     assert_eq!(parts[8], "returned [object Compartment]");
     assert_eq!(parts[9], "returned [object Compartment]");
@@ -484,9 +484,9 @@ fn the_modules_option_and_its_entries_are_type_checked() {
     assert_eq!(parts[0], "[object Compartment]", "empty module map");
     // The REASON, not just the class: a `TypeError` raised by some unrelated
     // mistake in the fixture would satisfy a bare `starts_with("TypeError:")`.
-    for i in 1..5 {
+    for (i, part) in parts.iter().enumerate().take(5).skip(1) {
         assert_eq!(
-            parts[i], "TypeError: new Compartment: modules is not an object",
+            *part, "TypeError: new Compartment: modules is not an object",
             "option {i}"
         );
     }

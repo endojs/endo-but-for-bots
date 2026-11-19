@@ -287,7 +287,7 @@ fn cross_file_violations(path: &str, source: &str) -> Vec<String> {
         for at in token_positions(&code, &format!("{receiver}.exception")) {
             let suffix = &code[at + 3..];
             let assignment = suffix.first().is_some_and(|token| token.text == "=")
-                && !suffix.get(1).is_some_and(|token| token.text == "=");
+                && suffix.get(1).is_none_or(|token| token.text != "=");
             if !assignment && !accepted.contains(&at) {
                 bad.push(format!(
                     "{path}: exception-register read at byte {}",

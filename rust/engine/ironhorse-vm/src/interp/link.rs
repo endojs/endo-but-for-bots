@@ -681,7 +681,7 @@ impl Interp {
         for (proto, pname, value) in &data {
             if let Some(&pid) = self.symbol_ids.get(*pname) {
                 if keep(pid) && (full || self.find_property(*proto, pid).is_none()) {
-                    let off = self.alloc_str_text(&value);
+                    let off = self.alloc_str_text(value);
                     self.set_own_unmetered_with_flag(
                         *proto,
                         pid,
@@ -973,7 +973,7 @@ impl Interp {
                 if proto.is_null() {
                     continue;
                 }
-                let off = self.alloc_str_text(&tag);
+                let off = self.alloc_str_text(tag);
                 self.set_own_unmetered_with_flag(
                     proto,
                     tag_id,

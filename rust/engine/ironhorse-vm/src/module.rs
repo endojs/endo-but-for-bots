@@ -737,12 +737,11 @@ impl ModuleGraph {
         let mut entries: Vec<(String, CellId)> = Vec::new();
         for name in names {
             let mut set = BTreeSet::new();
-            match self.resolve_export(module, &name, &mut set) {
-                Resolution::Resolved(cell) => entries.push((name, cell)),
-                // Ambiguous / NotFound names are excluded from the
-                // namespace (ECMA-262 excludes ambiguous star names). A
-                // `default` local export resolves like any other name.
-                _ => {}
+            // Ambiguous / NotFound names are excluded from the namespace
+            // (ECMA-262 excludes ambiguous star names). A `default` local
+            // export resolves like any other name.
+            if let Resolution::Resolved(cell) = self.resolve_export(module, &name, &mut set) {
+                entries.push((name, cell));
             }
         }
         // Sort by code unit (XS's `c_strcmp`; ASCII/BMP-exact). Rust's

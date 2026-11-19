@@ -736,9 +736,8 @@ impl Slot {
         if !self.next.is_null() {
             f(self.next);
         }
-        match self.value {
-            Payload::Reference(r) => f(r),
-            _ => {}
+        if let Payload::Reference(r) = self.value {
+            f(r)
         }
     }
 

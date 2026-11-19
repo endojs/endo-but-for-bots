@@ -1664,7 +1664,7 @@ impl Parser<'_> {
             | flags::TARGET
             | flag;
         let want_symbol = symbol_out.is_some();
-        let name = self.function_name(saved, want_symbol, symbol_out)?;
+        self.function_name(saved, want_symbol, symbol_out)?;
         self.parameters_binding()?;
         self.match_token(Token::LeftBrace)?;
         self.body()?;
@@ -1683,7 +1683,6 @@ impl Parser<'_> {
         }
         self.flags = saved;
         self.match_token(Token::RightBrace)?;
-        let _ = name;
         Ok(())
     }
 
@@ -2240,7 +2239,7 @@ impl Parser<'_> {
                 let decl = self.stack[before..].to_vec();
                 let mut specs = Vec::new();
                 for item in &decl {
-                    self.export_binding(item, line, &mut specs);
+                    self.export_binding(item, &mut specs);
                 }
                 self.push_node_list_from(specs)?;
                 self.push_null();
@@ -2377,7 +2376,7 @@ impl Parser<'_> {
 
     /// `fxExportBinding` — collect specifier nodes from a declaration
     /// subtree into `out`.
-    fn export_binding(&mut self, item: &Item, line: u32, out: &mut Vec<Item>) {
+    fn export_binding(&mut self, item: &Item, out: &mut Vec<Item>) {
         let Item::Node(node) = item else { return };
         match node.token {
             Token::Const | Token::Let | Token::Var => {
@@ -2394,19 +2393,19 @@ impl Parser<'_> {
             }
             Token::Binding => {
                 if let Some(child) = node.children.first() {
-                    self.export_binding(child, line, out);
+                    self.export_binding(child, out);
                 }
             }
             Token::ArrayBinding | Token::ObjectBinding | Token::Statements => {
                 if let Some(Item::List(list)) = node.children.first() {
                     for child in list {
-                        self.export_binding(child, line, out);
+                        self.export_binding(child, out);
                     }
                 }
             }
             Token::PropertyBinding | Token::PropertyBindingAt | Token::RestBinding => {
                 if let Some(child) = node.children.last() {
-                    self.export_binding(child, line, out);
+                    self.export_binding(child, out);
                 }
             }
             _ => {}

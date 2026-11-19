@@ -587,7 +587,7 @@ impl Interp {
             return self.array_define_length(code, inst, descriptor);
         }
         if let Some(index) = name.as_deref().and_then(string_to_index) {
-            return Ok(self.array_define_index(inst, Some(id), index, descriptor)?);
+            return self.array_define_index(inst, Some(id), index, descriptor);
         }
         Ok(self.ordinary_define_own_property(inst, id, descriptor))
     }

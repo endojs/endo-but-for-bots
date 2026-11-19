@@ -72,11 +72,12 @@ pub(super) fn parse_int(bytes: &[u8], mut radix: i32) -> Slot {
         }
         _ => {}
     }
-    if bytes.get(i) == Some(&b'0') && matches!(bytes.get(i + 1), Some(b'x') | Some(b'X')) {
-        if radix == 0 || radix == 16 {
-            radix = 16;
-            i += 2;
-        }
+    if bytes.get(i) == Some(&b'0')
+        && matches!(bytes.get(i + 1), Some(b'x') | Some(b'X'))
+        && (radix == 0 || radix == 16)
+    {
+        radix = 16;
+        i += 2;
     }
     if radix == 0 {
         radix = 10;
@@ -225,7 +226,7 @@ pub(super) fn string_to_number(bytes: &[u8], whole: bool) -> f64 {
                 b'b' | b'B' => (2, &body[2..]),
                 b'o' | b'O' => (8, &body[2..]),
                 b'x' | b'X' => (16, &body[2..]),
-                _ => (0, &body[..]),
+                _ => (0, body),
             };
             if r != 0 {
                 if digits.is_empty() {

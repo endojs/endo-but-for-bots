@@ -663,7 +663,7 @@ pub fn gen_stage3_for_of_program(data: &[u8]) -> String {
 fn gen_code_unit(b: &mut Bytes) -> String {
     let unit: u16 = match b.choice(8) {
         // ASCII, the ordinary case.
-        0 | 1 | 2 => 0x20 + (b.next() % 0x5f) as u16,
+        0..=2 => 0x20 + (b.next() % 0x5f) as u16,
         // Latin-1 supplement and friends: two UTF-8 bytes, one code unit.
         3 => 0x80 + b.next() as u16,
         // BMP beyond Latin-1: three UTF-8 bytes, one code unit.

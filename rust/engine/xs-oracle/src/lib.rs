@@ -447,7 +447,7 @@ pub fn run_cranks(sources: &[&str]) -> Option<Vec<OracleOutcome>> {
         .iter()
         .map(|s| s.as_bytes().as_ptr() as *const c_char)
         .collect();
-    let lens: Vec<u32> = sources.iter().map(|s| s.as_bytes().len() as u32).collect();
+    let lens: Vec<u32> = sources.iter().map(|s| s.len() as u32).collect();
     let mut raws: Vec<XsOracleResultRaw> = (0..sources.len())
         .map(|_| XsOracleResultRaw::default())
         .collect();

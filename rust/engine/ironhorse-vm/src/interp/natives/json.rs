@@ -965,7 +965,7 @@ impl Interp {
                     "false"
                 };
                 Ok(JsonStrOpened::Value(Some(
-                    self.json_output_text(state, &text)?,
+                    self.json_output_text(state, text)?,
                 )))
             }
             Kind::Integer => match value.value {

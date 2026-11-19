@@ -280,7 +280,7 @@ impl Interp {
                         value: Payload::Reference(entry),
                         ..
                     }
-                        if self.arrays.get(&entry).is_some_and(|entry_data| {
+                        if self.arrays.get(entry).is_some_and(|entry_data| {
                             entry_data.length >= 2
                                 && entry_data.items().contains_key(&0)
                                 && entry_data.items().contains_key(&1)
@@ -3057,7 +3057,8 @@ impl Interp {
     /// `NaN`).
     fn normalize_coll_key(&self, key: Slot) -> Slot {
         match key.value {
-            Payload::Number(n) if n == 0.0 => Slot::number(0.0),
+            // A float literal pattern compares with `==`, so `0.0` matches `-0`.
+            Payload::Number(0.0) => Slot::number(0.0),
             _ => key,
         }
     }

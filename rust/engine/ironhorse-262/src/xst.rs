@@ -1399,12 +1399,10 @@ fn evaluate_negative_early(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdi
                     "negative over-acceptance: ironhorse-compile accepted a source expected to be a {}-phase early error",
                     neg.phase
                 ))
+            } else if cfg.oracle {
+                Verdict::RunSkip("negative-oracle-unexpected".into())
             } else {
-                if cfg.oracle {
-                    Verdict::RunSkip("negative-oracle-unexpected".into())
-                } else {
-                    Verdict::RunSkip("oracle-gate-off:negative-over-acceptance".into())
-                }
+                Verdict::RunSkip("oracle-gate-off:negative-over-acceptance".into())
             }
         }
 

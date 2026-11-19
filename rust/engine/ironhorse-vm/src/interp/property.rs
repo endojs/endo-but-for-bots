@@ -291,7 +291,7 @@ impl Interp {
                 // exists to avoid materializing.
                 let id = self.index_read_key_id(index);
                 return self.with_native_frame(LIGHT_FRAME_COST, |vm| {
-                    Ok(vm.array_define_index(inst, id, index, desc)?)
+                    vm.array_define_index(inst, id, index, desc)
                 });
             }
             // A String wrapper's in-range index is an immutable own property.

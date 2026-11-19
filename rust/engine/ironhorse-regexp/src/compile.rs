@@ -1657,7 +1657,7 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
             }
             c if c == b'0' as i64 => {
                 let n = self.read8(self.offset);
-                if !(b'0'..=b'9').contains(&n) {
+                if !n.is_ascii_digit() {
                     self.character = 0;
                 } else {
                     return Err(self.error("invalid escape"));
@@ -2393,7 +2393,7 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
                 if self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0 {
                     return Err(self.error("invalid character"));
                 }
-                if let Some(_) = self.quantifier_parse_brace()? {
+                if self.quantifier_parse_brace()?.is_some() {
                     return Err(self.error("invalid quantifier"));
                 }
             }

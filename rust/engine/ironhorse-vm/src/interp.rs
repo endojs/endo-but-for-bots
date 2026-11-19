@@ -2109,7 +2109,7 @@ struct StaticStrings {
 /// back onto these statics and refuses anything else — crafted bytes,
 /// never engine output.
 pub fn dtf_component_key_static(name: &str) -> Option<&'static str> {
-    for key in [
+    [
         "weekday",
         "era",
         "year",
@@ -2121,12 +2121,9 @@ pub fn dtf_component_key_static(name: &str) -> Option<&'static str> {
         "second",
         "fractionalSecondDigits",
         "timeZoneName",
-    ] {
-        if key == name {
-            return Some(key);
-        }
-    }
-    None
+    ]
+    .into_iter()
+    .find(|&key| key == name)
 }
 
 /// A suspended activation: the caller's scope and resume point, saved by

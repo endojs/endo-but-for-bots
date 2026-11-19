@@ -456,12 +456,9 @@ impl Interp {
         // BigInt and one Number is a catchable TypeError; two BigInts stay in
         // the arbitrary-precision domain for every binary arithmetic op.
         if a.kind == Kind::BigInt || b.kind == Kind::BigInt {
-            match self.try_bigint_binop(op, a, b)? {
-                Some(r) => {
-                    self.push(r);
-                    return Ok(());
-                }
-                None => {}
+            if let Some(r) = self.try_bigint_binop(op, a, b)? {
+                self.push(r);
+                return Ok(());
             }
             return Err(Step::Host(Halt::EngineInvariant(
                 "bigint:missing-binary-result",

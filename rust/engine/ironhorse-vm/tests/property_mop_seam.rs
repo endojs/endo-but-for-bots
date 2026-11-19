@@ -267,7 +267,7 @@ fn restore_row_contract_violations(source: &str, rows: &[&str]) -> Vec<String> {
             !matches!(token.text, "async" | "unsafe" | "const" | "extern")
                 && literal_end(token.text, 0).is_none()
         });
-        if !visibility.is_some_and(|token| token.text == "pub") {
+        if visibility.is_none_or(|token| token.text != "pub") {
             continue;
         }
         if !remaining.remove(row) {

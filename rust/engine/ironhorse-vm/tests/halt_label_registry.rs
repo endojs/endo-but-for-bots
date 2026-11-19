@@ -143,7 +143,7 @@ fn sites(variant: &str) -> Vec<Site> {
         let src = src.as_str();
         // Every spelling of the variant must be a construction: no `use`,
         // no function value, no alias — so the scan below is complete.
-        for at in marker_positions(&src, &bare) {
+        for at in marker_positions(src, &bare) {
             let after = &src[at + bare.len()..];
             assert!(
                 after.starts_with('('),
@@ -156,15 +156,15 @@ fn sites(variant: &str) -> Vec<Site> {
         }
         for glob in ["Halt::*", "Halt::{", "Halt as ", "= Halt;"] {
             assert!(
-                marker_positions(&src, glob).is_empty(),
+                marker_positions(src, glob).is_empty(),
                 "{}: `{glob}` imports, aliases, or renames `Halt` or its variants (in a \
                  `use` group spanning any number of lines, or a type alias), which \
                  would hide constructions from the registry scan",
                 file.display()
             );
         }
-        for at in marker_positions(&src, &marker) {
-            let args = balanced_args(&src, at, &marker);
+        for at in marker_positions(src, &marker) {
+            let args = balanced_args(src, at, &marker);
             let literals = string_literals(args);
             let line = src[..at].matches('\n').count() + 1;
             let preceding: String = src[..at]

@@ -801,10 +801,10 @@ impl<'a> Parser<'a> {
                         if self.array_binding_from_expression(Token::Access)? {
                             return Ok(true);
                         }
-                    } else if t == Some(Token::Object) {
-                        if self.object_binding_from_expression(Token::Access)? {
-                            return Ok(true);
-                        }
+                    } else if t == Some(Token::Object)
+                        && self.object_binding_from_expression(Token::Access)?
+                    {
+                        return Ok(true);
                     }
                 }
                 if token == Token::Delete {

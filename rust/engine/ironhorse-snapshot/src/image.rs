@@ -1526,8 +1526,8 @@ pub(crate) fn decode_collections(p: &[u8]) -> Result<Vec<CollectionImage>, Snaps
             }
         } else {
             if !table_length.is_power_of_two()
-                || table_length < ironhorse_vm::snapshot_api::MAP_MIN_TABLE_LENGTH
-                || table_length > TABLE_MAX
+                || !(ironhorse_vm::snapshot_api::MAP_MIN_TABLE_LENGTH..=TABLE_MAX)
+                    .contains(&table_length)
             {
                 return Err(SnapshotError::Corrupt(
                     "collections side table: unreachable rehash geometry",
@@ -8682,11 +8682,10 @@ mod side_table_field_refusals {
         row.table_length = 8;
         let high = 6;
         row.entries = (0..high)
-            .map(|i| (Slot::integer(i as i32), Slot::undefined()))
+            .map(|i| (Slot::integer(i), Slot::undefined()))
             .collect();
         assert!(decode_collections(&encode_collections(std::slice::from_ref(&row))).is_ok());
-        row.entries
-            .push((Slot::integer(high as i32), Slot::undefined()));
+        row.entries.push((Slot::integer(high), Slot::undefined()));
         assert_eq!(
             decode_collections(&encode_collections(std::slice::from_ref(&row))),
             Err(SnapshotError::Corrupt(

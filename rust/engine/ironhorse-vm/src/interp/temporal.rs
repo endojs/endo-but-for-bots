@@ -560,7 +560,7 @@ pub(super) fn iso_total_calendar_units(
             "month" => iso_date_add(start, 0, k, 0, 0)?,
             _ => return None,
         };
-        Some(iso_days_between(start, d)?.checked_mul(DAY_NS)?)
+        iso_days_between(start, d)?.checked_mul(DAY_NS)
     };
     // Seed `k` near the answer so the adjustment loops are O(1) rather than
     // stepping one unit at a time across a span that can be ~10^8 days.
@@ -703,7 +703,7 @@ pub(super) fn validate_duration_increment(rank: u8, increment: i64) -> Option<()
     let max: i64 = match rank {
         4 => 24,
         5 | 6 => 60,
-        7 | 8 | 9 => 1000,
+        7..=9 => 1000,
         _ => return Some(()),
     };
     if increment >= max || max % increment != 0 {

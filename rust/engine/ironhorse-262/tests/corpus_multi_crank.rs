@@ -136,8 +136,8 @@ fn the_converted_corpus_agrees_crank_by_crank() {
     // `corpus_conversion_equivalence` test already pays for.
     let mut completes = Vec::new();
     let mut aborts = Vec::new();
-    for index in 0..files.len() {
-        let borrowed = [sources[index].as_str()];
+    for (index, source) in sources.iter().enumerate() {
+        let borrowed = [source.as_str()];
         let runs = dual_run_cranks(&borrowed).expect("the XS oracle machine must start");
         match runs.first().map(|r| r.agreement) {
             Some(Agreement::BothComplete) => completes.push(index),

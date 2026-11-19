@@ -265,7 +265,7 @@ impl Interp {
                 if self
                     .functions
                     .get(&r)
-                    .map_or(false, |fi| fi.native.is_none() && fi.method.is_none()) =>
+                    .is_some_and(|fi| fi.native.is_none() && fi.method.is_none()) =>
             {
                 r
             }
@@ -340,7 +340,7 @@ impl Interp {
                 if self
                     .functions
                     .get(&r)
-                    .map_or(false, |fi| fi.native.is_none() && fi.method.is_none()) =>
+                    .is_some_and(|fi| fi.native.is_none() && fi.method.is_none()) =>
             {
                 r
             }

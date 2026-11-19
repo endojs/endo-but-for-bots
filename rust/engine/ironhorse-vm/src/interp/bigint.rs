@@ -78,8 +78,8 @@ pub(super) fn bi_add_mag(a: &[u32], b: &[u32]) -> Vec<u32> {
 pub(super) fn bi_sub_mag(a: &[u32], b: &[u32]) -> Vec<u32> {
     let mut out = Vec::with_capacity(a.len());
     let mut borrow: i64 = 0;
-    for i in 0..a.len() {
-        let x = a[i] as i64;
+    for (i, &x) in a.iter().enumerate() {
+        let x = x as i64;
         let y = *b.get(i).unwrap_or(&0) as i64;
         let mut d = x - y - borrow;
         if d < 0 {

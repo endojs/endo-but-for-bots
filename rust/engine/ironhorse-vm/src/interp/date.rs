@@ -128,7 +128,7 @@ fn parse_iso_date_string(text: &str) -> Option<f64> {
     let (month, day) = match tail.len() {
         0 => (1, 1),
         3 if tail.starts_with('-') => (tail[1..].parse().ok()?, 1),
-        6 if tail.as_bytes().get(0) == Some(&b'-') && tail.as_bytes().get(3) == Some(&b'-') => {
+        6 if tail.as_bytes().first() == Some(&b'-') && tail.as_bytes().get(3) == Some(&b'-') => {
             (tail[1..3].parse().ok()?, tail[4..6].parse().ok()?)
         }
         _ => return None,

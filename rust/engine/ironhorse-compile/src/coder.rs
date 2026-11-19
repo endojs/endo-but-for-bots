@@ -2629,7 +2629,7 @@ impl Coder<'_, '_> {
             self.first_continue_target
         };
         while let Some(t) = target {
-            if self.targets[t].labels.iter().any(|l| *l == symbol) {
+            if self.targets[t].labels.contains(&symbol) {
                 self.adjust_environment(t);
                 self.adjust_scope(t);
                 self.add_branch(0, XS_CODE_BRANCH_1, t);
@@ -5396,8 +5396,8 @@ impl Coder<'_, '_> {
     /// `fxNodeDispatchCodeReference` — prepare a store target.
     #[inline(never)]
     fn code_reference(&mut self, item: &Item, flag: i32) {
-        match item {
-            Item::Node(n) => match n.token {
+        if let Item::Node(n) = item {
+            match n.token {
                 // fxDeclareNodeCodeReference: a declaration target (a
                 // `var`/`let`/`const` binding) — nothing when resolved.
                 Token::Var | Token::Let | Token::Const | Token::Using | Token::Arg => {
@@ -5446,8 +5446,7 @@ impl Coder<'_, '_> {
                 }
                 // fxNodeCodeReference: nothing.
                 _ => {}
-            },
-            _ => {}
+            }
         }
     }
 
@@ -6089,14 +6088,11 @@ impl Coder<'_, '_> {
         let mut size: i32 = 0;
         let mut delta: i32 = 0;
         for c in &mut self.codes {
-            match c.id {
-                XS_NO_CODE => {
-                    if let Payload::Target { tid } = c.payload {
-                        // set later; record offset now
-                        let _ = tid;
-                    }
+            if c.id == XS_NO_CODE {
+                if let Payload::Target { tid } = c.payload {
+                    // set later; record offset now
+                    let _ = tid;
                 }
-                _ => {}
             }
             size1_step(c, &mut size, &mut delta, &mut self.targets);
         }
@@ -6245,10 +6241,10 @@ fn width_select_integer_family(c: &mut Code, size: &mut i32) {
         Payload::Integer { value } => *value,
         _ => 0,
     };
-    if value < -32768 || value > 32767 {
+    if !(-32768..=32767).contains(&value) {
         c.id += 2;
         *size += 5;
-    } else if value < -128 || value > 127 {
+    } else if !(-128..=127).contains(&value) {
         c.id += 1;
         *size += 3;
     } else {

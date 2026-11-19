@@ -436,7 +436,7 @@ fn dump_item(item: &Item, out: &mut String) {
     match item {
         Item::Null => out.push_str("()"),
         Item::Symbol(s) => {
-            out.push_str("#");
+            out.push('#');
             out.push_str(&SymbolName::from_units(s).to_string());
         }
         Item::List(items) => {
@@ -467,19 +467,19 @@ fn dump_node(node: &Node, out: &mut String) {
     match &node.value {
         Value::None => {}
         Value::Integer(v) => {
-            out.push_str(" ");
+            out.push(' ');
             out.push_str(&v.to_string());
         }
         Value::Number(v) => {
-            out.push_str(" ");
+            out.push(' ');
             out.push_str(&dump_number(*v));
         }
         Value::Str(s) => {
-            out.push_str(" ");
+            out.push(' ');
             out.push_str(&dump_string(s));
         }
         Value::BigInt(b) => {
-            out.push_str(" ");
+            out.push(' ');
             out.push_str(&b.digits);
             out.push_str("n/");
             out.push_str(&b.radix.to_string());

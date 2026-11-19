@@ -119,7 +119,7 @@ impl Interp {
                 Some(s) => {
                     let mut a = self.to_number_f64(code, s)?;
                     if a.is_normal() && (-4503599627370495.0 < a) && (a < 4503599627370495.0) {
-                        if a < -0.5 || 0.5 <= a {
+                        if !(-0.5..0.5).contains(&a) {
                             a = (a + 0.5).floor();
                         } else if a < 0.0 {
                             a = -0.0;

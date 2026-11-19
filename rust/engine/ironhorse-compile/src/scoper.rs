@@ -677,10 +677,10 @@ fn delete_target_is_private(item: &Item) -> bool {
 
 // --------- child-slot accessors (positional, per the struct layout) ---------
 
-fn child<'a>(n: &'a Node, i: usize) -> Option<&'a Item> {
+fn child(n: &Node, i: usize) -> Option<&Item> {
     n.children.get(i)
 }
-fn child_node<'a>(n: &'a Node, i: usize) -> Option<&'a Node> {
+fn child_node(n: &Node, i: usize) -> Option<&Node> {
     match n.children.get(i) {
         Some(Item::Node(b)) => Some(b.as_ref()),
         _ => None,
@@ -760,7 +760,7 @@ fn class_has_constructor_init_member(class: &Node) -> bool {
     })
 }
 #[allow(dead_code)]
-fn child_list<'a>(n: &'a Node, i: usize) -> Option<&'a [Item]> {
+fn child_list(n: &Node, i: usize) -> Option<&[Item]> {
     match n.children.get(i) {
         Some(Item::List(v)) => Some(v.as_slice()),
         _ => None,
@@ -1638,7 +1638,7 @@ impl Scoper<'_> {
         if node.flags & flags::STRING_LEGACY != 0 {
             let strict = self
                 .scope
-                .map_or(false, |si| self.scopes[si].flags & SCOPE_STRICT != 0);
+                .is_some_and(|si| self.scopes[si].flags & SCOPE_STRICT != 0);
             if strict {
                 return Err(err(node.line, "invalid escape sequence"));
             }

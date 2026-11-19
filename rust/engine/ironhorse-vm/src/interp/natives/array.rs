@@ -1664,7 +1664,7 @@ impl Interp {
             if array
                 .items()
                 .get(&index)
-                .map_or(true, |item| item.flag & XS_DONT_SET_FLAG != 0)
+                .is_none_or(|item| item.flag & XS_DONT_SET_FLAG != 0)
             {
                 return false;
             }
@@ -2406,7 +2406,7 @@ impl Interp {
                 if result
                     .len()
                     .checked_add(separator.len())
-                    .map_or(true, |length| length > GENERIC_JOIN_OUTPUT_CAP)
+                    .is_none_or(|length| length > GENERIC_JOIN_OUTPUT_CAP)
                 {
                     return Err(Step::Host(Halt::Refused("join:oversized-result")));
                 }
@@ -2418,7 +2418,7 @@ impl Interp {
                 if result
                     .len()
                     .checked_add(units.len())
-                    .map_or(true, |length| length > GENERIC_JOIN_OUTPUT_CAP)
+                    .is_none_or(|length| length > GENERIC_JOIN_OUTPUT_CAP)
                 {
                     return Err(Step::Host(Halt::Refused("join:oversized-result")));
                 }
@@ -3757,7 +3757,7 @@ impl Interp {
                     .scalar_key_text(id)
                     .and_then(|name| string_to_array_like_index(&name))
                 {
-                    if index >= start && index < len && next.map_or(true, |found| index < found) {
+                    if index >= start && index < len && next.is_none_or(|found| index < found) {
                         next = Some(index);
                     }
                 }

@@ -369,14 +369,12 @@ fn round_to_significant(dec: &Decimal, keep: usize, mode: RoundingMode, negative
         };
     }
     let mut exponent = dec.exponent;
-    if round_up {
-        if increment_digits(&mut kept) {
-            // Carry rippled past the front: [1, 0, 0, ...]; drop the new last
-            // digit to keep the fixed width and bump the exponent.
-            kept.insert(0, 1);
-            kept.pop();
-            exponent += 1;
-        }
+    if round_up && increment_digits(&mut kept) {
+        // Carry rippled past the front: [1, 0, 0, ...]; drop the new last
+        // digit to keep the fixed width and bump the exponent.
+        kept.insert(0, 1);
+        kept.pop();
+        exponent += 1;
     }
     Decimal {
         digits: kept,
