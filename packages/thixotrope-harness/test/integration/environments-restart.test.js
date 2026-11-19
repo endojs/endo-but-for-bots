@@ -192,16 +192,18 @@ run('home, runner restart alone, SIGKILL during a command', async t => {
 
   // K6 and K7: a SIGKILL right after an emergency stop and a delete were
   // sent, before either answered.
+  // Client presences held before the supervisor restart are disconnected.
+  const { backend: currentBackend } = await slice.makeBackend(script);
   const stopping = await startEnvironmentSession(
     slice,
-    backend,
+    currentBackend,
     'development',
     'k6',
   );
   const { key: stoppingKey } = await E(stopping).getInfo();
   const doomed = await startEnvironmentSession(
     slice,
-    backend,
+    currentBackend,
     'development',
     'k7',
   );

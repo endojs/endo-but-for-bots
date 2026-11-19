@@ -21,6 +21,7 @@ import test from '@endo/ses-ava/test.js';
 import { E } from '@endo/far';
 
 import { texts } from '../../guest/lib/interfaces.js';
+import { uiTextOf } from '../../resources/agent-host/impl/gateway/protocol.js';
 import { makeSlice, waitFor } from '../integration/_m1a-slice.js';
 import { executionTexts } from '../../ui/src/environment/texts.js';
 
@@ -155,7 +156,7 @@ const statusBecomes = (page, text) =>
       await page.locator('.thix-send-error').waitFor();
       t.is(
         await page.locator('.thix-send-error').textContent(),
-        texts.sessionStopped,
+        uiTextOf.statusError(texts.sessionStopped),
       );
       t.is(await input.inputValue(), 'while stopped');
       const held = await E(session).listPending();

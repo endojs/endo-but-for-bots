@@ -17213,3 +17213,27 @@ SHA-256 digests byte for byte. Its parent is the original M6 tip `5437fe19f2`. R
 environment regression files from a deeper checkout hit the macOS 103-byte socket path limit
 before the daemon served. Commit `f3f6bd97e3` lets the test helper take a short private state
 directory through `THIX_HARNESS_TMP`. Run-lock slots remain shared across checkouts.
+
+### J-12101 2026-11-19 W6.7 stopped-session data export
+
+Acceptance 22 passed on the fake-runtime Ironhorse template in 17.9 s. The JSON lines importer
+restored the execution head, selected the exported environment preset, preserved the stopped queue
+hold, then resumed and ran a command in the new environment. The stop, resume and delete case
+finished in 238.1 s. Twenty create/delete cycles returned the manager to two baseline environments,
+zero pending stops and zero pending releases. The three preset cases passed. The browser's
+first case passed. Its stopped-send assertion expected the raw refusal, but the shared controller
+renders it with `uiTextOf.statusError`; the assertion now checks the controller's displayed text.
+The restart case reached the post-SIGKILL home read before it reused the disconnected backend
+presence. Its second setup now obtains a backend from the reconnected client.
+
+### J-12120 2026-11-19 W6.8 shared layout and guarded bundle boundaries
+
+`32fccde460` shares the package and state path resolvers between the two native resources and
+includes the resolver in the provisioned template digest. The environments manager no longer
+imports the full session guard table to check Git reads. The two SourceReader shapes now live
+in the shared base guard table. Twenty-nine guard, environment export and manager tests passed.
+The session program is 241,283 bytes; its M6 growth excluding the 1,857 shared call-table bytes
+is 6,300 bytes against the 6,400-byte cap. The manager measures 101,880 bytes against 80,000.
+Its measured native install took 4.73 s. The duplicate check found 550 of 30,919 normalized
+lines in duplicate blocks, 1.78% against 2.05%. The provisional guest seam, preset provider
+build method and environment not-built marker searches were empty.
