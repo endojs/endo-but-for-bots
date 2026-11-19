@@ -346,6 +346,8 @@ await runPerf('environments', async ({ provision }) => {
   const lastRecords = toolResultsOf(
     await turnRecords((await toolTurn(main, 'true')).turn),
   );
+  const nextTurnRan = lastRecords.length === 1 && !lastRecords[0].failed;
+  if (!nextTurnRan) wrong.push('the following command failed');
   await single('environments.tooBig', Math.max(...bigMs), {
     budget: { value: 2000 },
     extra: {
@@ -353,11 +355,13 @@ await runPerf('environments', async ({ provision }) => {
       runs: bigMs.map(ms => Math.round(ms)),
       wrong,
       halted,
-      nextTurnRan: lastRecords.length === 1 && !lastRecords[0].failed,
+      nextTurnRan,
     },
   });
   if (wrong.length > 0 || halted.length > 0)
-    emit({ metric: 'environments.tooBig.gate', pass: false, wrong, halted });
+    throw Error(
+      `Large-output gate failed: ${JSON.stringify({ wrong, halted })}`,
+    );
 
   // ---- environments.bundles (gate)
   const session = await bundleGuest(sessionEntry, { guestRoot });
