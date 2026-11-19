@@ -27,7 +27,7 @@
  * The rules of `../interfaces.js` apply: changing an existing guard is a
  * contract change.
  */
-import { limits } from '../limits.js';
+import { guardLimits as limits } from '../guard-limits.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 

@@ -18,6 +18,8 @@
  * Plain data only: this module is evaluated in vats and in Node alike.
  */
 
+import { guardLimits, imagePathLimits } from './guard-limits.js';
+
 /** The entries the session-object entries below are derived from. */
 const core = {
   // ---- shared with config/defaults.js (values must be equal) ----
@@ -25,8 +27,7 @@ const core = {
   frameBytes: 24_576,
   /** All messages one crank sends (J-0142). */
   crankOutBytes: 196_608,
-  /** A text field larger than this is staged as a Blob (M1b; M1a refused it). */
-  inlineBytes: 8192,
+  inlineBytes: guardLimits.inlineBytes,
   /** Distinct record keys a vat may ever receive or create (J-0191); rule 12.10. */
   vatKeyNames: 57_000,
   /** Eventual sends per crank, answered or not (guest rule 12.3; J-0143, J-0194). */
@@ -44,18 +45,14 @@ const core = {
   textUnits: 24_576,
   /** A submission's text (Composer, enqueueOnce, startTurn): inlineBytes in M1a (no staging). */
   submissionUnits: 8192,
-  /** Ids the vat mints: session key `s<n>`, turn id `t<n>`, op id `t<n>/r<r>/c<k>`, entry key `q<n>`. */
-  idUnits: 64,
+  idUnits: guardLimits.idUnits,
   /** A client's submission request id: 13 digits, '-', a UUID (A.4 SPEC:1627). */
   requestIdUnits: 64,
   /** A provider's tool call id (may be empty; R4-42 synthesises one). */
   callIdUnits: 256,
-  /** A tool name. */
-  toolNameUnits: 128,
-  /** A tool description shown to the model. */
-  toolDescriptionUnits: 4096,
-  /** A tool's JSON schema, as JSON text (rule 12.10). */
-  toolParametersUnits: 8192,
+  toolNameUnits: guardLimits.toolNameUnits,
+  toolDescriptionUnits: guardLimits.toolDescriptionUnits,
+  toolParametersUnits: guardLimits.toolParametersUnits,
   /** Session title (human label, F.2 a). */
   titleUnits: 256,
   /** Labels of presets, backends and the like (F.2 a). */
@@ -64,16 +61,13 @@ const core = {
   modelIdUnits: 256,
   /** Reasoning effort names (R4-23). */
   effortUnits: 32,
-  /** An error or failure reason, a note, a hold text. */
-  reasonUnits: 4096,
+  reasonUnits: guardLimits.reasonUnits,
   /** A history page cursor (text, F.2 d). */
   cursorUnits: 64,
-  /** Preview of a message in pages and lists (architecture 9). */
-  messagePreviewUnits: 1024,
+  messagePreviewUnits: guardLimits.messagePreviewUnits,
   /** Preview of tool arguments and results in pages (architecture 9). */
   toolPreviewUnits: 256,
-  /** Tool output into the model, marker included (R4-100, R4-46). */
-  toolOutputUnits: 32_768,
+  toolOutputUnits: guardLimits.toolOutputUnits,
   /** Waiting queue entries (R4-98, R4-53). */
   maxWaiting: 100,
   /** Submission receipts kept (R4-98). */
@@ -375,8 +369,7 @@ export const limits = harden({
   // ---- staged tool arguments (the exec vat's `splitArgs`) ----
   /** A string value longer than this is staged by `splitArgs`. */
   splitStringUnits: 1024,
-  /** Staged strings one `splitArgs` answer may carry. */
-  splitStagedStrings: 16,
+  splitStagedStrings: guardLimits.splitStagedStrings,
 
   ...core,
 
@@ -409,8 +402,7 @@ export const limits = harden({
    * `unavailableReason`), so every saved preset's `PresetView` fits a frame.
    */
   presetRecordBytes: core.frameBytes - 2048,
-  /** An endowment's or an inventory entry's label (Fae: 80 characters). */
-  endowmentLabelUnits: 80,
+  endowmentLabelUnits: guardLimits.endowmentLabelUnits,
   /** Endowments a preset adds (R3-22 default 32). */
   maxEndowments: 32,
   /** Template objects a preset selects (Fae: 16). */
@@ -435,10 +427,8 @@ export const limits = harden({
   labelValueBytes: core.inlineBytes,
   /** All stored JSON values of one session together. */
   labelJsonBytes: 262_144,
-  /** A method name rendered for a remote capability. */
-  methodNameUnits: 128,
-  /** Method names rendered for a remote capability (exec/render.js keeps 128). */
-  maxMethodNames: 128,
+  methodNameUnits: guardLimits.methodNameUnits,
+  maxMethodNames: guardLimits.maxMethodNames,
 
   // ---- granted tools (session vat; R3-6, P-65) ----
   /** Grants a session keeps, offered or not (withdrawn ones are dropped). */
@@ -458,8 +448,7 @@ export const limits = harden({
   roundGrantedToolBytes: 12_288,
 
   // ---- mentions and packages (session vat; R3-8, R3-9, R4-29, R4-99) ----
-  /** Attachments one message carries (R3-9, R4-99). */
-  maxAttachments: 32,
+  maxAttachments: guardLimits.maxAttachments,
   /** Message text of a message with attachments (R3-9: 64,000 characters). */
   packageTextUnits: 64_000,
 
@@ -472,19 +461,14 @@ export const limits = harden({
   inspectResultUnits: 48_000,
   /** `readSources` items per call (Fae: 1-8). */
   readSourcesItems: 8,
-  /** `readSources` lines per item (Fae: 1-200, default 80). */
-  readSourcesLineCount: 200,
+  readSourcesLineCount: guardLimits.readSourcesLineCount,
   /** `readSources` default line count. */
   readSourcesDefaultLines: 80,
-  /** `readSources` largest start line (Fae: 1,000,000). */
-  readSourcesMaxStartLine: 1_000_000,
-  /** `readSources` text per item (Fae: 8,000 characters). */
-  readSourcesItemUnits: 8000,
-  /** `readSources` path segments (Fae: 1-64) and segment length (1-255). */
-  readSourcesPathSegments: 64,
-  pathSegmentUnits: 255,
-  /** `readSources` literal search text (Fae: 1-256). */
-  searchUnits: 256,
+  readSourcesMaxStartLine: guardLimits.readSourcesMaxStartLine,
+  readSourcesItemUnits: guardLimits.readSourcesItemUnits,
+  readSourcesPathSegments: guardLimits.readSourcesPathSegments,
+  pathSegmentUnits: guardLimits.pathSegmentUnits,
+  searchUnits: guardLimits.searchUnits,
 
   // ---- the exec membrane (exec vat; D-M5-3, open decision O-9) ----
   /**
@@ -556,9 +540,8 @@ export const imageLimits = harden({
   imagesPerRequest: 20,
   /** `petName` (Fae `image-tool.js:46`). */
   petNameUnits: 256,
-  /** `path` segments and their length (Fae `image-tool.js:51-53`). */
-  pathSegments: 64,
-  segmentUnits: 255,
+  pathSegments: imagePathLimits.pathSegments,
+  segmentUnits: imagePathLimits.segmentUnits,
   /**
    * The raw `path` text the vat passes on: the arguments of a local tool
    * are at most `inlineBytes` (staged arguments are refused, M5 2.4.2),
