@@ -6,7 +6,10 @@ archive, delete, export; done with open items, `milestones.md` M2) are built; so
 and gateway), M4 (Secrets manager and subscription pools) and M5 (presets, prompt composition,
 object and exec tools, grants, mentions), integrated across lanes and closed by X-CLOSE (M3 and M4
 done with open items, M5 done; J-10060..J-10064); and so are two core changes after M1b: the
-allocation collection schedule (CORE-11, C-7) and the hub write-ahead log (CORE-12, C-2). M0's
+allocation collection schedule (CORE-11, C-7) and the hub write-ahead log (CORE-12, C-2). Steps 1-3
+of the harness review (`arch-review/harness.md` section 8; J-10130..J-10254) then restructured the
+built code without changing behaviour except where a row names it; the "as built after step 3"
+paragraphs below (4.7-4.9, D-6, D-8, D-18) and the glossary (section 14) describe the result. M0's
 measurements are summarised in `m0-results.md` (which also keeps the core-change candidates current),
 M1a's and M1b's in `milestones.md` (outcome tables); all are recorded in `../JOURNAL.md` (M0:
 J-0100..J-0198, J-9000..J-9051; M1a: J-0200..J-0296, J-9100..J-9200; M1b: J-0300..J-0398,
@@ -285,8 +288,10 @@ Confirmed by spike S6 (J-0183..J-0185, J-9045). Cost of a cold session vat: `E(v
 (about 140 ms; the vat boots with its first message), the session program staged by
 `evaluateSource`, and one evaluating crank; 6.4 s for a 246 KB program, of which staging is about
 10 us per byte (fact 2) and the boot about 3.5 s [inferred from install times]. Disk 17.3 MB per
-sleeping vat. **The session program bundle is therefore bounded to 200 KB** (`bundle-guest.mjs`
-reports the size; section 11 `session.program`), which keeps a cold create near the 6 s budget. The
+sleeping vat. **The session program bundle is therefore bounded**, first to 200 KB and since M5 to
+240,000 bytes (`limits.sessionProgramBytes`, M5 O-1; `bundle-guest.mjs` reports the size; section
+11 `session.program`; 212,484 after step 3 of the harness review, J-10250), which keeps a cold
+create near the 6 s budget. The
 factory keeps `poolSize` (default 2) spare session vats already loaded with the session program and 1
 spare exec vat, refilled in the background after each take with up to 4 creations in parallel (four
 lanes scale almost linearly: 50 spares in 108.7 s), so `createSession` costs a wake plus one
@@ -415,10 +420,11 @@ SessionFactory
   findSession(key) -> Session                 // only for page reload (F.2 d)
   deleteSession(session) -> undefined         // factory-level authority takes the object
   listBackends() -> [Backend]; listModels(backend?) -> [ModelRow]
-  listPresets() -> [Preset]; getPresetConfiguration() -> { presets, revision }
-  savePreset(record, expectedRevision) -> Preset; deletePreset(preset, expectedRevision); resetPreset(preset, ...)
+  // presets (M5, as built): Operator.getPresets() -> PresetCatalog { list, configuration, create,
+  //   defaultPreset }; configuration() is A.4's getPresetConfiguration (guards/factory.js)
 
-SessionRow = { session, key, title, activity, backendTitle, modelId, effort, messageCount, queuedCount }
+SessionRow = { session, key, title, activity, state: Lifecycle, backendTitle, modelId, effort,
+               messageCount, queuedCount }      // state carries D-17's `lost`
 Preset     // exo in the factory vat; record holds { label, value } endowments (F.1 #4)
   describe() -> record ; snapshot() -> frozen PresetSnapshot (data + object references)
 ```
@@ -439,11 +445,13 @@ publisher is a tombstone; the factory's start listener obtains a new one. Viewer
 make({ config, services: SessionServices, rowReporter }) -> { session: Session, internal: SessionInternal }
 
 SessionServices        // per-session, attenuated; built by the factory, never contains admin facets
-  backend: Backend                 // this session's backend only; open() -> Endpoint
+  backend: Backend                 // this session's backend only; open(host) -> TurnPorts (D-5)
   host: SessionHostFacet           // manager-minted for this session: liveChannel() -> LivePublisher,
                                    //   content() (Blob reads by handle only)
   workspace?: Workspace, shell?: Shell, envControl?: EnvironmentControl   // M6, per session
-  execVat: ExecHandle              // from the factory pool: run(), retire(); no evaluate, no notifyOnStart
+  execVat: ExecHandle              // from the factory pool: scope() -> { scope: ExecScope, deadlineMs },
+                                   //   retire(scope); ExecScope: run, abandon, inspect; no evaluate,
+                                   //   no notifyOnStart
 
 Session
   getInfo() -> record ; rename(title)
@@ -457,7 +465,8 @@ Session
   startTurn(input) -> Turn          // refused with the R4-10 text while a turn is active
   getCurrentTurn() -> { input, turn: Turn, history } | undefined      // reload re-attach (R4-62)
   getHistoryPage(cursor?) -> { turns: [TurnRecordPreview], nextCursor }   // cursor is text (d)
-  getTurnContent(ref) -> { text } | { blob, preview, bytes }          // ref is a page-local marker (F.1 #15)
+  // content of a turn too big for its page (F.1 #15), as built: Turn.getContent(),
+  //   History.turnContent(session, turnId), SessionInternal.blobPage(cursor?)
   getUsage() -> totals ; getAccount(refresh?) -> accounts (M4)
   emergencyStop() / resume()                                          // shell presets (M6)
   getNetworkPolicy() / requestNetworkPolicyChange(...)                // M7
@@ -483,7 +492,8 @@ AgentHostAdmin (facet installed as 'agentHostAdmin'; held only by the factory)
   getSecrets() -> SecretsAdmin
   speech() -> VoiceServices (M11)
 
-Backend          describe() ; listModels() ; open() -> Endpoint          // Endpoint is adapter-side (transient)
+Backend          describe() ; listModels() ; open(host) -> TurnPorts     // { endpoint, publisher, tools, since };
+                                                                         //   Endpoint is adapter-side (transient)
 Endpoint         holdTurn(turnHandle) -> settles at turn end (lease, D-5) ; releaseTurn(turnHandle)
                  startRound(roundRequest)  (sendOnly) ; cancelRound()   ; revoke() (subscription backends, R4-49)
                  armDeadline({ opId, ms }) / disarm(opId)  (sendOnly; adapter timers, section 8)
@@ -509,7 +519,9 @@ the resource can map (a manager-side WeakMap from `Secret` to entry, consulted b
 its attach sink). Values are written through `SecretWriter`, an adapter-local object: from the browser
 the call stays inside the gateway process; from the CLI the value is sealed to the adapter's X25519
 public key (`node:crypto`) before it crosses the control socket and hub. Provider code reads values
-in-process at each round (R4-82). The sign-in secret is an entry in the same store.
+in-process at each round (R4-82). As built (M3), the sign-in secret is not an entry in that store:
+it is its own file, `<state>/agent-host/gateway/signin.enc`, under the same wrapping key
+(`AH/gateway/signin.js`; `m3-interfaces.md`).
 
 As built in M2 (W2.3, W2.9): the store is `<state>/agent-host/secrets.enc` (AES-256-GCM, fresh
 nonce per write, temp file, fsync, rename); the audit log is a separate append-only file of sealed
@@ -544,6 +556,16 @@ Secrets; tokens, renewal (write-ahead, generation-conditioned, single-flight per
 selection, refusal marks and account readings live in the agent-host process, and the vat side is
 a few handles. The adapter caches each pool's state and re-reads it when the manager pushes
 `poolsChanged()` (retirement waits for that answer), with a 600 s re-read as the safety net.
+
+As built after step 3 of the harness review (J-10230, J-10231, J-10233): one **wrapping key**
+object per adapter incarnation, `makeWrappingKey({ keyFile, stateDir })` in
+`AH/secrets/wrapping-key.js`, made in `AH/index.js` and passed to the secret store and the
+sealing keys; a failed key load is retried at the next use instead of kept until restart (the
+row's behaviour change; the sign-in file keeps its own retrying cache). Atomic file writes go
+through `AH/files.js` (`writeFileAtomic`, `writeFileAtomicSync`, `syncDirectory`), each writer
+keeping its own step order and fsync choices (the blob store's split write and the sign-in file
+still write for themselves). Tests and perf checks give a supervisor its key file as
+`secretsKeyFile`; nothing sets the key variable process-wide.
 
 **D-15. Blob handles are manager-minted and pre-minted.** The adapter keeps a stock of minted, empty
 `Blob` handles (minted 32 at a time with one manager crank through its attach sink); it writes and
@@ -701,6 +723,14 @@ duplicate dropped, a missing rev given up after 1 s or a full window); a subscri
 where the gateway subscribes, a delta reaches a waiting subscriber 0.15-0.18 ms after its publish
 (budget 5 ms); a control client through the hub sees 17-18 ms (J-9173, J-9124).
 
+As built after step 3 (J-10232): the session channel and the list channel use one subscriber,
+`AH/channel-subscriber.js` (`makeSubscriber`: its queue and bounds; `slowestOf`;
+`makeRevReorder`: the rev hold, duplicate drop and give-up; one injectable default timer).
+`channels.js` and `list-channel.js` keep only what each kind adds (the session channel's turn fold
+and held deltas). Wire shapes, bounds and `ordering()` are unchanged; the session channel's
+`closes()` counts by close-reason key like the list channel. A later feed (M11 voice, M12 home)
+builds on `makeSubscriber` and `makeRevReorder`; it does not write a third queue.
+
 ### 4.3 What is recorded before and after each step (intent before effect)
 
 The heap is made durable by image + journal replay, and the hub commits a crank's outbound frames
@@ -809,7 +839,8 @@ while nothing was delivered (R4-74), and never put a provider body into a failur
 provider is ordinary Node code beside the channels, and the vat sees one `roundFinal` or
 `roundFailed` per round. The model catalogue (R4-104) is a per-Backend cache in the adapter; it
 holds its Backend presences strongly (bounded) because a presence collected between calls comes
-back as a new object (J-9403).
+back as a new object (J-9403). Since step 3 the providers sit under one shell and one kind table
+(section 4.9).
 
 Compaction (P-36, M8): the vat decides from the previous usage reading (R4-34) and records
 `CompactionStarted` before a tool-less summary round; the adapter plans the retained tail on its cache
@@ -854,6 +885,75 @@ CORE-12 makes each commit an append (GC ms per frame 2.2 -> 1.8, `hub.gcBurst.tu
 105 ms, p99 442 -> 373 ms, J-9333). Frames from the in-process endpoint and releases toward it are
 still one commit each (J-9216). Fewer exports per turn would shrink bursts, but a long-lived viewer
 (the M3 gateway) makes the same pattern.
+
+### 4.7 The turn runner as built (step 3, HR-SYN-4; J-10206..J-10208, J-10240)
+
+`guest/session/session.js` `makeSession` builds the session from parts, all made once, in this
+order: the runtime (4.8), the delete **fence** `{ close, closed }` (one per session; `deleteSelf`
+closes it before `beginDelete`), the record archive and its `ContextSource`, then the runner. The
+runner (`turn.js` `makeTurnRunner`, 1,266 lines, was 1,553) keeps the turn's own life: claim,
+settle, cancel, tool calls, rounds, the engine callbacks, the sink and `Turn` exos, the lease and
+round sends. The other jobs are modules the runner is given or makes:
+
+| module | job |
+|---|---|
+| `outbox.js` | the crank's events, one publish per crank (4.1) |
+| `usage.js` over `guest/lib/usage-counts.js` | round and session usage; counts add by named key (`m2-interfaces.md` 12) |
+| `ports.js` | the held `TurnPorts`, reopen after a retired break, the `since` comparison (4.4) |
+| `turn-index.js` | `TurnInfo` by id, the retained `Turn` handles |
+| `turn-import.js` | `importState` of turns |
+| `recovery.js` `makeRecovery` | `recoverAfterRestart`, one per session with its own generation |
+| `archive.js` | seals and the kept turns; `unresolved` only through `keepUnresolved`, `unresolvedInfo`, `resolve` |
+| `turn-types.js` | shared JSDoc types only (`ActiveTurn`, `TurnInfo`, `RoundCalls`, `ToolIntent`); not bundled |
+
+The runner answers no `archive`, `deleting`, `turnHandle` or `isLive` any more; export takes the
+archive and the fence from `session.js`. Records, their order, the claim and settle sequences, the
+publish points and every send are those of the old runner: a golden trace of every vat call in
+delivery order (`test/unit/turn-runner-golden.test.js`, digest `eed428b3...`) and the fence-order
+test are equal on the old and new guest. The history page and the archive's `History` share one
+preview rule, `guest/lib/record-preview.js` (HR-SYN-28, J-10205, J-10235).
+
+### 4.8 The session's extension mechanism: runtime parts (step 3, HR-SYN-15; J-10209, J-10245)
+
+A per-session job joins the session as a **runtime part** in `guest/session/runtime-parts.js`, and
+only so (the static `turn-hooks.js` tables, the module `WeakMap`s keyed by session objects,
+`runtime.session` and `part(name)` are gone). A part is `{ name, make(runtime) }`; `make` runs once
+in `makeSession`, synchronously, sends and awaits nothing, and answers the part's value: its own
+members plus optional `hooks` and `tools`. Hooks are synchronous and run in table order in the
+crank named: `onClaim(turn, item)` (claim crank, after `TurnStarted`), `beforeRound(turn)` (the
+crank that sends `startRound`), `onCancel(turn)`, `onSettle(turn)` (after `TurnSettled`),
+`onRecover(turn)` (recovery step 6, each part's guarded) and `nextTurn()` (a turn source, asked when
+idle; the first that answers wins). A hook gets a frozen `HookTurn { active, round, append, emit }`:
+records go into this crank's record log and events into this crank's outbox, so a hook adds no
+delivery. `tools` is a `ToolSource`, asked every round after the static table under
+`toolSetFor`'s name rules. The table is `powers, inspector, grants, exec, packages`; the order is
+behaviour (recovery: exec, then packages). Adding a part (M6 `workspace`, M8 `compaction`, M9
+`inbox` and `subagents`) is one name in `PartName` and `requiredParts`, one getter, one entry in
+`runtimeParts`. What a part may and may not hold is the module's header and `step3-plan.md` 2; the
+main limits are: no module-level state, no `await` inside a hook, no ports kept past their turn, no
+state that must survive export or a restart.
+
+### 4.9 The provider seam (step 3, HR-SYN-3 (a), HR-SYN-17; J-10220..J-10224, J-10247, J-10248)
+
+Every backend kind answers the Endpoint with one `Provider` made by `AH/providers/shell.js`
+`makeProviderShell({ timers, runRound })`: `startRound(req, channel, prepare, owner)`,
+`cancelRound(turn)`, `releaseTurn(turn)`, one round control per turn (`round.js`
+`makeRoundControl`). The two API kinds are `providers/api.js` `makeApiProvider(wire)` with a
+per-vendor `wire` record (`anthropicWire`, `openRouterWire`); the pools (`subscriptions/provider.js`)
+and the scripted double use the same shell (the scripted double keeps its own round source, plan
+item (b)). `providers/kinds.js` holds `backendKinds`, one `BackendKind` entry per `BackendSpec.kind`
+(`makeProvider`, `tools`, `unexpectedFailure`, `catalog`, optional `readModels` and
+`acceptsModelId`), and `kindOf(spec)` is the only match of `spec.kind` in the provider code. The
+pools' own kind table, `providerOfKind` and `poolKinds` (`guest/lib/subscription-texts.js`), stays
+as the pools' table: reading `kindOf` from `subscriptions/` would make an import cycle. The model
+catalogue and the pool catalogue share `providers/catalog-core.js` (`makeCatalogOwner`,
+`makeOwnerTable`, `readJson`, `boundedJson`) with their bounds as parameters (16 MB and
+`4 * maxBackends` owners; 8 MB and `2 * maxMembers`). `providers/event-log.js` holds the event
+log. Behaviour change named by the row: an API or pool round without `prepare` is refused
+(`PREPARE_REQUIRED`) before any key, credential or request. The requests sent are byte-equal before
+and after (wire goldens `test/fixtures/provider-wire-golden.json`, `pool-wire-golden.json`). A new
+kind adds one entry to `backendKinds` (and, only if it is a pool kind, one line to the pools'
+table).
 
 ---
 
@@ -912,9 +1012,15 @@ snapshot by about 3.3 bytes per character and the state directory roughly double
   read). The turn path's remaining stall is not the archive: the core's worker transport takes
   its cadence snapshot (every 256 deliveries) between a busy turn's deliveries, so the turn that
   crosses the count waits for the whole snapshot (`checkpoint.stall` p99 1.0-1.4 s against 1 s;
-  core candidate C-24, J-9494).
+  core candidate C-24, J-9494). As built after step 3 (J-10231, J-10235): segments (`.part`,
+  removed on error), the manifest (no directory fsync: rebuilt from the segments), `context.jsonl`
+  and `mirror.jsonl` (caches, no fsync) are written through `AH/files.js` with those sequences
+  unchanged, and the archive's `History` previews a turn with the vat's own rule
+  (`guest/lib/record-preview.js`), so an archived page and a kept page agree. `makeArchiveStore`
+  is still one 1,240-line closure (theme T7 of `arch-review/harness.md` 4; outside step 3).
 - History pages are 32 turns and at most `frameBytes`; a turn larger than that returns a summary with
-  refs (`getTurnContent(ref)`). The browser reads blob content through the gateway's `Content`
+  refs (as built: `Turn.getContent()`, or `History.turnContent` for an archived turn). The browser
+  reads blob content through the gateway's `Content`
   service in-process (0 vat deliveries; one manager crank to resolve handles after a restart).
 - Guest code never builds strings with `+=` in loops; it uses arrays and `join` (lint check in
   `guest/` and the "too big" perf probes).
@@ -1026,7 +1132,9 @@ caches rebuild lazily per session (journal: blast radius).
   binds `127.0.0.1:<port>` (the reverse proxy and TLS are out of scope). Any non-upgrade GET returns
   the app shell; static assets are served from `implDir` (D-14) with correct content types and a
   strict CSP (W-15). WebSocket upgrade on `/ws` only; Origin must equal `publicOrigin` (W-1).
-- Protocol: `@endo/captp` JSON text frames. The bootstrap offers only `fetch(secret)`; a correct
+- Protocol: `@endo/captp`, each message UTF-8 JSON in one WebSocket binary frame (as built in M3,
+  `m3-interfaces.md` 2 and its decision 5; a text frame closes the socket; the server is the adapter's own, `AH/gateway/server.js`, with no
+  `ws` dependency since step 3, J-10234). The bootstrap offers only `fetch(secret)`; a correct
   secret returns `{ operator, live, content, composer }`: the `Operator` presence imported from the
   factory vat plus three gateway-local services (`Live` subscriptions, `Content` blob reads, `Composer`
   submissions and queue edits that stage large text). The browser keeps the secret in the URL fragment
@@ -1038,8 +1146,12 @@ caches rebuild lazily per session (journal: blast radius).
 - **Frame guard:** the CapTP bridge measures every call it forwards to a vat (sum of string bytes,
   estimated as UTF-16 units x 3) and refuses one over `frameBytes` with "message too large; use the
   composer" before it reaches the hub. Max WS message 1 MiB.
-- **Key guard:** the bridge also refuses a call whose arguments contain a record with a key that the
-  target method's declared shape (`guest/lib/interfaces.js`) does not name, with "unexpected field";
+- **Key guard:** the bridge also refuses a call whose arguments contain a record with a key outside
+  one vocabulary, the union of every key the harness's interfaces and shapes name
+  (`AH/gateway/vocabulary.js`, `guard.js`; `m3-interfaces.md` 4.4), with "unexpected field". As
+  built this is weaker than a per-method check: any known key may be sent to any method. It is the
+  right trade (the vat's name budget is spent once, on a fixed set), but a reader must not assume
+  the method's own shape was checked before the exo guard;
   every fresh record key a vat receives costs it one of its about 57,000 names for life, and running
   out leaves the session failing every new name for good (fact 4; a catchable error, not a halt). An exo guard cannot protect the vat from either: decoding
   happens before the guard runs.
@@ -1122,7 +1234,7 @@ too. The other rows below are design settings, kept in the module that enforces 
 | Exec source, **staged** in `frameBytes` pages then evaluated in one crank | 262,144 (`config/defaults.js` `execSourceBytes`) | 262 k staged in 3.9 s, evaluating crank 175 ms; one message of 150 k halts (J-0195) | none |
 | Crank budget (`THIXOTROPE_CRANK_BUDGET`, daemon-wide) | 50,000,000 (`config/defaults.js` `crankBudget`, set by `scripts/serve.mjs`) | runaway ends in 242-271 ms; 100 M buys nothing (J-0143) | n/a |
 | Crashes in a row before a vat is given up (`THIXOTROPE_MAX_DELIVERY_ATTEMPTS`) | 5 (`config/defaults.js` `maxDeliveryAttempts`, set by `scripts/serve.mjs`) | D-17; J-9046, J-9051 | n/a |
-| Session program bundle | 200 KB (checked by `bundle-guest.mjs` output and the `session.program` perf row) | cold session vat 6.4 s for a 246 KB program (J-9045) | n/a |
+| Session program bundle | 240,000 bytes since M5 (`limits.sessionProgramBytes`; 200 KB before; checked by `bundle-guest.mjs` output and the `session.program` perf row) | cold session vat 6.4 s for a 246 KB program (J-9045) | n/a |
 | Staging chunk for program sources | `frameBytes` units for ASCII, `frameBytes / 3` units otherwise | `evaluateSource` default 8,192 units (J-0186) | n/a |
 | previews (messages / tool calls and results) | 1,024 / 256 | | n/a |
 | Message string (submission, through the Composer) | 200,000 characters (staged as a Blob; the limit is WS message size and context, not frame cost) | | 100,000,000 (R4-97) - lower; open decision 1 |
@@ -1268,7 +1380,7 @@ milestone by itself.
 | `exec` first call in a session (spare exec vat) | <= 750 ms | a spare take is 157-176 ms (J-9045); was 1.5 s; M1b 541 ms, now 285-298 ms (J-9382) |
 | `exec` 100 answered sends / 100 `sendOnly` | <= 8 s / <= 1 s | S1 from a probe vat: 100 answered 9.4-10.6 s until all answers were back, 100 `sendOnly` 490-513 ms (J-0143, before CORE-4); exec vat: 7.0 s (J-9368) -> 1.3-1.4 s after CORE-11 (J-9382); `sendOnly` not measurable until M5's `powers` |
 | Session create with spare pool / without | <= 750 ms / <= 6 s; without **depends on C-5** | take 157-176 ms (was 1.5 s); cold 6.4 s for a 246 KB program (J-9045); M1a cold 6.14 s for the 157 KB session program (J-9192); M1b with the pool 1.2 s (miss), after CORE-11/12 849-864 ms (pass under 1.25 x), cold 4.5 s (J-9382) |
-| `session.program` session program bundle size | <= 200 KB | M1a: 157,493 bytes (J-9192) |
+| `session.program` session program bundle size | <= 240,000 bytes (200 KB until M5) | M1a: 157,493 bytes (J-9192); after step 3 of the review 212,484 (J-10250) |
 | Session list, 100 sessions | <= 200 ms per 50-row page; 0 session vats woken | |
 | Session watch snapshot, 1,000-turn session | <= 300 ms; <= `frameBytes` | |
 | History page (32 turns) | <= 300 ms; **depends on C-5** or W2.5's record bound | M1a: 0.77 ms in Node with the structural guard (18 ms strict) (J-9153); in a vat 568-596 ms at 22 turns of 7 records, 869 ms on a 1,000-turn session: the page crank's own marshalling (J-9382, J-9383, J-9387) |
@@ -1323,7 +1435,8 @@ milestone by itself.
    (`guest/lib/retired.js`).
 9. Code shipped into vats is frozen there: keep vat programs thin, state as plain records, so
    `exportState`/`importState` (M2) can move it to a new program version. The session program bundle
-   stays at or below 200 KB: every spare vat pays about 10 us per byte to load it (D-4).
+   stays at or below `limits.sessionProgramBytes` (240,000 bytes since M5; 200 KB before): every
+   spare vat pays about 10 us per byte to load it (D-4).
 10. **No data-dependent record keys crossing into a vat, and none created inside one.** Every distinct
     property name a vat ever receives or creates takes one of its about 57,000 names for life
     (`vatKeyNames`, fact 4). Keys of records sent to or built in a vat come from a fixed vocabulary
@@ -1386,3 +1499,121 @@ milestone by itself.
 18. BOM handling: Syrup now keeps a leading U+FEFF (`5a73049032`), and the Ironhorse `TextDecoder`
     strips a leading BOM unless `ignoreBOM`, as the Encoding Standard requires (J-0111, J-0113,
     J-0192). [as built]
+
+---
+
+## 14. Glossary
+
+The harness's words (HR-SYN-30), from `arch-review/harness-ontology.md` section 5 as reconciled in
+`arch-review/harness.md` section 6 with the core's glossary (`arch-review/core-ontology.md`
+section 5), plus the step 3 structure (4.7-4.9). Bold is the word to use; brackets name words to
+avoid in that sense. Persisted and wire names (`sealedTo`, `epoch` in `context.jsonl`, `label`,
+`members`, tool argument names, `SealedText`) are not renamed: the glossary fixes what they mean.
+Words shared with the core keep the core's sense and are defined there: vat, worker, incarnation,
+crank, delivery, frame, journal, snapshot ("heap snapshot" in harness prose), hub, hub session,
+session epoch, host, host endpoint, native resource, manager, adapter, launcher, registration,
+installation, workspace, retire and forget, durable, ephemeral and transient.
+
+**Places and parts**
+
+1. **harness**: the server in this package: factory, session and exec vats and the agent-host
+   native resource. [not: Floot, Familiar]
+2. **Familiar** is the browser client; **Floot** the persona the model is told it is. Neither
+   names a component.
+3. **operator**: the owner, who holds `Operator`.
+4. **factory**: the installed vat with the session index, presets, inventory and spare pool.
+5. **session**: one agent conversation, one session vat. The core's sense is written **hub
+   session**. [not, in code: conversation, chat]
+6. **session vat**, **exec vat**, **spare**: a session's program vat; its lazily made vat for model
+   code; a vat preloaded with a program and kept by the factory.
+7. **exec scope**: the exec vat's persistent bindings, reached through `ExecHandle.scope()`.
+8. **agent host**: the agent-host manager vat plus its adapter (one Node process per **adapter
+   incarnation**); its facets are `AgentHostAdmin` and a session's **session host facet**.
+9. **gateway**: the HTTP and WebSocket server in the agent-host adapter; the **bridge** is its
+   CapTP side, with the frame guard and the key guard.
+10. **start count**: how many times the factory's start listener ran (`guest/factory/starts.js`).
+    [not: epoch]
+11. **listener handle**: what `onStart` answers. [not: Registration, the core's word]
+
+**Turns**
+
+12. **turn**: one input processed from claim to settle.
+13. **round**: one model request and the tool calls it asks for. [not: step, tool round]
+14. **attempt**: one try of a round's request by a provider module or one pool member.
+15. **turn generation**: the counter that makes late answers of an abandoned turn ignored.
+16. **turn endpoint** (`Endpoint`): the adapter's object for one session's turns. [not: endpoint,
+    the core's host endpoint]
+17. **turn lease**: the answered `holdTurn` call whose break signals a restart. [not: lease alone;
+    `ExecLease` is now `ExecScopeInfo`]
+18. **ports** (`TurnPorts`): what `Backend.open(host)` answers: turn endpoint, publisher, tools,
+    `since` and the adapter services added since M1b.
+19. **sink**: a vat-side object an adapter reports into (`TurnSink`, `AgentHostSink`).
+20. **retired break**: a call rejected with the hub's retired text; from an adapter object it means
+    restart, from a guest vat that the vat is **lost**.
+21. **turn runner**: `turn.js` `makeTurnRunner`, the turn's own life (4.7).
+22. **runtime part**: a per-session job in `runtime-parts.js` with optional **hooks** (called with
+    a **hook turn**, `HookTurn`) and `tools` (4.8). [not: turn hook table]
+23. **delete fence**: the session's one `{ close, closed }` that stops claims once delete begins.
+24. **outbox**: the events of one crank, published once (4.1).
+
+**Records and streams**
+
+25. **turn record**: one entry of the session's **record log** (`TurnRecord`).
+26. **transcript record**: one entry of the projection's output, the format providers read.
+    "Transcript" means this format only.
+27. **context projection**: turn records to transcript records, in the adapter, per round; its
+    per-session copy is the **context cache**, whose compaction counter is the **context epoch**
+    (not the core's session epoch).
+28. **native context**: a round's opaque provider payload (signed thinking, encrypted reasoning),
+    carried as `providerContext`.
+29. **archive** (verb and noun): whole settled turns moved from the record log into **segments**.
+    [not: seal; "seal" means encryption]
+30. **archived ref**: the `{ key }` stand-in for a blob inside archived records.
+31. **history page**: a page of turns, from the vat or, for archived turns, the adapter's
+    `History`; both preview a turn with one **record preview** rule (`record-preview.js`).
+32. **live event**: what a session publishes for viewers, plus the adapter's **delta** and
+    **snapshot event**; the **fold** makes a view of them.
+33. **live delivery**: one numbered live event in a batch. [not: delivery alone, the core's]
+34. **channel**, **publisher**, **subscription**, **watch**: the adapter's stream; the vat's handle
+    to publish on it; a viewer's handle to read it; the snapshot read (`Session.watch`). The
+    subscription plan is written **subscription plan**.
+
+**Input**
+
+35. **submission**, **request id**, **receipt**: what a client sends, its idempotency key, and the
+    session's answer to it.
+36. **queue entry**: a waiting submission ("queued message" to the user); a **hold** stops the
+    queue. [not: pending row, waiting entry, queue item]
+37. **Composer** (the gateway service) and **composer** (the input box); a **draft** is its
+    unsent text.
+
+**Backends and secrets**
+
+38. **backend**: a manager-vat `Backend` of one **backend kind** (`scripted`, `openrouter`,
+    `anthropic`, `claude-pool`, `codex-pool`; `providers/kinds.js`).
+39. **provider**: the vendor behind a kind; its code is a **provider module**, run under the one
+    **provider shell** (4.9). [not: a backend]
+40. **pool** and **member**: a subscription backend and its entry for one login, with its
+    **credential** (the Secret's JSON) and its **account reading**.
+41. **Secret**, **read grant**, **SecretWriter**, **sealed box**: a stored secret, the right to read
+    it, the adapter-local writer, and a value sealed to the adapter's public key.
+42. **store key** `k<n>`, **blob file key** `b<n>`, **archive key** `h<n>`, **history cursor**
+    `h<n>`, **API key**: five keys; the two `h<n>` are different things.
+43. **wrapping key**: the one key behind the secret store, the audit log, the sign-in file and the
+    sealed boxes; one object per adapter incarnation (D-6).
+44. **sign-in secret**: the gateway's password, in its own file (`signin.enc`).
+
+**Objects, tools and presets**
+
+45. **label**: a session's name for an object (its petname); **title**: a display name; **pool
+    name** and **built-in id** for the two keyed uses. [not: label as display name or key]
+46. **attachment**, **package**, **endowment**: an object sent with a label; one message's
+    attachments, open for its turn (not M9's mail package); an object a preset gives a session.
+47. **inventory**: the operator's labelled objects.
+48. **powers**: the per-call object model code receives, and `GatewayPowers`. [not: an options
+    bag, which is **options** or **deps**]
+49. **tool**, by **site**: adapter tool, granted tool, object tools, exec tool; a **tool grant**
+    gives a session a granted tool.
+50. **preset**, **preset snapshot**, **preset template**, **state template**: a session recipe; its
+    frozen copy in a session; a built-in recipe to start from; a prepared state directory for
+    tests and perf. [not: template alone]

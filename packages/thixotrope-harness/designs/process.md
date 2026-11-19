@@ -133,13 +133,13 @@ Commands from the package, one batch each (S2, HR-SYN-18): `corepack yarn test:r
 and the batch's wall time. The lists live in `scripts/test-integration.mjs` `regressionLists`, and
 a unit test keeps every integration, template and browser file in exactly one list.
 
-Last run: the step 1-2 close-out (CL-CLOSE, J-10191), 2026-11-18 21:03-21:31 UTC, at
-`bd4c811b7b` (lane `endo-thix-clean`, after the review's steps 1 and 2), 6 jobs in shared slots,
-load 1.9-5.7, with the long-session template chain (section 3.2) holding one slot beside it.
-**Core list: 25 files, 4,194 s held, 859 s wall (927 s with the unit lane, 15.4 min); milestones
-list: 31 files (26 + 5 browser), 3,301 s held, 703 s wall (11.7 min).** Both fit the 20-minute
-rule. One failure, `m1b-exec-tool` (below), passed alone (154 s held). The X-CLOSE column is the
-run before (2026-11-18 15:33-16:04 UTC at `717e26789f`, `--jobs 5`).
+Last run: the step 3 close-out (T3-CLOSE, J-10251), 2026-11-19 00:09-00:37 UTC, at
+`804398c4d9` (lane `endo-thix-clean`, after the review's step 3, documents edited), 6 jobs in
+shared slots, load 2.0-4.3, with the long-session template chain (section 3.2) holding one slot
+beside it. **Core list: 25 files, 4,344 s held, 922 s wall (989 s with the unit lane, 16.5 min);
+milestones list: 31 files (26 + 5 browser), 3,326 s held, 665 s wall (11.1 min).** Both fit the
+20-minute rule; all 56 files passed. The CL-CLOSE column is the run before (2026-11-18
+21:03-21:31 UTC at `bd4c811b7b`, J-10191).
 
 **The one-run rule no longer holds.** With M3, M4 and M5 the run is 1 unit lane, 51 integration
 files and 5 browser files: **7,263 s held** (unit lane not counted), and the measured wall time was
@@ -158,66 +158,71 @@ finishes inside 20 minutes of wall at six slots:
 - A merge regression is the two lists as two batches (about 25 minutes of wall in all); each batch
   stays inside 20 minutes. Waits for slots are reported apart from held time.
 
-| list | part | file | held s | waited s | exit | X-CLOSE held s |
+| list | part | file | held s | waited s | exit | CL-CLOSE held s |
 |---|---|---|---|---|---|---|
-| core | unit + adapter | `ses-ava` (1,286 passed, 116 skipped; no slot) | 67 (wall) | - | 0 | 67 (wall; 1 load failure) |
-| core | integration | `m1a-provision` | 227 | 0 | 0 | 190 |
-| core | integration | `m1a-slice` | 236 | 0 | 0 | 201 |
-| core | integration | `m1a-slice-crash` | 127 | 0 | 0 | 114 |
-| core | integration | `m1a-slice-restart` | 241 | 0 | 0 | 199 |
-| core | integration | `m1b-content` | 135 | 0 | 0 | 104 |
-| core | integration | `m1b-context-restart` | 228 | 19 | 0 | 226 |
-| core | integration | `m1b-exec-tool` | 163 | 0 | 1 (acceptance 11: the killed exec call answered `4`; alone 154 s, exit 0) | 198 |
-| core | integration | `m1b-exec-tool-restart` | 117 | 101 | 0 | 128 |
-| core | integration | `m1b-followups` | 268 | 0 | 0 | 297 |
-| core | integration | `m1b-live` | 174 | 5 | 0 | 167 |
-| core | integration | `m1b-pool` | 162 | 50 | 0 | 144 |
-| core | integration | `m1b-pool-restart` | 166 | 0 | 0 | 125 |
-| core | integration | `m1b-qc` | 139 | 0 | 0 | 117 |
-| core | integration | `m2-archive-restart` | 168 | 99 | 0 | 166 |
-| core | integration | `m2-archive-restart-2` | 195 | 0 | 0 | 202 |
-| core | integration | `m2-catalog` | 88 | 0 | 0 | 87 |
-| core | integration | `m2-history` | 214 | 0 | 0 | 218 |
-| core | integration | `m2-lifecycle` | 193 | 214 | 0 | 189 |
-| core | integration | `m2-lifecycle-export` | 273 | 0 | 0 | 252 |
-| core | integration | `m2-probes` | 80 | 0 | 0 | 81 |
-| core | integration | `m2-providers` | 84 | 0 | 0 | 92 |
-| core | integration | `m2-queue` | 155 | 0 | 0 | 151 |
-| core | integration | `m2-secrets` | 78 | 0 | 0 | 86 |
-| core | integration | `m2-turns` | 216 | 0 | 0 | 213 |
-| core | integration | `test/template/template.test.js` | 69 | 97 | 0 | 83 |
-| M3 | integration | `m3-gateway` | 143 | 0 | 0 | 114 |
-| M3 | integration | `m3-reconnect` | 165 | 0 | 0 | 159 |
-| M3 | integration | `m3-sessions` | 130 | 0 | 0 | 118 |
-| M3 | browser | `m3-ui` | 116 | 0 | 0 | 110 |
-| M3 | browser | `m3-ui-restart` | 215 | 0 | 0 | 202 |
-| M3 | browser | `m3-ui-history` | 92 | 340 | 0 | 110 |
-| M4 | integration | `m4-accounts` | 89 | 0 | 0 | 86 |
-| M4 | integration | `m4-catalog` | 88 | 0 | 0 | 86 |
-| M4 | integration | `m4-pools` | 97 | 0 | 0 | 101 |
-| M4 | integration | `m4-provision` | 96 | 0 | 0 | 103 |
-| M4 | integration | `m4-reachability` | 83 | 0 | 0 | 86 |
-| M4 | integration | `m4-renewal` | 96 | 0 | 0 | 93 |
-| M4 | integration | `m4-restart` | 176 | 0 | 0 | 180 |
-| M4 | integration | `m4-restart-renewal` | 108 | 0 | 0 | 101 |
-| M4 | integration | `m4-retire` | 79 | 0 | 0 | 79 |
-| M4 | integration | `m4-secrets` | 88 | 0 | 0 | 89 |
-| M4 | integration | `m4-wire` | 109 | 0 | 0 | 110 |
-| M4 | browser | `m4-ui` | 83 | 80 | 0 | 95 |
-| M5 | integration | `m5-grants` | 79 | 0 | 0 | 86 |
-| M5 | integration | `m5-grants-restart` | 107 | 0 | 0 | 118 |
-| M5 | integration | `m5-labels` | 105 | 0 | 0 | 106 |
-| M5 | integration | `m5-mentions` | 77 | 7 | 0 | 74 |
-| M5 | integration | `m5-mentions-restart` | 114 | 76 | 0 | 93 |
-| M5 | integration | `m5-objects` | 93 | 0 | 0 | 95 |
-| M5 | integration | `m5-presets` | 123 | 0 | 0 | 110 |
-| M5 | integration | `m5-presets-inventory` | 121 | 0 | 0 | 98 |
-| M5 | integration | `m5-prompt` | 90 | 104 | 0 | 95 |
-| M5 | integration | `m5-reachability` | 86 | 0 | 0 | 81 |
-| M5 | integration | `m5-security` | 87 | 0 | 0 | 77 |
-| M5 | integration | `m5-snapshot` | 72 | 0 | 0 | 75 |
-| M5 | browser | `m5-ui` | 91 | 5 | 0 | 105 |
+| core | unit + adapter | `ses-ava` (1,328 passed, 116 skipped; no slot) | 67 (wall) | - | 0 | 67 (wall) |
+| core | integration | `m1a-provision` | 222 | 0 | 0 | 227 |
+| core | integration | `m1a-slice` | 236 | 0 | 0 | 236 |
+| core | integration | `m1a-slice-crash` | 134 | 0 | 0 | 127 |
+| core | integration | `m1a-slice-restart` | 247 | 0 | 0 | 241 |
+| core | integration | `m1b-content` | 134 | 18 | 0 | 135 |
+| core | integration | `m1b-context-restart` | 239 | 0 | 0 | 228 |
+| core | integration | `m1b-exec-tool` | 182 | 88 | 0 | 163 |
+| core | integration | `m1b-exec-tool-restart` | 115 | 0 | 0 | 117 |
+| core | integration | `m1b-followups` | 297 | 44 | 0 | 268 |
+| core | integration | `m1b-live` | 184 | 0 | 0 | 174 |
+| core | integration | `m1b-pool` | 190 | 0 | 0 | 162 |
+| core | integration | `m1b-pool-restart` | 185 | 0 | 0 | 166 |
+| core | integration | `m1b-qc` | 150 | 21 | 0 | 139 |
+| core | integration | `m2-archive-restart` | 175 | 0 | 0 | 168 |
+| core | integration | `m2-archive-restart-2` | 199 | 0 | 0 | 195 |
+| core | integration | `m2-catalog` | 95 | 0 | 0 | 88 |
+| core | integration | `m2-history` | 231 | 0 | 0 | 214 |
+| core | integration | `m2-lifecycle` | 197 | 0 | 0 | 193 |
+| core | integration | `m2-lifecycle-export` | 257 | 140 | 0 | 273 |
+| core | integration | `m2-probes` | 80 | 0 | 0 | 80 |
+| core | integration | `m2-providers` | 85 | 0 | 0 | 84 |
+| core | integration | `m2-queue` | 152 | 0 | 0 | 155 |
+| core | integration | `m2-secrets` | 79 | 0 | 0 | 78 |
+| core | integration | `m2-turns` | 208 | 0 | 0 | 216 |
+| core | integration | `test/template/template.test.js` | 71 | 0 | 0 | 69 |
+| M3 | integration | `m3-gateway` | 155 | 0 | 0 | 143 |
+| M3 | integration | `m3-reconnect` | 175 | 0 | 0 | 165 |
+| M3 | integration | `m3-sessions` | 133 | 0 | 0 | 130 |
+| M3 | browser | `m3-ui` | 113 | 0 | 0 | 116 |
+| M3 | browser | `m3-ui-restart` | 216 | 0 | 0 | 215 |
+| M3 | browser | `m3-ui-history` | 110 | 47 | 0 | 92 |
+| M4 | integration | `m4-accounts` | 89 | 0 | 0 | 89 |
+| M4 | integration | `m4-catalog` | 89 | 0 | 0 | 88 |
+| M4 | integration | `m4-pools` | 100 | 0 | 0 | 97 |
+| M4 | integration | `m4-provision` | 104 | 0 | 0 | 96 |
+| M4 | integration | `m4-reachability` | 86 | 0 | 0 | 83 |
+| M4 | integration | `m4-renewal` | 92 | 0 | 0 | 96 |
+| M4 | integration | `m4-restart` | 175 | 0 | 0 | 176 |
+| M4 | integration | `m4-restart-renewal` | 107 | 0 | 0 | 108 |
+| M4 | integration | `m4-retire` | 82 | 0 | 0 | 79 |
+| M4 | integration | `m4-secrets` | 94 | 0 | 0 | 88 |
+| M4 | integration | `m4-wire` | 110 | 191 | 0 | 109 |
+| M4 | browser | `m4-ui` | 81 | 0 | 0 | 83 |
+| M5 | integration | `m5-grants` | 79 | 0 | 0 | 79 |
+| M5 | integration | `m5-grants-restart` | 114 | 0 | 0 | 107 |
+| M5 | integration | `m5-labels` | 106 | 0 | 0 | 105 |
+| M5 | integration | `m5-mentions` | 79 | 0 | 0 | 77 |
+| M5 | integration | `m5-mentions-restart` | 97 | 0 | 0 | 114 |
+| M5 | integration | `m5-objects` | 92 | 0 | 0 | 93 |
+| M5 | integration | `m5-presets` | 120 | 10 | 0 | 123 |
+| M5 | integration | `m5-presets-inventory` | 101 | 0 | 0 | 121 |
+| M5 | integration | `m5-prompt` | 91 | 112 | 0 | 90 |
+| M5 | integration | `m5-reachability` | 85 | 0 | 0 | 86 |
+| M5 | integration | `m5-security` | 84 | 0 | 0 | 87 |
+| M5 | integration | `m5-snapshot` | 75 | 0 | 0 | 72 |
+| M5 | browser | `m5-ui` | 94 | 0 | 0 | 91 |
 
+T3-CLOSE: 56 files, 7,670 s held (CL-CLOSE 7,494 s, +2.3 %), none over 5 minutes held (longest
+`m1b-followups` 297 s, `m2-lifecycle-export` 257 s), none timed out, none failed (`m1b-exec-tool`,
+CL-CLOSE's load flake, passed at 182 s held). Waits are slot waits behind the template chain
+(`m4-wire` waited 191 s, `m2-lifecycle-export` 140 s). The milestone templates were rebuilt first
+(guest and adapter bundles changed in step 3): 169 s wall for the six in parallel (J-10250).
 CL-CLOSE: 56 files, 7,494 s held (X-CLOSE 7,263 s), none over 5 minutes held (longest
 `m2-lifecycle-export` 273 s, `m1b-followups` 268 s), none timed out. Waits are slot waits behind
 the template chain and the list's own files (`m3-ui-history` waited 340 s for a slot). The one
@@ -305,6 +310,22 @@ under the new keys first, section 3.1; rows and readings `JOURNAL.md` J-10192):
 | `perf/gateway.perf.mjs` | 329 | 1 | `ui.deltaFanout` 5 deliveries over 1,100 deltas (0.0045 per delta, budget 0; X-CLOSE 0, the lane 0.007-0.010: carried, intermittent) |
 | `perf/subscriptions.perf.mjs` | 209 | 0 | - (`subscriptions.turnStart` median 248 ms, rerun 110 ms, held 207 s: one bimodal window) |
 | `perf/exec-m5.perf.mjs` | 275 | 1 | `exec.tooBig.probe.b`: the 200 KB help is refused by the hub since CC-027 and the file's check does not accept that outcome (the integration test does since `385b8a703c`); not from the fold |
+
+**T3-CLOSE mini-pass after the review's step 3** (2026-11-19 00:37:28-01:14:06 UTC, at
+`804398c4d9` with only documents edited, load 1.6-4.3: 6 files, **1,159 s held, 2,198 s of wall**,
+1,038 s of it waiting for the long-session chain's shared steps; the cross-check, plus `history`
+and `archive` (the turn runner and the archive coupling moved) and `exec-m5` (the too-big probes);
+each file run as `perf:pass` runs it, templates rebuilt first; rows and readings `JOURNAL.md`
+J-10252):
+
+| file | held s | exit | budget misses that set the exit |
+|---|---|---|---|
+| `perf/session.perf.mjs` | 160 | 0 | - (`session.createCold` 6,379 ms, CL-CLOSE 6,095) |
+| `perf/turn.perf.mjs` | 129 | 0 | - (2 deliveries per turn start, 3 per round, 1 lease: unchanged) |
+| `perf/exec.perf.mjs` | 110 | 0 | - |
+| `perf/history.perf.mjs` | 240 | 1 | `archive.flat.turnStart.at1000` 1.83 x (258 ms against 141 at 200; K2 1.99 x, carried) |
+| `perf/archive.perf.mjs` | 245 | 0 | - (`archive.stall.at200` p99 1,233 ms, K2 1,239) |
+| `perf/exec-m5.perf.mjs` | 275 | 0 | - (`exec.tooBig.probe.b` now `helpUnavailable`, passes: CL-CLOSE's miss is gone) |
 
 **M0-M2** (last run at the M2 close-out; not rerun at X-CLOSE except the cross-check above):
 
@@ -400,9 +421,14 @@ kept every layer. From M6 on (PM rulings, 2026-11-18; the naming and code rules 
   reviewed by that module's owner. A copy of more than 15 lines is a review finding.
 - **Duplicate ceiling.** `corepack yarn lint:duplicates` (part of `yarn lint`) runs
   `arch-review/tools/find-duplicates.mjs` over `guest`, `resources` and `ui` and fails above
-  3.25 % of normalised lines in repeated blocks (measured 3.00 %, 802 of 26,741 lines, at
-  `f6a844cbbf` after the fold; 3.22 % at `802bd2767c`, when the ceiling was 3.5 %). A change that
-  lowers the share lowers the ceiling in the same commit; nobody raises it.
+  2.05 % of normalised lines in repeated blocks (set by `d94ad96129` in step 3; measured 1.80 %,
+  478 of 26,614 lines in 23 clusters, at `804398c4d9`; 3.00 % after the fold under a 3.25 %
+  ceiling; 3.22 % at `802bd2767c` under 3.5 %). A change that lowers the share lowers the ceiling
+  in the same commit; nobody raises it.
+- **A shared index is shared.** Units in one worktree share git's index: stage a deletion or
+  rename in the same command as its commit (`git rm` and `git commit -- <paths>` together), and
+  always commit with a pathspec. In step 3 a `git rm` staged ahead was carried into another unit's
+  commit and left HEAD broken for one commit (J-10213, J-10223).
 - **Fakes from the real guards.** A fake is a `makeExo` with the product's interface guard, or
   the product's own assembly; a hand `Far` object or a re-assembled program is a review finding,
   and so is a product branch only tests take.

@@ -101,7 +101,8 @@ one that names `H/test/*/m6-*` or an `interfaces-m6.js`).
    milestone's module instead of copying it; the export is a one-line seam listed in the lane's
    contract and reviewed by the module's owner. Copying more than 15 lines is a review finding.
    `corepack yarn lint:duplicates` fails above the duplicate ceiling (`scripts/check-duplicates.mjs`:
-   3.25 % of normalised lines over `guest`, `resources` and `ui`; measured 3.00 % at `f6a844cbbf`);
+   2.05 % of normalised lines over `guest`, `resources` and `ui` since step 3, `d94ad96129`;
+   measured 1.80 %, 478 of 26,614 lines, at `804398c4d9`; 3.25 % and 3.00 % after the fold);
    the ceiling only goes down.
 4. **Fakes are built from the real guards** (T5): `makeExo` with the product's interface,
    assemblies exported by the product rather than re-assembled in a fixture; a product branch
@@ -114,6 +115,18 @@ one that names `H/test/*/m6-*` or an `interfaces-m6.js`).
    stands for an object, a reason or a position?"; a list of files is explicit, never a glob.
 7. **A new job names its module** (T7): when a contract adds a job to an existing closure, it
    names the module the job lives in.
+
+**Where later jobs go after step 3 of the review** (`arch-review/step3-plan.md`; as built:
+`architecture.md` 4.7-4.9, D-6, D-8, D-18; J-10200..J-10253). A per-session job is a runtime
+part (`guest/session/runtime-parts.js`, 4.8), never a new member of `turn.js`; its hooks are
+synchronous and get a `HookTurn { active, round, append, emit }`, which can add records and
+events to the crank but cannot change the round request or skip a round (M8's tool-less summary
+round needs a contract addition there, J-10253). A backend kind is one `backendKinds` entry in
+`AH/providers/kinds.js` under the provider shell; a pool kind also adds one line to
+`providerOfKind` in `guest/lib/subscription-texts.js` (a guest file: templates rebuild). A feed
+builds on `AH/channel-subscriber.js`; an atomic file write uses `AH/files.js`; anything keyed by
+the wrapping key takes the incarnation's `makeWrappingKey` object. A history or archive preview
+uses `guest/lib/record-preview.js`, and usage arithmetic `guest/lib/usage-counts.js`.
 
 ## Order and parallelism
 
