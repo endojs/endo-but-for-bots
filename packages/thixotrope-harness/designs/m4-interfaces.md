@@ -721,7 +721,7 @@ allowed; names and signatures are fixed). Types: `resources/agent-host/impl/subs
 | file | export |
 |---|---|
 | `guest/lib/interfaces-m4.js` (vat and Node) | `m4Shapes`, `m4Interfaces`, `m4MethodNames`, `m4SinkMethodGuards()`, `m4SinkMethodNames`, `vocabularyShapes()` (M3's key guard, 9.1 item 2); re-exports of `texts-m4.js` and `limits-m4.js` |
-| `guest/lib/texts-m4.js` (vat and Node) | `m4Texts`, `m4TextOf`, `codexExplanations`, `m4Codes`, `poolKinds`, `providerOfKind` |
+| `guest/lib/texts-m4.js` (vat and Node) | `m4Texts`, `m4TextOf`, `codexExplanations`, `m4Codes`, `poolKinds`, `providerOfKind` (as built after step 3, in `guest/lib/subscription-texts.js`: `providerOfKind` and `poolKinds` are the pools' own table keyed by the kind string, read by `subscriptions/`; the adapter's provider code matches a kind only through `kindOf(spec)` in `AH/impl/providers/kinds.js`. A later pool kind adds one line to this table; no milestone adds a second table keyed by `spec.kind`) |
 | `guest/lib/limits-m4.js` (vat and Node) | `m4Limits` |
 | `resources/agent-host/impl/subscriptions/types.js` (Node) | JSDoc types only |
 

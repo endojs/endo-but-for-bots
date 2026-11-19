@@ -4,7 +4,12 @@
  * "Hook tables": later milestones add entries, never edit another's): one
  * entry per `BackendSpec.kind`, each from its own module, carrying
  * everything the adapter decides by kind, so `kindOf(spec)` is the one
- * place a spec's kind is matched.
+ * place a spec's kind is matched by the adapter's provider code. One other
+ * table is keyed by the kind string: `providerOfKind` and `poolKinds`
+ * (`guest/lib/subscription-texts.js`), the pools' own table, shared with
+ * the guest, which the pool code (`subscriptions/`) reads to tell a Claude
+ * pool from a Codex one. A later kind adds its entry here and, only if it
+ * is a pool kind, one line to that table; it never adds a third table.
  *
  * Node only (adapter).
  */
