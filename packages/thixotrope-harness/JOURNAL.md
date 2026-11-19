@@ -15024,3 +15024,51 @@ Reading: W6.3b adds no guest code (both modules are adapter modules): 0 of M6's 
 uncommitted session edits. `lint:duplicates` 1.86 % (ceiling 2.05 %). No command over 60 s (the
 longest, the perf probe, 33 s). Nothing pushed; no change to `packages/thixotrope` or `rust/**`.
 Fit: neutral.
+
+### J-12080 2026-11-19 W6.6 Sandbox execution section and composer refusal - built
+Evidence: `0142a2963f`, `f26eda0a01`; `test/unit/ui-environment.test.js` (9),
+`test/browser/environment-ui.test.mjs` (2 cases; the first run, the second not yet runnable).
+Reading: `ui/src/environment/` (seam U-1) fills `session.settings` with "Sandbox execution"
+(R6-57): the status line, Fae's explanation, Emergency stop (Retry emergency stop while
+`stopping`) or Resume session, the session's rejection text shown as an alert, the buttons disabled
+while an action runs, and a note while the queue stays held `stopped` after resume. The state comes
+from `Session.getExecutionState()` and then from the live `execution` event: the controller hands
+no vat event to features, so the section holds its own `Live.subscribe` while it is shown and reads
+only `execution` deliveries from it. A session without an environment is read once
+(`supported: false` cannot change: services are fixed at creation) and gets no subscription; the
+section renders nothing. Order: read, subscribe, read again (events are in order, so the last one
+is the newest state); a closed subscription is reopened and re-read, at most 3 times in a row with
+nothing but snapshots between. The session is found with the accounts feature's
+`activeSessionOf` (imported, not copied). Seam C-1: `SUBMIT_REFUSALS` gains
+`texts.sessionStopped`, so a staged submission a stopped session refuses has its file deleted.
+Fit: good.
+
+### J-12081 2026-11-19 W6.6 measured - measured
+Evidence: `corepack yarn test test/unit/ui-environment.test.js` and the UI suites beside it (45
+tests, 1.1 s); the browser case "a session without an environment" through `run-lock.mjs
+--shared` at `0142a2963f` (65.3 s in the test, 2 min 4 s with the slot and the template start);
+`m3-ui-build` at `0142a2963f`.
+Reading: UI bundle 311,224 bytes, 102,463 gzipped, within its budget, with the feature collected.
+Session program: W6.6 adds no guest code (0 of M6's 6,400 bytes; the composer is an adapter
+module). No vat message on a turn: the section's calls are user actions and Settings reads.
+Cost: while Settings is open on a shell session, every delivery of that session's channel (deltas
+included) goes to the page twice, and each open costs two `getExecutionState` deliveries to the
+session vat.
+Fit: neutral.
+
+### J-12082 2026-11-19 W6.6 fit and gaps - finding
+Reading: what suits Thixotrope here: the execution state is a session heap value published in the
+crank that changes it, so a page needs no polling and every device sees a stop made elsewhere
+(R6-59). What does not: the UI controller drops vat events it does not know, so a feature that
+wants one opens a second channel subscription (a `FeatureContext` event tap in the controller would
+remove it; M3's file). Acceptance 19 cannot run before the lane's environments template exists
+(`test/integration/_environments.js`); and the new browser file is not yet in a regression list,
+so `test/integration-runner.test.js` fails until the `environments` list (K-2) names it.
+Fit: awkward.
+
+### J-12083 2026-11-19 W6.6 time record - process
+Evidence: first command 2026-11-19T02:23:30Z, last 2026-11-19T02:34:03Z.
+Reading: one command over 60 s (the browser case, 2 min 4 s under a shared slot). Commits
+`0142a2963f`, `f26eda0a01` and this journal commit; nothing pushed; no change to
+`packages/thixotrope` or `rust/**`.
+Fit: neutral.
