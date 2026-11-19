@@ -51,7 +51,27 @@ const identity = [
 const writeFiles = `const fs = require('fs'); for (let d = 0; d < 100; d += 1) { fs.mkdirSync('tree/d' + d, { recursive: true }); for (let f = 0; f < 100; f += 1) fs.writeFileSync('tree/d' + d + '/f' + f + '.txt', 'file ' + d + ' ' + f + ' of the status fixture\\n'); }`;
 /** 30 modified tracked files and 2 untracked ones. */
 const touchFiles = `const fs = require('fs'); for (let f = 0; f < 30; f += 1) fs.appendFileSync('tree/d0/f' + f + '.txt', 'changed\\n'); fs.writeFileSync('new-a.txt', 'a'); fs.writeFileSync('new-b.txt', 'b');`;
-const commits = `for i in $(seq 1000); do git ${identity.join(' ')} commit -q --allow-empty -m "commit $i" || exit 1; done`;
+// Import the same linear history in one Git process during fixture setup.
+// Each commit inherits the tree from its parent, including the 10,000 files.
+const commits = `
+  const { execFileSync } = require('node:child_process');
+  const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+  const ref = git('symbolic-ref', 'HEAD');
+  const base = git('rev-parse', 'HEAD');
+  const stream = [];
+  for (let i = 1; i <= 1000; i += 1) {
+    const message = 'commit ' + i;
+    stream.push('commit ' + ref, 'committer perf <perf@example.invalid> ' + (1700000000 + i) + ' +0000',
+      'data ' + message.length, message);
+    if (i === 1) stream.push('from ' + base);
+    stream.push('');
+  }
+  execFileSync('git', ['fast-import', '--quiet'], { input: stream.join('\\n') + '\\ndone\\n' });
+  if (git('rev-list', '--count', base + '..HEAD') !== '1000' ||
+      git('rev-parse', base + '^{tree}') !== git('rev-parse', 'HEAD^{tree}')) {
+    throw Error('Git fixture history or tree mismatch');
+  }
+`;
 
 const workspace = "const w = await E(powers).lookup('workspace');";
 
@@ -61,7 +81,7 @@ const script = harden({
       [commandCall('node', ['-e', writeFiles])],
       [commandCall('git', ['add', '-A'])],
       [commandCall('git', [...identity, 'commit', '-q', '-m', 'tree'])],
-      [commandCall('sh', ['-c', commits])],
+      [commandCall('node', ['-e', commits])],
       [commandCall('node', ['-e', touchFiles])],
     ]),
     commandTurn('status', [
