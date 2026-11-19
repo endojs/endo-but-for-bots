@@ -2,7 +2,35 @@
 
 The November release measurements used worker `367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25`, the allocation GC policy and a 50-million-computron crank budget. The mail release benchmark has four clients, eight recipient sessions and a paged operator inbox. A completed post includes the recipient's scripted turn and dismissal of its reply. [Mail contract, section 10](m9-interfaces.md#10-performance-fixed-windows-perf_window_scale-scales-them)
 
-## Where the time went
+## Where to start on the current mail workload
+
+**Profile mark traversal and the work done for each reclaimed slot.** A November 20 capture ran the three stock 60 s prefix phases on the same daemon as a 15 s four-client traffic window. It used the guest sources from `69997bd0c5`, the normal allocation schedule and a locally built phase-timing worker. All 46 posts completed and were dismissed in 16.357 s (2.812/s). Every factory reply matched exactly one native request. Seven of the 46 collected, each in two rounds. The other 39 did no collection.
+
+| Median collecting reply, by total collector time | First round | Follow-up after finalizers |
+|---|---:|---:|
+| Whole collection | 195.900 ms | 68.741 ms |
+| Mark slot and side-table edges | 71.000 ms | 62.192 ms |
+| Sweep slots and run reclaim hooks | 115.644 ms | 2.195 ms |
+| Enumerate roots | 0.139 ms | 0.065 ms |
+| Compact chunks | 1.372 ms | 1.112 ms |
+| Late side-table pruning | 4.490 ms | 0.113 ms |
+| Slots reclaimed | 158,359 | 2,106 |
+| Slots marked / edges visited | 89,448 / 146,986 | 89,457 / 146,994 |
+
+These are two rounds of the *same* selected reply. Both scanned a capacity of 732,334 slots and gathered 919 roots. Across all seven collecting replies, the first sweep cost 97–120 ms, compared with 2.2–3.2 ms on the follow-up. The sweep timer includes dead-slot table cleanup. Instrument that cleanup separately from scanning and freeing slots. Both rounds traced almost the same live graph, which also makes mark traversal a candidate for reducing recurring work. Collection time over the window totaled 3.175 s in factory row changes, 1.840 s in factory replies and 1.837 s in factory sends. The crank that triggers collection can pay for earlier allocations. [Slot sweep](../../../rust/engine/ironhorse-vm/src/value.rs) · [Reclaim hooks and early/late table pruning](../../../rust/engine/ironhorse-vm/src/interp/gc_tables.rs) · [Mark and compaction](../../../rust/engine/ironhorse-vm/src/gc.rs)
+
+**Trace the previous recipient crank when an acknowledgment is slow.** Across 101 instrumented operator sends, median ACK was 140.378 ms when neither the factory nor the recipient collected (39 sends), 226.705 ms with confirmed recipient collection only (29), 336.739 ms with factory collection only (7), and 364.314 ms with both (24). In two other sends the recipient collection crossed a timing boundary and could not be placed precisely. For the overall median send (210.613 ms), a previously running recipient crank occupied the first 81 ms and the factory did no collection. The factory's send, the recipient's delivery, the factory row update and the returned receipt still followed. Each measured ACK ends at the caller's receipt. Observer timings are diagnostic. The uninstrumented 60 s release median for this source was 216.441 ms. [Release and workload comparison](../JOURNAL.md#j-12552-2026-11-20-wxf-exact-sizing-comparisons-and-full-factory-result)
+
+**Measure the host separately.** During those 46 traffic posts, the hub handled 687 inbound delivery calls and 1,390 frames. Its synchronous delivery time totaled 7.947 s, including 5.127 s in 939 persistence calls and 2.551 s in 1,194 send calls. Serialization accounted for 0.297 s inside persistence. The log recorded 890 appends and five compactions. These timers include nested work, and worker and hub activity can overlap. For host-side improvements, time the log delta computation and the write inside the storage call before changing either one. [Hub counters](../../thixotrope/src/net/hub.js) · [Hub log store](../../thixotrope/src/store/hub-log-store.js)
+
+The compact phase record includes both worker and bundle digests, the exact counters, the timing boundaries and the capture hashes. Both local branches are retained in the harness Git repository. Run this from its root to read the record and inspect the workload overlay.
+
+```sh
+git show 59369d4afee4:rust/engine/benches/results/thixotrope-warm-factory-gc.json
+git show --stat 419e73c1b471
+```
+
+## Earlier factory and startup measurements
 
 | Observation | Workload and evidence | What to investigate |
 |---|---|---|
@@ -15,6 +43,8 @@ The method-level traces used temporary host instrumentation. For each factory or
 The full mail benchmark and the instrumented diagnostics use different windows. Under the same release implementation the full exclusive benchmark recorded 146.447 ms median acknowledgment and 2.670 completed posts/s. A trace of one recipient or one vat cannot establish aggregate throughput. Different vats can execute at the same time. [Full mail measurements](../JOURNAL.md#j-12549-2026-11-19-wxf-fresh-mail-growth-baseline)
 
 The four-window comparison of single-recipient delivery identifies a shared bottleneck. Taking the union of the matched host-delivery intervals for the single factory vat covered 99.55–99.62% of each traffic window, including its final drain. In the two candidate windows, 328 and 314 factory cranks occupied 16.772 and 16.775 s. Of those totals, collection accounted for 8.718 and 9.106 s, and guest execution for 3.280 and 3.189 s. The factory handled 104 and 100 session-row updates for 52 and 50 completed posts. This makes factory wall time per completed post a useful comparison even when load is spread over eight recipients. [Matched workload and delivery rates](../JOURNAL.md#j-1478-2026-11-19-wxf-single-recipient-mail-comparison)
+
+The two 60 s fresh-daemon runs at the end of the factory comparison also show the collection cadence. All 118 collecting factory cranks on the control and all 133 on the candidate ran two rounds. The median gap between collecting cranks was nine factory deliveries on each side. Record both the collection trigger and work in each round when evaluating a change to the VM. [Factory comparison](../JOURNAL.md#j-12552-2026-11-20-wxf-exact-sizing-comparisons-and-full-factory-result)
 
 ## A collector profile that would distinguish the costs
 

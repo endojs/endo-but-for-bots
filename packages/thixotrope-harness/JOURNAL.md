@@ -18650,3 +18650,36 @@ completed post. These are component sums across 1,081 and 1,214 factory
 cranks, including the reply drain. They apply to fresh four-client traffic.
 The contractual throughput row runs after the 60 s ACK, session and 255-row
 inbox windows on the same daemon. J-12552 gives the full-release result.
+
+### J-12562 2026-11-20 M9 warmed mail phase attribution
+
+The allocation-scheduled research worker ran the stock 60 s ACK, session and
+255-message inbox phases on the same daemon, then 15 s of ordinary traffic.
+Guest and perf sources matched `69997bd0c5` apart from the private observation
+entry and trace hooks. Four clients completed and dismissed 46 posts in
+16.357 s (2.812/s). All 46 factory reply requests matched their host delivery.
+Seven collected twice. On the median collecting reply the native collector
+used 264.640 ms. The first round swept and ran reclaim hooks for 115.644 ms
+while removing 158,359 slots. The follow-up took 2.195 ms to remove 2,106.
+Marking cost 71.000 and 62.192 ms. The two rounds gathered 919 roots each,
+in 0.139 and 0.065 ms. Chunk compaction took 1.372 and 1.112 ms. Across the
+window, factory row updates accounted for 3.175 s of collection versus
+1.840 s in replies and 1.837 s in sends.
+
+Of 101 operator ACKs, 39 with no overlapping collection in either vat had
+median 140.378 ms. The 29 with recipient collection only had median
+226.705 ms, seven with factory collection only 336.739 ms, and 24 with
+both 364.314 ms. Placement was uncertain for two more recipient collections.
+Fifteen ACKs began while a preceding recipient crank was still running.
+In the median 210.613 ms ACK, that crank occupied the first 81 ms, including
+about 73–83 ms of collection. The factory did no collection during this ACK.
+
+The hub's 7.947 s of synchronous inbound delivery work during traffic included
+5.127 s in persistence, of which 0.297 s was serialization. These times
+overlap some native work. Six bounded replay, ordered cleanup, and metering
+checks passed with detail enabled and again with it disabled. Research worker
+`4a3fc4926cd505f0d5e9f6c085be898102b929081245c4b161e133fec80dba08`
+ran this diagnostic. The [developer guide](designs/ironhorse-performance.md)
+links source, counters and the command to retrieve the compact phase record
+at `59369d4afee4` and capture entry at `419e73c1b471`. Both are retained on
+local branches. The release result on the pinned worker is J-12552.

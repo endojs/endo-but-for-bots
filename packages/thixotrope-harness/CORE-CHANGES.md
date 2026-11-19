@@ -1206,3 +1206,17 @@ when the core lane makes the change.
 | CC-120 | M11 (conditional) | an adapter process exits when its supervisor dies even if its IPC channel stays open; reserved, asked only if K11-1 finds an engine alive | requested, not built (reserved) | K11-1's process check |
 
 CC-093..CC-099, CC-102..CC-109, CC-113..CC-119 and CC-121..CC-129 are not used.
+
+## Local Ironhorse experiments for M9
+
+The harness benchmark uses the release worker pinned in the README. These
+research branches are retained in the same local Git repository. The
+[performance note](designs/ironhorse-performance.md) connects the source,
+workloads, functional checks and measurements.
+
+| ID | Local experiment | Evidence and disposition |
+|---|---|---|
+| CC-130 | Reuse outgoing-edge traversal storage in the mark worklist. | `59dabaf09a` on `codex/mail-gc-edge-scratch`. The synthetic collector improved. The ordinary-mail baseline completed 51 posts and the candidate 50 (J-12560). |
+| CC-131 | Return individual sweep and notification timings on timing-enabled worker delivery. | `3646bd8307` on `codex/thix-worker-sweep-timing`. Timed and untimed workers emitted the same ordered frames in the bounded checks (J-1476). |
+| CC-132 | Port the core mail phase profiler to the allocation-triggered worker. | Worker `67f844b057`, compact record `59369d4afee4`, capture entry `419e73c1b471`. Two sweeps on the median collecting factory reply took 195.900 and 68.741 ms (J-12562). |
+| CC-133 | Investigate grouping early side-table cleanup after slot reclamation and before chunk compaction. | Assigned for isolated implementation and correctness checks. The median first sweep and its per-slot hooks took 115.644 ms in J-12562. |
