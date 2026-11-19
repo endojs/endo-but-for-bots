@@ -29,12 +29,20 @@ import {
 
 takeIntegrationLock(test, 'subagent environment isolation');
 const run = integrationEnabled ? test.serial : test.skip;
+/** @type {Awaited<ReturnType<typeof environmentsTemplate>>} */
+let template;
+if (integrationEnabled) {
+  test.before(async t => {
+    t.timeout(5 * 60_000);
+    template = await environmentsTemplate();
+  });
+}
 
 run(
   'a child has its own workspace and shell while the parent is stopped',
   async t => {
     t.timeout(5 * 60_000);
-    const state = await startFromTemplate(await environmentsTemplate(), { t });
+    const state = await startFromTemplate(template, { t });
     const slice = await makeSlice(state);
     const script = harden({
       turns: [
