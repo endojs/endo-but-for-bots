@@ -15364,3 +15364,58 @@ supervisor and no run lock used. `tsc` clean; eslint 0 errors on the changed fil
 (ceiling 2.05 %). Unit suites run: the crank-order suites of P3 5, M5's session and package
 suites, the mail, request and subagent tool suites, `runtime-parts`, `session-inbox`: all pass.
 Fit: neutral.
+
+### J-12500 2026-11-19 W9.9 factory wiring - built
+Evidence: `28eda9f491`, `a659e74b12`; `test/unit/factory-mail-wiring.test.js` (8 tests),
+`test/unit/mail-prompt.test.js` (6); the factory, prompt, lifecycle, provisioning, post-office,
+operator-mail and subagent-tree unit files (152 and 104 tests in two runs) pass.
+Reading: F1: `makeFactoryKit` makes `makePostOffice({ admin, rows, starts, lastKnownTime })`,
+then `makeOperatorMail` (it registers the operator inbox), then `makeSubagents({ create,
+deleteSession, rows, postOffice, starts, admin, settings })`; `Operator.getMail` answers
+`operatorMail.mailbox`; `recover()` runs `postOffice.restart(current)` and
+`subagents.restart(current)` after the creations' recovery and awaits them with the probes and
+the deletes. F2: the one `buildSessionServices` context gains `row`, `postOffice`, `subagents`,
+`resolved`, and, for a subagent only, `delegated` (its listed attachments). F3: `create(options,
+{ importing?, parent?, endowments?, link? })` stores `parent` on the row through `rows.add`,
+calls `link(row)` right after it, and `rows.isListed` skips a row with a parent (page and list
+feed); `findSession` still finds it. F4: `mailServices` (`mail` = the row's outbox,
+`operatorAddress`; a subagent's `endowments` replaced by `delegated`, `[]` when none) and
+`subagentServices` (`subagents` = `delegationFor(row, resolved)`, absent at `maxDepth`). F5:
+`makeDeletions({ ..., hooks: harden([context => subagents.deleteChildren(context)]) })`, one
+entry; the environments lane's release appends as the second. The post office's
+`rowRemoved(row)` runs when a delete dropped its row: the kit's `deleteSession` (the factory
+method, the subagent tree's injected delete and the import rollback all use it) and, after a
+restart, every row `deletions.resume()` dropped. F7: `guest/lib/mail-prompt.js` adds part 2
+`mailTools` (Fae's mail list with `dismiss`, the request tools and the `user` recipient added,
+the raw-mailbox paragraph dropped, the runner's two closing sentences kept) and part 4
+`delegation` (Fae's words, "These Endo tools" -> "These tools"), both applying to every session.
+Fit: good: the kit's late binding (hooks and `create` close over objects made after them)
+needs no registry or name; the delete hook and the post office's row removal are plain closures.
+
+### J-12501 2026-11-19 W9.9 contract differences and sizes - finding
+Evidence: m9-interfaces.md F1, F4, F5, F7; `guest/factory/delete.js` (hooks run before step 1);
+`guest/factory/root.js` `makeHarnessSettings`; `node scripts/bundle-guest.mjs` at `a659e74b12`.
+Reading: (1) `rowRemoved` is not in a delete hook: hooks run before the fence, and dropping the
+row's `seq` there would let a delivery in the few cranks before `deleteSelf` restart at seq 1 and
+be answered as a duplicate; it runs after the row is dropped instead. (2) `settings` passed to
+the tree is `{ current }` over `harnessSettings`, but `makeHarnessSettings.set` stores no
+`maxDescendants`, `maxDepth` or `askTimeoutSeconds` (F6 admits them in the guard only), so the
+tree reads `mailLimits` until `root.js` stores them (acceptance 8's "`maxDepth` 0 in the
+settings" needs that). (3) The composed prompt grew from 3,769 to 5,979 bytes plain (6,275
+spoken; mail 909, delegation 1,301, two separators): a preset's instructions stay inline up to
+about 2.2 KB instead of 4.4 KB before the prompt is staged; `m5-w51-factory`'s over-frame preset
+was cut from 1,300 to 400 units of instructions to keep its prompt inline. (4) Pins changed with
+the seam: `m5-w52-prompt` and `m2-w26-prompt` (section table, plain prompt), `m1a-factory`
+(`serviceBuilders.length` 3 -> 5). Sizes: session program 234,624 bytes, unchanged by this unit
+(no module of it is in the session bundle); factory bundle 192,892 -> 233,199 (+40,307:
+`post-office.js`, `operator-mail.js`, `subagents.js`, `mail-prompt.js` and the wiring), no harness
+limit on the factory bundle (installed once over the 8 MiB admin frame).
+Fit: fair: the factory vat carries every mail and subagent object at once, which suits one
+system of record, at the cost of a factory heap and bundle 21 % larger.
+
+### J-12502 2026-11-19 W9.9 time record - process
+Evidence: first command 2026-11-19T02:45:13Z, last 2026-11-19T02:55Z; no command over 60 s; no
+supervisor, run lock or perf window (W9.9 has no perf rows). `tsc` clean; eslint 0 errors on the
+changed files (only `safe-await-separator` warnings already in `factory.js` and `services.js`);
+prettier clean; `lint:duplicates` 1.72 % (ceiling 2.05 %).
+Fit: neutral.
