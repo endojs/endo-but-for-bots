@@ -357,6 +357,7 @@ export const makeVoiceState = ({
    * @property {Record<string, any> | undefined} preferences
    * @property {any} port
    * @property {AudioSocket | undefined} socket
+   * @property {boolean} bound the socket's READY came: the port takes streams
    * @property {Promise<Connection | undefined> | undefined} opening
    * @property {number} attempt reconnect attempts since the last READY
    * @property {Array<{ sessionKey: string, session: any, requestId: string }>} waiting
@@ -468,6 +469,7 @@ export const makeVoiceState = ({
     if (c.socket !== socket) return;
     c.socket = undefined;
     c.port = undefined;
+    c.bound = false;
     if (conn !== c || !mic) return;
     // The mic stays on: open a new port after the backoff (R6-14 style).
     const delay = audioReconnectDelay(c.attempt);
@@ -500,6 +502,7 @@ export const makeVoiceState = ({
     c.port = grant.port;
     c.socket = socket;
     await socket.ready;
+    c.bound = c.socket === socket;
     c.attempt = 0;
     return conn === c ? c : undefined;
   };
@@ -687,7 +690,8 @@ export const makeVoiceState = ({
    */
   const openUtterance = m => {
     const c = conn;
-    if (!c || !c.port || !c.socket || c.socket.closed()) return undefined;
+    // Before READY the port refuses streams (W11.5: `portClosed`).
+    if (!c || !c.bound || !c.socket || c.socket.closed()) return undefined;
     const port = c.port;
     return c.socket.utterance(
       E(port)
@@ -1033,6 +1037,7 @@ export const makeVoiceState = ({
         preferences: undefined,
         port: undefined,
         socket: undefined,
+        bound: false,
         opening: undefined,
         attempt: 0,
         waiting: [],
