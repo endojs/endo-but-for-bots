@@ -26,20 +26,20 @@ JOBS = (
     "cross-target-ironhorse", "build-ironhorse-wasm", "test-ocapn-python",
     "build-wasm", "browser-tests", "guile-interop", "viable-release",
     "depcheck", "check-action-pins", "package-uniformity", "filter-tests",
-    "cargo-deny",
+    "cargo-deny", "clippy-endo",
 )
 JS_JOBS = {
     "test", "cover", "lint", "familiar-bundle", "sandbox-drivers",
     "test-async-hooks", "test-hermes", "test-xs", "build-xsnap",
     "test-thixotrope-ironhorse", "test-ocapn-python", "browser-tests",
-    "guile-interop", "viable-release", "depcheck", "check-action-pins", "package-uniformity",
+    "clippy-endo", "guile-interop", "viable-release", "depcheck", "check-action-pins", "package-uniformity",
 }
 RUST_JOBS = {
     "build-xsnap", "test-thixotrope-ironhorse", "format-ironhorse",
     "test-ironhorse", "test-ironhorse-calibration", "compare-ironhorse-math",
     "test-ironhorse-oracle", "oracle-sanitizers", "fuzz-ironhorse",
     "cross-target-ironhorse", "build-ironhorse-wasm", "build-wasm",
-    "cargo-deny",
+    "cargo-deny", "clippy-endo",
 }
 WORKFLOWS = {
     ".github/workflows/browser-test.yml": {"browser-tests"},
@@ -285,6 +285,14 @@ def classify(paths, graphs, all_jobs=False):
             for name, manifest in graph.js.items() if name in packages
         )
         jobs["build-xsnap"] |= bool(core_crates & {"endo", "xsnap"})
+        # Clippy lints every root-workspace member, and an engine crate one
+        # of them depends on can change what it compiles to. Bench sources
+        # are clippy inputs (`--all-targets`), so only prose is filtered.
+        # The oracle reaches the members only through the engine crates'
+        # optional `parity` feature, which no member enables.
+        outer = {graph.crate_names[d] for d in outer_members(graph) if d in graph.crate_names}
+        linted = graph.crates(graph.affected([p for p in paths if not p.endswith(".md")], oracle=False))
+        jobs["clippy-endo"] |= bool(linted & outer)
         jobs["test-thixotrope-ironhorse"] |= "thixotrope-ironhorse-worker" in core_crates
         jobs["test-ironhorse"] |= bool(core_crates & CORE)
         jobs["test-ironhorse-calibration"] |= "ironhorse-vm" in core_crates
@@ -350,6 +358,8 @@ def classify(paths, graphs, all_jobs=False):
             jobs["format-ironhorse"] = True
         if PurePosixPath(path).name in {"rustfmt.toml", ".rustfmt.toml"}:
             jobs["format-ironhorse"] = True
+        if PurePosixPath(path).name in {"clippy.toml", ".clippy.toml"}:
+            jobs["clippy-endo"] = True
         # Supply-chain policy: every manifest and lockfile can add a crate,
         # a licence or a source.
         if path == "deny.toml" or PurePosixPath(path).name in {"Cargo.toml", "Cargo.lock"}:

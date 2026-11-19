@@ -66,3 +66,6 @@ path = "src/bin/endor.rs"
 [[bench]]
 name = "codec"
 harness = false
+
+[lints]
+workspace = true

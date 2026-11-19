@@ -69,7 +69,7 @@ pub fn spawn_inproc_xs_manager(
         sup,
         "<in-process manager>".to_string(),
         Some(shutdown_notify),
-        Box::new(|transport| xsnap::run_xs_manager_inproc(transport)),
+        Box::new(xsnap::run_xs_manager_inproc),
     )
 }
 
@@ -82,7 +82,7 @@ pub fn spawn_shared_worker(sup: &Arc<Supervisor>, _parent_handle: Handle) -> io:
         sup,
         "<shared-worker>".to_string(),
         None,
-        Box::new(|transport| xsnap::run_xs_worker_inproc(transport)),
+        Box::new(xsnap::run_xs_worker_inproc),
     )
 }
 

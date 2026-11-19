@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::sync::Once;
 
 use xsnap::{Machine, DEFAULT_CREATION, SNAPSHOT_SIGNATURE};

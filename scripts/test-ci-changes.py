@@ -284,6 +284,20 @@ class Repository(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(self.selected(path)["format-ironhorse"])
 
+    def test_outer_workspace_clippy_follows_every_member(self):
+        """Clippy lints every root-workspace member with `--all-targets`:
+        each member, its benches, an engine crate a member compiles, and a
+        clippy configuration file select it. The oracle, which no member
+        compiles, and prose do not."""
+        for path in self.OUTER_SOURCES + ["rust/engine/ironhorse-vm/src/lib.rs",
+                                          "rust/endo/clippy.toml", "Cargo.toml"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["clippy-endo"])
+        for path in ["rust/engine/xs-oracle/src/lib.rs", "rust/endo/README.md",
+                     "packages/cbor/src/encode.js", "deny.toml"]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["clippy-endo"])
+
     def test_format_helper_inputs(self):
         self.assertTrue(self.selected("rust/engine/scripts/generate-compiler-opcodes.py")["format-ironhorse"])
 

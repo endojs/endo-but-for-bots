@@ -319,7 +319,7 @@ impl WorkerTransport for ChannelTransport {
 
 thread_local! {
     static ACTIVE_TRANSPORT: RefCell<Option<Box<dyn WorkerTransport>>> = RefCell::new(None);
-    static PENDING_ENVELOPE: RefCell<Option<Vec<u8>>> = RefCell::new(None);
+    static PENDING_ENVELOPE: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
 }
 
 /// Store envelope bytes in the thread-local for retrieval by `host_get_pending_envelope`.
@@ -651,11 +651,8 @@ pub unsafe extern "C" fn host_recv_frame(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_send_frame(the: *mut XsMachine) {
     guard_ffi(|| unsafe {
         let hex_data = arg_str(the, 0);
-        match hex::decode(hex_data) {
-            Ok(data) => {
-                let _ = with_transport(|t| t.send_frame(&data));
-            }
-            Err(_) => {}
+        if let Ok(data) = hex::decode(hex_data) {
+            let _ = with_transport(|t| t.send_frame(&data));
         }
     });
 }

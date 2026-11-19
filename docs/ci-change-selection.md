@@ -61,6 +61,10 @@ can introduce a crate, a licence or a source.
 New advisories arrive without a commit, so `cargo-deny-advisories.yml` also
 re-checks advisories weekly; editing that workflow selects the `cargo-deny` job.
 
+The `clippy-endo` job lints every member of the repository-root Cargo workspace.
+It runs when a member, or an engine crate a member compiles, is affected;
+prose does not select it, but bench sources do, because the job lints all
+targets.
 The `format-ironhorse` job checks the formatting of the engine workspace and of
 every root-workspace member, so any Rust source under either selects it, as does
 a `rustfmt.toml`.

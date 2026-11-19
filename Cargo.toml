@@ -8,3 +8,16 @@ resolver = "2"
 
 [profile.release]
 overflow-checks = true
+
+# Clippy gate, the same shape as rust/engine/Cargo.toml's: every default
+# family warns, and CI's `cargo clippy ... -- -D warnings` fails on any. The
+# families below fired when the gate was introduced (Rust 1.91.1) and are
+# grandfathered; remove an entry once its sites are cleaned up. Families with
+# few sites were fixed instead of listed.
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+missing_safety_doc = "allow"
+result_large_err = "allow"
+should_implement_trait = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"

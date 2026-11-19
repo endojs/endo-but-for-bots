@@ -40,3 +40,6 @@ harness = false
 [[bench]]
 name = "transport"
 harness = false
+
+[lints]
+workspace = true

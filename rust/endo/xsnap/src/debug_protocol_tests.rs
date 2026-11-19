@@ -59,7 +59,7 @@ static INIT: Once = Once::new();
 /// Create a debug-enabled XS machine.  Returns `None` if the
 /// binary was built without `mxDebug` (prebuilt libxs.a).
 fn debug_machine(ps: &mut powers::HostPowers) -> Option<Machine> {
-    INIT.call_once(|| initialize_shared_cluster());
+    INIT.call_once(initialize_shared_cluster);
     debug::debug_reset();
     debug::debug_enable();
     let machine = Machine::new(&DEFAULT_CREATION, "debug-test").expect("machine creation failed");
@@ -142,11 +142,7 @@ fn all_attrs<'a>(xml: &'a str, element: &str, name: &str) -> Vec<&'a str> {
     let key = format!("{name}=\"");
     let mut results = Vec::new();
     let mut search = xml;
-    loop {
-        let pos = match search.find(&tag) {
-            Some(p) => p,
-            None => break,
-        };
+    while let Some(pos) = search.find(&tag) {
         let rest = &search[pos..];
         if let Some(kpos) = rest.find(&key) {
             let val_start = kpos + key.len();

@@ -1,5 +1,5 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -50,7 +50,7 @@ fn main() {
     println!("cargo:rustc-link-lib=dl");
 }
 
-fn compile_xs(manifest_dir: &PathBuf, moddable_dir: &PathBuf) {
+fn compile_xs(manifest_dir: &Path, moddable_dir: &Path) {
     let xs_sources = moddable_dir.join("xs/sources");
     let xs_includes = moddable_dir.join("xs/includes");
     let xs_platforms = moddable_dir.join("xs/platforms");
@@ -175,7 +175,7 @@ fn compile_xs(manifest_dir: &PathBuf, moddable_dir: &PathBuf) {
 /// prebuilt libxs.a (e.g. fxRunDebugger, which the prebuilt may
 /// not include).  This file does NOT #include xsAll.h — it only
 /// uses opaque pointer types.
-fn compile_platform_supplement(out_dir: &PathBuf) {
+fn compile_platform_supplement(out_dir: &Path) {
     let src = out_dir.join("xsnap-platform-supplement.c");
     std::fs::write(
         &src,

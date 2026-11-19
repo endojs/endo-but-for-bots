@@ -152,7 +152,7 @@ impl Machine {
             //   fxRunCount(the, 1)       — execute with 1 arg
             //   result = fxPop()         — pop result
 
-            let eval_id = fxID(the, b"eval\0".as_ptr() as *const c_char);
+            let eval_id = fxID(the, c"eval".as_ptr());
 
             fxOverflow(the, -(XS_FRAME_COUNT + 1), ptr::null(), 0);
 
@@ -215,7 +215,10 @@ impl Machine {
         // Track for snapshot callback table (dedup by pointer).
         {
             let mut cbs = self.registered_callbacks.borrow_mut();
-            if !cbs.iter().any(|&c| c == callback) {
+            // Address equality, as before: a function compiled into two
+            // codegen units may not compare equal, which only costs a
+            // duplicate table entry.
+            if !cbs.iter().any(|&c| std::ptr::fn_addr_eq(c, callback)) {
                 cbs.push(callback);
             }
         }
@@ -873,7 +876,7 @@ pub const HOST_ALIASES: &str = include_str!("host_aliases.js");
 /// declared in `ffi.rs` but never called). The realm runs on
 /// unrepaired intrinsics and `polyfills.js`'s deep-freeze `harden`.
 /// Tracked in `designs/worker-rust-xs.md` § Known Gaps.
-
+///
 /// Web-platform text endowments for archive compartments, evaluated as
 /// a side-effecting script after the base endowments object so it
 /// installs onto `globalThis.__archiveEndowments`: the machine's
@@ -1249,13 +1252,13 @@ pub const DEFAULT_METERING_INTERVAL: u64 = 10_000;
 
 thread_local! {
     /// Per-crank hard limit (computrons). 0 = no enforcement.
-    static CRANK_LIMIT: Cell<u64> = Cell::new(0);
+    static CRANK_LIMIT: Cell<u64> = const { Cell::new(0) };
     /// Set to true when the metering callback aborted execution.
-    static METERING_ABORTED: Cell<bool> = Cell::new(false);
+    static METERING_ABORTED: Cell<bool> = const { Cell::new(false) };
     /// Hard limit received via `meter-config` envelope. 0 = no
     /// enforcement.  Persists across cranks; updated only when the
     /// supervisor sends a new config.
-    static CRANK_HARD_LIMIT: Cell<u64> = Cell::new(0);
+    static CRANK_HARD_LIMIT: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Metering callback invoked by XS every `interval` computrons.
@@ -1426,7 +1429,7 @@ fn cbor_read_uint(data: &[u8], pos: usize) -> Option<(u64, usize)> {
                 return None;
             }
             let v = u64::from_be_bytes(data[pos + 1..pos + 9].try_into().ok()?);
-            Some((v as u64, pos + 9))
+            Some((v, pos + 9))
         }
         _ => None,
     }
@@ -4485,7 +4488,7 @@ mod tests {
             // (login XML) and debug-attached ack.
             let frames = sent.lock().unwrap();
             assert!(
-                frames.len() >= 1,
+                !frames.is_empty(),
                 "expected at least 1 outbound frame, got {}",
                 frames.len()
             );
@@ -4814,7 +4817,7 @@ mod tests {
         let mut data = machine.suspend(TEST_SNAPSHOT_SIG).expect("first suspend");
         drop(machine);
 
-        for i in 1..=3 {
+        for _ in 1..=3 {
             let m = Machine::resume(&data, "cycle").expect("resume failed");
             m.eval("n++").unwrap();
             data = m.suspend(TEST_SNAPSHOT_SIG).expect("suspend failed");

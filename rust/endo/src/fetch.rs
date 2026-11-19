@@ -529,7 +529,7 @@ impl DirNode {
             [head, tail @ ..] => {
                 self.dirs
                     .entry(head.clone())
-                    .or_insert_with(DirNode::new)
+                    .or_default()
                     .insert(tail, hash, size);
             }
         }
@@ -562,12 +562,8 @@ pub(crate) fn materialise(node: &DirNode, cas: &ContentStore) -> Result<String, 
         );
     }
     let manifest = TreeManifest { entries };
-    let bytes = serde_json::to_vec(&manifest).map_err(|e| {
-        FetchError::Io(io::Error::new(
-            io::ErrorKind::Other,
-            format!("encode tree: {e}"),
-        ))
-    })?;
+    let bytes = serde_json::to_vec(&manifest)
+        .map_err(|e| FetchError::Io(io::Error::other(format!("encode tree: {e}"))))?;
     cas.store_tree(&bytes).map_err(FetchError::Io)
 }
 
@@ -1324,7 +1320,7 @@ mod tests {
             .to_string()
             .starts_with("unsupported integrity form: "));
 
-        let io_err: FetchError = io::Error::new(io::ErrorKind::Other, "disk gone").into();
+        let io_err: FetchError = io::Error::other("disk gone").into();
         let s = io_err.to_string();
         assert!(s.starts_with("io: "), "got {s:?}");
         assert!(s.contains("disk gone"));

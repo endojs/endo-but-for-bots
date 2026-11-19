@@ -726,6 +726,66 @@ jobs:
           cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler --test js_machine_trait
           cargo test --locked -p endo --features ironhorse-engine --lib ironhorse_engine::
 
+  # Clippy for every member of the repo-root workspace (rust/engine has its
+  # own gate in test-ironhorse-oracle). Like build-xsnap, this compiles XS
+  # from the c/moddable submodule and needs the gitignored XS bootstraps that
+  # xsnap and endo embed with include_str!. The toolchain, with clippy, comes
+  # from the root rust-toolchain.toml; the lint levels from Cargo.toml's
+  # [workspace.lints].
+  clippy-endo:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['clippy-endo']) }}
+    name: clippy-endo
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - run: corepack enable
+
+      - name: Use Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Cache Cargo + target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-clippy-endo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-clippy-endo-
+
+      - name: Generate XS bootstraps
+        run: |
+          yarn workspace @endo/thixotrope run build:xs-bundles
+          yarn bundle:xs
+
+      # `endo`'s default features are `ironhorse-engine`; the XS-only daemon
+      # (`--no-default-features`) is a supported build too, so lint both.
+      - name: Clippy, default features
+        run: cargo clippy --locked --workspace --all-targets --no-deps -- -D warnings
+
+      - name: Clippy, XS-only endo
+        run: cargo clippy --locked -p endo --no-default-features --all-targets --no-deps -- -D warnings
+
   # Supply-chain policy (deny.toml): advisories, licences, bans and sources
   # for every Cargo root with a committed lockfile. deny.toml says which roots
   # and why. The weekly advisory sweep in cargo-deny-advisories.yml shares

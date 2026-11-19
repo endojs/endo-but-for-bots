@@ -693,84 +693,83 @@ fn install_archive_prelude(machine: &crate::Machine, archive: &LoadedArchive) ->
     }
 
     // Step 2: Create compartments and wire them together
-    let compartments_js = format!(
-        r#"
-var __archiveCompartments = {{}};
+    let compartments_js = r#"
+var __archiveCompartments = {};
 
-function __makeArchiveCompartment(compName) {{
+function __makeArchiveCompartment(compName) {
     if (__archiveCompartments[compName]) return __archiveCompartments[compName];
 
-    var sources = __archiveRegistry[compName] || {{}};
-    var links = __archiveLinks[compName] || {{}};
+    var sources = __archiveRegistry[compName] || {};
+    var links = __archiveLinks[compName] || {};
 
-    var endowments = globalThis.__archiveEndowments || {{}};
+    var endowments = globalThis.__archiveEndowments || {};
     // Translate a cross-compartment link's target specifier. A '.'
     // link module loads the target's literal '.' source when the
     // archive registers one (the zip-archive convention, where the
     // mapper already resolved entries); otherwise it defers to the
     // target package's exports map ('main' / index.js when it has
     // none).
-    var linkTarget = function(link) {{
+    var linkTarget = function(link) {
         var mod = link.module;
-        if (mod === '.') {{
-            var fsources = __archiveRegistry[link.compartment] || {{}};
+        if (mod === '.') {
+            var fsources = __archiveRegistry[link.compartment] || {};
             mod = fsources['.'] !== undefined
                 ? '.'
                 : __resolveExports(link.compartment, '.');
-        }}
+        }
         return mod;
-    }};
-    var comp = new Compartment({{
+    };
+    var comp = new Compartment({
         globals: endowments,
-        resolveHook: function(specifier, referrer) {{
+        resolveHook: function(specifier, referrer) {
             return __resolveRelative(specifier, referrer);
-        }},
-        loadNowHook: function(specifier) {{
+        },
+        loadNowHook: function(specifier) {
             // Node's subpath imports: a '#'-prefixed specifier
             // resolves through this package's own `imports` map —
             // to a module of this compartment under its canonical
             // key (so its own relative imports resolve against its
             // real directory), or onward through the link map when
             // the target is a bare package specifier.
-            if (specifier.charCodeAt(0) === 35 /* '#' */) {{
+            if (specifier.charCodeAt(0) === 35 /* '#' */) {
                 var importedNow = __resolveImports(compName, specifier);
-                if (importedNow.key !== undefined) {{
-                    return {{
+                if (importedNow.key !== undefined) {
+                    return {
                         namespace: __makeArchiveCompartment(compName)
                             .importNow(importedNow.key)
-                    }};
-                }}
+                    };
+                }
                 specifier = importedNow.bare;
-            }}
+            }
             // Check for cross-compartment link first.
             var link = links[specifier];
-            if (link) {{
+            if (link) {
                 var foreignComp = __makeArchiveCompartment(link.compartment);
-                return {{ namespace: foreignComp.importNow(linkTarget(link)) }};
-            }}
+                return { namespace: foreignComp.importNow(linkTarget(link)) };
+            }
             // A bare specifier with a subpath ('pkg/sub',
             // '@scope/pkg/sub') follows the package's link, then
             // resolves the subpath through its exports map.
-            if (specifier.charCodeAt(0) !== 46 /* '.' */) {{
+            if (specifier.charCodeAt(0) !== 46 /* '.' */) {
                 var parsed = __parsePackageName(specifier);
-                if (parsed !== undefined) {{
+                if (parsed !== undefined) {
                     var plink = links[parsed.name];
-                    if (plink) {{
+                    if (plink) {
                         var pcomp = __makeArchiveCompartment(plink.compartment);
                         var pmod = __resolveExports(plink.compartment, './' + parsed.rest);
-                        return {{ namespace: pcomp.importNow(pmod) }};
-                    }}
-                }}
-            }}
+                        return { namespace: pcomp.importNow(pmod) };
+                    }
+                }
+            }
             // Look up source in this compartment's registry, applying
             // Node's .js / /index.js completion.
             var key = __lookupSource(compName, specifier);
-            if (key === undefined) {{
+            if (key === undefined) {
                 throw new Error('Module not found: ' + compName + '/' + specifier);
-            }}
-            return {{ source: new ModuleSource(sources[key]) }};
-        }},
-        loadHook: function(specifier) {{
+            }
+            return { source: new ModuleSource(sources[key]) };
+        },
+        loadHook: function(specifier) {
             // Async twin of loadNowHook, used by the async entry
             // import so a module graph may use top-level await.
             // Cross-compartment edges return the lazy descriptor
@@ -778,42 +777,42 @@ function __makeArchiveCompartment(compName) {{
             // engine drives the foreign module's (possibly async)
             // evaluation itself; an eager foreignComp.import()
             // awaited here would deadlock the loader.
-            if (specifier.charCodeAt(0) === 35 /* '#' */) {{
+            if (specifier.charCodeAt(0) === 35 /* '#' */) {
                 var importedAsync = __resolveImports(compName, specifier);
-                if (importedAsync.key !== undefined) {{
-                    return {{
+                if (importedAsync.key !== undefined) {
+                    return {
                         namespace: importedAsync.key,
                         compartment: __makeArchiveCompartment(compName)
-                    }};
-                }}
+                    };
+                }
                 specifier = importedAsync.bare;
-            }}
+            }
             var link = links[specifier];
-            if (link) {{
-                return {{
+            if (link) {
+                return {
                     namespace: linkTarget(link),
                     compartment: __makeArchiveCompartment(link.compartment)
-                }};
-            }}
-            if (specifier.charCodeAt(0) !== 46 /* '.' */) {{
+                };
+            }
+            if (specifier.charCodeAt(0) !== 46 /* '.' */) {
                 var parsed = __parsePackageName(specifier);
-                if (parsed !== undefined) {{
+                if (parsed !== undefined) {
                     var plink = links[parsed.name];
-                    if (plink) {{
-                        return {{
+                    if (plink) {
+                        return {
                             namespace: __resolveExports(plink.compartment, './' + parsed.rest),
                             compartment: __makeArchiveCompartment(plink.compartment)
-                        }};
-                    }}
-                }}
-            }}
+                        };
+                    }
+                }
+            }
             var key = __lookupSource(compName, specifier);
-            if (key === undefined) {{
+            if (key === undefined) {
                 throw new Error('Module not found: ' + compName + '/' + specifier);
-            }}
-            return {{ source: new ModuleSource(sources[key]) }};
-        }}
-    }});
+            }
+            return { source: new ModuleSource(sources[key]) };
+        }
+    });
     // The CJS facade modules (`export default __loadCjs(...)`) call
     // back into the shared CommonJS loader through their
     // compartment's global. The exposed callback IGNORES the
@@ -822,14 +821,14 @@ function __makeArchiveCompartment(compName) {{
     // compartment name and force-load a module outside its link map.
     // (The facade already passes its own compartment; the argument is
     // accepted only for call-shape compatibility.)
-    comp.globalThis.__loadCjs = function (_callerComp, key) {{
+    comp.globalThis.__loadCjs = function (_callerComp, key) {
         return __loadCjs(compName, key);
-    }};
+    };
     __archiveCompartments[compName] = comp;
     return comp;
-}}
+}
 "#
-    );
+    .to_string();
 
     // Step 3: Create the entry compartment — split into multiple
     // evals to avoid XS SIGSEGV when Compartment creation + import

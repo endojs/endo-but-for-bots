@@ -24,3 +24,6 @@ ironhorse-compile = { path = "../../engine/ironhorse-compile" }
 # checkpoint locks) instantiated against this backend in
 # tests/store_suite.rs.
 ironhorse-snapshot = { path = "../../engine/ironhorse-snapshot", features = ["store-suite"] }
+
+[lints]
+workspace = true

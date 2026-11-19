@@ -53,8 +53,8 @@ pub struct MetaEntry {
 impl RegistryTable {
     /// Open (or create) the registry database at the given path.
     pub fn open(db_path: &Path) -> io::Result<Self> {
-        let conn = Connection::open(db_path)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite open: {e}")))?;
+        let conn =
+            Connection::open(db_path).map_err(|e| io::Error::other(format!("sqlite open: {e}")))?;
         let table = RegistryTable { conn };
         table.create_tables()?;
         Ok(table)
@@ -62,8 +62,8 @@ impl RegistryTable {
 
     /// Open an in-memory database (for testing).
     pub fn open_in_memory() -> io::Result<Self> {
-        let conn = Connection::open_in_memory()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite: {e}")))?;
+        let conn =
+            Connection::open_in_memory().map_err(|e| io::Error::other(format!("sqlite: {e}")))?;
         let table = RegistryTable { conn };
         table.create_tables()?;
         Ok(table)
@@ -82,16 +82,14 @@ impl RegistryTable {
         let user_version: i64 = self
             .conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("user_version: {e}")))?;
+            .map_err(|e| io::Error::other(format!("user_version: {e}")))?;
         if user_version < SCHEMA_VERSION {
             self.conn
                 .execute_batch(
                     "DROP TABLE IF EXISTS packages;
                      DROP TABLE IF EXISTS package_meta;",
                 )
-                .map_err(|e| {
-                    io::Error::new(io::ErrorKind::Other, format!("drop stale tables: {e}"))
-                })?;
+                .map_err(|e| io::Error::other(format!("drop stale tables: {e}")))?;
         }
         self.conn
             .execute_batch(
@@ -112,10 +110,10 @@ impl RegistryTable {
                     PRIMARY KEY (registry, name)
                 );",
             )
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("create tables: {e}")))?;
+            .map_err(|e| io::Error::other(format!("create tables: {e}")))?;
         self.conn
             .execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("set user_version: {e}")))?;
+            .map_err(|e| io::Error::other(format!("set user_version: {e}")))?;
         Ok(())
     }
 
@@ -146,7 +144,7 @@ impl RegistryTable {
                 },
             )
             .optional()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("lookup: {e}")))
+            .map_err(|e| io::Error::other(format!("lookup: {e}")))
     }
 
     /// Insert or replace a package entry keyed on its `registry`
@@ -167,7 +165,7 @@ impl RegistryTable {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![registry, name, version, hash, integrity, now],
             )
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("insert: {e}")))?;
+            .map_err(|e| io::Error::other(format!("insert: {e}")))?;
         Ok(())
     }
 
@@ -180,7 +178,7 @@ impl RegistryTable {
                 "SELECT registry, name, version, hash, integrity, fetched_at
                  FROM packages WHERE name = ?1 ORDER BY registry, version",
             )
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("prepare: {e}")))?;
+            .map_err(|e| io::Error::other(format!("prepare: {e}")))?;
 
         let rows = stmt
             .query_map(params![name], |row| {
@@ -193,12 +191,11 @@ impl RegistryTable {
                     fetched_at: row.get(5)?,
                 })
             })
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("query: {e}")))?;
+            .map_err(|e| io::Error::other(format!("query: {e}")))?;
 
         let mut entries = Vec::new();
         for row in rows {
-            entries
-                .push(row.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("row: {e}")))?);
+            entries.push(row.map_err(|e| io::Error::other(format!("row: {e}")))?);
         }
         Ok(entries)
     }
@@ -215,7 +212,7 @@ impl RegistryTable {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("get_meta: {e}")))
+            .map_err(|e| io::Error::other(format!("get_meta: {e}")))
     }
 
     /// Every cached metadata document for `name`, one per registry it
@@ -229,13 +226,13 @@ impl RegistryTable {
                 "SELECT registry, versions_json FROM package_meta
                  WHERE name = ?1 ORDER BY registry",
             )
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("prepare: {e}")))?;
+            .map_err(|e| io::Error::other(format!("prepare: {e}")))?;
         let rows = stmt
             .query_map(params![name], |row| Ok((row.get(0)?, row.get(1)?)))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("query: {e}")))?;
+            .map_err(|e| io::Error::other(format!("query: {e}")))?;
         let mut docs = Vec::new();
         for row in rows {
-            docs.push(row.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("row: {e}")))?);
+            docs.push(row.map_err(|e| io::Error::other(format!("row: {e}")))?);
         }
         Ok(docs)
     }
@@ -251,7 +248,7 @@ impl RegistryTable {
                  VALUES (?1, ?2, ?3, ?4)",
                 params![registry, name, versions_json, now],
             )
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("set_meta: {e}")))?;
+            .map_err(|e| io::Error::other(format!("set_meta: {e}")))?;
         Ok(())
     }
 
@@ -259,7 +256,7 @@ impl RegistryTable {
     pub fn count(&self) -> io::Result<u64> {
         self.conn
             .query_row("SELECT COUNT(*) FROM packages", [], |row| row.get(0))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("count: {e}")))
+            .map_err(|e| io::Error::other(format!("count: {e}")))
     }
 
     /// List every package entry in the table, ordered by name then
@@ -271,7 +268,7 @@ impl RegistryTable {
                 "SELECT registry, name, version, hash, integrity, fetched_at
                  FROM packages ORDER BY name, version, registry",
             )
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("prepare: {e}")))?;
+            .map_err(|e| io::Error::other(format!("prepare: {e}")))?;
 
         let rows = stmt
             .query_map([], |row| {
@@ -284,12 +281,11 @@ impl RegistryTable {
                     fetched_at: row.get(5)?,
                 })
             })
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("query: {e}")))?;
+            .map_err(|e| io::Error::other(format!("query: {e}")))?;
 
         let mut entries = Vec::new();
         for row in rows {
-            entries
-                .push(row.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("row: {e}")))?);
+            entries.push(row.map_err(|e| io::Error::other(format!("row: {e}")))?);
         }
         Ok(entries)
     }
@@ -300,7 +296,7 @@ impl RegistryTable {
         let mut stmt = self
             .conn
             .prepare("SELECT registry, name, fetched_at FROM package_meta ORDER BY name, registry")
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("prepare: {e}")))?;
+            .map_err(|e| io::Error::other(format!("prepare: {e}")))?;
 
         let rows = stmt
             .query_map([], |row| {
@@ -310,12 +306,11 @@ impl RegistryTable {
                     fetched_at: row.get(2)?,
                 })
             })
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("query: {e}")))?;
+            .map_err(|e| io::Error::other(format!("query: {e}")))?;
 
         let mut entries = Vec::new();
         for row in rows {
-            entries
-                .push(row.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("row: {e}")))?);
+            entries.push(row.map_err(|e| io::Error::other(format!("row: {e}")))?);
         }
         Ok(entries)
     }
@@ -329,7 +324,7 @@ impl RegistryTable {
         let changed = self
             .conn
             .execute("DELETE FROM package_meta WHERE name = ?1", params![name])
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("delete_meta: {e}")))?;
+            .map_err(|e| io::Error::other(format!("delete_meta: {e}")))?;
         Ok(changed > 0)
     }
 }

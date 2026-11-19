@@ -36,3 +36,6 @@ features = ['rand_core']
 #This was recommended but not evidently necessary:
 #[target.wasm32-unknown-unknown]
 #rustflags = ['--cfg', 'getrandom_backend="custom"']
+
+[lints]
+workspace = true

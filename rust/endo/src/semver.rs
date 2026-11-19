@@ -371,7 +371,7 @@ pub fn select_versions(available: &[Version], ranges: &[Range]) -> Vec<Version> 
     }
 
     let mut selected = Vec::new();
-    for (_, versions) in &mut by_major {
+    for versions in by_major.values_mut() {
         versions.sort();
         // Find the greatest version satisfying all ranges for this major.
         if let Some(best) = versions

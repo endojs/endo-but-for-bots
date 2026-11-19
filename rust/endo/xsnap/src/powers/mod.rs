@@ -29,6 +29,12 @@ pub struct HostPowers {
     pub module_sources: HashMap<String, String>,
 }
 
+impl Default for HostPowers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HostPowers {
     /// Create empty host powers (no directories, no modules).
     pub fn new() -> Self {

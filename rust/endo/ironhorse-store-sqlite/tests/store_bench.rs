@@ -234,8 +234,7 @@ fn store_query_cost_across_heap_sizes() {
             freed_last,
         );
         Rc::try_unwrap(store)
-            .ok()
-            .expect("sole owner")
+            .unwrap_or_else(|_| panic!("sole owner"))
             .into_inner()
             .close()
             .unwrap();

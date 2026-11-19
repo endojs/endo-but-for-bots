@@ -92,7 +92,7 @@ fn main() -> ExitCode {
                 "xs" => {
                     if let Some(hash) = cas_hash {
                         // Run from CAS root hash.
-                        result_to_exit("endor", cmd_run_from_cas(&hash))
+                        result_to_exit("endor", cmd_run_from_cas(hash))
                     } else if let Some(ref p) = path {
                         match classify_run_input(p) {
                             RunInput::ZipArchive => {
