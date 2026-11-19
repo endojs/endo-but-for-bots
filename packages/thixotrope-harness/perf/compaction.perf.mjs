@@ -307,6 +307,10 @@ await runPerf('compaction', async ({ provision }) => {
     const compactedLong = (await contentOf(compactTurn.turn)).some(
       (/** @type {any} */ r) => r.kind === 'compaction',
     );
+    if (!compactedLong) throw Error('the imported session did not compact');
+    // The high usage on the compacting turn requests another compaction.
+    // Finish it before timing the first cold prepare in each restart.
+    await runTurn(slice, long, live, 'plain');
     await live.stop();
     const rebuild = await runWindow(
       async () => {
@@ -324,19 +328,24 @@ await runPerf('compaction', async ({ provision }) => {
           10_000,
           'the context line',
         );
-        return line.ms;
+        return { ms: line.ms, timing: line.timing };
       },
       { ms: REBUILD_WINDOW_MS, min: 3 },
     );
-    await stats('compaction.rebuild', rebuild.results, {
-      budget: { median: 359 },
-      extra: {
-        ...windowFields(rebuild),
-        turns: 300,
-        compacted: compactedLong,
-        restartAndTurnMs: rebuild.samples,
+    await stats(
+      'compaction.rebuild',
+      rebuild.results.map(r => r.ms),
+      {
+        budget: { median: 359 },
+        extra: {
+          ...windowFields(rebuild),
+          turns: 300,
+          compacted: compactedLong,
+          restartAndTurnMs: rebuild.samples,
+          prepareTimings: rebuild.results.map(r => r.timing),
+        },
       },
-    });
+    );
   } finally {
     await rm(file, { force: true });
   }

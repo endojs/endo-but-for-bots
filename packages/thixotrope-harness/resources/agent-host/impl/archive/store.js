@@ -911,19 +911,25 @@ export const makeArchiveStore = ({
    * Rewrite the mirror from `sealedTo` (records below it are sealed now).
    * @param {SessionArchive} st
    * @param {number} sealedTo
+   * @param {number} boundary the vat's last compaction boundary
    */
-  const cutMirror = async (st, sealedTo) => {
+  const cutMirror = async (st, sealedTo, boundary) => {
     const path = mirrorPath(st);
     const kept = await loadMirror(path, { from: sealedTo });
     trace('mirror', st.key);
-    if (kept.records.length === 0 || kept.from !== sealedTo) {
+    // A rebuilt mirror can start at the compaction boundary beyond sealedTo.
+    // Keep that suffix at its original indices for the next incarnation.
+    if (
+      kept.records.length === 0 ||
+      (kept.from !== sealedTo && kept.from !== boundary)
+    ) {
       await unlink(path).catch(() => {});
       st.mirrorEnd = undefined;
       counts.mirrorDrops += 1;
       return;
     }
-    await rewriteMirror(path, sealedTo, kept.records);
-    st.mirrorEnd = sealedTo + kept.records.length;
+    await rewriteMirror(path, kept.from, kept.records);
+    st.mirrorEnd = kept.from + kept.records.length;
     counts.mirrorRewrites += 1;
   };
 
@@ -1039,7 +1045,7 @@ export const makeArchiveStore = ({
       await syncContext(st, state.segments, false);
     }
     if (segmentsOf(previous) !== state.segments && state.sealedTo > 0) {
-      await cutMirror(st, state.sealedTo);
+      await cutMirror(st, state.sealedTo, manifest.boundary);
     }
   };
 

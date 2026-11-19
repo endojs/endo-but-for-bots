@@ -336,6 +336,22 @@ const archivedCompaction = async (t, { order }) => {
     epoch: 1,
     boundary: b,
   });
+  // After a rebuild the mirror begins at the compaction boundary. A later
+  // incarnation can still check its last record against the vat and use it.
+  const later = makeIncarnation(dirs, sink);
+  const fromMirror = await later.cache.prepare(
+    vat.session,
+    harden({
+      turnId: 'tc',
+      base: { count: vat.all.length, ...base },
+      append: [],
+      context,
+    }),
+    { key },
+  );
+  t.deepEqual(fromMirror.transcript, oracle);
+  t.is(later.cache.stats().mirrorTails, 1);
+  await later.archive.drain();
   t.log({
     order,
     records: vat.all.length,
