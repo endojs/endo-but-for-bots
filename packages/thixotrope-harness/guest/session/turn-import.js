@@ -31,6 +31,9 @@ const { Fail } = /** @type {GuestGlobals} */ (globalThis);
  * @param {() => number} options.lastKnownTime
  * @param {() => boolean} options.idle no turn is current
  * @param {() => void} options.seal `archive.maybeSeal` with the held ports
+ * @param {{ observe: (record: any, index: number) => void }} [options.window]
+ *   the session's context window (m8-interfaces.md 4.5, seam S-8): an
+ *   imported `compaction` record moves it
  */
 export const makeTurnImport = ({
   records,
@@ -41,6 +44,7 @@ export const makeTurnImport = ({
   lastKnownTime,
   idle,
   seal,
+  window,
 }) => {
   /** @param {readonly any[]} list */
   const importTurns = list => {
@@ -59,7 +63,8 @@ export const makeTurnImport = ({
         index.info(record.turnId)?.state !== 'running' ||
           Fail`imported resolution of ${record.turnId} precedes its settle`;
       }
-      records.append(record);
+      const at = records.append(record);
+      window?.observe(record, at);
       see(record.at);
       const info =
         index.info(record.turnId) ?? archive.unresolvedInfo(record.turnId);

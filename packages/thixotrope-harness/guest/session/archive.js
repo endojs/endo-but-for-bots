@@ -44,6 +44,8 @@ const letterOf = new Map(/** @type {any} */ (archiveKindLetters));
  *   seal was rejected or broke
  * @param {{ closed: () => boolean }} [options.fence] the session's delete
  *   fence (7.1): no seal starts once it is closed
+ * @param {() => number} [options.epoch] the context window's epoch, carried
+ *   by every seal request (m8-interfaces.md 4.4, seam S-9)
  */
 export const makeSessionArchive = ({
   records,
@@ -51,6 +53,7 @@ export const makeSessionArchive = ({
   onSealed = () => {},
   onNotSealed = () => {},
   fence = harden({ closed: () => false }),
+  epoch = () => 0,
 }) => {
   let sealedTurns = 0;
   let digest = '';
@@ -175,7 +178,7 @@ export const makeSessionArchive = ({
       firstTurnId: ids[0],
       lastTurnId: ids[range.count - 1],
       kinds: letters.join(''),
-      epoch: 0,
+      epoch: epoch(),
       previous: digest,
       context,
     });

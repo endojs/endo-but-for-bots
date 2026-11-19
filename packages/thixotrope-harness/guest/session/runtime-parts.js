@@ -78,6 +78,7 @@ import { execPart } from './tools/exec.js';
 import { packagesPart } from './packages.js';
 // slot: environment
 // slot: compaction
+import { compactionPart } from './compaction.js';
 // slot: inbox
 // slot: subagents
 
@@ -188,6 +189,7 @@ export const requiredParts = harden([
   'packages',
   // slot: environment
   // slot: compaction
+  'compaction',
   // slot: inbox
   // slot: subagents
 ]);
@@ -201,6 +203,7 @@ export const runtimeParts = harden([
   packagesPart,
   // slot: environment
   // slot: compaction
+  compactionPart,
   // slot: inbox
   // slot: subagents
 ]);
@@ -316,6 +319,9 @@ export const makeRuntime = ({
     },
     // slot: environment
     // slot: compaction
+    get compaction() {
+      return made.get('compaction');
+    },
     // slot: inbox
     // slot: subagents
     get hooks() {

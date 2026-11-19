@@ -41,6 +41,7 @@ import { makeRecordLog } from './records.js';
 import { submissionField } from './staging.js';
 import { toolTable } from './tool-table.js';
 import { makeTurnRunner } from './turn.js';
+import { makeContextWindow } from './compaction.js';
 
 // The exo methods are typed loosely; the interface guards check the values.
 const { makeExo } = /** @type {any} */ (globalThis);
@@ -78,8 +79,20 @@ export const makeSession = (
     seeds: seedsFor(services, config, labelSeeds),
   });
   // The runtime parts (S4), made once, in table order; they send nothing.
-  const runtime = makeRuntime({ labels, services, config, parts });
   const records = makeRecordLog();
+  // M8 S-6 (m8-interfaces.md 4.7): the context window over the log; the
+  // runner's clock is read at run time (`runner` is defined below).
+  const window = makeContextWindow({
+    records,
+    seenAt: () => runner.lastKnownTime(),
+  });
+  const runtime = makeRuntime({
+    labels,
+    services,
+    config,
+    contextWindow: window,
+    parts,
+  });
   const live = makeLivePublishing({
     host: services.host,
     // `runner` is defined below; a break is reported only in a later crank.
@@ -101,8 +114,13 @@ export const makeSession = (
     onSealed: dropped => runner.onSealed(dropped),
     onNotSealed: (error, ports) => runner.onNotSealed(error, ports),
     fence,
+    epoch: () => window.epoch(),
   });
-  const contextSource = makeContextSource({ records, archive });
+  const contextSource = makeContextSource({
+    records,
+    archive,
+    boundary: () => window.boundary(),
+  });
   const runner = makeTurnRunner({
     config,
     services,
@@ -116,6 +134,7 @@ export const makeSession = (
     isRestartSignal,
     table,
     maxToolRounds,
+    window,
   });
   // Receipts keep the turn id; the Turn is minted when one is handed out
   // while the session keeps the turn (J-9152, m2-interfaces.md 5.3).

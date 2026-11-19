@@ -72,6 +72,8 @@ import { makePorts } from './ports.js';
 import { makeTurnImport } from './turn-import.js';
 import { makeTurnIndex } from './turn-index.js';
 import { makeUsage } from './usage.js';
+import { makeContextWindow } from './compaction.js';
+import { sessionContext } from '../lib/usage-counts.js';
 // The result of a call the turn never ran because it was cancelled first
 // (one text with the exec tool's; tools/exec.js never imports this module).
 import { NOT_RUN_TEXT } from './tools/exec.js';
@@ -81,6 +83,7 @@ import { NOT_RUN_TEXT } from './tools/exec.js';
 /** @import { LivePublishing } from './live.js' */
 /** @import { ActiveTurn, TurnInfo, RoundCalls } from './turn-types.js' */
 /** @import { HookTurn, Runtime } from './runtime-parts.js' */
+/** @import { ContextWindow } from './compaction.js' */
 const { E, Fail, defineExoClass, makePromiseKit, matches } =
   /** @type {GuestGlobals} */ (globalThis);
 
@@ -110,6 +113,9 @@ const reason = text => previewText(text, limits.reasonUnits);
  * @param {(error: unknown) => boolean} options.isRestartSignal
  * @param {readonly any[]} [options.table] tool table
  * @param {number} [options.maxToolRounds]
+ * @param {ContextWindow} [options.window] the
+ *   session's context window (m8-interfaces.md 4.7, seam S-6; tests that
+ *   make a runner alone get one over `records`)
  */
 export const makeTurnRunner = ({
   config,
@@ -124,6 +130,7 @@ export const makeTurnRunner = ({
   isRestartSignal,
   table = toolTable,
   maxToolRounds = limits.maxToolRounds,
+  window = makeContextWindow({ records }),
 }) => {
   const { hooks } = runtime;
   /**
@@ -187,7 +194,20 @@ export const makeTurnRunner = ({
    * @returns {HookTurn}
    */
   const hookTurn = active =>
-    Object.freeze({ active, round: active.round, append: appendRecord, emit });
+    Object.freeze({
+      active,
+      round: active.round,
+      append: appendRecord,
+      emit,
+      // M8 seam S-5e (m8-interfaces.md 4.1 rule 4): round 0 the session's
+      // latest reading, round r this turn's; the stored window wins (R4-33).
+      get reading() {
+        return sessionContext(
+          active.usage?.context ?? usage.totals().context,
+          config.contextLength,
+        );
+      },
+    });
 
   // The session's recovery (recovery.js): steps 1-8 in the crank that saw
   // the restart signal.
@@ -228,8 +248,7 @@ export const makeTurnRunner = ({
   const incarnation = makePorts({
     services,
     live,
-    toolsFor: ports =>
-      toolSetFor(ports, table, services, runtime),
+    toolsFor: ports => toolSetFor(ports, table, services, runtime),
     onFresh: (set, since) => onOpened(set, since),
     onFailed: error => onOpenFailed(error),
     flush,
@@ -664,6 +683,41 @@ export const makeTurnRunner = ({
   };
 
   /**
+   * The records appended since the previous `startRound` (or crank Y), as
+   * `make(count, append)` wraps them, or none when they do not fit (the
+   * adapter then pulls them through `context`, contract 9). Shared by the
+   * round request and `TurnSink.compacted` (M8 seam S-5d).
+   * @template T
+   * @param {(count: number, append: any[]) => T} make
+   * @returns {T}
+   */
+  const sendSince = make => {
+    // Records below the archive's `sealedTo` are in segments (M2, 4.8).
+    const from = Math.max(sentUpTo, records.base());
+    const to = records.count();
+    sentUpTo = to;
+    const append = inCallOrder(records.since(from));
+    if (append.length <= limits.maxAppendRecords) {
+      const message = make(from, append);
+      if (fitsFrame(message)) return message;
+    }
+    // M1a adapters do not read past records; M1b pulls through `context`.
+    return make(to, []);
+  };
+
+  /**
+   * `RoundRequest.base`: the count, the context window's epoch (and
+   * boundary once it moved, M8 S-5b) and the archive state.
+   * @param {number} count
+   */
+  const baseOf = count =>
+    harden({
+      count,
+      ...window.baseFields(),
+      ...(archive.any() ? { archive: archive.state() } : {}),
+    });
+
+  /**
    * The round request: records appended since the previous `startRound`
    * (results in call order), or none when they do not fit (the adapter then
    * pulls them through `context`, contract 9).
@@ -671,10 +725,6 @@ export const makeTurnRunner = ({
    * @param {number} round
    */
   const roundRequest = (active, round) => {
-    // Records below the archive's `sealedTo` are in segments (M2, 4.8).
-    const from = Math.max(sentUpTo, records.base());
-    const to = records.count();
-    sentUpTo = to;
     /** @type {Record<string, any>} */
     const options = { modelId: config.modelId };
     if (config.reasoningEffort !== undefined) {
@@ -684,15 +734,15 @@ export const makeTurnRunner = ({
     if (config.maxOutputTokens !== undefined) {
       options.maxOutputTokens = config.maxOutputTokens;
     }
-    const archived = archive.any() ? { archive: archive.state() } : {};
     const system = systemFor(active);
+    const ask = active.compactionAsk;
     const make = (/** @type {number} */ count, /** @type {any[]} */ append) =>
       harden({
         turn: active.turn,
         sink: active.sink,
         turnId: active.turnId,
         round,
-        base: harden({ count, epoch: 0, ...archived }),
+        base: baseOf(count),
         append: harden(append),
         tools: active.tools.descriptions,
         options: harden(options),
@@ -700,14 +750,10 @@ export const makeTurnRunner = ({
         // M2 seam 1: the composed prompt, inline or staged; M5 S2 with
         // the turn's note.
         ...(system === undefined ? {} : { system }),
+        // M8 S-5b: the part's ask (m8-interfaces.md 4.1).
+        ...(ask === undefined ? {} : { compaction: ask }),
       });
-    const append = inCallOrder(records.since(from));
-    if (append.length <= limits.maxAppendRecords) {
-      const request = make(from, append);
-      if (fitsFrame(request)) return request;
-    }
-    // M1a adapters do not read past records; M1b pulls through `context`.
-    return make(to, []);
+    return sendSince(make);
   };
 
   /**
@@ -720,10 +766,13 @@ export const makeTurnRunner = ({
     active.round = round;
     active.info.round = round;
     if (active.ports === undefined) throw SETTLED;
+    // M8: an ask is for one round; the compaction part may set a new one.
+    active.compactionAsk = undefined;
     hooks.beforeRound(hookTurn(active));
     // M5 S1: the tool set is read again at the start of every round (R3-6).
     active.tools = toolSetFor(active.ports, table, services, runtime);
-    if (round > 0) {
+    // M8 S-5c: with an ask out, the part emits `thinking` after crank Y.
+    if (round > 0 && active.compactionAsk === undefined) {
       emit({ type: 'phase', turnId: active.turnId, phase: 'thinking' });
     }
     const request = roundRequest(active, round);
@@ -901,13 +950,33 @@ export const makeTurnRunner = ({
         return true;
       },
       /**
-       * WX.1: the guard's context-window method (m8-interfaces.md G-1). No
-       * round asks to compact until the `compaction` part does, so the
-       * answer is the one for an ask no longer pending; the part replaces
-       * this body (seam S-5d).
+       * Crank Y (m8-interfaces.md 4.2, seam S-5d): the adapter planned and
+       * summarized before this round. The compaction part records the
+       * outcome; the answer is the cache's next `{ base, append }`.
+       * `go: false` when the turn or the round moved on, or no ask is out.
+       * @param {any} result CompactionResult
        */
-      compacted() {
-        return harden({ go: false });
+      compacted(result) {
+        const { active } = /** @type {any} */ (this).state;
+        if (
+          current !== active ||
+          active.state !== 'running' ||
+          result.round !== active.round ||
+          active.compactionAsk === undefined
+        ) {
+          return harden({ go: false });
+        }
+        see(result.at);
+        // R4-36: the summary's tokens are charged; its reading is not kept.
+        const { context: _, ...counts } = result.usage ?? {};
+        usage.addRound(active, result.usage && counts);
+        runtime.compaction.compacted(hookTurn(active), result);
+        active.compactionAsk = undefined;
+        const reply = sendSince((count, append) =>
+          harden({ go: true, base: baseOf(count), append: harden(append) }),
+        );
+        flushTo(active.ports);
+        return reply;
       },
     },
   );
@@ -1114,7 +1183,8 @@ export const makeTurnRunner = ({
         attachments.map((/** @type {any} */ a) => a.label),
       );
     }
-    records.append(started);
+    // M8 S-5a: the index of TurnStarted (the compaction part reads it).
+    active.startIndex = records.append(started);
     active.turn = turn;
     active.sink = makeSink(active);
     index.add(info);
@@ -1267,6 +1337,7 @@ export const makeTurnRunner = ({
 
   const { importTurns, importEnd } = makeTurnImport({
     records,
+    window,
     index,
     archive,
     usage,
