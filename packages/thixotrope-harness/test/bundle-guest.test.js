@@ -82,6 +82,59 @@ test('the bundle carries no copy of @endo/patterns or any other package', async 
   t.true(source.length < 10_000, `${source.length}`);
 });
 
+test('the session linker keeps effects, export cells, names and original module accounting', async t => {
+  const dir = await scratch(t, 'link');
+  const entry = path.join(dir, 'session', 'main.js');
+  await mkdir(path.dirname(entry));
+  await writeFile(
+    path.join(dir, 'package.json'),
+    '{"name":"guest","type":"module"}',
+  );
+  await writeFile(
+    path.join(dir, 'counter.js'),
+    [
+      "globalThis.mark('counter');",
+      'let count = 0;',
+      'export const read = () => count;',
+      'export const advance = () => ++count;',
+    ].join('\n'),
+  );
+  await writeFile(
+    path.join(dir, 'effect.js'),
+    "globalThis.mark('effect'); export const unused = 1;",
+  );
+  await writeFile(
+    entry,
+    [
+      "import { read, advance as next } from '../counter.js';",
+      'export const advance = () => next();',
+      'export const count = () => read();',
+      "import { unused } from '../effect.js';",
+      "globalThis.mark('entry');",
+    ].join('\n'),
+  );
+  const expectedModules = ['counter.js', 'effect.js', 'session/main.js'];
+  for (const comments of [false, true]) {
+    const bundle = await bundleGuest(entry, { comments });
+    const seen = [];
+    const namespace = evaluateBundle(bundle.source, {
+      mark: value => seen.push(value),
+    });
+    t.deepEqual(seen, ['counter', 'effect', 'entry']);
+    t.deepEqual(bundle.modules, expectedModules);
+    t.deepEqual(Object.keys(namespace).sort(), ['advance', 'count']);
+    t.is(namespace.advance.name, 'advance');
+    t.is(namespace.count(), 0);
+    namespace.advance();
+    t.is(namespace.count(), 1);
+  }
+  await writeFile(
+    entry,
+    "import { unused } from '@endo/patterns'; export const valid = true;",
+  );
+  await t.throwsAsync(() => bundleGuest(entry), { message: /@endo\/patterns/ });
+});
+
 test('a guest that imports @endo/patterns does not bundle', async t => {
   const dir = await scratch(t, 'bg');
   await mkdir(path.join(dir, 'bad'));
