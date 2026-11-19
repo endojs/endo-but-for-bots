@@ -148,6 +148,8 @@ await runPerf('voice-session', async ({ provision }) => {
   const first = await E(voice).startVoiceSession(
     harden({ invocationId: 'launch-perf', at: Date.now() }),
   );
+  // The pool's refill after that take is not the duplicate's.
+  await E(slice.harness).whenSettled();
   before = await state.counters();
   const duplicates = await runWindow(
     () => E(voice).startVoiceSession(harden({ invocationId: 'launch-perf' })),
@@ -202,6 +204,8 @@ await runPerf('voice-session', async ({ provision }) => {
     ...base.context,
     operator: () => controlOperator,
   });
+  // The pool's refill after the last take is not the reads'.
+  await E(slice.harness).whenSettled();
   before = await state.counters();
   const reads = await runWindow(
     async () => {
