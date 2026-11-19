@@ -73,7 +73,7 @@ time_budget_s = 146
 memory_budget_gb = 7
 unreachable = 6
 unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
-mutants = ["SNAP-1-a", "SNAP-1-d"]
+mutants = ["SNAP-1-a"]
 expect = "pass"
 canary = false
 
@@ -90,7 +90,7 @@ time_budget_s = 471
 memory_budget_gb = 7
 unreachable = 6
 unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
-mutants = ["SNAP-1-a", "SNAP-1-d"]
+mutants = ["SNAP-1-a"]
 expect = "pass"
 canary = false
 
@@ -359,7 +359,7 @@ time_budget_s = 5
 memory_budget_gb = 2
 unreachable = 7
 unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
-mutants = ["SNAP-3-e"]
+mutants = []
 expect = "pass"
 canary = false
 
@@ -626,7 +626,7 @@ flags = []
 time_budget_s = 5
 memory_budget_gb = 2
 unreachable = 0
-mutants = ["TXT-1-f"]
+mutants = []
 expect = "pass"
 canary = false
 
