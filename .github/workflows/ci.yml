@@ -726,6 +726,51 @@ jobs:
           cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler --test js_machine_trait
           cargo test --locked -p endo --features ironhorse-engine --lib ironhorse_engine::
 
+  # Supply-chain policy (deny.toml): advisories, licences, bans and sources
+  # for every Cargo root with a committed lockfile. deny.toml says which roots
+  # and why. The weekly advisory sweep in cargo-deny-advisories.yml shares
+  # the install recipe; bump CARGO_DENY_VERSION in both.
+  cargo-deny:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['cargo-deny']) }}
+    name: cargo-deny
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_DENY_VERSION: 0.21.0
+
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache cargo-deny
+        id: cache-cargo-deny
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: ${{ runner.os }}-cargo-deny-${{ env.CARGO_DENY_VERSION }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Install cargo-deny
+        if: steps.cache-cargo-deny.outputs.cache-hit != 'true'
+        run: cargo install --locked "cargo-deny@$CARGO_DENY_VERSION"
+
+      - name: Check supply-chain policy
+        run: |
+          status=0
+          for manifest in Cargo.toml rust/engine/Cargo.toml rust/engine/ironhorse-fuzz/fuzz/Cargo.toml; do
+            echo "::group::cargo deny $manifest"
+            cargo deny --manifest-path "$manifest" --locked check || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"
+
   # Skip entire jobs, including the runner matrix, on unrelated PRs/pushes.
   format-ironhorse:
     needs: changes

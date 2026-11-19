@@ -1,0 +1,56 @@
+name: cargo-deny advisories
+
+# New RustSec advisories land against crates already in the lockfiles, with
+# no commit here to start ci.yml's cargo-deny job. This sweep re-reads the
+# advisory database weekly for the same Cargo roots (see deny.toml). It is a
+# separate workflow because a `schedule` event in ci.yml would select every
+# job there.
+
+on:
+  schedule:
+    # Mondays 05:17 UTC.
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  advisories:
+    name: cargo-deny advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Keep in step with ci.yml's cargo-deny job.
+      CARGO_DENY_VERSION: 0.21.0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache cargo-deny
+        id: cache-cargo-deny
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: ${{ runner.os }}-cargo-deny-${{ env.CARGO_DENY_VERSION }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Install cargo-deny
+        if: steps.cache-cargo-deny.outputs.cache-hit != 'true'
+        run: cargo install --locked "cargo-deny@$CARGO_DENY_VERSION"
+
+      - name: Check advisories
+        run: |
+          status=0
+          for manifest in Cargo.toml rust/engine/Cargo.toml rust/engine/ironhorse-fuzz/fuzz/Cargo.toml; do
+            echo "::group::cargo deny $manifest"
+            cargo deny --manifest-path "$manifest" --locked check advisories || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"

@@ -54,6 +54,13 @@ The old `test262` job has been removed because it only installed dependencies an
 built the repository before executing `exit 0`.
 The real hardened262 baseline remains in the affected XS suite.
 
+The `cargo-deny` job checks the supply-chain policy in `deny.toml` for every
+Cargo root with a committed lockfile.
+Any `Cargo.toml`, any `Cargo.lock`, or `deny.toml` itself selects it, since each
+can introduce a crate, a licence or a source.
+New advisories arrive without a commit, so `cargo-deny-advisories.yml` also
+re-checks advisories weekly; editing that workflow selects the `cargo-deny` job.
+
 When adding a test job, register its package or crate roots and any non-manifest
 inputs in the detector, then wire its job-level condition to the returned flag.
 Add regression cases showing both relevant and unrelated changes.

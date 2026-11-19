@@ -26,6 +26,7 @@ JOBS = (
     "cross-target-ironhorse", "build-ironhorse-wasm", "test-ocapn-python",
     "build-wasm", "browser-tests", "guile-interop", "viable-release",
     "depcheck", "check-action-pins", "package-uniformity", "filter-tests",
+    "cargo-deny",
 )
 JS_JOBS = {
     "test", "cover", "lint", "familiar-bundle", "sandbox-drivers",
@@ -38,6 +39,7 @@ RUST_JOBS = {
     "test-ironhorse", "test-ironhorse-calibration", "compare-ironhorse-math",
     "test-ironhorse-oracle", "oracle-sanitizers", "fuzz-ironhorse",
     "cross-target-ironhorse", "build-ironhorse-wasm", "build-wasm",
+    "cargo-deny",
 }
 WORKFLOWS = {
     ".github/workflows/browser-test.yml": {"browser-tests"},
@@ -50,6 +52,9 @@ WORKFLOWS = {
     # other; every sibling entry above maps a workflow to the job it
     # defines.
     ".github/workflows/ironhorse-deep-fuzz.yml": {"fuzz-ironhorse"},
+    # The weekly advisory sweep runs the same cargo-deny install and roots as
+    # ci.yml's cargo-deny job.
+    ".github/workflows/cargo-deny-advisories.yml": {"cargo-deny"},
 }
 CORE = {
     "ironhorse-meter", "ironhorse-vm", "ironhorse-snapshot",
@@ -334,6 +339,10 @@ def classify(paths, graphs, all_jobs=False):
             jobs["check-action-pins"] = True
         if path.endswith(".rs") and (under(path, "rust/engine") or under(path, "rust/endo/ironhorse-store-sqlite")):
             jobs["format-ironhorse"] = True
+        # Supply-chain policy: every manifest and lockfile can add a crate,
+        # a licence or a source.
+        if path == "deny.toml" or PurePosixPath(path).name in {"Cargo.toml", "Cargo.lock"}:
+            jobs["cargo-deny"] = True
         # Every engine change but documentation: the probe's sources, which no
         # crate graph sees (`stack-lanes/`), its corpus and snippets, the lane
         # scripts and the expected lists are all inputs of the comparison.

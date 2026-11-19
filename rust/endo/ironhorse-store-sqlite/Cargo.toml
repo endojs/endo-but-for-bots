@@ -9,6 +9,7 @@
 name = "ironhorse-store-sqlite"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 [dependencies]
 # `fallible_uint` keeps the u64/usize conversions rusqlite 0.31 had built in

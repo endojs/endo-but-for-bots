@@ -2,6 +2,7 @@
 name = "xsnap"
 version = "0.1.0"
 edition = "2021"
+publish = false
 description = "Rust bindings for the XS JavaScript engine (Moddable)"
 
 [dependencies]

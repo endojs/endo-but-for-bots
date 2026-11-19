@@ -251,6 +251,22 @@ class Repository(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(self.selected(path)["build-ironhorse-wasm"])
 
+    def test_cargo_deny_runs_for_every_manifest_lockfile_and_its_policy(self):
+        for path in ["deny.toml", "Cargo.toml", "Cargo.lock", "rust/engine/Cargo.lock",
+                     "rust/engine/ironhorse-fuzz/fuzz/Cargo.lock", "rust/endo/xsnap/Cargo.toml",
+                     "rust/engine/ironhorse-vm/Cargo.toml",
+                     ".github/workflows/cargo-deny-advisories.yml"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["cargo-deny"])
+        for path in ["rust/endo/src/lib.rs", "rust/engine/ironhorse-vm/src/lib.rs",
+                     "packages/cbor/src/encode.js", "docs/ci-change-selection.md"]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["cargo-deny"])
+
+    def test_policy_file_alone_selects_only_cargo_deny(self):
+        jobs = self.selected("deny.toml")
+        self.assertEqual([n for n, value in jobs.items() if value], ["cargo-deny"])
+
     def test_format_helper_inputs(self):
         self.assertTrue(self.selected("rust/engine/scripts/generate-compiler-opcodes.py")["format-ironhorse"])
 
