@@ -321,32 +321,40 @@ const makeInbox = runtime => {
     lastSeq === 0 || Fail`only a new session imports mail`;
     messageBytes(chunk) <= limits.frameBytes ||
       Fail`an inbox page over frameBytes`;
+    const pending = [];
+    let high = floor;
     for (const item of chunk.messages ?? []) {
       const { type, state } = item;
-      /** @type {number} */
-      const number = item.number;
+      const number = /** @type {number} */ (item.number);
       (mailTypes.includes(type) && inboxStates.includes(state)) ||
         Fail`not an inbox message: ${type} ${state}`;
+      (Number.isSafeInteger(number) &&
+        number > 0 &&
+        number < Number.MAX_SAFE_INTEGER) ||
+        Fail`invalid imported message number`;
       const known = messages.get(number);
       if (known !== undefined) {
-        // A page sent again: applied once.
         known.imported || Fail`only a new session imports mail`;
       } else {
-        messages.size < limits.inboxMessages ||
-          Fail`an imported inbox holds at most ${limits.inboxMessages}`;
-        add(number, item, {
-          attachments: harden([]),
-          edges: item.edges,
-          state: 'kept',
-          imported: true,
-        });
-        if (number > floor) floor = number;
+        number > high || Fail`imported message numbers must increase`;
+        high = number;
+        pending.push(item);
       }
     }
-    // The packages counter resumes above every imported number (D-M9-21),
-    // so a package opened before the next delivery cannot reuse one
-    // (`reserve(floor - 1)` sets a new session's counter to `floor`).
-    if (floor > 0) packages().reserve(floor - 1);
+    messages.size + pending.length <= limits.inboxMessages ||
+      Fail`an imported inbox holds at most ${limits.inboxMessages}`;
+    for (const item of pending) {
+      add(item.number, item, {
+        attachments: harden([]),
+        edges: item.edges,
+        state: 'kept',
+        imported: true,
+      });
+    }
+    if (high > floor) {
+      floor = high;
+      packages().raiseTo(high);
+    }
   };
 
   // ---------------------------------------------------------------- hooks
