@@ -17469,6 +17469,13 @@ observation leaves eventual daemon retirement unresolved. The targeted
 normal ExecHandle unit test passed (one test, fake worker), checking that
 retiring the matching scope retires its worker and permits a new scope.
 
+An independent performance run at `d45039364e-dirty` recorded the same
+exhaustion path completing, one exec vat retiring and the next turn
+completing (`tooBig.keys60k`). The QC assertion now polls for disappearance
+of an original worker ID for up to 30 seconds. Its count and the performance
+limits are unchanged. The changed observation has not been exercised in a
+standalone run of the legacy QC file.
+
 ### J-12726 2026-11-19 W11.9 — monotonic-clock transport pass
 
 Node 22.23.4, worker 367e78ad1db3, b1601fb0ac, 60-second exclusive

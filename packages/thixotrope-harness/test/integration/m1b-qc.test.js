@@ -42,7 +42,7 @@ import {
   startFromTemplate,
   takeIntegrationLock,
 } from '../template/index.js';
-import { makeSlice, round1 } from './_m1a-slice.js';
+import { makeSlice, round1, waitFor } from './_m1a-slice.js';
 import { execTemplate, isExecVat } from './_m1b-exec.js';
 import { runTurn, turnRecords } from './_m1b.js';
 
@@ -213,11 +213,18 @@ run(
       textOf.errorResult(texts.execExhausted),
       'the exec vat answered exhausted',
     );
-    await delay(2000);
-    const execRowsAfter = (await slice.workers()).filter(isExecVat);
-    const retired = execRowsBefore.filter(
-      w => !execRowsAfter.some(a => a.workerId === w.workerId),
-    ).length;
+    const retired = await waitFor(
+      async () => {
+        const workers = await slice.workers();
+        const execRowsAfter = workers.filter(isExecVat);
+        return execRowsBefore.filter(
+          w => !execRowsAfter.some(a => a.workerId === w.workerId),
+        ).length;
+      },
+      30_000,
+      'a previous exec worker to retire',
+      250,
+    );
     t.true(retired >= 1, 'the exhausted exec vat was retired');
     const tTrivial = performance.now();
     const trivial = await runTurn(slice, session, live, 'trivial');
