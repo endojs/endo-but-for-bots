@@ -18041,3 +18041,21 @@ ea857fc639 uses the 50,000,000 crank budget from `config/defaults.js`
 when resolving this fixture. A job using the
 normal template API and shared run lock was queued beside the
 functional batch. Each fixture key has its own build lock.
+
+### J-12549 2026-11-19 WX.F fresh mail growth baseline
+
+M9 §10.1 budgets the persisted hub image plus log at 1.25 times fresh.
+The eight-active run measured 789,721 to 1,120,398 bytes (1.419 times),
+and the earlier four-active run measured 757,183 to 1,223,996 (1.617
+times). Both denominators followed the no-attachment throughput window.
+Those two-point totals cannot separate live row growth from the store's
+natural log compaction. The revised driver prepares eight recipients on
+a separate template copy, settles setup, and takes its first sample before
+any attachment traffic. It records file bytes, sequence, record count,
+appends and compactions at both endpoints, retaining the 120-second
+window, final drain, 32 idle cranks and 1.25 limit.
+
+The session-to-session delivery count (budget at most four) remains
+unverified. The existing isolated crank trace supplies worker, method
+and wall timestamps. Overlapping sender settlement and recipient work
+preclude assigning every crank to a single mail from that information.

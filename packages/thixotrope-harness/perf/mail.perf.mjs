@@ -1,11 +1,13 @@
 // @ts-check
 /** Measured operator and session mail, bounded inbox delivery, throughput and hub growth. */
+import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { emit, hubJsonBytes, loadAvg, runPerf, stats } from './_harness.mjs';
+import { emit, loadAvg, runPerf, stats } from './_harness.mjs';
 import { runWindow, windowFields, windowMs } from './_window.mjs';
 
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
 installGuestPrelude();
+const { hubDiskBytes } = await import('./_hub.mjs');
 const { E } = await import('@endo/far');
 const { sliceScript } = await import('../test/fixtures/scripts/m1a-slice.js');
 const { connect, TEMPLATE_WORKSPACE } =
@@ -212,167 +214,208 @@ await runPerf('mail', async ({ provision }) => {
   });
   if (!total || p95 > 550) process.exitCode = 1;
 
-  await E(slice.harness).configure(harden({ backends: [made.backend] }));
-  const clients = [];
-  try {
-    for (let i = 0; i < 4; i += 1) {
-      const client = await connect(run.root, { workspace: TEMPLATE_WORKSPACE });
-      const root = await client.call('lookup', names.harness);
-      const operator = await E(root).getOperator();
-      const factory = await E(operator).getFactory();
-      const [backend] = await E(factory).listBackends();
-      const [preset] = await E(factory).listPresets();
-      const [a, b] = await Promise.all(
-        [0, 1].map(j =>
-          E(factory).createSession(
-            harden({
-              title: `Mailbox ${i}-${j}`,
-              backend,
-              preset,
-              at: Date.now(),
-            }),
-          ),
-        ),
-      );
-      clients.push({
-        client,
-        mailbox: await E(operator).getMail(),
-        sessions: [a, b],
-        attachments: [
-          { label: 'preset', value: preset },
-          { label: 'backend', value: backend },
-        ],
-      });
-    }
-    /**
-     * @param {number} ms
-     * @param {boolean} edges
-     */
-    const measureThroughput = async (ms, edges) => {
-      let posts = 0;
-      let largest = 0;
-      let active = 0;
-      let maxActive = 0;
-      let ackBacklog = 0;
-      let finished = 0;
-      let stopped = false;
-      /** @type {Map<number, () => void>} */
-      const pending = new Map();
-      const start = performance.now();
-      // Each client issues just one send at a time, but can use its second
-      // recipient while the first recipient is processing its turn.
-      const senders = clients.map(async c => {
-        /** @type {Promise<void>[]} */
-        const credits = c.sessions.map(() => Promise.resolve());
-        let n = 0;
-        while (!stopped) {
-          const slot = n % credits.length;
-          await credits[slot];
-          if (stopped || (n && performance.now() - start >= ms)) break;
-          active += 1;
-          maxActive = Math.max(maxActive, active);
-          const { postmark } = await post(
-            c.mailbox,
-            c.sessions[slot],
-            edges ? c.attachments : [],
-          );
-          if (stopped) break;
-          credits[slot] = new Promise(resolve =>
-            pending.set(postmark, resolve),
-          );
-          ackBacklog = Math.max(ackBacklog, pending.size);
-          n += 1;
-        }
-        finished += 1;
-      });
-      const drain = waitFor(
-        async () => {
-          if (stopped || (finished === clients.length && !pending.size))
-            return true;
-          if (!pending.size) return false;
-          let after = 0;
-          let seen = 0;
-          for (;;) {
-            const page = await E(mailbox).list(harden({ after }));
-            seen += page.messages.length;
-            await Promise.all(
-              page.messages.map(async message => {
-                const release = pending.get(message.inReplyTo);
-                if (!release) return;
-                await E(message.message).dismiss();
-                pending.delete(message.inReplyTo);
-                posts += 1;
-                active -= 1;
-                release();
+  const template = await sliceTemplate();
+  for (const growthPhase of [false, true]) {
+    const trafficRun = growthPhase
+      ? await provision({ template, root: path.join(run.root, 'g') })
+      : run;
+    const trafficSlice = growthPhase ? await makeSlice(trafficRun) : slice;
+    const trafficBackend = growthPhase
+      ? await trafficSlice.makeBackend(harden(sliceScript))
+      : made;
+    await E(trafficSlice.harness).configure(
+      harden({ backends: [trafficBackend.backend] }),
+    );
+    const trafficMailbox = await E(
+      E(trafficSlice.harness).getOperator(),
+    ).getMail();
+    const clients = [];
+    try {
+      for (let i = 0; i < 4; i += 1) {
+        const client = await connect(trafficRun.root, {
+          workspace: TEMPLATE_WORKSPACE,
+        });
+        const root = await client.call('lookup', names.harness);
+        const operator = await E(root).getOperator();
+        const factory = await E(operator).getFactory();
+        const [backend] = await E(factory).listBackends();
+        const [preset] = await E(factory).listPresets();
+        const [a, b] = await Promise.all(
+          [0, 1].map(j =>
+            E(factory).createSession(
+              harden({
+                title: `Mailbox ${i}-${j}`,
+                backend,
+                preset,
+                at: Date.now(),
               }),
-            );
-            if (page.next === undefined) break;
-            after = page.next;
-          }
-          largest = Math.max(largest, seen);
-          return false;
-        },
-        ms + 60_000,
-        'all senders and their completed, dismissed replies',
-        10,
-      );
-      try {
-        await Promise.all([...senders, drain]);
-      } finally {
-        stopped = true;
-        for (const release of pending.values()) release();
+            ),
+          ),
+        );
+        clients.push({
+          client,
+          mailbox: await E(operator).getMail(),
+          sessions: [a, b],
+          attachments: [
+            { label: 'preset', value: preset },
+            { label: 'backend', value: backend },
+          ],
+        });
       }
-      if (active !== 0 || pending.size !== 0)
-        throw Error('Mail window did not drain');
-      return {
-        posts,
-        largest,
-        maxActive,
-        ackBacklog,
-        w: {
-          samples: posts,
-          ms,
-          elapsedMs: performance.now() - start,
-          few: 10,
-        },
+      /**
+       * @param {number} ms
+       * @param {boolean} edges
+       */
+      const measureThroughput = async (ms, edges) => {
+        let posts = 0;
+        let largest = 0;
+        let active = 0;
+        let maxActive = 0;
+        let ackBacklog = 0;
+        let finished = 0;
+        let stopped = false;
+        /** @type {Map<number, () => void>} */
+        const pending = new Map();
+        const start = performance.now();
+        // Each client issues just one send at a time, but can use its second
+        // recipient while the first recipient is processing its turn.
+        const senders = clients.map(async c => {
+          /** @type {Promise<void>[]} */
+          const credits = c.sessions.map(() => Promise.resolve());
+          let n = 0;
+          while (!stopped) {
+            const slot = n % credits.length;
+            await credits[slot];
+            if (stopped || (n && performance.now() - start >= ms)) break;
+            active += 1;
+            maxActive = Math.max(maxActive, active);
+            const { postmark } = await post(
+              c.mailbox,
+              c.sessions[slot],
+              edges ? c.attachments : [],
+            );
+            if (stopped) break;
+            credits[slot] = new Promise(resolve =>
+              pending.set(postmark, resolve),
+            );
+            ackBacklog = Math.max(ackBacklog, pending.size);
+            n += 1;
+          }
+          finished += 1;
+        });
+        const drain = waitFor(
+          async () => {
+            if (stopped || (finished === clients.length && !pending.size))
+              return true;
+            if (!pending.size) return false;
+            let after = 0;
+            let seen = 0;
+            for (;;) {
+              const page = await E(trafficMailbox).list(harden({ after }));
+              seen += page.messages.length;
+              await Promise.all(
+                page.messages.map(async message => {
+                  const release = pending.get(message.inReplyTo);
+                  if (!release) return;
+                  await E(message.message).dismiss();
+                  pending.delete(message.inReplyTo);
+                  posts += 1;
+                  active -= 1;
+                  release();
+                }),
+              );
+              if (page.next === undefined) break;
+              after = page.next;
+            }
+            largest = Math.max(largest, seen);
+            return false;
+          },
+          ms + 60_000,
+          'all senders and their completed, dismissed replies',
+          10,
+        );
+        try {
+          await Promise.all([...senders, drain]);
+        } finally {
+          stopped = true;
+          for (const release of pending.values()) release();
+        }
+        if (active !== 0 || pending.size !== 0)
+          throw Error('Mail window did not drain');
+        return {
+          posts,
+          largest,
+          maxActive,
+          ackBacklog,
+          w: {
+            samples: posts,
+            ms,
+            elapsedMs: performance.now() - start,
+            few: 10,
+          },
+        };
       };
-    };
-    const rate = await measureThroughput(window, false);
-    const perSecond = (rate.posts * 1000) / rate.w.elapsedMs;
-    emit({
-      metric: 'mail.throughput',
-      unit: 'posts/s',
-      value: perSecond,
-      posts: rate.posts,
-      largestInbox: rate.largest,
-      maxActiveRecipients: rate.maxActive,
-      maxAcknowledgedAwaitingDismissal: rate.ackBacklog,
-      loadAvg: loadAvg(),
-      budget: { minimum: 3 },
-      pass: perSecond >= 3,
-      ...windowFields(rate.w),
-    });
-    if (perSecond < 3) process.exitCode = 1;
-    const before = await hubJsonBytes(run.root);
-    const growth = await measureThroughput(growthWindow, true);
-    for (let i = 0; i < 32; i += 1) await E(mailbox).rev();
-    const after = await hubJsonBytes(run.root);
-    const ratio = before && after ? after / before : Infinity;
-    emit({
-      metric: 'mail.hubGrowth',
-      unit: 'ratio',
-      value: ratio,
-      before,
-      after,
-      posts: growth.posts,
-      maxActiveRecipients: growth.maxActive,
-      maxAcknowledgedAwaitingDismissal: growth.ackBacklog,
-      budget: { maximum: 1.25 },
-      pass: ratio <= 1.25,
-      ...windowFields(growth.w),
-    });
-    if (ratio > 1.25) process.exitCode = 1;
-  } finally {
-    for (const { client } of clients) client.close();
+      await E(trafficSlice.harness).whenSettled();
+      if (!growthPhase) {
+        const rate = await measureThroughput(window, false);
+        const perSecond = (rate.posts * 1000) / rate.w.elapsedMs;
+        emit({
+          metric: 'mail.throughput',
+          unit: 'posts/s',
+          value: perSecond,
+          posts: rate.posts,
+          largestInbox: rate.largest,
+          maxActiveRecipients: rate.maxActive,
+          maxAcknowledgedAwaitingDismissal: rate.ackBacklog,
+          loadAvg: loadAvg(),
+          budget: { minimum: 3 },
+          pass: perSecond >= 3,
+          ...windowFields(rate.w),
+        });
+        if (perSecond < 3) process.exitCode = 1;
+        continue;
+      }
+      const snapshot = async () => {
+        const { hub } = await trafficRun.client.call('status');
+        const disk = await hubDiskBytes(trafficRun.root);
+        if (!disk) throw Error('Missing persisted hub image and log');
+        const { seq, compactions, appends, logRecords, imageChars, logChars } =
+          hub.store;
+        return {
+          ...disk,
+          seq,
+          compactions,
+          appends,
+          logRecords,
+          imageChars,
+          logChars,
+        };
+      };
+      const fresh = await snapshot();
+      const before = fresh.bytes;
+      const growth = await measureThroughput(growthWindow, true);
+      for (let i = 0; i < 32; i += 1) await E(trafficMailbox).rev();
+      const final = await snapshot();
+      const after = final.bytes;
+      const ratio = before && after ? after / before : Infinity;
+      emit({
+        metric: 'mail.hubGrowth',
+        unit: 'ratio',
+        value: ratio,
+        before,
+        after,
+        fresh,
+        final,
+        posts: growth.posts,
+        maxActiveRecipients: growth.maxActive,
+        maxAcknowledgedAwaitingDismissal: growth.ackBacklog,
+        budget: { maximum: 1.25 },
+        pass: ratio <= 1.25,
+        ...windowFields(growth.w),
+      });
+      if (ratio > 1.25) process.exitCode = 1;
+    } finally {
+      for (const { client } of clients) client.close();
+    }
   }
 });
