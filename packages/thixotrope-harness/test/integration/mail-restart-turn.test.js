@@ -47,7 +47,7 @@ run(
         const found = messages.filter(
           (/** @type {any} */ m) => m.inReplyTo === postmark,
         );
-        return found.length > 0 && found;
+        return found.length && found;
       },
       30_000,
       'the interrupted turn reply',
