@@ -41,7 +41,9 @@ flate2 = "1"
 gix = { version = "0.85", default-features = false, features = ["parallel", "sha1", "sha256"] }
 hex = "0.4"
 libc = "0.2"
-rusqlite = { version = "0.31", features = ["bundled"] }
+# `fallible_uint` keeps the u64/usize conversions rusqlite 0.31 had built in
+# (range-checked against i64 when binding and reading).
+rusqlite = { version = "0.43", features = ["bundled", "fallible_uint"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -49,7 +51,7 @@ tar = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal", "process", "io-util", "net", "time"] }
 ureq = "2"
 xsnap = { path = "xsnap" }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

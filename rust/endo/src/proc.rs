@@ -113,8 +113,14 @@ pub fn wire_worker_tasks(
         }
     }
 
-    let async_read = AsyncFd::new(read_file)?;
-    let async_write = AsyncFd::new(write_file)?;
+    // SAFETY: `AsyncFd::register` requires the descriptor to be open and to
+    // name the same open file description until the `AsyncFd` is dropped.
+    // Both are owned `std::fs::File`s moved into their `AsyncFd`, so nothing
+    // else can close or reuse the descriptor while the `AsyncFd` holds it,
+    // and `File::as_raw_fd` returns the same descriptor on every call.
+    let async_read = unsafe { AsyncFd::register(read_file) }?;
+    // SAFETY: as above, for the owned write-end `File`.
+    let async_write = unsafe { AsyncFd::register(write_file) }?;
 
     // Read task: child -> supervisor.
     let sup_read = Arc::clone(sup);

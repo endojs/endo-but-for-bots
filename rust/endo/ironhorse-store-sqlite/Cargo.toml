@@ -11,7 +11,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rusqlite = { version = "0.31", features = ["bundled"] }
+# `fallible_uint` keeps the u64/usize conversions rusqlite 0.31 had built in
+# (range-checked against i64 when binding and reading).
+rusqlite = { version = "0.43", features = ["bundled", "fallible_uint"] }
 ironhorse-snapshot = { path = "../../engine/ironhorse-snapshot" }
 ironhorse-vm = { path = "../../engine/ironhorse-vm" }
 
