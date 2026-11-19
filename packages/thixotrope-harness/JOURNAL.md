@@ -17804,3 +17804,23 @@ THIX_HARNESS_INTEGRATION=1 corepack yarn exec node \
 
 The package typecheck passed. ESLint reported zero errors on the modified
 product and test files and three pre-existing warnings.
+
+### J-1455 2026-11-19 WX.F integrated verification of the follow-up
+
+At `4a5b1c7dad` the full unit and adapter command passed 2,001 tests, with
+168 skipped and three TODOs. The integration-only retirement case accounts for
+one new skip in this command. Type checking and ESLint passed with zero errors
+and 923 warnings. Duplication was 584 of 38,406 normalized lines (1.52%,
+ceiling 1.77%). J-1460 and J-1461 record the isolated M9 allocation and the
+installed mail runtime. J-1473 records the real retirement result.
+
+Both cases in `compaction-archive.test.js` passed on Ironhorse. The first
+recovered the compacted 300-turn context after a kill. The second exported and
+imported the session and recovered the same summary and tail. The file held its
+shared slot for 282.7 s and waited 649.9 s for it (932.7 s elapsed).
+
+Two M9 timing launches exited during supervisor startup. The benchmark's
+500-character error row retained only the SES startup preamble. It now retains
+both the operation and the end of the supervisor error under the same bound.
+A synthetic startup failure verified the reported cause, 500-character limit
+and failing status. Startup failures supply no performance samples.

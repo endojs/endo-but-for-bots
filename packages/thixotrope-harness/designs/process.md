@@ -315,6 +315,13 @@ and took 1,322.8 s elapsed after template preparation.
 | turn | 144.7 | 0 | Start median 180 ms. |
 | exec | 142.7 | 0 | First call median 576 ms, trivial call median 153 ms. |
 
+In the follow-up, `compaction.perf.mjs` passed all four budget rows in a
+220 s exclusive acquisition. Nine restarts of the compacted 300-turn session
+rebuilt context in 60 ms median and 76 ms p95 (J-1454). The separate archive
+integration file passed both cases, including recovery, export and import
+(J-1455). J-1461 records all eight mail integration cases passing with the
+production session emitter.
+
 **M3, M4, M5 and the cross-check** (X-CLOSE, 2026-11-18 16:12-17:19 UTC, at `404e60ea3a`, load
 1.0-2.8: 15 files, **4,004 s held (66.7 minutes), 66.8 minutes of wall**; exit 1 means a budget
 missed, each listed):

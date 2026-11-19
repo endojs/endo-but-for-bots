@@ -587,12 +587,14 @@ export const runPerf = async (feature, fn) => {
     });
   } catch (error) {
     failures += 1;
+    const message = String(/** @type {Error} */ (error)?.message ?? error);
+    // Supervisor startup errors end with the cause after the SES startup log.
     emit({
       metric: `${feature}.error`,
-      error: String(/** @type {Error} */ (error)?.message ?? error).slice(
-        0,
-        500,
-      ),
+      error:
+        message.length <= 500
+          ? message
+          : `${message.slice(0, 160)}...${message.slice(-337)}`,
       pass: false,
     });
   } finally {
