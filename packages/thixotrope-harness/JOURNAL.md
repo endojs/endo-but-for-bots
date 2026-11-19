@@ -15419,3 +15419,77 @@ supervisor, run lock or perf window (W9.9 has no perf rows). `tsc` clean; eslint
 changed files (only `safe-await-separator` warnings already in `factory.js` and `services.js`);
 prettier clean; `lint:duplicates` 1.72 % (ceiling 2.05 %).
 Fit: neutral.
+
+### J-12520 2026-11-19 W9.10 mail integration in a real daemon - built
+Evidence: `test/integration/mail.test.js` (8 cases, 100 s, `ff2a1d637f`),
+`test/integration/mail-restart-delivery.test.js` (1 case, 86 s, `15edb62d1a`),
+`perf/mail.perf.mjs` (`3edd555021`); the `mail` lists of `scripts/test-integration.mjs`
+(`test:regression:mail`: both files) and `perf/_pass.mjs` (`mail`). Built: on the m1a template
+with the real factory and session programs, the operator's `getMail()` mailbox; `addressOf`
+describing sessions; a package to two recipients reaching each session vat's `deliverMail` once
+and its answer returned per recipient; a request whose delivery is refused settling its handle
+`failed` and freeing its `responseKey` (R3-216); a client-made remotable and the factory refused
+`notAnAddress` with the stranger called 0 times; the 32-maximal-field form refused at the mailbox
+(`envelopeTooLarge`); a deleted session's address answering `recipientLost`; the gateway's
+signed-in CapTP client calling `getMail().send` with a preset attached and an invented draft key
+refused "unexpected field" before decode (acceptance 17). After a SIGKILL with a post in flight
+the factory's recovery (which awaits the mail start steps) ends, the mailbox, the address and
+the request's handle are the replayed ones, and a new post is delivered (restart to first answer
+8.6 s, first post after it 86 ms).
+Fit: good: an operator-side Far object passed as a recipient is refused by amplification without
+a call, as D-M9-2 says; identity of minted addresses survives the restart with no table.
+
+### J-12521 2026-11-19 W9.10 the session half is not registered - finding
+Evidence: `node scripts/bundle-guest.mjs session` at `5fb1a8203e`: 234,624 bytes (base after WX.1
+233,126; M9's seams +1,498). A scratch copy of `guest/` with S1 and S6 registered (the two parts
+and three tool spreads below their slot comments): 280,209 bytes, 9,873 over the 270,336 limit and
++47,083 against M9's 21,500. Per module in that bundle: `tools/mail.js` 10,556, `tools/subagents.js`
+9,954, `inbox.js` 8,070, `tools/requests.js` 4,979, `subagents.js` 3,432, `mail-text.js` 1,650,
+`tools/call-table.js` 1,518 (first imported by M9), cells and linkage the rest; string literals
+are 2,037, 1,400, 708 and 1,091 bytes of the four largest, so shorter descriptions cannot close the
+gap. Reading: every session answers `deliverMail` with `texts.notBuiltYet`, so acceptance 1, 4, 5,
+7-12, 14-16 and every `subagent.*` row cannot run in a daemon; the integration files assert the
+not-built answer and flip at registration. Second defect, found by reading: `inbox.js` `replyBody`
+reads `turn.final`, which `HookTurn` does not carry (`turn.js` `hookTurn` builds `{ active,
+round, append, emit }`, and `settle` keeps `final` only in the record), so a completed mail turn
+would reply with an empty body and an ask would answer ''. Needs a part-API line (`HookTurn.final`
+in the settle hook), which is WX's, not a lane's.
+Fit: poor here: the session program is one bundle per session vat with a byte ceiling, so a
+feature's tool argument handling (closed parsing, label lookup, refusals before any send) is paid
+in every session's cold create; the mail lane's tools are the first to need much of it.
+
+### J-12522 2026-11-19 W9.10 perf pass mail (exclusive) - measured
+Evidence: `corepack yarn perf:pass mail` at `3edd555021` (milestones.md uncommitted: `-dirty`),
+exclusive, load 2.2-2.6, crank budget 50,000,000, 1,243 s with templates (607 s for the four files;
+templates m1a, exec, pool, m4, m5o, m3-300 112-152 s each where rebuilt), every file exit 0, no
+row over budget.
+`{"metric":"mail.post.operator","n":460,"median":71.516,"p95":278.963,"p99":412.633,"min":59.835,"max":846.929,"deliveries":{"count":1380,"perOp":3},"engine":{"snapshot":{"count":7,"ms":2120.4},"wake":{"count":0}},"window":{"ms":60000,"elapsedMs":60002},"recipient":"not-built","budget":{"median":200},"pass":true}`;
+`mail.sessionToSession`, `mail.throughput`, `mail.inboxCrank`, `mail.hubGrowth`:
+`measured: false` (need the inbox part). Cross-check: `session.program` 234,624; `turn.start`
+median 123 ms (open 81, dispatch 36); `exec.trivial` median 74 ms; `exec.first` 321 ms;
+`install.factory` median 8,645 ms (the factory bundle is 233,199 bytes since W9.9). Shared smoke
+before (PERF_WINDOW_SCALE 0.1): median 64.2 ms, 48 samples. Reading: 3 deliveries per post (the
+factory's post crank, the session's delivery crank, the answer) as the contract counts without the
+claim; the p95 of 279 ms follows the 7 snapshots in the window (2.1 s of snapshot time over 460
+posts).
+Fit: good: the relay costs one factory crank and one session crank per recipient, inside the
+200 ms budget by a factor of 2.8.
+
+### J-12523 2026-11-19 W9.10 what is deferred and why - process
+Evidence: m9-interfaces.md 8.1, 8.2, 9, 10. Not written: `mail-restart-turn.test.js` (KM4-KM6,
+acceptance 15, `restart.mailIdle`), `subagents.test.js`, `subagents-restart.test.js` (KM7-KM11),
+`perf/subagents.perf.mjs`: nothing they test is reachable while the session parts are not
+registered (the subagent tools are the only way to call `Delegation.spawn`). KM1-KM3, KM13, KM14
+and acceptance 21 in `mail-restart-delivery.test.js` likewise. Cross-lane (WX.F): a subagent's
+own environment, mail to an emergency-stopped session, the four lanes' session program. Also
+found: `scripts/export.mjs` ignores `inbox` export pages (W9.8), and the factory export lists
+child rows as exportable sessions (W9.9; the contract is silent). The M9 unit and adapter files
+(15 files, 146 tests) pass at `3edd555021`; `lint:duplicates` 1.72 %; `tsc` clean.
+Fit: neutral.
+
+### J-12524 2026-11-19 W9.10 time record - process
+Evidence: first command 2026-11-19T02:56:20Z; commands over 60 s: the mail integration file five
+times (80-141 s, two of them failing on a teardown the setup case owned: `startFromTemplate`'s `t`
+cleans the state after that case), the restart file 86 s, the shared perf smoke (about 70 s), the
+exclusive `perf:pass mail` 1,243 s (03:17-03:38). No exit 124.
+Fit: neutral.
