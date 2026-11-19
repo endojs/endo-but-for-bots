@@ -16,6 +16,7 @@ flowchart TD
     ironhorse_regexp["ironhorse-regexp"]
     ironhorse_runtime["ironhorse-runtime"]
     ironhorse_snapshot["ironhorse-snapshot"]
+    ironhorse_spec["ironhorse-spec"]
     ironhorse_text["ironhorse-text"]
     ironhorse_unicode["ironhorse-unicode"]
     ironhorse_vm["ironhorse-vm"]
