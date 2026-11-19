@@ -17,6 +17,11 @@
  *   respawn adds a line).
  * - `--log`: appends one JSON line per message received:
  *   `{ type, stream, pcmBytes? }` (decoded byte lengths only, never audio).
+ * - `--clock` (with `--log`): each line also carries `at`, the wall time in
+ *   ms (`performance.timeOrigin + performance.now()`, comparable across
+ *   processes of one machine) when its input chunk arrived, and each
+ *   partial written adds `{ type: 'partial', stream, at }` (perf rows
+ *   `speech.audioForward` and `speech.partialRelay`).
  * - Exits at end of standard input (D-M11-15), except in `hang-after`.
  *
  * Modes: `normal`; `hang-after=<n>` after `n` received lines it stops
@@ -29,6 +34,7 @@
  * Plain Node (no SES): it is a stand-in for an external program.
  */
 import { appendFileSync } from 'node:fs';
+import { performance } from 'node:perf_hooks';
 import process from 'node:process';
 import { Buffer } from 'node:buffer';
 
@@ -43,6 +49,9 @@ const argOf = name => {
 const mode = argOf('--mode') ?? 'normal';
 const pidFile = argOf('--pid-file');
 const logFile = argOf('--log');
+const clock = process.argv.includes('--clock');
+/** Wall time in ms with a sub-millisecond fraction. */
+const wallNow = () => performance.timeOrigin + performance.now();
 const numberAfter = (/** @type {string} */ prefix) =>
   mode.startsWith(prefix) ? Number(mode.slice(prefix.length)) : undefined;
 const hangAfter = numberAfter('hang-after=');
@@ -66,13 +75,17 @@ let received = 0;
 let flooded = false;
 let hung = false;
 
-/** @param {Record<string, any>} req */
-const handle = req => {
+/**
+ * @param {Record<string, any>} req
+ * @param {number | undefined} at when its chunk arrived (`--clock`)
+ */
+const handle = (req, at) => {
   const { type, stream } = req;
+  const stamp = at === undefined ? {} : { at };
   if (type === 'stream_audio') {
     let bytes = Buffer.from(String(req.pcm ?? ''), 'base64').length;
     if (bytes % 2) bytes -= 1;
-    logEntry({ type, stream, pcmBytes: bytes });
+    logEntry({ type, stream, pcmBytes: bytes, ...stamp });
     if (mode === 'flood-line' && !flooded) {
       flooded = true;
       process.stdout.write(`${'x'.repeat(10 * 1024 * 1024)}\n`);
@@ -83,11 +96,12 @@ const handle = req => {
     state.bytes += bytes;
     if (state.bytes - state.reported >= PARTIAL_BYTES) {
       state.reported = state.bytes;
+      if (clock) logEntry({ type: 'partial', stream, at: wallNow() });
       send({ stream, partial: `${state.bytes} bytes` });
     }
     return;
   }
-  logEntry({ type, stream });
+  logEntry({ type, stream, ...stamp });
   if (type === 'stream_start') {
     streams.set(stream, { bytes: 0, reported: 0 });
   } else if (type === 'stream_stop') {
@@ -109,6 +123,7 @@ let pending = '';
 /** @param {string} chunk */
 const onData = chunk => {
   if (hung) return;
+  const at = clock ? wallNow() : undefined;
   pending += chunk;
   let nl = pending.indexOf('\n');
   while (nl !== -1) {
@@ -117,7 +132,7 @@ const onData = chunk => {
     if (line) {
       received += 1;
       try {
-        handle(JSON.parse(line));
+        handle(JSON.parse(line), at);
       } catch {
         // keep serving, as Moonshine does
       }
