@@ -54,12 +54,13 @@ test('a package goes to every recipient with the sender stamped, in its own seq'
   const attachment = Far('Thing', {});
   const receipt = await E(a.outbox).post(
     harden({
-      to: [b.address, c.address],
+      to: [b.address, c.address, b.address],
       body: 'hello',
       attachments: [{ label: 'thing', value: attachment }],
     }),
   );
-  t.is(receipt.results.length, 2);
+  t.is(receipt.results.length, 3);
+  t.deepEqual(receipt.results[2], receipt.results[0]);
   const [toB, toC] = receipt.results;
   t.true(typeof toB.postmark === 'number' && toB.postmark !== toC.postmark);
   t.is(b.envelopes.length, 1);

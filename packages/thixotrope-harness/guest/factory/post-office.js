@@ -578,17 +578,21 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
     const toSessions = harden(stray);
     checkEnvelope(full);
     checkEnvelope(toSessions);
+    /** @param {any} object */
+    const deliver = object => {
+      const party = recipientOf(object);
+      if (party === undefined) {
+        return harden({ refused: postOfficeTexts.notAnAddress });
+      }
+      if ('row' in party) return toSession(sender, party, toSessions, onReply);
+      return toOperator(full, sender, party);
+    };
+    const deliveries = new Map();
+    for (const address of draft.to) {
+      if (!deliveries.has(address)) deliveries.set(address, deliver(address));
+    }
     const results = await Promise.all(
-      draft.to.map((/** @type {any} */ object) => {
-        const party = recipientOf(object);
-        if (party === undefined) {
-          return harden({ refused: postOfficeTexts.notAnAddress });
-        }
-        if ('row' in party) {
-          return toSession(sender, party, toSessions, onReply);
-        }
-        return toOperator(full, sender, party);
-      }),
+      draft.to.map((/** @type {any} */ address) => deliveries.get(address)),
     );
     return harden({ results: harden(results) });
   };
