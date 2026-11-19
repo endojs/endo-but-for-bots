@@ -42,6 +42,7 @@ import {
   gitAbsentMethodNames,
 } from '../../guest/lib/guards/environments.js';
 import { texts } from '../../guest/lib/interfaces.js';
+import { limits } from '../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { emit, loadAvg, runIdentity } from '../../perf/_harness.mjs';
 import { fakeCommandEnv } from '../../resources/environments/impl/runtime-fake.js';
@@ -82,6 +83,15 @@ const gitCommit = (/** @type {string[]} */ ...rest) =>
 const workspaceOf = "const w = await E(powers).lookup('workspace');";
 
 const IMAGE_BYTES = 20_000;
+/** Calls in one round: more than `maxCallsPerRound` (64). */
+const CALLS = 100;
+/** A workspace image whose one page is over the vat frame ceiling. */
+const BIG_IMAGE_BYTES = 196_608;
+/** `runCommand` arguments with 20,000 fresh keys in `options` (section 11). */
+const flooded = `{"command":"true","args":[],"options":{${Array.from(
+  { length: 20_000 },
+  (_, i) => `"k${i}":0`,
+).join(',')}}}`;
 
 const script = harden({
   turns: [
@@ -146,6 +156,27 @@ const script = harden({
         commandCall('sleep', ['1']),
         toolCall('echo', { text: 'e', delayMs: 1000 }),
       ],
+    ]),
+    commandTurn('probes', [
+      Array.from({ length: CALLS }, () => commandCall('true')),
+      [toolCall('runCommand', flooded)],
+      [
+        execCall(
+          `${workspaceOf} const out = []; for (const name of ['--upload-pack=x', 'a..b', 'b'.repeat(300)]) { try { await E(w).createBranch(name); out.push('created'); } catch (e) { out.push(e.message); } } return JSON.stringify(out);`,
+        ),
+      ],
+      [
+        commandCall('sh', [
+          '-c',
+          `head -c ${BIG_IMAGE_BYTES} /dev/urandom > img/big.png`,
+        ]),
+      ],
+      [
+        execCall(
+          `${workspaceOf} const s = await E(w).openImage(['img', 'big.png']); try { const p = await E(s).readBase64({ offset: 0, maxBytes: ${BIG_IMAGE_BYTES} }); return 'answered ' + p.data.length; } catch (e) { return 'refused: ' + e.message; }`,
+        ),
+      ],
+      [execCall('return 41 + 1;')],
     ]),
     commandTurn('cancel', [[commandCall('sleep', ['600'])]]),
     commandTurn('after cancel', [[commandCall('printf', ['again'])]]),
@@ -323,6 +354,37 @@ run('environments on the turn and exec paths', async t => {
   t.is(execValue(concurrent.results[0].result), 1, 'exec first');
   t.is(JSON.parse(concurrent.results[1].result).exitCode, 0, 'sleep second');
   t.is(concurrent.results[2].result, 'e', 'echo third');
+
+  // Section 11, the vat-facing probes.
+  const probes = await turn('probes');
+  t.is(probes.end.status, 'completed', 'the probe turn completes');
+  const [calls, flood, refs, , bigPage, alive] = [
+    probes.results.slice(0, CALLS),
+    ...probes.results.slice(CALLS),
+  ];
+  t.is(
+    calls.filter(r => !r.failed).length,
+    limits.maxCallsPerRound,
+    `maxCallsPerRound calls ran (${calls.filter(r => !r.failed).length})`,
+  );
+  t.is(
+    calls.filter(r => r.failed).length,
+    CALLS - limits.maxCallsPerRound,
+    'the rest were refused',
+  );
+  const floodText = String(await readField(content, flood.result));
+  t.true(flood.failed, 'the 20,000-key options are refused');
+  t.true(
+    floodText.length < 1000,
+    `the refusal is short (${floodText.slice(0, 200)})`,
+  );
+  const refNames = execValue(refs.result);
+  t.true(
+    Array.isArray(refNames) && refNames.every(text => text !== 'created'),
+    `bad branch names are refused (${JSON.stringify(refNames)})`,
+  );
+  t.log('a page over the frame ceiling:', bigPage.result);
+  t.is(execValue(alive.result), 42, 'the exec vat answers after the big page');
 
   // 10: cancel stops the environment.
   const from = live.deliveries.length;

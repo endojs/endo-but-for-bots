@@ -15,12 +15,19 @@
  *   the turn is `outcome-unknown`, the process group is gone (the new
  *   bind's sweep), and the next turn's command works;
  * - 8: after the restart no fake group runs until a session's first
- *   command.
+ *   command;
+ * - K6 / K7: a SIGKILL right after `emergencyStop` and `deleteSession` were
+ *   sent: after the restart the stop is `stopping` (resume refused with
+ *   `finishStopFirst`) or done, a retried stop answers `stopped` and resume
+ *   works; the delete finishes, its environment directory is gone and the
+ *   trash is empty.
  *
  *   THIX_AGENT=W6.7 corepack yarn test:integration test/integration/environments-restart.test.js
  */
 import '../unit/_m1a-prelude.js';
 
+import { readdirSync } from 'node:fs';
+import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 import test from 'ava';
@@ -42,6 +49,7 @@ import { runTurn, turnRecords } from './_m1b.js';
 import {
   commandCall,
   commandTurn,
+  environmentKeys,
   environmentProcesses,
   environmentsAdapter,
   environmentsTemplate,
@@ -97,6 +105,7 @@ run('home, runner restart alone, SIGKILL during a command', async t => {
   await turn('write home');
   const read = await turn('read home');
   t.is(stdoutOf(read.results[0].result), 'kept', 'home survives a turn');
+  const [key0] = environmentKeys(state.root);
 
   // 11 / K8: the environments adapter alone killed during a command.
   const adapterBefore = environmentsAdapter(state.root);
@@ -179,6 +188,78 @@ run('home, runner restart alone, SIGKILL during a command', async t => {
     stdoutOf(after.results[0].result),
     'kept',
     'home survives the SIGKILL and the next command works',
+  );
+
+  // K6 and K7: a SIGKILL right after an emergency stop and a delete were
+  // sent, before either answered.
+  const stopping = await startEnvironmentSession(
+    slice,
+    backend,
+    'development',
+    'k6',
+  );
+  const { key: stoppingKey } = await E(stopping).getInfo();
+  const doomed = await startEnvironmentSession(
+    slice,
+    backend,
+    'development',
+    'k7',
+  );
+  const { key: doomedKey } = await E(doomed).getInfo();
+  const doomedLive = await slice.subscribe(doomed);
+  await runTurn(slice, doomed, doomedLive, 'write home');
+  await doomedLive.stop();
+  const doomedDirs = environmentKeys(state.root).filter(k => k !== key0);
+  E(stopping)
+    .emergencyStop()
+    .catch(() => {});
+  E(slice.factory)
+    .deleteSession(doomed)
+    .catch(() => {});
+  await live.stop();
+  await state.kill();
+  await killStrays(state.root);
+  await state.restart();
+  await slice.refresh();
+  const k6 = await E(slice.factory).findSession(stoppingKey);
+  const k6State = (await E(k6).getExecutionState()).state;
+  t.log('K6: after the restart the session is', k6State);
+  if (k6State === 'stopping')
+    await t.throwsAsync(() => E(k6).resume(), {
+      message: texts.finishStopFirst,
+    });
+  t.deepEqual(
+    await E(k6).emergencyStop(),
+    { state: 'stopped', supported: true },
+    'K6: the retried emergency stop answers stopped',
+  );
+  t.deepEqual(
+    await E(k6).resume(),
+    { state: 'running', supported: true },
+    'K6: then resume works',
+  );
+  // K7: the delete resumes at this start and finishes.
+  await waitFor(
+    async () => {
+      try {
+        await E(slice.factory).findSession(doomedKey);
+        return false;
+      } catch {
+        return true;
+      }
+    },
+    60_000,
+    'K7: the delete finished after the restart',
+  );
+  await waitFor(
+    () => doomedDirs.every(k => !environmentKeys(state.root).includes(k)),
+    30_000,
+    "K7: the deleted session's environment directory gone",
+  );
+  t.deepEqual(
+    readdirSync(path.join(state.root, 'environments', 'trash')),
+    [],
+    'K7: the trash is empty',
   );
 
   emit({

@@ -66,11 +66,15 @@ const environmentsSources = harden([
 export const environmentsTemplate = async () => {
   /** @type {any[]} */
   const steps = [];
-  const run = makeProvision({
-    pool: {},
-    environments: environmentsSettings,
-    onStep: report => steps.push(report),
-  });
+  // `environments` is a registered step's option, forwarded untouched
+  // (`makeProvision`'s typedef names only the earlier lanes' options).
+  const run = makeProvision(
+    /** @type {any} */ ({
+      pool: {},
+      environments: environmentsSettings,
+      onStep: (/** @type {any} */ report) => steps.push(report),
+    }),
+  );
   const template = await ensureTemplate({
     id: await templateIdFor({ pool: {}, prefix: 'env' }),
     sources: [...environmentsSources],
@@ -279,9 +283,8 @@ export const stateHasPath = async root => {
   let bytes = 0;
   for (const dir of ['heaps', 'workers']) {
     // eslint-disable-next-line no-await-in-loop
-    const found = await grepState(
-      path.join(root, dir),
-      path.join(root, 'environments'),
+    const found = /** @type {any} */ (
+      await grepState(path.join(root, dir), path.join(root, 'environments'))
     );
     hits.push(...found);
     files += found.files;

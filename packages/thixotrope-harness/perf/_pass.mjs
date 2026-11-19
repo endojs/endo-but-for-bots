@@ -74,7 +74,11 @@ export const perfLists = Object.freeze({
   M5: Object.freeze(['presets', 'creation-m5', 'exec-m5', 'tools', 'mentions']),
   // Reserved by WX.1 for the group of four lanes, named by concept; each
   // lane adds its perf checks to its own list (empty until then).
-  environments: Object.freeze(/** @type {string[]} */ ([])),
+  environments: Object.freeze([
+    'environments',
+    'environments-git',
+    'environments-restart',
+  ]),
   context: Object.freeze(/** @type {string[]} */ ([])),
   mail: Object.freeze(/** @type {string[]} */ ([])),
   voice: Object.freeze(/** @type {string[]} */ ([])),
@@ -156,6 +160,10 @@ const templateMakers = {
   m5o: async () =>
     (await import('../test/integration/_m5-objects.js')).objectsTemplate(),
   'm3-300': async () => (await import('./_m3-client.mjs')).ensureM3Template(),
+  environments: async () =>
+    (
+      await import('../test/integration/_environments.js')
+    ).environmentsTemplate(),
 };
 
 /** The milestone template names, in build order. */
