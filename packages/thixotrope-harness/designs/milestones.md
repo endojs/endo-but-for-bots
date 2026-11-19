@@ -1951,9 +1951,11 @@ at `1881601aab`, load 1.9-3.2, 690.9 s held, 786 s of wall for the files; J-1226
 and child-environment cases. The exclusive mail pass met the inbox and hub-growth limits
 and missed both delivery latency targets and throughput (J-1448). All three eight-child
 bursts and subtree stops passed. Ask overhead was 715 ms against 300 ms (J-1449).
-The ten mail, request and subagent tools are registered. The
-like-for-like M9 byte growth exceeded its lane allocation (J-12541). The session and factory
-guard tables now own the corresponding mail interfaces; the limits are in `guest/lib/limits.js`.
+The ten mail, request and subagent tools are registered. With the production session
+linker, M9 adds 21,430 bytes to the WX.1 base of 115,502, within its 21,500-byte
+allocation. J-1460 gives both Git inputs, the exact command and the earlier J-12541 miss.
+The session and factory guard tables own the corresponding mail interfaces. The
+limits are in `guest/lib/limits.js`.
 The contract is `m9-interfaces.md` (seams 6, work units 7, acceptance 8, restart files 9,
 perf 10, probes 11, fold 12).
 
