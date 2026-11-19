@@ -13,11 +13,14 @@
  *
  * The runtime is a hardened record:
  *
- *   { labels, services, config, powers, inspector, grants, exec, packages,
- *     hooks, toolSources }
+ *   { labels, services, config, contextWindow, powers, inspector, grants,
+ *     exec, packages, hooks, toolSources }
  *
  * - `labels`: the session's label map (`labels.js`); `services`, `config`:
- *   the session's `SessionServices` and `SessionConfig`;
+ *   the session's `SessionServices` and `SessionConfig`; `contextWindow`:
+ *   the session's context window object when `makeSession` passes one
+ *   (`makeRuntime`'s option; undefined until the context window is built,
+ *   m8-interfaces.md 4.7), read by a part at run time, never in `make`;
  * - one getter per part name (a part made earlier in the table reaches one
  *   made later at run time, as `adoptTool` reaches `grants`); every name of
  *   `requiredParts` is required: a table without one is refused when the
@@ -26,12 +29,30 @@
  *   recovery call these); `toolSources`: the parts' `tools`, in table order
  *   (`tool-table.js` `toolSetFor` asks them every round).
  *
- * Order is behaviour: `powers, inspector, grants, exec, packages` keeps the
- * hook order the static tables had (recovery: exec, then packages).
+ * Order is behaviour, and it is fixed for every part to come (WX.1;
+ * m8-interfaces.md D-M8-18, m9-interfaces.md D-M9-24):
  *
- * How a part is added (M6 `workspace`, M8 `compaction`, M9 `inbox` and
- * `subagents`): one entry in `runtimeParts`, one name in `PartName` and
- * `requiredParts`, one getter below. A part may hold per-session state in
+ *   powers, inspector, grants, exec, packages, environment, compaction,
+ *   inbox, subagents
+ *
+ * `powers, inspector, grants, exec, packages` keeps the hook order the
+ * static tables had (recovery: exec, then packages); in a settle crank the
+ * `environment` part's hooks run before the inbox posts its reply, and
+ * `compaction`'s before both; `admit` answers the first refusal in this
+ * order. The static tool order after the package entries is fixed the same
+ * way in `tool-table.js` (shell, `viewImage`, mail, requests, subagents).
+ *
+ * How a part is added (`environment`, `compaction`, `inbox`, `subagents`;
+ * their names are already in `PartName` and, optional, on `Runtime`):
+ * four additions, each directly below that part's slot comment
+ * (`// slot: <name>`) in this file: its import, its name in
+ * `requiredParts`, its entry in `runtimeParts`, and its getter in
+ * `makeRuntime` (`get <name>() { return made.get('<name>'); }`). The slots
+ * stand in table order, one comment line each, so two lanes' lines never
+ * touch and merge without conflict; a lane deletes nothing. A part
+ * goes into `requiredParts` in the commit that adds it to `runtimeParts`
+ * (`makeRuntime` refuses a table without a required part, and a test that
+ * passes its own `parts` then lists it). A part may hold per-session state in
  * its closure (each collection bounded or with a delete path, ARCH 12.6),
  * exos it mints, services from `runtime.services`, other parts through
  * `runtime` at run time (never during `make` of an earlier part), and
@@ -40,6 +61,12 @@
  * log, an `await` or a promise a turn waits on inside a hook, ports beyond
  * the turn they came with, per-connection objects (ARCH 12.7), data-keyed
  * record keys (12.10), or state that must survive export or a restart.
+ * Through `HookTurn.active` a part reads the runner's turn record and
+ * writes only the fields named for parts in `ActiveTurn`
+ * (`turn-types.js`: `systemNote` in `onClaim`, `compactionAsk` in
+ * `beforeRound`); it never writes another field of it. (Hardening what the
+ * hooks receive would freeze the runner's own mutable record; the rule is
+ * written here and in the typedef instead.)
  *
  * Guest rules.
  */
@@ -49,13 +76,27 @@ import { inspectorPart } from './tools/inspection.js';
 import { grantsPart } from './tools/granted.js';
 import { execPart } from './tools/exec.js';
 import { packagesPart } from './packages.js';
+// slot: environment
+// slot: compaction
+// slot: inbox
+// slot: subagents
 
 /** @import { Labels } from './labels.js' */
-/** @import { ActiveTurn } from './turn-types.js' */
+/** @import { ActiveTurn, TurnInfo } from './turn-types.js' */
 /** @import { ToolSource } from './tool-table.js' */
 
 /**
- * @typedef {'powers' | 'inspector' | 'grants' | 'exec' | 'packages'} PartName
+ * @typedef {'powers'
+ *   | 'inspector'
+ *   | 'grants'
+ *   | 'exec'
+ *   | 'packages'
+ *   | 'environment'
+ *   | 'compaction'
+ *   | 'inbox'
+ *   | 'subagents'
+ * } PartName the closed list, in table order; WX.1 named the four parts
+ *   still to come, so a lane adds no line here
  *
  * @typedef {object} RuntimePart
  * @property {PartName} name closed list; one getter per name on Runtime
@@ -79,15 +120,30 @@ import { packagesPart } from './packages.js';
  *   `TurnSettled`
  * @property {(turn: HookTurn) => unknown} [onRecover] recovery step 6; a
  *   throw or a rejection is skipped
- * @property {() => ({ text: string, at: number } | undefined)} [nextTurn] a
- *   turn source, asked when idle, the queue empty and not held
+ * @property {() => (NextTurn | undefined)} [nextTurn] a turn source, asked
+ *   when idle and the queue empty, and not held or held only `restart`
+ *   (m9-interfaces.md D-M9-5)
+ * @property {() => (string | undefined)} [admit] asked before a user-facing
+ *   start and by `claimNext` (m6-interfaces.md 15.3): a refusal text, or
+ *   undefined to admit; synchronous, sends nothing
+ *
+ * @typedef {object} NextTurn a turn source's turn
+ * @property {any} text the input: a string or a StagedText
+ * @property {number} at
+ * @property {(info: TurnInfo) => void} [take] run by `claim` before any
+ *   record is appended or message sent, as the queue's claim is (the source
+ *   marks its item taken; a throw leaves no turn behind)
  *
  * @typedef {object} HookTurn frozen (not hardened: `active` is the runner's
- *   mutable record)
+ *   mutable record; a part writes only the fields `ActiveTurn` names for
+ *   parts)
  * @property {ActiveTurn} active
  * @property {number} round
  * @property {(record: any) => void} append into the record log, in this crank
  * @property {(event: any) => void} emit into this crank's outbox
+ * @property {{ usedTokens: number, windowTokens: number }} [reading] the
+ *   context reading the round's decision uses (m8-interfaces.md 4.1 rule 4,
+ *   seam S-5e): set by the runner once the context window is built
  *
  * @typedef {object} RuntimeHooks the parts' hooks, combined
  * @property {(turn: HookTurn, item: any) => void} onClaim
@@ -95,18 +151,27 @@ import { packagesPart } from './packages.js';
  * @property {(turn: HookTurn) => void} onCancel
  * @property {(turn: HookTurn) => void} onSettle
  * @property {(turn: HookTurn) => void} onRecover each part's in a guard
- * @property {() => ({ text: string, at: number } | undefined)} nextTurn the
- *   first source that has a turn
+ * @property {() => (NextTurn | undefined)} nextTurn the first source that
+ *   has a turn, its answer unchanged
+ * @property {() => (string | undefined)} admit the first part's refusal, in
+ *   table order, or undefined
  *
  * @typedef {object} Runtime
  * @property {Labels} labels
  * @property {any} services
  * @property {any} config
+ * @property {any} contextWindow the session's context window object, or
+ *   undefined (m8-interfaces.md 4.7)
  * @property {any} powers
  * @property {any} inspector
  * @property {any} grants
  * @property {any} exec
  * @property {any} packages
+ * @property {any} [environment] the parts still to come (WX.1): undefined
+ *   until the part's lane adds it and its getter
+ * @property {any} [compaction]
+ * @property {any} [inbox]
+ * @property {any} [subagents]
  * @property {RuntimeHooks} hooks
  * @property {readonly ToolSource[]} toolSources
  */
@@ -121,6 +186,10 @@ export const requiredParts = harden([
   'grants',
   'exec',
   'packages',
+  // slot: environment
+  // slot: compaction
+  // slot: inbox
+  // slot: subagents
 ]);
 
 /** @type {readonly RuntimePart[]} */
@@ -130,6 +199,10 @@ export const runtimeParts = harden([
   grantsPart,
   execPart,
   packagesPart,
+  // slot: environment
+  // slot: compaction
+  // slot: inbox
+  // slot: subagents
 ]);
 
 /**
@@ -153,6 +226,7 @@ const combineHooks = all => {
   const onSettle = listOf('onSettle');
   const onRecover = listOf('onRecover');
   const nextTurn = listOf('nextTurn');
+  const admit = listOf('admit');
   return harden({
     onClaim: (turn, item) => {
       for (const hook of onClaim) hook(turn, item);
@@ -186,6 +260,13 @@ const combineHooks = all => {
       }
       return undefined;
     },
+    admit: () => {
+      for (const hook of admit) {
+        const refusal = hook();
+        if (refusal !== undefined) return refusal;
+      }
+      return undefined;
+    },
   });
 };
 
@@ -194,6 +275,8 @@ const combineHooks = all => {
  * @param {Labels} options.labels
  * @param {any} options.services
  * @param {any} options.config
+ * @param {any} [options.contextWindow] the session's context window
+ *   object (m8-interfaces.md 4.7, seam S-6); `Runtime.contextWindow`
  * @param {readonly RuntimePart[]} [options.parts]
  * @returns {Runtime}
  */
@@ -201,6 +284,7 @@ export const makeRuntime = ({
   labels,
   services,
   config,
+  contextWindow = undefined,
   parts = runtimeParts,
 }) => {
   /** @type {Map<string, any>} */
@@ -214,6 +298,7 @@ export const makeRuntime = ({
     labels,
     services,
     config,
+    contextWindow,
     get powers() {
       return made.get('powers');
     },
@@ -229,6 +314,10 @@ export const makeRuntime = ({
     get packages() {
       return made.get('packages');
     },
+    // slot: environment
+    // slot: compaction
+    // slot: inbox
+    // slot: subagents
     get hooks() {
       return /** @type {RuntimeHooks} */ (hooks);
     },
