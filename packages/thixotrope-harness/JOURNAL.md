@@ -17686,7 +17686,7 @@ use of a fresh worker. Further work compares a compacted 300-turn restart with t
 subagent ask. The M9 allocation comparison uses the same emitter for the unmodified
 WX.1 guest tree and the isolated M9 tree (J-12541). The seven-file M6 source checkpoint
 remains in its original checkout. J-1451 and J-1452 are the pre-change results.
-### J-1485 2026-11-19 M9 post-office envelope validation
+### J-1466 2026-11-19 M9 post-office envelope validation
 
 The factory formerly cloned, hardened and measured the full envelope twice on
 each turn-starting post. It now reuses the validated envelope for every
@@ -17694,3 +17694,20 @@ recipient. Only a session receiving a shortened body needs its own envelope
 and second validation. The operator still receives the full original.
 The post-office and subagent-tree suites passed all 39 cases at b669cf1f8f.
 The change is in the factory and does not reduce the session allocation.
+
+### J-1454 2026-11-19 WX.F compacted archive rebuild closes its budget
+
+At restart the archive discarded a valid mirror when it began at the compaction
+boundary past the last sealed record. The next prepare then paged records from the
+vat again. Commit `a0661e938b` preserves a mirror at either valid starting index,
+keeps its absolute indices, and retains the existing last-record check against the
+vat. Three second-restart regression cases failed on the prior code and passed with
+the fix, including the interrupted manifest/context write. All 31 selected archive
+and context-cache adapter tests passed.
+
+The benchmark now settles the final request for compaction before the restart window,
+so every sample times the cold prepare. The 300-turn fixture did compact. Nine real
+restarts each needed one vat page, with rebuild median 60 ms and p95 76 ms (359 ms
+budget, previous combined median 615 ms). Planning took 10.2 ms across 1,821 samples.
+Overhead took 288 ms across 76 turns, with one compacted delivery per compaction.
+All four gated rows passed.

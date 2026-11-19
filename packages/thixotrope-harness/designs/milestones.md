@@ -1829,7 +1829,8 @@ to the loopback Anthropic provider. The largest inbound frames were 92 bytes at 
 and 450 bytes at the session (J-1446). The lane table below records the earlier W8.7 build. Reference: `m8-interfaces.md` (seams 10, work units 11,
 acceptance 12, perf 13, probes 14, fold 18); the shared guard definitions now live in `guest/lib/guards/session.js` and `guest/lib/interfaces.js`,
 with `guest/lib/limits.js` and `AH/providers/compaction.js` holding the limits and provider texts. The combined exclusive benchmarks passed both image request targets.
-Context rebuild after restart took 615 ms against 359 ms (J-1450).
+After preserving the compacted mirror across restarts, context rebuild took 60 ms median
+across nine restarts against 359 ms (J-1454). The previous median was 615 ms (J-1450).
 
 **Goal.** Long sessions keep working: automatic compaction at 70 % of the context window,
 `viewImage` image input, the window known for every backend kind.
