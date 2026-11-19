@@ -18363,3 +18363,28 @@ package reply discards its receipt, but M9's Outbox interface explicitly
 specifies an answered call for this hook. Preserved that call and the
 existing guest implementation. This review did not rerun the exclusive
 benchmark or change its gate.
+### J-1468 2026-11-19 Independent operator message facet regression
+
+Reviewed ecc7171aa2, which constructs each operator message with the
+same guarded class. Every construction still receives its own inbox
+entry, the capacity check precedes construction, and the list method
+uses the existing row count, UTF-8 byte bound and numeric cursor.
+Dismiss still deletes by number and releases a staged body only on
+successful deletion. A held facet still refers to its own entry.
+The ordinary build produced the same 145,957-byte session with digest
+`9611cc3ef25d553fa10c0a92479a2619ababcb94a1857fa79431cdbb2925c193`.
+
+The two-message public mailbox regression (8e3367ec6b) sends from
+distinct sessions with different capabilities under the same attachment
+label. It verifies separate identities, list membership after one
+dismissal, attachment identity from both held facets, and reply
+routing to the correct original postmark and sender. All 13
+operator-mail unit cases passed, including overflow and page bounds.
+
+The installed candidate passed all eight real mail cases, the mailbox
+SIGKILL/replay case (11,689.5 ms to serve, 528.9 ms to first post)
+and the separate interrupted-turn case (one error reply after waking).
+The last file held its slot for 144.3 s after waiting 481.5 s. The
+restart cases reacquire mailbox capabilities after reconnecting.
+Logs: thix-qc-message-class-integration.log,
+thix-mail-independent-restart-turn.log, thix-mail-independent-unit.log.
