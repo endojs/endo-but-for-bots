@@ -17437,3 +17437,18 @@ Both exceeded their targets. The eight-child bursts took 31,036, 28,180 and 27,4
 a 30,000 ms maximum, exceeding the maximum once. All three subtree stops removed exactly three
 sessions, in 2,525, 1,958 and 2,175 ms. The benchmark exited 1 for its budget misses. In the
 repeat of the five-file daemon suite, the in-flight delivery/reconnect case also passed again.
+
+### J-1446 2026-11-19 WX.F workspace image and local landing
+
+The workspace-image case passed on Ironhorse with the manager and session journals retained
+for the turn. The loopback Anthropic endpoint received a complete 2,097,152-byte PNG identical
+to the file in the session's workspace. The result carried the image receipt. The manager
+received three frames, largest 92 bytes; the session received fifteen, largest 450 bytes.
+Both fit the 4,096-byte frame gate. The file used its slot for 98.0 s after 1,191.4 s waiting.
+Together with J-1445, all four cross-lane files passed (604.6 s of aggregate slot use).
+
+Independent review of `b229345163` confirmed reachability of all four lane tips, the M6
+checkpoint, the public factory services, the tool registrations and the regression-list owners.
+The seven original M6 file digests still matched the untouched source tree, its backup and
+the checkpoint commit. The local landing uses a fast-forward from `9adecb9b94`. Earlier
+performance misses stay open; work in later milestone groups has its own scope.

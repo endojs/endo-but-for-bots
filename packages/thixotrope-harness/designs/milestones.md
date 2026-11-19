@@ -1476,7 +1476,10 @@ drops most of Endo's name plumbing.
 
 ## The group {M6, M8, M9, M11}: shared units, owner questions, core requests
 
-**Integration in progress (2026-11-19, J-1440).** The four implementation branches have been combined on the integration branch. The individual outcome tables and journal distinguish completed acceptance runs from outstanding checks. The four contracts are the reference:
+**Integrated locally (2026-11-19, J-1440..J-1446).** The first-parent merges are M11, M6, M8
+and M9. All four cross-lane tests passed on the combined daemon. Session and native manager
+sizes met their whole-program limits. The individual outcomes and journal retain the missed
+performance gates, per-lane growth overage and remaining verification. The four contracts are the reference:
 `m6-interfaces.md`, `m8-interfaces.md`, `m9-interfaces.md`, `m11-interfaces.md`, settled against
 the cross-check WX.0 (journal J-1410..J-1417, issues X-01..X-17) and against cleanup step 3
 (`arch-review/step3-plan.md` and the step-3 code as built in the cleanup lane). No seam is
@@ -1672,7 +1675,10 @@ naming M6 and M8, CC-101 as spike step 2, CC-110 as C-10.
 
 ## M6. Containers and git workspace
 
-**Status: environment manager, adapters, factory, session tools and settings UI implemented. W6.7 regression and performance verification is in progress.** Reference: `m6-interfaces.md` (work units 8, acceptance
+**Status: integrated with open performance and acceptance items.** Stopped-session import,
+workspace isolation, runner and supervisor recovery, and both Chromium settings cases passed.
+The native manager measures 75,511 bytes against its 80,000-byte limit. J-12100..J-12103
+and J-12121 record the measurements and the deferred guest-level checks. Reference: `m6-interfaces.md` (work units 8, acceptance
 9, perf 10, probes 11, fold 14); guards and texts `guest/lib/guards/environments.js`.
 
 **Goal.** Development sessions: a per-session rootless container with `/workspace` backed by the
@@ -1813,7 +1819,9 @@ policy change to next turn <= environment restart time + 1 s.
 
 ## M8. Compaction, images and context window
 
-**Status: integrated.** The session registers `viewImage` after the shell tools. The lane outcome below records tests before registration. Combined image and compaction runs are recorded in the group journal. Reference: `m8-interfaces.md` (seams 10, work units 11,
+**Status: integrated.** The registered `viewImage` tool delivered a 2 MiB PNG byte for byte
+to the loopback Anthropic provider. The largest inbound frames were 92 bytes at the manager
+and 450 bytes at the session (J-1446). The lane table below records the earlier W8.7 build. Reference: `m8-interfaces.md` (seams 10, work units 11,
 acceptance 12, perf 13, probes 14, fold 18); the shared guard definitions now live in `guest/lib/guards/session.js` and `guest/lib/interfaces.js`,
 with `guest/lib/limits.js` and `AH/providers/compaction.js` holding the limits and provider texts.
 
