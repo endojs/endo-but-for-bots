@@ -15067,3 +15067,67 @@ about 50 s). Commits `edf702bfbe`, `03b9283077` and this journal commit; nothing
 bundle 233,126 bytes before and after (M11's cap 0: this unit adds no guest code); no change to
 `packages/thixotrope` or `rust/**`; `lint:duplicates` 1.68 % (ceiling 2.05 %).
 Fit: neutral.
+
+### J-12640 2026-11-19 W11.6 client audio modules - built
+Evidence: `5a2adbb1ea`, `6378458547`, `064f7a9440`, `33d4d597be`, `ac6f288303`, `498c197b35`.
+Reading: `AH/speech/capture-worklet.js` (an `AudioWorkletProcessor` that averages the context's
+rate down to 16 kHz s16le across render quanta and posts 1,360-sample blocks with their RMS, the
+buffer transferred; rates and block size come from `processorOptions`, so the page's constants
+stay the one source; it imports nothing since the extension serves it as one file);
+`UI/src/voice/capture.js` (`openCapture` asks `getUserMedia` and makes the context before
+anything is awaited, answers the `Capture` at once so the mic can be turned off while the prompt
+is open, `started` rejects with a reason from the DOM error's name); `endpointing.js` (the
+pure `makeEndpointer(defaults, { immediate, busy, audible })` with `block(rms, atMs)`,
+`makePreRoll`, `keptFinal`, `makeSpokenDraft` for the grace send, `meterFraction`);
+`audio-socket.js` (frame codec and `openAudioSocket`: HELLO on open, READY, streams claimed by
+the number a CapTP call answers); `playback.js` (`makePlayer`: gapless at each frame's rate, one
+track at a time); `wake-lock.js` (Endo's wake lock, ported, plus `wakeWanted`). Tests: 49 in
+`test/unit/voice-{endpointing,audio-socket,playback,capture,wake-lock}.test.js`, about 3 s.
+Session bundle 233,126 bytes before and after (digest `06aceb9a1412`): nothing here is guest code.
+Fit: good.
+
+### J-12641 2026-11-19 W11.6 both sockets race for a stream's first frame - finding
+Evidence: `audio-socket.js` at `ac6f288303`; `voice-audio-socket.test.js` "events before its
+number are held".
+Reading: a stream is opened by a CapTP call on `/ws` and its frames travel on `/audio`, and the
+server sends `phase: listening` (or the first PCM) as soon as it opened the stream, so the
+`/audio` frame can arrive before the CapTP answer that names it. The client holds frames of
+unclaimed numbers (at most `streamsPerPort` numbers and `pcmBufferedBytes` in all, the oldest
+number dropped first and its stream aborting with `speechTexts.backlog` when claimed) and queues
+an utterance's audio until its number comes (at most `sttBacklogBytes`, then the utterance
+aborts and only an ABORT goes out). Frames for a number the page has ended are dropped, not held.
+The contract's section 4 does not state the race; W11.5's server needs nothing for it.
+Fit: neutral (a cost of D-M11-3's two sockets, bounded on the client).
+
+### J-12642 2026-11-19 W11.6 hardening byte views is the client's hot cost - measured
+Evidence: `498c197b35` against `ac6f288303`; scratch probe through `perf/_window.mjs`
+`runWindow`, 5 s windows (smoke, `VOICE_PROBE_MS=5000`), batches of 1,000 operations, Node under
+the SES lockdown the page bundle also runs.
+Reading: one 2,720-byte AUDIO frame encoded and decoded: median 599.6 us (p99 608.2) while the
+decoded record was `harden`ed (it walks every index of the payload view), 0.834 us (p99 1.164)
+with the record `Object.freeze`d: about 700 x. Other rows at `498c197b35`: `endpointer.block`
+1.24 us (p99 1.40); an EVENT decode (a 120-unit partial) 2.16 us (p99 2.59); one 128-frame
+quantum resampled 48 to 16 kHz 1.45 us (p99 1.64), so a 2.67 ms quantum costs 0.05 % of its
+time. An 85 ms block's whole client path (resample, endpoint, frame) is under 25 us.
+Fit: neutral: harden on a record that carries bytes is a trap for any adapter or page code that
+moves audio: never harden a record that holds a byte view
+on a per-block path.
+
+### J-12643 2026-11-19 W11.6 endpointing differs from Endo in two places - finding
+Evidence: `endpointing.js` at `5a2adbb1ea`; `voice-endpointing.test.js`.
+Reading: (1) Endo measures minimum speech from onset to the END decision, which includes the
+1,200 ms trailing silence, so its 400 ms minimum never discards anything; here speech is the span
+from the onset block to the last block above the threshold, so acceptance 6's 400 ms burst is
+discarded (340 ms of loud block starts) and a 600 ms one is kept. (2) A discarded blip during the
+grace window re-arms the pending text's send (`makeSpokenDraft().dropped`), where Endo left the
+text in the box unsent. Barge-in follows Endo's code, not the defaults file's comment: the
+barge-in threshold is max(minimum, speech threshold x 3), not floor x 3.
+Fit: neutral.
+
+### J-12644 2026-11-19 W11.6 time record - process
+Evidence: first command 2026-11-19T02:22:38Z, last 2026-11-19T02:38:56Z.
+Reading: no command over 60 s (unit tests about 3 s, `lint:types` 3 s, probe 20 s). Nothing
+started a supervisor or a browser; no run lock taken. `lint:duplicates` 1.68 %. tsc: no error
+in this unit's files (errors remain in other units' files in this worktree, uncommitted or
+theirs). Commits as listed in J-12640 and this journal commit; nothing pushed.
+Fit: neutral.
