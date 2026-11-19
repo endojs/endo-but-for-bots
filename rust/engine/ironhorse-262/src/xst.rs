@@ -2712,8 +2712,10 @@ fn ironhorse_terminates_alone(
 /// timeout permits one additional bound for Ironhorse-only attribution (see
 /// [`run_case_bounded`]).
 pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf]) -> XstReport {
-    let mut rep = XstReport::default();
-    rep.ses_mode = cfg.ses_mode;
+    let mut rep = XstReport {
+        ses_mode: cfg.ses_mode,
+        ..Default::default()
+    };
     for path in files {
         let rel = path
             .strip_prefix(root)
@@ -2913,9 +2915,10 @@ mod tests {
              would make this splice guard vacuous",
         );
         let fm = frontmatter::parse("1 + 1;\n");
-        let mut cfg = Config::default();
-
-        cfg.ses_mode = SesMode::None;
+        let mut cfg = Config {
+            ses_mode: SesMode::None,
+            ..Default::default()
+        };
         let unlocked = assemble(&harness, "1 + 1;\n", &fm, None, cfg.ses_mode).expect("assembles");
         assert!(
             !unlocked.setup.contains("lockdown()"),
@@ -3050,8 +3053,10 @@ mod tests {
         // whole-case named pre-skip (there is no guest `Compartment`), never a
         // failure — even though the case itself runs fine with no mode. The
         // harness dir is irrelevant: the mode short-circuits before assembly.
-        let mut cfg = Config::default();
-        cfg.ses_mode = SesMode::Compartment;
+        let mut cfg = Config {
+            ses_mode: SesMode::Compartment,
+            ..Default::default()
+        };
         let r = run_case(&cfg, Path::new("/nonexistent"), "1 + 1;");
         assert_eq!(
             r.verdict,
@@ -3112,8 +3117,10 @@ mod tests {
         // `lockdown()` has frozen `Compartment.prototype` before the case asks
         // whether it is configurable. `packages/test262-runner/README.md`
         // carries the measurement.
-        let mut cfg = Config::default();
-        cfg.features_include = vec!["ses-xs-parity".into()];
+        let cfg = Config {
+            features_include: vec!["ses-xs-parity".into()],
+            ..Default::default()
+        };
         let skip = effective_skip_features(&cfg);
         assert!(!skip.contains("Compartment"));
         assert!(!skip.contains("lockdown"));
@@ -3122,8 +3129,10 @@ mod tests {
 
     #[test]
     fn report_yaml_carries_the_ses_mode() {
-        let mut rep = XstReport::default();
-        rep.ses_mode = SesMode::Lockdown;
+        let rep = XstReport {
+            ses_mode: SesMode::Lockdown,
+            ..Default::default()
+        };
         assert!(rep.to_yaml().contains("ses-mode: l"));
         let plain = XstReport::default();
         assert!(plain.to_yaml().contains("ses-mode: none"));
@@ -3442,8 +3451,10 @@ mod tests {
                 } else {
                     observed.insert(key, expectation_outcome(&verdict));
                 }
-                let mut ungated = Config::default();
-                ungated.oracle = false;
+                let ungated = Config {
+                    oracle: false,
+                    ..Default::default()
+                };
                 assert!(
                     matches!(evaluate_positive(&ungated, &run, false), Verdict::RunSkip(reason) if reason.starts_with("oracle-gate-off:"))
                 );
@@ -4580,8 +4591,10 @@ mod tests {
         // demoted to the named `oracle-gate-off:` skip, as the existing
         // over-acceptance arm already is. Engine-invariant halts and
         // unregistered labels are not oracle disagreements and still fail.
-        let mut cfg = Config::default();
-        cfg.oracle = false;
+        let cfg = Config {
+            oracle: false,
+            ..Default::default()
+        };
         // A harness assertion ironhorse failed is the case's own contract,
         // not an oracle disagreement: it gates either way.
         let assertion = synthetic_oracle_only(Halt::synthetic_throw("Test262Error: nope"));

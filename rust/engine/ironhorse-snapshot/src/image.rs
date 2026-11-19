@@ -6106,8 +6106,10 @@ mod tests {
             )
         }
         // Owners not strictly ascending.
-        let mut t = IntlTables::default();
-        t.collators = vec![collator(5), collator(3)];
+        let t = IntlTables {
+            collators: vec![collator(5), collator(3)],
+            ..Default::default()
+        };
         assert_eq!(
             decode_intl(&encode_intl(&t)),
             Err(SnapshotError::Corrupt(
@@ -6115,15 +6117,17 @@ mod tests {
             ))
         );
         // Segment boundaries outside their input.
-        let mut t = IntlTables::default();
-        t.segments = vec![(
-            1,
-            SegmentsData {
-                units: vec![104, 105],
-                segments: vec![(0, 5, false)],
-                granularity: "word".into(),
-            },
-        )];
+        let t = IntlTables {
+            segments: vec![(
+                1,
+                SegmentsData {
+                    units: vec![104, 105],
+                    segments: vec![(0, 5, false)],
+                    granularity: "word".into(),
+                },
+            )],
+            ..Default::default()
+        };
         assert_eq!(
             decode_intl(&encode_intl(&t)),
             Err(SnapshotError::Corrupt(
@@ -6132,15 +6136,17 @@ mod tests {
         );
         // Overlapping ranges: a start must equal the previous END.
         // Comparing previous STARTS would admit (0,2),(1,3).
-        let mut t = IntlTables::default();
-        t.segments = vec![(
-            1,
-            SegmentsData {
-                units: vec![104, 105, 106],
-                segments: vec![(0, 2, false), (1, 3, false)],
-                granularity: "word".into(),
-            },
-        )];
+        let t = IntlTables {
+            segments: vec![(
+                1,
+                SegmentsData {
+                    units: vec![104, 105, 106],
+                    segments: vec![(0, 2, false), (1, 3, false)],
+                    granularity: "word".into(),
+                },
+            )],
+            ..Default::default()
+        };
         assert_eq!(
             decode_intl(&encode_intl(&t)),
             Err(SnapshotError::Corrupt(
@@ -6149,15 +6155,17 @@ mod tests {
         );
         // Boundaries that do not COVER the input (ICU always emits the
         // final boundary at the unit count).
-        let mut t = IntlTables::default();
-        t.segments = vec![(
-            1,
-            SegmentsData {
-                units: vec![104, 105, 106],
-                segments: vec![(0, 2, false)],
-                granularity: "word".into(),
-            },
-        )];
+        let t = IntlTables {
+            segments: vec![(
+                1,
+                SegmentsData {
+                    units: vec![104, 105, 106],
+                    segments: vec![(0, 2, false)],
+                    granularity: "word".into(),
+                },
+            )],
+            ..Default::default()
+        };
         assert_eq!(
             decode_intl(&encode_intl(&t)),
             Err(SnapshotError::Corrupt(
@@ -6170,18 +6178,20 @@ mod tests {
         let mut unicode = std::collections::BTreeMap::new();
         unicode.insert("ca".to_string(), "vx".to_string());
         unicode.insert("nu".to_string(), "wy".to_string());
-        let mut t = IntlTables::default();
-        t.locales = vec![(
-            1,
-            ironhorse_vm::snapshot_api::LocaleData {
-                tag: "en".into(),
-                language: "en".into(),
-                script: None,
-                region: None,
-                variants: vec![],
-                unicode,
-            },
-        )];
+        let t = IntlTables {
+            locales: vec![(
+                1,
+                ironhorse_vm::snapshot_api::LocaleData {
+                    tag: "en".into(),
+                    language: "en".into(),
+                    script: None,
+                    region: None,
+                    variants: vec![],
+                    unicode,
+                },
+            )],
+            ..Default::default()
+        };
         let canonical = encode_intl(&t);
         assert_eq!(decode_intl(&canonical).unwrap(), t);
         let mut invalid = canonical.clone();
@@ -6223,21 +6233,23 @@ mod tests {
         );
         // An unknown date-time component key is crafted bytes: the keys
         // are a closed engine set carried as statics.
-        let mut t = IntlTables::default();
-        t.date_time_formats = vec![(
-            1,
-            DateTimeFormatData {
-                locale: "en".into(),
-                calendar: "gregory".into(),
-                numbering_system: "latn".into(),
-                time_zone: "UTC".into(),
-                offset_minutes: 0,
-                hour_cycle: None,
-                components: vec![("year", "numeric".into())],
-                date_style: None,
-                time_style: None,
-            },
-        )];
+        let t = IntlTables {
+            date_time_formats: vec![(
+                1,
+                DateTimeFormatData {
+                    locale: "en".into(),
+                    calendar: "gregory".into(),
+                    numbering_system: "latn".into(),
+                    time_zone: "UTC".into(),
+                    offset_minutes: 0,
+                    hour_cycle: None,
+                    components: vec![("year", "numeric".into())],
+                    date_style: None,
+                    time_style: None,
+                },
+            )],
+            ..Default::default()
+        };
         let mut bytes = encode_intl(&t);
         assert_eq!(decode_intl(&bytes).unwrap(), t);
         let needle = b"year";
@@ -6250,8 +6262,10 @@ mod tests {
             ))
         );
         // A boolean byte outside 0/1.
-        let mut t = IntlTables::default();
-        t.collators = vec![collator(1)];
+        let t = IntlTables {
+            collators: vec![collator(1)],
+            ..Default::default()
+        };
         let mut bytes = encode_intl(&t);
         assert_eq!(decode_intl(&bytes).unwrap(), t);
         // The `numeric` byte follows the four leading strings; find the
@@ -6263,16 +6277,18 @@ mod tests {
             Err(SnapshotError::Corrupt("intl side table: bad boolean byte"))
         );
         // The intact forms round-trip.
-        let mut ok = IntlTables::default();
-        ok.collators = vec![collator(1), collator(4)];
-        ok.segments = vec![(
-            2,
-            SegmentsData {
-                units: vec![104, 105],
-                segments: vec![(0, 2, true)],
-                granularity: "word".into(),
-            },
-        )];
+        let ok = IntlTables {
+            collators: vec![collator(1), collator(4)],
+            segments: vec![(
+                2,
+                SegmentsData {
+                    units: vec![104, 105],
+                    segments: vec![(0, 2, true)],
+                    granularity: "word".into(),
+                },
+            )],
+            ..Default::default()
+        };
         assert_eq!(decode_intl(&encode_intl(&ok)).unwrap(), ok);
     }
 
@@ -6298,19 +6314,23 @@ mod tests {
             )
         };
         // An owner past the arena.
-        let mut t = IntlTables::default();
-        t.segments = vec![segs(9)];
+        let t = IntlTables {
+            segments: vec![segs(9)],
+            ..Default::default()
+        };
         assert!(check(&t).is_err(), "owner past the arena");
         // An iterator naming an instance with NO segments row.
-        let mut t = IntlTables::default();
-        t.segments = vec![segs(1)];
-        t.segment_iterators = vec![(
-            2,
-            SegmentIteratorData {
-                segments_inst: ironhorse_vm::value::SlotIndex(3),
-                pos: 0,
-            },
-        )];
+        let t = IntlTables {
+            segments: vec![segs(1)],
+            segment_iterators: vec![(
+                2,
+                SegmentIteratorData {
+                    segments_inst: ironhorse_vm::value::SlotIndex(3),
+                    pos: 0,
+                },
+            )],
+            ..Default::default()
+        };
         assert_eq!(
             check(&t),
             Err(SnapshotError::Corrupt(
@@ -6318,15 +6338,17 @@ mod tests {
             ))
         );
         // A cursor past the precomputed list.
-        let mut t = IntlTables::default();
-        t.segments = vec![segs(1)];
-        t.segment_iterators = vec![(
-            2,
-            SegmentIteratorData {
-                segments_inst: ironhorse_vm::value::SlotIndex(1),
-                pos: 5,
-            },
-        )];
+        let t = IntlTables {
+            segments: vec![segs(1)],
+            segment_iterators: vec![(
+                2,
+                SegmentIteratorData {
+                    segments_inst: ironhorse_vm::value::SlotIndex(1),
+                    pos: 5,
+                },
+            )],
+            ..Default::default()
+        };
         assert_eq!(
             check(&t),
             Err(SnapshotError::Corrupt(
@@ -6334,15 +6356,17 @@ mod tests {
             ))
         );
         // The covered form passes (pos == len is the exhausted cursor).
-        let mut t = IntlTables::default();
-        t.segments = vec![segs(1)];
-        t.segment_iterators = vec![(
-            2,
-            SegmentIteratorData {
-                segments_inst: ironhorse_vm::value::SlotIndex(1),
-                pos: 1,
-            },
-        )];
+        let t = IntlTables {
+            segments: vec![segs(1)],
+            segment_iterators: vec![(
+                2,
+                SegmentIteratorData {
+                    segments_inst: ironhorse_vm::value::SlotIndex(1),
+                    pos: 1,
+                },
+            )],
+            ..Default::default()
+        };
         assert!(
             check(&t).is_ok(),
             "a covering row with an in-range cursor passes"
