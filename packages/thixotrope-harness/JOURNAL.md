@@ -18153,3 +18153,75 @@ was 627 ms. The three burst-of-eight runs took 13.829, 14.325 and
 13.685 s against 30 s. All stops removed three workers, in 1.769,
 1.808 and 1.724 s. Raw output is in
 `/private/tmp/thix-qc-post-allocation-subagents.log`.
+
+### J-1465 2026-11-19 Milestone functional batch, wall and list-feed follow-up
+
+On ea857fc639, 51 complete files from the 54-file milestone registry passed
+94 tests. The runner kept registry order, six jobs, the standard per-file
+commands and timeouts, and the pinned worker. It ran from 11:57:03 to
+13:17:22 UTC. The reported wall was 4,818.5 s, above the 1,200 s gate.
+The six slots spent 6,728.3 s held in total; cumulative waiting across
+the concurrent wrappers was 21,932.6 s. The first files waited over
+ten minutes for a shared slot. Other performance jobs acquired the
+whole pool between cohorts. The matched 51 files in the earlier
+54-file run accounted for 7,172.5 s held.
+
+The 51-file run excludes the M3 gateway, M5 security and environments
+shell files containing adversarial or oversized-input scenarios.
+J-1464 records the four selected gateway tests and the normal shell
+workflow separately. The M5 security file consists of one mixed case.
+The unchanged full 54-file gate was not exercised by this run.
+Its 51 observed held times would occupy 1,172.4 s in a six-slot
+simulation using registry order and no queue delays. This is a
+scheduling projection, not a measured 54-file time.
+
+A separate combined-tree confirmation at clean c8d57059bd exercised the
+f595d6bc64 list-feed change in real vats. `test/integration/m1b-live.test.js`
+passed four tests, including published row changes and removal, in 191.6 s
+held with no slot wait. The earlier wrapper exited 127 before starting
+AVA; the successful run used `corepack yarn exec node
+scripts/test-integration.mjs test/integration/m1b-live.test.js` with
+integration enabled. The existing 25-of-26 core coverage belongs to
+its previously recorded revision.
+
+A second run on the same checkout reused the clean fixtures from that
+functional pass. One enclosing machine-wide exclusive reservation held
+all six slots. Its six child file wrappers used normal lock re-entry
+and their standard per-file timeouts. The reservation's acquisition
+wait was outside the measured batch. The same 51 files in registry
+order passed all 94 tests in **974.4 s (16 min 14.4 s)**, from 13:25:35.690
+to 13:41:50.152 UTC. Held time was 5,607.1 slot-seconds, including
+zero per-file waiting. The longest file was environments-stop at 232.1 s.
+The selected batch finished 225.6 s inside the wall budget. Neither
+observed run covered the three omitted files in full, so this is not
+a passing 54-file result.
+
+The same M3 sessions setup dropped from 90.2 s to 19.9 s and the same
+300-turn history setup from 125.9 s to 35.8 s. The ordinary browser
+M3 setup, warm in both runs, took 39.9 s and 34.5 s respectively.
+Reservation and warm fixtures sufficed for the selected workload
+without changing test data, assertions, order or bounds.
+
+To reproduce the selected run, use the checkout, worker, fixture
+directory and integration/browser flags from the functional pass.
+From the harness package, the following Bash command keeps the
+selection and execution inside the ordinary runner. The larger time
+box applies only to the enclosing reservation.
+
+```bash
+export THIX_HARNESS_INTEGRATION=1 THIX_HARNESS_BROWSER=1
+corepack yarn exec node scripts/run-lock.mjs --exclusive --max-ms 3000000 \
+  --label 'warm milestone routine timing' -- node --input-type=module -e '
+  import { spawnSync } from "node:child_process";
+  import { listFiles } from "./scripts/test-integration.mjs";
+  const excluded = new Set([
+    "test/integration/m3-gateway.test.js",
+    "test/integration/m5-security.test.js",
+    "test/integration/environments-shell.test.js",
+  ]);
+  const files = listFiles("milestones").filter(file => !excluded.has(file));
+  const run = spawnSync(process.execPath,
+    ["scripts/test-integration.mjs", "--jobs", "6", ...files],
+    { stdio: "inherit" });
+  process.exitCode = run.status ?? 1;'
+```
