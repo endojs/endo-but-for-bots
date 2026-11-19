@@ -168,7 +168,7 @@ class JudgeTests(unittest.TestCase):
 
 class ManifestTests(unittest.TestCase):
     def manifest(self):
-        return tomllib.loads(verify.MANIFEST.read_text())
+        return verify.load_manifest()
 
     def test_checked_in_manifest_is_valid(self):
         self.assertEqual(verify.validate_manifest(self.manifest(), verify.mutant_files()), [])
@@ -244,12 +244,12 @@ class ManifestTests(unittest.TestCase):
 
 class LedgerTests(unittest.TestCase):
     def test_checked_in_ledger_is_current(self):
-        data = tomllib.loads(verify.MANIFEST.read_text())
+        data = verify.load_manifest()
         actual = verify.LEDGER.read_text()
         self.assertEqual(verify.splice(actual, verify.render_ledger(data)), actual)
 
     def test_ledger_tracks_the_manifest(self):
-        data = tomllib.loads(verify.MANIFEST.read_text())
+        data = verify.load_manifest()
         before = verify.render_ledger(data)
         data["harness"][0]["domain"] = "something else | with a pipe"
         after = verify.render_ledger(data)

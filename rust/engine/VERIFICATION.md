@@ -145,7 +145,8 @@ CI runs `check` and `run --tier pr` on pull requests; the scheduled
    its guarantee (`mtr3_...`).
    Give it at least one `kani::cover!` naming a non-trivial case, and state
    every `kani::assume` as a precondition the code really has.
-2. Add a `[[harness]]` entry to `verification/proofs.toml` (and a
+2. Add a `[[harness]]` entry to `verification/proofs.toml`, or to a per-area fragment
+   `verification/proofs.d/<area>.toml` that the runner merges into it (and a
    `[[guarantee]]` if the ID is new) with its statement, exact domain, unwind,
    flags, budgets and mutants.
 3. Write at least one mutant per guarantee: a one-line semantic change, as a

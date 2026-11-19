@@ -80,7 +80,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p kani-report
-          python3 rust/engine/scripts/verify.py run --tier nightly 2>&1 | tee kani-report/nightly.log
+          python3 rust/engine/scripts/verify.py run --tier all 2>&1 | tee kani-report/nightly.log
 
       - name: Check that the proofs catch mutants
         if: ${{ !cancelled() }}
@@ -89,12 +89,21 @@ jobs:
           mkdir -p kani-report
           python3 rust/engine/scripts/verify.py mutants 2>&1 | tee kani-report/mutants.log
 
+      # The runner must reject a failing proof, an unsatisfiable cover, a
+      # vacuous assumption and a solver running out of memory.
+      - name: Check that the runner rejects bad harnesses
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          mkdir -p kani-report
+          python3 rust/engine/scripts/verify.py selftest 2>&1 | tee kani-report/selftest.log
+
       - name: Summarize
         if: always()
         run: |
           {
             echo '## Ironhorse Kani nightly'
-            for log in kani-report/nightly.log kani-report/mutants.log; do
+            for log in kani-report/nightly.log kani-report/mutants.log kani-report/selftest.log; do
               [ -f "$log" ] || continue
               echo "### $log (last 40 lines)"
               echo '```'

@@ -75,7 +75,23 @@ class ManifestError(Exception):
 # ---- manifest ---------------------------------------------------------------
 
 def load_manifest(path: Path = MANIFEST) -> dict:
-    return tomllib.loads(path.read_text())
+    """Load `proofs.toml` and merge every `proofs.d/*.toml` beside it.
+
+    The fragments hold further `[[guarantee]]` and `[[harness]]` tables, one
+    file per area, so unrelated proof work does not contend for one file.
+    Top-level scalars live in `proofs.toml` only.
+    """
+    data = tomllib.loads(path.read_text())
+    for fragment in sorted((path.parent / "proofs.d").glob("*.toml")):
+        extra = tomllib.loads(fragment.read_text())
+        unknown = set(extra) - {"guarantee", "harness"}
+        if unknown:
+            raise ManifestError(
+                f"{fragment.name}: only [[guarantee]] and [[harness]] tables may "
+                f"appear in a fragment, found {sorted(unknown)}")
+        for key in ("guarantee", "harness"):
+            data.setdefault(key, []).extend(extra.get(key, []))
+    return data
 
 
 def validate_manifest(data: dict, mutant_names: set[str] | None = None) -> list[str]:
