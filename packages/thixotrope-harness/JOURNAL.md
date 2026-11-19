@@ -15349,3 +15349,76 @@ Reading: over 60 s: adapter tests importing `AH/index.js` 61 s; `test:integratio
 107.9 s each (shared slot). Commits `aa004f2606`, `69fa32328c`, `e867eaa129`, `c4cf4d6dc3`,
 `b8535f265f` and this journal commit; nothing pushed; no change to `packages/thixotrope` or `rust/**`.
 Fit: neutral.
+
+### J-12680 2026-11-19 W11.8 the voice UI feature - built
+Evidence: `541034968f` (H10), `ccb6ce177b`, `ae18dd5922`, `6433ad7140`.
+Reading: seam H10 in `ui/src/controller/index.js`: `onSubmission(listener) -> unsubscribe`, a
+`Set` told `{ sessionKey, session, requestId, receipt }` after each answered `send` (a listener's
+throw never fails the send), cleared in `attach`. `ui/src/voice/feature.js`: `voice.controls`
+(`composer.addon`: mic, speaker, meter with floor and threshold markers, Talk, one note line),
+`voice.panel` (`app.panel` "Voice": Spoken replies, voice, the four sliders, the shortcut preset)
+and `voice.replay` (`message.renderer`, settled turns only), each `when` the connection serves the
+`speech` extra. `ui/src/voice/state.js` `makeVoiceState(io)`: per page the player, wake lock,
+mic (W11.6's capture, endpointer, pre-roll, spoken draft), auto-speak (page memory, on while speech
+out is wired, R5-55) and the launch id used; per connection (rebuilt whenever the controller hands
+a new `FeatureContext`, i.e. every attach) `Speech`, `Voice`, configuration, server preferences,
+the port and its socket (opened at first need, reopened with `audioReconnectDelay` while the mic is
+on), the submission listener and at most 8 receipts waiting for their turn. Settings resolve field
+by field (server, `thix-voice:settings` cache, `configuration().defaults`, `ttsDefaults`), a change
+is used at once, cached, written once after 300 ms and restarts the running playback (R5-50).
+Auto-speak: a started receipt gives its turn (`turnId`, else `Turn.getStatus()`), a queued one is
+read once (`getSubmissionReceipt`) after the active view's next running turn; another page's turn
+is never spoken. Dictation: onset cancels the grace send, stops playback, opens `transcribe` and
+sends the pre-roll first; partials and finals replace the box through `replaceInput`; the grace
+timer sends what the box holds if the mic is on, the session is the one dictated to and no
+utterance is open; mic off discards a box that only holds the dictation. Barge-in shows
+"continuing in background…" until the turn is no longer busy; a cancelled spoken turn stops its
+playback (R5-48). Talk opens the mic inside the tap, then `startVoiceSession`, selects the key once
+listed (at most 10 s) and shows the warning; `#...&voice=<id>` does the same once per page with
+the endpointer in invocation mode. Replay sends the turn's assistant texts as pieces (inline cut at
+white space to 8,192 units, a staged text's Blob, a sealed text read with `readContent`; at most 64
+pieces and 300,000 inline units). Shortcut: the catalogue read by object, chosen with its revision;
+a stale revision shows the factory's text and re-reads. Test: `test/unit/voice-state.test.js`, 21
+cases, `Speech`/`AudioPort`/`Voice` as exos on the real guards over M3's controller and fake powers.
+Fit: good (the feature only decides; every byte of audio stays in the page and the adapter).
+
+### J-12681 2026-11-19 W11.8 sizes and costs - measured
+Evidence: `6433ad7140`; unit runs, no supervisor, shared machine (other lanes building).
+Reading: session program 233,126 bytes before and after, digest `06aceb9a1412` unchanged (M11 cap
+0: no guest file touched); exec 64,500. UI bundle with the voice feature (and W11.6's modules,
+first bundled now): `main` 308,123 bytes, css 34,384, total 342,989 bytes, 114,498 gzip (budget
+600 KiB, `m3-ui-build` `ui.bundle` 99 ms). `voice-state.test.js` 21 tests in about 1.3 s; the UI
+unit lane (m3-ui, m4-ui, m5-w58, voice) 178 tests in 1.7 s, all passing. `lint:duplicates` 1.61 %
+(524 of 32,495), no cluster in these files. Vat traffic of the feature: page load 2 factory
+cranks (`getVoice`, `getPreferences`) plus `configuration()` (gateway-local, none); a preference
+change 1 factory crank per 300 ms window; Talk/launch 1 (`startVoiceSession`, then creation); the
+panel 1 `getPreferences`, 1 `getVoicePreset`, 1 catalogue read and one `describe` per preset; a
+spoken started turn 1 session crank (`Turn.getStatus`, no `turnId` in a live receipt), a spoken
+queued turn 1 (`getSubmissionReceipt`, whose answer carries the `Turn`, so 2 when its `turnId` is
+absent). A page that will not speak reads nothing for its sends (a test pins 0 receipt and 0
+status reads).
+Fit: neutral (two cranks per spoken turn at most, all outside the turn's own crank chain).
+
+### J-12682 2026-11-19 W11.8 contract differences - finding
+Evidence: `ccb6ce177b`; `designs/m11-interfaces.md` D-M11-13, section 9, H10; `ui/src/controller/
+index.js` `featureContext` (a hardened record made anew at every attach); `ui/src/voice/texts.js`.
+Reading: (1) State: neither the contract's `WeakMap` by `powers` nor a field of `FeatureContext`
+(it is hardened and has no per-feature cache until step 5 (a)): one `VoiceState` per page found
+by `context.controller` (`statesByPage` in `state.js`) and bound to the context object, whose
+identity marks a connection; F-5 replaces that lookup. (2) The page binds in `when` (a side
+effect): the shell has no feature start hook, and the launch link and auto-speak must work before
+any voice control renders. (3) `texts.js` has one microphone text, so every capture failure reason
+shows `micUnavailable`. (4) An utterance whose onset comes before the port's READY is not opened
+(the blocks go to the pre-roll); calibration (1 s) hides it in normal mode, an invocation launch
+could lose its first words if the port is slower than the permission prompt. (5) Talk dictates
+into the box of the session active at the onset; if the onset beats the new session's row, the
+grace send is skipped. (6) H10 is 25 lines with its comments, not 10-15. (7) A live turn's replay
+uses the fold's previews (the fold keeps no Blob).
+Fit: poor at (1)-(2): the UI seam has no place for per-connection feature state or a start hook.
+
+### J-12683 2026-11-19 W11.8 time record - process
+Evidence: first command 2026-11-19T02:39:37Z.
+Reading: no command over 60 s (the longest, the UI unit lane, 1.7 s; `lint:types` 2.7 s). Commits
+`541034968f`, `ccb6ce177b`, `ae18dd5922`, `6433ad7140` and this journal commit; nothing pushed;
+no change to `packages/thixotrope`, `rust/**` or a guest file; no integration or browser run.
+Fit: neutral.
