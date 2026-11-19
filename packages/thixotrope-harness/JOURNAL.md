@@ -18461,3 +18461,29 @@ backlog were both eight. Largest inbox was five. Fresh hub image plus
 log grew 996,081 to 1,096,466 bytes, 1.100780 times fresh against 1.25
 after 353 attachment posts in 121.357 s and 32 idle cranks. Compactions
 went 12 to 48. Raw rows are in `/private/tmp/thix-qc-mail-class-final.log`.
+
+### J-1478 2026-11-19 WX.F single-recipient mail comparison
+
+On the class-only candidate, each single-recipient send still constructed
+a deduplication map and aggregated one promise. Ordinary replies also
+constructed a result array used only for asks or closed requests.
+`d333ba1833` calls the same admission and delivery function directly for one
+address and constructs that reply array only when returning it. Multicast
+and repeated-address handling stayed on their original path. The changes
+are confined to the factory.
+
+In four 15 s diagnostic windows under one exclusive reservation, the class-
+only variant ran first and last (2.919 and 2.857 posts/s). The single-address
+variant ran in the middle (3.088 and 2.969 posts/s). Both used four clients,
+eight recipients and the final reply drain. Aggregated over the two windows
+per variant, the rates were 94/32.545 s = 2.888/s and 102/33.676 s = 3.029/s.
+The factory's reply crank averaged 91.44 and 66.96 ms wall per post, including
+59.20 and 36.43 ms of native collection, respectively. The full benchmark
+uses 60 s for each latency/throughput row and 120 s for fresh growth.
+
+The unscaled, uninstrumented file at `d333ba1833` measured 196.128 ms median
+operator acknowledgment (98 sends; 200 ms limit) and 176 posts in 61.369 s
+(2.867906/s; 3/s target). Session-to-session delivery took 345 ms (69 sends;
+300 ms target). Inbox p95 was 500 ms (550 ms limit). Fresh hub bytes went
+from 272,283 to 572,539 (2.103×, limit 1.25×) after 325 attachment posts.
+The file exited 1. The short comparison and the full row are both retained.

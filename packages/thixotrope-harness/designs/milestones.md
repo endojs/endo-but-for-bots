@@ -1976,7 +1976,10 @@ class. It completed and dismissed 182 posts in 60.786 s (2.994131/s) and took
 205.186 ms median to acknowledge a send (104 samples). Both strict targets
 were still open. A collector microbenchmark overlapped part of the acknowledgment
 window. Session delivery measured 335 ms and fresh hub growth was 1.101× after
-353 posts. J-1476 records the collector measurements and isolated Ironhorse experiments.
+353 posts. In the next full run, single-recipient admission at `d333ba1833`
+passed acknowledgment at 196.128 ms (98 sends) and missed throughput at
+2.868 posts/s (176 in 61.369 s). Fresh growth was 2.103× after 325 posts
+(J-1478). J-1476 records the collector measurements and isolated Ironhorse experiments.
 All three eight-child bursts and subtree stops passed. Ask overhead was 363 ms
 against 300 ms and spawn was 1,513 ms against 1,500 ms (J-12549).
 The ten mail, request and subagent tools are registered. With the production session
