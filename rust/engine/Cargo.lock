@@ -271,6 +271,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironhorse-spec"
+version = "0.0.2"
+
+[[package]]
 name = "ironhorse-text"
 version = "0.0.2"
 
