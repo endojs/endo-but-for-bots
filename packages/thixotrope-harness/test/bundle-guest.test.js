@@ -109,20 +109,29 @@ test('the session linker keeps effects, export cells, names and original module 
       "import { read, advance as next } from '../counter.js';",
       'export const advance = () => next();',
       'export const count = () => read();',
+      'export const linkedSession = 42;',
       "import { unused } from '../effect.js';",
       "globalThis.mark('entry');",
     ].join('\n'),
   );
   const expectedModules = ['counter.js', 'effect.js', 'session/main.js'];
-  for (const comments of [false, true]) {
-    const bundle = await bundleGuest(entry, { comments });
+  const bundles = await Promise.all([
+    bundleGuest(entry),
+    bundleGuest(entry, { comments: true }),
+  ]);
+  for (const bundle of bundles) {
     const seen = [];
     const namespace = evaluateBundle(bundle.source, {
       mark: value => seen.push(value),
     });
     t.deepEqual(seen, ['counter', 'effect', 'entry']);
     t.deepEqual(bundle.modules, expectedModules);
-    t.deepEqual(Object.keys(namespace).sort(), ['advance', 'count']);
+    t.deepEqual(Object.keys(namespace).sort(), [
+      'advance',
+      'count',
+      'linkedSession',
+    ]);
+    t.is(namespace.linkedSession, 42);
     t.is(namespace.advance.name, 'advance');
     t.is(namespace.count(), 0);
     namespace.advance();
@@ -133,6 +142,68 @@ test('the session linker keeps effects, export cells, names and original module 
     "import { unused } from '@endo/patterns'; export const valid = true;",
   );
   await t.throwsAsync(() => bundleGuest(entry), { message: /@endo\/patterns/ });
+});
+
+test('session cycles, live public exports and module-specific globals keep mapper semantics', async t => {
+  const dir = await scratch(t, 'cyclic');
+  const entry = path.join(dir, 'session', 'main.js');
+  await mkdir(path.dirname(entry));
+  await writeFile(
+    path.join(dir, 'package.json'),
+    '{"name":"guest","type":"module"}',
+  );
+  await writeFile(
+    path.join(dir, 'a.js'),
+    "import { fromB } from './b.js'; export const fromA = () => 1; export const answer = () => fromB();",
+  );
+  await writeFile(
+    path.join(dir, 'b.js'),
+    "import { fromA } from './a.js'; export const fromB = () => fromA() + 1;",
+  );
+  await writeFile(
+    entry,
+    "import { answer } from '../a.js'; export const read = () => answer();",
+  );
+  const cycle = await bundleGuest(entry);
+  t.is(evaluateBundle(cycle.source, {}).read(), 2);
+  await writeFile(entry, 'export let value = 1;');
+  const live = evaluateBundle((await bundleGuest(entry)).source, {});
+  const cell = Object.getOwnPropertyDescriptor(live, 'value');
+  t.is(live.value, 1);
+  cell?.set?.(2);
+  t.is(live.value, 2);
+  await writeFile(entry, 'export const kind = typeof require;');
+  const global = evaluateBundle((await bundleGuest(entry)).source, {
+    require: 17,
+  });
+  t.is(global.kind, 'number');
+});
+
+test('linked session reads preserve lexical initialization errors in the entry and imported modules', async t => {
+  const dir = await scratch(t, 'tdz');
+  const entry = path.join(dir, 'session', 'main.js');
+  await mkdir(path.dirname(entry));
+  await writeFile(
+    path.join(dir, 'package.json'),
+    '{"name":"guest","type":"module"}',
+  );
+  await writeFile(entry, 'export const first = last; export const last = 1;');
+  const direct = await bundleGuest(entry);
+  t.throws(() => evaluateBundle(direct.source, {}), {
+    instanceOf: ReferenceError,
+  });
+  await writeFile(
+    path.join(dir, 'early.js'),
+    'const read = () => last; export const first = read(); const last = 1;',
+  );
+  await writeFile(
+    entry,
+    "import { first } from '../early.js'; export const result = first;",
+  );
+  const dependency = await bundleGuest(entry);
+  t.throws(() => evaluateBundle(dependency.source, {}), {
+    instanceOf: ReferenceError,
+  });
 });
 
 test('a guest that imports @endo/patterns does not bundle', async t => {
