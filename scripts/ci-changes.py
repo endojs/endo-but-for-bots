@@ -26,7 +26,8 @@ JOBS = (
     "cross-target-ironhorse", "build-ironhorse-wasm", "test-ocapn-python",
     "build-wasm", "browser-tests", "guile-interop", "viable-release",
     "depcheck", "check-action-pins", "package-uniformity", "filter-tests",
-    "cargo-deny", "clippy-endo",
+    "cargo-deny", "clippy-endo", "cargo-machete", "hack-ironhorse",
+    "ironhorse-kani",
 )
 JS_JOBS = {
     "test", "cover", "lint", "familiar-bundle", "sandbox-drivers",
@@ -39,7 +40,7 @@ RUST_JOBS = {
     "test-ironhorse", "test-ironhorse-calibration", "compare-ironhorse-math",
     "test-ironhorse-oracle", "oracle-sanitizers", "fuzz-ironhorse",
     "cross-target-ironhorse", "build-ironhorse-wasm", "build-wasm",
-    "cargo-deny", "clippy-endo",
+    "cargo-deny", "clippy-endo", "hack-ironhorse", "ironhorse-kani",
 }
 WORKFLOWS = {
     ".github/workflows/browser-test.yml": {"browser-tests"},
@@ -55,6 +56,8 @@ WORKFLOWS = {
     # The weekly advisory sweep runs the same cargo-deny install and roots as
     # ci.yml's cargo-deny job.
     ".github/workflows/cargo-deny-advisories.yml": {"cargo-deny"},
+    # The nightly proof tiers share ci.yml's Kani install and caches.
+    ".github/workflows/ironhorse-kani-nightly.yml": {"ironhorse-kani"},
 }
 CORE = {
     "ironhorse-meter", "ironhorse-vm", "ironhorse-snapshot",
@@ -296,6 +299,13 @@ def classify(paths, graphs, all_jobs=False):
         jobs["test-thixotrope-ironhorse"] |= "thixotrope-ironhorse-worker" in core_crates
         jobs["test-ironhorse"] |= bool(core_crates & CORE)
         jobs["test-ironhorse-calibration"] |= "ironhorse-vm" in core_crates
+        # Both check the engine workspace's members, through the graph: the
+        # feature matrix checks every member, and the Kani harnesses live in
+        # member sources. Prose and bench sources are inputs of neither.
+        engine = {f"rust:{posixpath.normpath(posixpath.join('rust/engine', m))}"
+                  for m in graph.workspaces.get("rust/engine", {}).get("members", [])}
+        jobs["hack-ironhorse"] |= bool(engine & rust_affected)
+        jobs["ironhorse-kani"] |= bool(engine & rust_affected)
         jobs["test-ironhorse-oracle"] |= any(
             n.startswith("rust:rust/engine/") for n in rust_affected
         )
@@ -360,6 +370,17 @@ def classify(paths, graphs, all_jobs=False):
             jobs["format-ironhorse"] = True
         if PurePosixPath(path).name in {"clippy.toml", ".clippy.toml"}:
             jobs["clippy-endo"] = True
+        # cargo-machete reads every manifest and Rust source in the tree,
+        # benches and standalone roots included; removing a `use` can leave
+        # a dependency unused.
+        if path.endswith(".rs") or PurePosixPath(path).name == "Cargo.toml":
+            jobs["cargo-machete"] = True
+        # The proof manifest, its generated ledger and the runner are no
+        # crate's sources.
+        if under(path, "rust/engine/verification") or path == "rust/engine/VERIFICATION.md" or (
+            path.startswith("rust/engine/scripts/") and "verify" in PurePosixPath(path).name
+        ):
+            jobs["ironhorse-kani"] = True
         # Supply-chain policy: every manifest and lockfile can add a crate,
         # a licence or a source.
         if path == "deny.toml" or PurePosixPath(path).name in {"Cargo.toml", "Cargo.lock"}:

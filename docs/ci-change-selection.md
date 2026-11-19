@@ -69,6 +69,22 @@ The `format-ironhorse` job checks the formatting of the engine workspace and of
 every root-workspace member, so any Rust source under either selects it, as does
 a `rustfmt.toml`.
 
+The `cargo-machete` job looks for unused dependencies in every Cargo manifest
+of the tree, so any `Cargo.toml` or Rust source selects it.
+It compares the findings with a committed list, so fixing a known finding also
+means removing it from the list.
+
+The `hack-ironhorse` feature matrix and the `ironhorse-kani` proofs check the
+engine workspace's members, so a change to a member, or to a crate a member
+depends on, selects both, as does the engine's manifest or lockfile.
+The proof manifest under `rust/engine/verification/`, the generated
+`rust/engine/VERIFICATION.md` ledger and the `verify` runner scripts also
+select `ironhorse-kani`, and so does editing `ironhorse-kani-nightly.yml`,
+which shares its install.
+That nightly workflow proves the slower tier and runs the proof mutation check;
+`rust-quality-weekly.yml` measures engine coverage and runs mutation testing.
+Neither gates a pull request.
+
 When adding a test job, register its package or crate roots and any non-manifest
 inputs in the detector, then wire its job-level condition to the returned flag.
 Add regression cases showing both relevant and unrelated changes.

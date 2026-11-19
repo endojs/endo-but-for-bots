@@ -1,0 +1,112 @@
+# The nightly Kani tier for the ironhorse engine. ci.yml's ironhorse-kani job
+# proves the PR tier on every relevant change; this workflow proves the
+# slower nightly tier and checks that the proofs catch injected mutants
+# (`verify.py mutants`). It shares that job's Kani install and caches: bump
+# KANI_VERSION in both.
+
+name: Ironhorse Kani nightly
+
+on:
+  schedule:
+    # Daily, off the peak hours and away from the 03:17 fuzz and test262 runs.
+    - cron: '43 1 * * *'
+  workflow_dispatch:
+
+# Minimal permissions: read the checkout; artifacts ride the built-in
+# token scope.
+permissions:
+  contents: read
+
+# Repo convention (designs/ci-no-npm-lifecycle.md): no yarn here, but
+# the posture is kept uniform across workflows.
+env:
+  YARN_ENABLE_SCRIPTS: 'false'
+  npm_config_ignore_scripts: 'true'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  kani-nightly:
+    name: kani-nightly
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      # Keep in step with ci.yml's ironhorse-kani job.
+      KANI_VERSION: 0.68.0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the proof manifest, ledger and runner
+        run: |
+          python3 rust/engine/scripts/test-verify.py
+          python3 rust/engine/scripts/verify.py check
+          python3 rust/engine/scripts/verify.py ledger --check
+
+      - name: Cache Kani
+        id: cache-kani
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/cargo-kani
+            ~/.cargo/bin/kani
+            ~/.kani
+            ~/.rustup/toolchains/nightly-*
+          key: ${{ runner.os }}-kani-${{ env.KANI_VERSION }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Install Kani
+        if: steps.cache-kani.outputs.cache-hit != 'true'
+        run: |
+          cargo install --locked "kani-verifier@$KANI_VERSION"
+          cargo kani setup
+
+      - name: Cache Cargo + target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/engine/target
+          key: ${{ runner.os }}-ironhorse-kani-${{ env.KANI_VERSION }}-${{ hashFiles('rust/engine/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-kani-${{ env.KANI_VERSION }}-
+
+      - name: Prove the nightly tier
+        run: |
+          set -o pipefail
+          mkdir -p kani-report
+          python3 rust/engine/scripts/verify.py run --tier nightly 2>&1 | tee kani-report/nightly.log
+
+      - name: Check that the proofs catch mutants
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          mkdir -p kani-report
+          python3 rust/engine/scripts/verify.py mutants 2>&1 | tee kani-report/mutants.log
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo '## Ironhorse Kani nightly'
+            for log in kani-report/nightly.log kani-report/mutants.log; do
+              [ -f "$log" ] || continue
+              echo "### $log (last 40 lines)"
+              echo '```'
+              tail -n 40 "$log"
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload runner output
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ironhorse-kani-nightly
+          path: kani-report/
+          if-no-files-found: warn

@@ -298,6 +298,49 @@ class Repository(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(self.selected(path)["clippy-endo"])
 
+    def test_cargo_machete_follows_every_manifest_and_rust_source(self):
+        for path in self.OUTER_SOURCES + ["rust/engine/ironhorse-vm/src/lib.rs",
+                                          "rust/engine/xs-oracle/build.rs",
+                                          "rust/engine/stack-lanes/probe/src/main.rs",
+                                          "rust/engine/ironhorse-fuzz/fuzz/Cargo.toml",
+                                          "Cargo.toml"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["cargo-machete"])
+        for path in ["rust/engine/Cargo.lock", "rust/endo/README.md", "deny.toml",
+                     "packages/cbor/src/encode.js"]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["cargo-machete"])
+
+    def test_engine_feature_matrix_follows_engine_members(self):
+        for path in ["rust/engine/ironhorse-text/src/lib.rs", "rust/engine/xs-oracle/src/lib.rs",
+                     "rust/engine/ironhorse-vm/Cargo.toml", "rust/engine/Cargo.lock",
+                     "rust/engine/Cargo.toml"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["hack-ironhorse"])
+        for path in ["rust/engine/README.md", "rust/engine/benches/xs_compare.py",
+                     "rust/engine/stack-lanes/probe/src/main.rs", "rust/endo/src/lib.rs",
+                     "packages/cbor/src/encode.js"]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["hack-ironhorse"])
+
+    def test_kani_follows_engine_members_and_the_proof_manifest(self):
+        for path in ["rust/engine/ironhorse-meter/src/lib.rs",
+                     "rust/engine/ironhorse-snapshot/src/atom.rs",
+                     "rust/engine/verification/manifest.toml",
+                     "rust/engine/VERIFICATION.md",
+                     "rust/engine/scripts/verify.py",
+                     "rust/engine/scripts/test-verify.py",
+                     "rust/engine/Cargo.lock",
+                     ".github/workflows/ironhorse-kani-nightly.yml"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["ironhorse-kani"])
+        for path in ["rust/engine/README.md", "rust/engine/scripts/bench.sh",
+                     "rust/engine/stack-lanes/lane_c.py", "rust/endo/src/lib.rs",
+                     "packages/cbor/src/encode.js",
+                     ".github/workflows/rust-quality-weekly.yml"]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["ironhorse-kani"])
+
     def test_format_helper_inputs(self):
         self.assertTrue(self.selected("rust/engine/scripts/generate-compiler-opcodes.py")["format-ironhorse"])
 
