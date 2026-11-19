@@ -13974,3 +13974,46 @@ First command 23:44:11Z. Over 60 s: the three kill-point rounds (217 s, 228 s, 2
 background) and the adapter lane (63 s). Not run: the browser lane, perf rows, regression lists,
 m1a-channels bench, integration m2-secrets/providers/catalog and m3-gateway. Scratch tmp/T3-QC
 removed. Fit: neutral.
+
+### J-10245 2026-11-18 T3-FIX extension-point docs - fixed
+T3-QC finding 1 (HR-SYN-15 docs). milestones.md (shared-file rules, M6, M8 and M9 owns, the
+ownership check, the review's ownership row), architecture.md section 4, the m5-interfaces
+hook-table and exports rows and m2-interfaces 2.3/2.4 now send later milestones to the runtime
+part of step3-plan section 2 (one name in `PartName` and `requiredParts`, one getter, one entry
+in `runtimeParts`; `hooks` { onClaim, beforeRound, onCancel, onSettle, onRecover, nextTurn } and
+`tools`; turnSources -> nextTurn, recoverySteps -> onRecover) and say `archive` is made in
+session.js. Historical M1a-M5 work-unit rows keep the file they edited. New
+test/unit/extension-point-docs.test.js pins it. Commits cd38c2368c and 861622d6d3 (the
+m5-interfaces rows went in the second; the docs test is green from it on). Fit: better.
+
+### J-10246 2026-11-18 T3-FIX describe of a refused help() - fixed
+T3-QC finding 2 (rule 1). No PM sign-off exists for the describe change of 1e833c0a82, so it is
+reverted: a help() the hub refuses for size is like any other help() failure, the methods with
+documentation `unavailable`. `ANSWER_OVER_FRAME_TEXT` stays on the granted-tool execute path.
+`tooBigOutcome` gains `helpUnavailable` (ok result); m5-security refuses it for a granted answer.
+Unit test inspector-frame-refusal rewritten for the old outcome; integration m5-objects
+(bigHelp outcome helpUnavailable) and m5-security (hubRefused) passed, 137.9 s wall, the
+templates rebuilt. Finding 3 rides the same commit (861622d6d3): queue.js and submissions.js
+comments name the runner's `claimNext()` (turn.js). Bundles: exec 62,754 -> 62,623, session
+212,483 -> 212,484, factory 156,955. Fit: better.
+
+### J-10247 2026-11-18 T3-FIX pool dead code - fixed
+T3-QC finding 4 (HR-SYN-3 (a)). `subscriptions.handles` and its type line removed; claudeAttempt
+and codexAttempt read `projection.transcript` (always given, PREPARE_REQUIRED). Pool wire golden
+byte-equal (m4-provider passes). New tests: subscriptions has no `handles` and `kindOf` routes the
+pool spec; an attempt without a projection sends nothing. Commit d23d464cab. Fit: better.
+
+### J-10248 2026-11-18 T3-FIX the pools' kind table - decided
+T3-QC finding 5. Putting `provider` on the pool kinds and reading `kindOf(spec).provider` in
+subscriptions/ would import providers/kinds.js, which imports subscriptions/provider.js: a cycle.
+Taken instead the finding's second option: kinds.js and m4-interfaces record that the adapter's
+provider code matches a kind only through `kindOf`, `providerOfKind`/`poolKinds` are the pools'
+own table (pinned by m4-interfaces.test.js), and later kinds add no other table. Commit
+ec3212168f. Fit: neutral.
+
+### J-10249 2026-11-18 T3-FIX time record - verified
+First command 23:56:27Z. Ran: unit lane 707 passed, adapter lane 458 passed (63 s), tsc,
+eslint and prettier on changed files, lint:duplicates 1.80 % of 2.05 %, bundle-guest, integration
+m5-objects + m5-security (`--jobs 2`, 137.9 s wall, over 60 s, background). Not run: perf rows
+(exec-m5 probe b uses the changed predicate), browser lane, regression lists, kill points. No
+manager-part file touched. No scratch left. Fit: neutral.
