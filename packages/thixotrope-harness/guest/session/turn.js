@@ -1227,8 +1227,10 @@ export const makeTurnRunner = ({
     const hold = queue.holdReason();
     // After resume, the stopped hold still protects queued user submissions.
     // Mail has separate admission and can be claimed while that hold remains.
-    if (hold !== undefined && hold !== 'restart' && hold !== 'stopped') return undefined;
-    const next = hooks.nextTurn();
+    if (hold !== undefined && hold !== 'restart' && hold !== 'stopped')
+      return undefined;
+    const next =
+      hold === 'stopped' ? runtime.inbox?.hooks.nextTurn() : hooks.nextTurn();
     if (next !== undefined) return claim(next.text, next.at, next.take);
     return undefined;
   };
