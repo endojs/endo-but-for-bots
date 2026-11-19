@@ -15306,3 +15306,85 @@ and the fixture; `yarn install` 5 s; `tsc` about 3 s; the tests about 8 s). No i
 supervisor or browser started. Commits `7ded984527`, `0a19ab7b58` and this journal commit;
 nothing pushed; no change to `packages/thixotrope`, `rust/**` or other packages.
 Fit: neutral.
+
+### J-12040 2026-11-19 W6.4 the session's environment part, shell tools and emergency stop - built
+Evidence: `35ee60034b`, `8c9a12bbfd`; `guest/session/environment.js`; seams R-1
+(`runtime-parts.js`, four lines under `// slot: environment`), R-2 (`turn.js` `claimNext`, one
+line), R-3 (`session.js`), R-4 (`queue.js`), X-E (`export.js`), T-1 (`tool-table.js`), L-1
+(`label-seeds.js`); tests `session-environment` (12), `session-shell-tool` (6),
+`session-environment-export` (6), helper `test/unit/_session-environment.js` (fakes made with
+`environmentInterfaces.EnvironmentControl` and `.ShellPort`).
+Reading: the part holds `execution`, the promise of the last `port()` ask, the Turn of the last
+shell call and WX.1's call table (D-M6-17; first use in a vat program). A call is opened in the
+table and sent straight to the ShellPort (one session delivery per command after the first; the
+first adds one manager crank); a retired break answers `commandOutcomeUnknown` and drops the port,
+the turn goes on (D-M6-5); any other failure, a refused `port()` among them, is the call's error
+and drops the port too; a call cancelled while its port was asked is never sent. `onCancel` ends
+the turn's calls with `commandStopped` and sends `stop()` only when the turn used the shell and no
+emergency stop is under way (a turn without a command sends nothing); `onRecover` ends them
+quietly. `admit` refuses while stopping or stopped: `enqueueOnce`, `enqueueMessageOnce`,
+`startTurn` and `QueueEntry.sendNow` throw `sessionStopped` before writing, `claimNext` claims
+nothing and does not ask a turn source. `emergencyStop`: the part goes `stopping` and sends the
+control's `emergencyStop`, then (one crank) the queue holds `stopped` and the current turn is
+cancelled; the answer is `stopped`, or `stopIncomplete` with the state left `stopping`; a stopped
+session answers at once. `resume` refuses while stopping, else the control's `resume`, `running`,
+the hold kept. The `execution` event is published with `runner.publishOutside` after the crank's
+own flush (the runner exposes no outbox `emit` outside a hook, and a publish before the flush
+would number its rev below an in-turn batch sent after it). The head page carries `execution`
+(`stopped`) when the part is not running; the import's head chunk re-applies it, holds `stopped`
+whatever the queue holds and sends the new environment `emergencyStop`.
+Departures from the contract, all inside this lane's files: (1) the shell tool entries live in
+`environment.js` beside the part (as `tools/exec.js` holds the exec entry and part); no
+`tools/shell.js`, so T-1 imports `shellToolEntries` from `./environment.js` (J-12041: a module of
+its own costs about 570 bytes of session program); (2) the part's `runCommand`/`inspectShell`
+members are one `shell(inspect, request, ports, context)`; (3) a refused `port()` answers the
+manager's own text, not `environmentTextOf.runtimeFailed` (the session bundles no environments
+guard, D-M6-10), and a retired break from `port()` itself answers `commandOutcomeUnknown`; (4) a
+session stopped but unsupported (imported into a state without environments) still exports
+`stopped` (the contract's 3.8 says undefined when unsupported; exporting it keeps the hold).
+Pins outside the lane's files changed with the registration: `m5-w53-labels.test.js` (the static
+tool names), `m1a-recovery.test.js` (the parts with `onRecover`), `runtime-parts.test.js` (the
+table and "parts still to come").
+Fit: neutral.
+
+### J-12041 2026-11-19 W6.4 session program growth of the environments lane - measured
+Evidence: `node scripts/bundle-guest.mjs session` at `8c9a12bbfd` against `git archive` of
+`6493d955c7` (scratch per-module diff); `session-environment-export.test.js` B-1 row.
+Reading: before 233,126, after 241,283 bytes (+8,157; limit 270,336). By module: `environment.js`
+4,132, `tools/call-table.js` 1,520 (WX.1's shared table, first bundled here), the bundle head
+836 (two new modules, about 420 each), `session.js` +701, `export.js` +280, `runtime-parts.js`
++195, `tool-table.js` +132, `queue.js` +102, `label-seeds.js` +100, `turn.js` +51. The B-1 row:
+`{"metric":"environments.bundles.session","bytes":241283,"growth":8157,"callTableBytes":1857,
+"ownGrowth":6300,"cap":6400}` (the call table's section, head block and head lines). So the
+lane's own lines fit the 6,400 cap with 100 to spare; with the call table the lane is 1,757 over
+it. The call table is lane-agnostic (M9's asks use it, D-M9-22) and was not in WX.1's base because
+no program imported it; whichever lane merges first pays it (M6, merge step 2). Iterations to fit:
+a separate `tools/shell.js` +570; the contract's two part members +150; the `tooManyCalls` text
+for an unreachable refusal +150 (now a `Fail`).
+Fit: worse (the bundle head charges about 420 bytes per module, so the guest-rule split into
+small modules costs every spare vat; J-12042).
+
+### J-12042 2026-11-19 W6.4 fit of the environment part on Thixotrope - finding
+Evidence: `environment.js`, `session.js`; `session-environment.test.js`.
+Reading: suits: the execution state is plain heap state of the part, so stop and resume survive a
+daemon restart with no record kind and no read-back at start (D-M6-9), and the import carries it
+on the head page; the ShellPort is an adapter presence the part keeps across turns, so a command
+costs one session delivery (vat -> adapter -> vat) and no manager delivery; the call table makes
+cancel and recovery a few lines. Does not suit as well: (a) a Session method outside a turn has
+no outbox `emit`: the part's hooks get one through `HookTurn`, the session does not, so the
+`execution` event goes through an answered outside publish (one extra publish per state change,
+ordered by `live.js`'s rev counter); a runner `emit` for Session methods would put it in the
+crank's one publish. (b) `callWhen` defers the method body past the caller's crank, so a test (or
+the UI) sees `stopping` only after the guard's own microtasks. (c) If a restart finds the turn the
+stop cancelled still current (waiting on a non-shell call) with entries waiting, recovery's
+`restart` hold replaces `stopped`; `admit` still refuses every start, so nothing runs, but the
+hold shown is `restart` (released by the next message after resume, as `stopped` would be). (d) Bundle bytes per module (J-12041).
+Fit: neutral.
+
+### J-12043 2026-11-19 W6.4 time record - process
+Evidence: first command 2026-11-19T02:23:29Z.
+Reading: no command over 60 s (the longest: the unit directory, about 6 s; `tsc` about 2 s;
+prettier and eslint about 10 s each). No integration test, supervisor or browser started;
+`THIX_AGENT=W6.4` in every test shell. Commits `35ee60034b`, `8c9a12bbfd` and this journal
+commit; nothing pushed; no change to `packages/thixotrope`, `rust/**` or other packages.
+Fit: neutral.
