@@ -17206,3 +17206,21 @@ four lanes on the same build. The standalone session-program tests exercised the
 program, its prelude and its byte gate. The supervisor SIGKILL restart test passed (192.1 s
 file wall, including template wait). The first mail smoke timed out during cold setup after
 123 s. Further live results are recorded separately.
+
+### J-12541 2026-11-19 M9 like-for-like allocation and follow-up regressions
+
+Bundling the exact WX.1 guest tree at 6493d955c7 with the group’s compact emitter (61242acb45)
+produced 203,585 bytes. The isolated M9 tree with the same emitter, fold cleanup and atomic
+inbox import produced 240,676. That is +37,091 bytes, 15,591 above the 21,500 lane allocation.
+It fits the historical 233,126 + 21,500 allowance and the 270,336 group ceiling. Those are
+different comparisons. The earlier 240,935-byte result was before cleanup. A local trial with
+esbuild identifier minification preserving function names yielded 156,378 and 184,031 respectively,
+a delta of 27,653. This trial was not applied. The session already excludes factory and relay
+guards, and removing redundant imports and an unused text has a sub-kilobyte effect.
+
+The inbox now validates the whole page before applying it. A retry no longer consumes package
+numbers. Number order and page size checks protect exported cursors. Nineteen inbox/import tests
+passed. A child reply cancelled during a relay copy releases the new handle, and an inbox import
+that fails after staging a body releases it before dropping the half-imported session. Those two
+cleanup regressions passed. In the combined checkout the real environment stop fixed the setup
+of both queue/stop unit cases, and all ten tests in the mail wiring and export files passed.
