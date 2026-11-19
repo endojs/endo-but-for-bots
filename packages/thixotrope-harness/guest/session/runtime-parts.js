@@ -79,7 +79,9 @@ import { packagesPart } from './packages.js';
 // slot: environment
 // slot: compaction
 // slot: inbox
+import { inboxPart } from './inbox.js';
 // slot: subagents
+import { subagentsPart } from './subagents.js';
 
 /** @import { Labels } from './labels.js' */
 /** @import { ActiveTurn, TurnInfo } from './turn-types.js' */
@@ -138,6 +140,7 @@ import { packagesPart } from './packages.js';
  *   mutable record; a part writes only the fields `ActiveTurn` names for
  *   parts)
  * @property {ActiveTurn} active
+ * @property {string} [final] completed turn text in the settle crank
  * @property {number} round
  * @property {(record: any) => void} append into the record log, in this crank
  * @property {(event: any) => void} emit into this crank's outbox
@@ -189,7 +192,9 @@ export const requiredParts = harden([
   // slot: environment
   // slot: compaction
   // slot: inbox
+  'inbox',
   // slot: subagents
+  'subagents',
 ]);
 
 /** @type {readonly RuntimePart[]} */
@@ -202,7 +207,9 @@ export const runtimeParts = harden([
   // slot: environment
   // slot: compaction
   // slot: inbox
+  inboxPart,
   // slot: subagents
+  subagentsPart,
 ]);
 
 /**

@@ -2,15 +2,14 @@
 /**
  * The texts a session composes from its inbox (designs/m9-interfaces.md
  * 3.2): the `listMessages` answer, a mail turn's input and its note. The
- * fixed words are `mailTextOf` in `./guards/mail.js`; this module only puts
+ * fixed words are `mailTextOf` in `./guards/session.js`; this module only puts
  * an inbox message's fields into them. The stray-body cut is the post
  * office's, not this module's.
  *
  * Guest rules: plain functions, no record key from data (a row's keys are
  * fixed; JSON is built here and leaves as text).
  */
-import { mailLimits } from './mail-limits.js';
-import { mailTextOf } from './guards/mail.js';
+import { textOf as mailTextOf } from './guards/session.js';
 import { textOf } from './guards/session.js';
 import { limits } from './limits.js';
 import { boundToolOutput, previewText } from './bounded.js';
@@ -32,7 +31,7 @@ import { boundToolOutput, previewText } from './bounded.js';
  * page, less room for the row's other fields.
  */
 const rowTextUnits =
-  Math.floor(limits.toolOutputUnits / mailLimits.listMessagesPage) - 256;
+  Math.floor(limits.toolOutputUnits / limits.listMessagesPage) - 256;
 
 /**
  * A body as text: an inline body itself, a staged one by its preview.

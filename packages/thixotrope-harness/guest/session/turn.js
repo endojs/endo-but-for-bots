@@ -228,8 +228,7 @@ export const makeTurnRunner = ({
   const incarnation = makePorts({
     services,
     live,
-    toolsFor: ports =>
-      toolSetFor(ports, table, services, runtime),
+    toolsFor: ports => toolSetFor(ports, table, services, runtime),
     onFresh: (set, since) => onOpened(set, since),
     onFailed: error => onOpenFailed(error),
     flush,
@@ -320,7 +319,7 @@ export const makeTurnRunner = ({
     } else {
       emit({ type: 'end', turnId: active.turnId, status });
     }
-    hooks.onSettle(hookTurn(active));
+    hooks.onSettle(Object.freeze({ ...hookTurn(active), final }));
     restActivity = status === 'failed' ? 'error' : 'passive';
     report({
       activity: restActivity,

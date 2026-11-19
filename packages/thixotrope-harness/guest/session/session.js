@@ -331,7 +331,6 @@ export const makeSession = (
     deliverMail(envelope) {
       const { inbox } = runtime;
       if (fence.closed()) return harden({ refused: texts.sessionDeleting });
-      if (inbox === undefined) return harden({ refused: texts.notBuiltYet });
       return inCrank(() => {
         runner.see(envelope.at);
         const delivery = inbox.deliver(envelope);

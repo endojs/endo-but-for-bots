@@ -37,13 +37,12 @@
  * (D-M9-19). No method of a held object is called: a handle is a factory
  * exo (D-M9-3). Guest rules.
  */
-import { mailLimits } from '../../lib/mail-limits.js';
 import {
   mailToolArgumentNames,
-  mailTextOf,
+  textOf as mailTextOf,
   subagentLabelPrefix,
   subagentNameSource,
-} from '../../lib/guards/mail.js';
+} from '../../lib/guards/session.js';
 import { textOf } from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
 import { parseClosedArgs } from '../../lib/tool-args.js';
@@ -58,7 +57,7 @@ import { notCapabilityText } from './inspection.js';
 /** @import { ArgSpec, ArgKind } from '../../lib/tool-args.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
 
-const ML = mailLimits;
+const ML = limits;
 const NAME = RegExp(subagentNameSource);
 /** The `splitArgs` placeholder of a staged string (`guards/base.js` SplitArgs). */
 const PLACEHOLDER = '\u0000s';

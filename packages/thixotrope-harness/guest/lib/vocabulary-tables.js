@@ -29,8 +29,6 @@ import * as m3 from './interfaces-m3.js';
 import * as m4 from './interfaces-m4.js';
 // The cross-lane seam unit (WX.1): mail (m9-interfaces.md V1) and speech
 // (m11-interfaces.md H3).
-import { mailTables } from './guards/mail.js';
-import { postOfficeTables } from './guards/post-office.js';
 import * as speech from './speech-guards.js';
 
 /**
@@ -53,19 +51,6 @@ export const vocabularyTables = harden([
   },
   { file: 'interfaces-m3.js', patterns: () => m3.vocabularyShapes() },
   { file: 'interfaces-m4.js', patterns: () => m4.vocabularyShapes() },
-  // Mail and subagents (m9-interfaces.md 6.2 V1; WX.1); the fold moves the
-  // entries into the vat tables and these two lines go.
-  {
-    file: 'guards/mail.js',
-    patterns: () => [...Object.values(mailTables().shapes)],
-  },
-  {
-    file: 'guards/post-office.js',
-    patterns: () => [
-      ...Object.values(postOfficeTables().shapes),
-      ...Object.values(postOfficeTables().interfaces),
-    ],
-  },
   // Voice (m11-interfaces.md 11 H3; WX.1).
   { file: 'speech-guards.js', patterns: () => speech.vocabularyShapes() },
 ]);

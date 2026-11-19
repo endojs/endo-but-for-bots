@@ -53,6 +53,7 @@
  * results through it).
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
+import { interfaces as relayInterfaces } from '../../../guest/lib/interfaces.js';
 import { E } from '@endo/far';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
@@ -71,7 +72,6 @@ import { argv as processArgv, pid } from 'node:process';
 import { StringDecoder } from 'node:string_decoder';
 
 import { interfaces, textOf, texts } from '../../../guest/lib/interfaces.js';
-import { postOfficeTables } from '../../../guest/lib/guards/post-office.js';
 import { limits } from '../../../guest/lib/limits.js';
 import { chunkText, previewText } from '../../../guest/lib/bounded.js';
 import { blobLimits } from '../../../config/defaults.js';
@@ -168,7 +168,7 @@ const isContinuation = byte => byte >= 0x80 && byte < 0xc0;
  *   a session's sealed blob bytes against its quota (once per incarnation,
  *   when its archive is first validated; 4.10 item 4)
  *
- * @typedef {{ maxUnits?: number, suffix?: string }} CopyOptions
+ * @typedef {{ maxUnits?: number, suffix?: string, from?: any, to?: any }} CopyOptions
  *   `maxUnits`: at most that many units of the source before the suffix,
  *   the R4-46 marker included when it is cut; `suffix`: written after it
  *
@@ -925,8 +925,9 @@ export const makeBlobStore = ({
    * stock key, named and the directory fsynced before the handle is bound
    * (D-15). The digest and preview are the source's, read from its file.
    * @param {{ path: string, bytes: number }} source
+   * @param {any} owner
    */
-  const linkCopy = async ({ path: from, bytes }) => {
+  const linkCopy = async ({ path: from, bytes }, owner) => {
     const hash = createHash('sha256');
     const headWant = limits.messagePreviewUnits * 3;
     /** @type {Buffer[]} */
@@ -945,7 +946,7 @@ export const makeBlobStore = ({
       limits.messagePreviewUnits,
     );
     await counted();
-    reserve(undefined, bytes);
+    reserve(owner, bytes);
     try {
       const path = await directory();
       const { blob, key } = await take();
@@ -959,12 +960,12 @@ export const makeBlobStore = ({
         await unlink(join(path, key)).catch(() => {});
         throw error;
       }
-      bind(blob, { key, bytes });
+      bind(blob, { key, bytes, owner });
       counts.linked += 1;
       counts.copiedBytes += bytes;
       return harden({ blob, preview, bytes, digest: hash.digest('hex') });
     } catch (error) {
-      charge(undefined, -bytes);
+      charge(owner, -bytes);
       throw error;
     }
   };
@@ -977,8 +978,11 @@ export const makeBlobStore = ({
    * @param {{ path: string }} source
    * @param {CopyOptions} options
    */
-  const cutCopy = async ({ path: from }, { maxUnits, suffix = '' }) => {
-    const { writer, drop: dropWriter } = openWriter(undefined);
+  const cutCopy = async (
+    { path: from },
+    { maxUnits, suffix = '', to: recipientOwner },
+  ) => {
+    const { writer, drop: dropWriter } = openWriter(recipientOwner);
     const decoder = new StringDecoder('utf8');
     /** @type {string[]} */
     const kept = [];
@@ -1020,34 +1024,31 @@ export const makeBlobStore = ({
   };
 
   /** @type {BlobStore['copy']} */
-  const copy = async (blob, { maxUnits, suffix } = {}) => {
+  const copy = async (
+    blob,
+    { maxUnits, suffix, from: sourceOwner, to: recipientOwner } = {},
+  ) => {
     maxUnits === undefined ||
       (Number.isSafeInteger(maxUnits) && maxUnits >= 0) ||
       Fail`copy maxUnits must be a non-negative integer`;
     suffix === undefined ||
       typeof suffix === 'string' ||
       Fail`copy suffix must be a string`;
-    // No owner: the source is neither claimed nor checked (the factory
-    // relays a handle its sender holds; D-M9-4).
-    const source = await locate(blob);
+    const source = await locate(blob, sourceOwner);
     if (maxUnits === undefined && (suffix === undefined || suffix === '')) {
-      return linkCopy(source);
+      return linkCopy(source, recipientOwner);
     }
-    return cutCopy(source, { maxUnits, suffix });
+    return cutCopy(source, { maxUnits, suffix, to: recipientOwner });
   };
 
-  const relayWriters = makeExo(
-    'RelayWriters',
-    postOfficeTables().interfaces.RelayWriters,
-    {
-      open: async () => makeWriter(undefined),
-      /**
-       * @param {any} blob
-       * @param {CopyOptions} options
-       */
-      copy: (blob, options) => copy(blob, options),
-    },
-  );
+  const relayWriters = makeExo('RelayWriters', relayInterfaces.RelayWriters, {
+    open: async () => makeWriter(undefined),
+    /**
+     * @param {any} blob
+     * @param {CopyOptions} options
+     */
+    copy: (blob, options) => copy(blob, options),
+  });
 
   /** @param {any} [owner] */
   const sessionWriters = owner =>

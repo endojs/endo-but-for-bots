@@ -65,8 +65,11 @@ import { packageToolEntries } from './tools/mentions.js';
 // slot: shell
 // slot: viewImage
 // slot: mail
+import { mailToolEntries } from './tools/mail.js';
 // slot: requests
+import { requestToolEntries } from './tools/requests.js';
 // slot: subagents
+import { subagentToolEntries } from './tools/subagents.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
@@ -163,8 +166,11 @@ export const toolTable = harden([
   // slot: shell
   // slot: viewImage
   // slot: mail
+  ...mailToolEntries,
   // slot: requests
+  ...requestToolEntries,
   // slot: subagents
+  ...subagentToolEntries,
 ]);
 
 /**

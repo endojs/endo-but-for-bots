@@ -19,8 +19,10 @@
  *
  * Guest rules: model JSON never becomes a record; no `JSON.parse`.
  */
-import { mailTextOf, mailTexts } from '../../lib/guards/mail.js';
-import { mailLimits } from '../../lib/mail-limits.js';
+import {
+  textOf as mailTextOf,
+  texts as mailTexts,
+} from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
 import { parseClosedArgs } from '../../lib/tool-args.js';
 import { messageOf, utf8Bytes } from '../../lib/bounded.js';
@@ -131,10 +133,10 @@ const requestEntry = (name, type, text, parameter, answer, done) => {
  */
 const tooLarge = json => {
   const bytes = utf8Bytes(json);
-  return bytes > mailLimits.requestAnswerBytes
+  return bytes > limits.requestAnswerBytes
     ? {
         outcome: failed(
-          mailTextOf.answerTooLarge(bytes, mailLimits.requestAnswerBytes),
+          mailTextOf.answerTooLarge(bytes, limits.requestAnswerBytes),
         ),
       }
     : undefined;

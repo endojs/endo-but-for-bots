@@ -45,13 +45,12 @@
  * keys (postmarks are counts and key `Map`s).
  */
 import { limits } from '../lib/limits.js';
-import { mailLimits } from '../lib/mail-limits.js';
 import {
-  postOfficeTables,
-  postOfficeTexts,
-  postOfficeTextOf,
-} from '../lib/guards/post-office.js';
-import { turnStartingTypes } from '../lib/guards/mail.js';
+  interfaces as factoryInterfaces,
+  texts as postOfficeTexts,
+  textOf as postOfficeTextOf,
+} from '../lib/guards/factory.js';
+import { turnStartingTypes } from '../lib/guards/session.js';
 import { texts as sessionTexts } from '../lib/guards/session.js';
 import { cutText, messageBytes, messageOf, utf8Bytes } from '../lib/bounded.js';
 import { isRetiredBreak } from '../lib/retired.js';
@@ -66,7 +65,7 @@ export const OPERATOR_TITLE = 'user';
 /** Deliveries one start's re-drive keeps in flight at once (5.1). */
 export const REDRIVE_WINDOW = 32;
 
-const ML = mailLimits;
+const ML = limits;
 
 /**
  * A party of a message: a session row or the operator.
@@ -83,6 +82,7 @@ const ML = mailLimits;
 /**
  * @typedef {object} Flight one delivery posted and not yet answered
  * @property {number} postmark
+ * @property {Party} sender
  * @property {Row} row the recipient
  * @property {Record<string, any>} base the envelope without `seq`, `postmark`
  * @property {boolean} copyBody the staged body is copied for the recipient
@@ -138,7 +138,7 @@ const titleOfRow = row => row.title.slice(0, limits.titleUnits);
  *   a caller's `at` is stamped with; by default the latest `at` seen
  */
 export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
-  const I = postOfficeTables().interfaces;
+  const I = factoryInterfaces;
   let latestAt = 0;
   /** @param {number | undefined} at */
   const stampOf = at => {
@@ -300,7 +300,12 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
         /** @type {any} */
         let copied;
         if (flight.copyBody) {
-          copied = await copy(body.blob);
+          copied = await copy(body.blob, {
+            ...('row' in flight.sender
+              ? { from: flight.sender.row.session }
+              : {}),
+            to: row.session,
+          });
           body = copied;
         }
         if (flight.done || flight.envelope !== undefined) {
@@ -386,7 +391,10 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
     let copied;
     try {
       if (typeof body === 'object') {
-        copied = await copy(body.blob);
+        copied = await copy(
+          body.blob,
+          'row' in sender ? { from: sender.row.session } : {},
+        );
         body = copied;
       }
     } catch (error) {
@@ -434,6 +442,7 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
     const flight = {
       postmark,
       row,
+      sender,
       base,
       copyBody: typeof base.body === 'object',
       bytes,

@@ -27,13 +27,15 @@
  * `Set`s, keyed by counts, records or the operator's `responseKey`.
  */
 import { limits } from '../lib/limits.js';
-import { mailLimits } from '../lib/mail-limits.js';
 import {
-  postOfficeTables,
-  postOfficeTexts,
-  postOfficeTextOf,
-} from '../lib/guards/post-office.js';
-import { mailTexts, mailTextOf } from '../lib/guards/mail.js';
+  interfaces as factoryInterfaces,
+  texts as postOfficeTexts,
+  textOf as postOfficeTextOf,
+} from '../lib/guards/factory.js';
+import {
+  texts as mailTexts,
+  textOf as mailTextOf,
+} from '../lib/guards/session.js';
 import { textOf } from '../lib/guards/base.js';
 import { messageBytes, utf8Bytes } from '../lib/bounded.js';
 
@@ -42,7 +44,7 @@ import { messageBytes, utf8Bytes } from '../lib/bounded.js';
 /** @import { PostOffice } from './post-office.js' */
 const { E, makeExo, makePromiseKit } = /** @type {GuestGlobals} */ (globalThis);
 
-const ML = mailLimits;
+const ML = limits;
 /** Bytes kept free in an inbox page for the page record and its framing. */
 const PAGE_OVERHEAD_BYTES = 1024;
 /** The message number a request's turn text is measured with: the widest. */
@@ -102,7 +104,7 @@ const kindPatterns = harden({
  */
 export const makeOperatorMail = ({ postOffice, admin, rows }) => {
   // The exos' methods answer plain records; the guards check them.
-  const I = /** @type {any} */ (postOfficeTables().interfaces);
+  const I = /** @type {any} */ (factoryInterfaces);
   /** @type {Map<number, InboxEntry>} in number order */
   const inbox = new Map();
   let lastNumber = 0;

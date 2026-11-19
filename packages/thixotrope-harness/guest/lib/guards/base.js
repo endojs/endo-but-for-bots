@@ -28,7 +28,6 @@
  * contract change.
  */
 import { limits } from '../limits.js';
-import { mailLimits } from '../mail-limits.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 
@@ -384,7 +383,7 @@ const m1bShapeBuilders = {
   SplitArgs: () =>
     record({
       json: text(limits.inlineBytes),
-      staged: list(S.StagedText, mailLimits.splitStagedStrings),
+      staged: list(S.StagedText, limits.splitStagedStrings),
     }),
 };
 

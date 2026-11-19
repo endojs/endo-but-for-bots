@@ -40,10 +40,13 @@ const { E } = /** @type {GuestGlobals} */ (globalThis);
  * Stage `text` as a Blob for no session yet (the factory's prompt).
  * @param {any} admin AgentHostAdmin
  * @param {string} text
+ * @param {any} [owner]
  * @returns {Promise<any>} a StagedText
  */
-export const stagePrompt = async (admin, text) => {
-  const writers = await E(admin).writersFor();
+export const stagePrompt = async (admin, text, owner) => {
+  const writers = await (owner === undefined
+    ? E(admin).writersFor()
+    : E(admin).writersFor(owner));
   const writer = await E(writers).open();
   try {
     for (const piece of chunkText(text, limits.blobPieceBytes)) {
