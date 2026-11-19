@@ -9,8 +9,11 @@
  *   or, for the M5 texts and names that snapshot lacked, from before the
  *   fold (`guard-snapshot-before-fold.json`), re-keyed by the committed map
  *   `test/fixtures/guard-fold-map.json`; every before entry no folded entry
- *   carries is listed there with the reason;
- * - the gateway's key and method sets are identical;
+ *   carries is listed there with the reason; an entry added since (the
+ *   cross-lane seam unit WX.1) is listed in the map's `added` with the
+ *   reason, and has no before entry;
+ * - the gateway's key and method sets are the before sets plus the map's
+ *   `vocabularyAdded` (WX.1's one re-pin);
  * - each guard module's tables answer the same objects as `interfaces.js`;
  * - every name a guest module reads from a guard module's table is in it,
  *   and no vat program bundles `lib/interfaces.js`.
@@ -60,6 +63,8 @@ const beforeFold = JSON.parse(
  *   changed: Record<string, string>,
  *   exportsRemoved: string[],
  *   exportsAdded: string[],
+ *   added: Record<string, string>,
+ *   vocabularyAdded: { keys: string[], methods: string[] },
  * }}
  */
 const foldMap = JSON.parse(
@@ -73,13 +78,17 @@ test('every guard, shape, method list and text equals its snapshot from before t
   const carried = new Set();
   for (const [key, digest] of Object.entries(after.entries)) {
     const from = foldMap.renamed[key] ?? key;
-    t.true(from in old, `${key}: ${from} is a before entry`);
-    if (key in foldMap.changed) {
-      t.not(digest, old[from], `${key} changed: ${foldMap.changed[key]}`);
+    if (key in foldMap.added) {
+      t.false(from in old, `added ${key} has no before entry`);
     } else {
-      t.is(digest, old[from], `${key} equals the old ${from}`);
+      t.true(from in old, `${key}: ${from} is a before entry, or added`);
+      if (key in foldMap.changed) {
+        t.not(digest, old[from], `${key} changed: ${foldMap.changed[key]}`);
+      } else {
+        t.is(digest, old[from], `${key} equals the old ${from}`);
+      }
+      carried.add(from);
     }
-    carried.add(from);
   }
   // Every before entry is carried by a folded one or removed with a reason.
   for (const key of Object.keys(old)) {
@@ -91,6 +100,10 @@ test('every guard, shape, method list and text equals its snapshot from before t
   for (const key of Object.keys(foldMap.removed)) {
     t.true(key in old, `removed ${key} is a before entry`);
   }
+  for (const [key, reason] of Object.entries(foldMap.added)) {
+    t.true(key in after.entries, `added ${key} is an entry`);
+    t.true(reason.length > 0, `added ${key}: a reason`);
+  }
   t.deepEqual(
     after.exports,
     [
@@ -101,10 +114,18 @@ test('every guard, shape, method list and text equals its snapshot from before t
   );
 });
 
-test("the gateway's key and method sets are identical", t => {
+test("the gateway's key and method sets are the before sets plus WX.1's", t => {
   const after = guardSnapshot();
-  t.deepEqual(after.vocabulary, before.vocabulary);
-  t.deepEqual(after.vocabulary.skipped, []);
+  const { keys, methods } = foldMap.vocabularyAdded;
+  for (const key of keys) t.false(before.vocabulary.keys.includes(key), key);
+  for (const name of methods) {
+    t.false(before.vocabulary.methods.includes(name), name);
+  }
+  t.deepEqual(after.vocabulary, {
+    keys: [...before.vocabulary.keys, ...keys].sort(),
+    methods: [...before.vocabulary.methods, ...methods].sort(),
+    skipped: [],
+  });
 });
 
 test('each guard module answers the same objects as interfaces.js', t => {
