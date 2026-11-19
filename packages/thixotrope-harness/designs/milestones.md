@@ -1984,10 +1984,12 @@ corrected the fresh hub denominator used in J-12547. J-1478 compares the
 single-recipient diagnostic with the full run. The factory revision at `69997bd0c5` completed
 193 posts in 61.359 s in an instrumented fresh-daemon comparison. The release
 throughput row reuses the daemon from the preceding ACK, session-to-session, and
-255-message inbox phases. An isolated collector change
-improved its microbenchmark while the paired ordinary-mail run completed 51 posts
-on the baseline and 50 on the candidate (J-12560). The factory and VM measurements
-are in the [Ironhorse performance note](ironhorse-performance.md).
+255-message inbox phases. On separate research workers, reusing mark storage
+improved a synthetic benchmark (J-12560), and batching dead-owner table cleanup
+reduced the warmed first sweep from 115.644 to 8.082 ms (J-12564). A full run
+on that uninstrumented research worker reached 3.996 posts/s and 198.865 ms
+operator ACK on the same guest (J-12565). The
+[Ironhorse performance note](ironhorse-performance.md) gives the workloads and phase boundaries.
 
 The five daemon regression files passed 12 tests across the recorded runs
 (J-12544). The combined branch also passed the stopped-mail and child-environment

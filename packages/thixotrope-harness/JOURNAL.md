@@ -18803,3 +18803,29 @@ new end-of-sweep hook. A discarded setup had reused an uninstrumented build
 and ended before measurement. The measured candidate used a dedicated
 Cargo target, a verified phase label and worker SHA-256
 `ceac01a23d0e888d957a3e2c184a1859ed56df7e3115f7d3b2161fabc16d9a8b`.
+
+### J-12565 2026-11-20 M9 complete stock workload on the isolated CC-133 worker
+
+The automatic-reply release at `e4dafe639d` ran the unmodified mail benchmark
+with the CC-133 worker, stock windows, allocation policy, unchanged boot bundles
+and separate fresh state. A clean Cargo target reproduced the uninstrumented
+worker SHA-256 `a2ee38f66b9bbf6a6913df46c4a56a75a21867c62fe01d7d5869ab1c24ba6888`.
+The process exited 0. Both runs in this comparison include the full preceding
+ACK, session-to-session and kept-inbox phases, plus the final reply drain.
+
+| Row | Pinned release (J-12553) | CC-133 |
+|---|---:|---:|
+| Operator ACK, median / p95 | 160.827 / 469.584 ms, n=102 | 198.865 / 325.706 ms, n=133 |
+| Completed and dismissed posts | 196 / 61.059 s, 3.210019/s | 244 / 61.060 s, 3.996038/s |
+| Session-to-session median | 359 ms | 318 ms |
+| Inbox p95 upper bound | 500 ms | 300 ms |
+| Fresh image plus log ratio | 0.968065×, 375 posts | 1.02658×, 487 posts |
+
+The research hub went from 785,049 to 805,915 bytes with 51 natural
+compactions. The full research run improved throughput, had a higher
+median operator ACK and a lower p95. Both workers remain over the strict
+300 ms session-to-session target even though the wrapper passed that row.
+The smaller synthetic reclamation workload and the warmed phase comparison
+are in J-12564. The complete experiment at `7f3ac522cbfc` is on the local
+branch `codex/mail-batch-early-gc`. The harness branch keeps the existing
+release worker digest.

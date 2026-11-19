@@ -84,7 +84,25 @@ The same warmed 15 s traffic workload on the profiled CC-133 worker produced the
 | Second sweep including cleanup, on the same reply | 2.195 ms | 1.122 ms |
 | Reclaimed slots, first round | 158,359 | 150,306 |
 
-Across every collecting reply, the measured first sweeps were 97.239–119.934 ms on the baseline and 6.552–8.082 ms on the candidate. First-round marking still took 64.383–73.534 ms and 60.089–73.954 ms respectively. The selected first rounds had similar capacity (732,334 and 732,014 slots), with 89,448 and 80,803 marked slots. The faster worker completed more work during the fixed-duration prefix. The paired phase timings and collection microbenchmarks identify a benefit from batching reclamation. The 15 s samples also show how much run-to-run context matters for a throughput estimate.
+Across every collecting reply, the measured first sweeps were 97.239–119.934 ms on the baseline and 6.552–8.082 ms on the candidate. First-round marking still took 64.383–73.534 ms and 60.089–73.954 ms respectively. The selected first rounds had similar capacity (732,334 and 732,014 slots), with 89,448 and 80,803 marked slots. The faster worker completed more work during the fixed-duration prefix. Read the paired measurements, binary provenance and test records in the local harness repository with the following command.
+
+```sh
+git show codex/mail-batch-early-gc:rust/engine/benches/results/thixotrope-batch-early-sweep.json
+```
+
+**Full run on the uninstrumented worker.** The same `e4dafe639d` guest, stock windows and eight-recipient driver ran to completion on both workers. Both benchmark processes exited 0. The release uses the pinned worker. The experimental worker was built from a clean target and its binary digest and absence of profiling probes were verified.
+
+| Full release workload | Pinned worker | CC-133 research worker |
+|---|---:|---:|
+| Operator ACK median (sends) | 160.827 ms (102) | 198.865 ms (133) |
+| Operator ACK p95 | 469.584 ms | 325.706 ms |
+| Completed posts / elapsed | 196 / 61.059 s | 244 / 61.060 s |
+| Completed posts per second | 3.2100 | 3.9960 |
+| Session-to-session median (strict target 300 ms) | 359 ms | 318 ms |
+| Inbox p95 upper bound (limit 550 ms) | 500 ms | 300 ms |
+| Fresh hub ratio (attachment posts) | 0.968× (375) | 1.027× (487) |
+
+The research worker completed 48 more posts in almost the same time. Median operator ACK rose while p95 fell. Both medians met the 200 ms ACK target. These are individual full runs under different host loads. The phase comparison identifies the specific collector work that became cheaper. Review the small-reclamation tradeoff alongside the warm throughput gain. The final source, test results and both benchmark records are preserved at `7f3ac522cbfc` on the local research branch.
 
 **Reuse mark traversal storage.** In `collect_full`, a visited slot's outgoing edges are gathered before the mutable mark step. Local commit `59dabaf09a` reuses one vector and drains it in the same order. The buffer stays alive until collection returns, so a wide node can determine its peak capacity. The change leaves the collection schedule, finalizer order and slot sweep order intact. The branch `codex/mail-gc-edge-scratch` is available in the harness Git repository. [Collector source](../../../rust/engine/ironhorse-vm/src/gc.rs) · [Existing heap benchmark](../../../rust/engine/ironhorse-snapshot/tests/gc_bench.rs)
 

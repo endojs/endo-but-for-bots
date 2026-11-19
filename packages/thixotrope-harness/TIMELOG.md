@@ -625,7 +625,7 @@ and lint jobs are outside this table. The preceding generated block covers Claud
 
 ## QC follow-up to the four-milestone integration
 
-Completed machine-wide acquisitions as of 2026-11-19 15:34 UTC, for follow-up runs
+Completed machine-wide acquisitions as of 2026-11-19 15:52 UTC, for follow-up runs
 requested since 11:25 UTC. The two timing columns sum each acquisition independently.
 Overlapping waits and holds can exceed elapsed wall time. A setup failure counts as
 a nonzero exit even when the actual test or benchmark collected no samples.
@@ -641,4 +641,4 @@ a nonzero exit even when the actual test or benchmark collected no samples.
 | Session refill and native phase diagnostics | 3 | 2513 | 384 | 2 | 0 |
 | Session snapshot preparation | 4 | 1706 | 535 | 1 | 0 |
 | Session and environment class diagnostics | 8 | 368 | 1856 | 2 | 0 |
-| Isolated Ironhorse worker comparison | 4 | 478 | 1041 | 1 | 0 |
+| Isolated Ironhorse worker comparison | 8 | 563 | 2119 | 2 | 0 |
