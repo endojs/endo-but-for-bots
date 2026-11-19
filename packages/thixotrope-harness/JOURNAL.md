@@ -17935,3 +17935,45 @@ AVA; the successful run used `corepack yarn exec node
 scripts/test-integration.mjs test/integration/m1b-live.test.js` with
 integration enabled. The existing 25-of-26 core coverage belongs to
 its previously recorded revision.
+
+A second run on the same checkout reused the clean fixtures from that
+functional pass. One enclosing machine-wide exclusive reservation held
+all six slots. Its six child file wrappers used normal lock re-entry
+and their standard per-file timeouts. The reservation's acquisition
+wait was outside the measured batch. The same 51 files in registry
+order passed all 94 tests in **974.4 s (16 min 14.4 s)**, from 13:25:35.690
+to 13:41:50.152 UTC. Held time was 5,607.1 slot-seconds, including
+zero per-file waiting. The longest file was environments-stop at 232.1 s.
+The selected batch finished 225.6 s inside the wall budget. Neither
+observed run covered the three omitted files in full, so this is not
+a passing 54-file result.
+
+The same M3 sessions setup dropped from 90.2 s to 19.9 s and the same
+300-turn history setup from 125.9 s to 35.8 s. The ordinary browser
+M3 setup, warm in both runs, took 39.9 s and 34.5 s respectively.
+Reservation and warm fixtures sufficed for the selected workload
+without changing test data, assertions, order or bounds.
+
+To reproduce the selected run, use the checkout, worker, fixture
+directory and integration/browser flags from the functional pass.
+From the harness package, the following Bash command keeps the
+selection and execution inside the ordinary runner. The larger time
+box applies only to the enclosing reservation.
+
+```bash
+export THIX_HARNESS_INTEGRATION=1 THIX_HARNESS_BROWSER=1
+corepack yarn exec node scripts/run-lock.mjs --exclusive --max-ms 3000000 \
+  --label 'warm milestone routine timing' -- node --input-type=module -e '
+  import { spawnSync } from "node:child_process";
+  import { listFiles } from "./scripts/test-integration.mjs";
+  const excluded = new Set([
+    "test/integration/m3-gateway.test.js",
+    "test/integration/m5-security.test.js",
+    "test/integration/environments-shell.test.js",
+  ]);
+  const files = listFiles("milestones").filter(file => !excluded.has(file));
+  const run = spawnSync(process.execPath,
+    ["scripts/test-integration.mjs", "--jobs", "6", ...files],
+    { stdio: "inherit" });
+  process.exitCode = run.status ?? 1;'
+```
