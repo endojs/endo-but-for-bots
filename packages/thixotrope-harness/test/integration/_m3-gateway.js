@@ -3,7 +3,7 @@
  * The gateway from a test's side (M3 W3.7; designs/m3-interfaces.md 12,
  * 17): serve it on a served state, read its sign-in secret the way
  * `scripts/gateway.mjs url` does, and connect Node CapTP clients over a
- * real loopback WebSocket (Node's built-in `WebSocket` with an `Origin`
+ * real loopback WebSocket (a fresh `ws` connection with an `Origin`
  * header, binary frames), as a page does.
  *
  * `serveGateway(state, options?)` answers `{ url, origin, port, secret,
@@ -27,6 +27,7 @@ import { createServer } from 'node:net';
 import path from 'node:path';
 
 import { E } from '@endo/far';
+import WebSocket from 'ws';
 
 import { gatewayUrl } from '../../scripts/gateway.mjs';
 import { names } from '../../scripts/provision-steps.js';
@@ -129,7 +130,6 @@ export const connectGateway = async ({
   headers = {},
 }) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
-    // @ts-expect-error undici's WebSocketInit accepts headers
     headers: { Origin: origin, ...headers },
   });
   ws.binaryType = 'arraybuffer';
@@ -144,7 +144,8 @@ export const connectGateway = async ({
   const client = makeClient({
     send: bytes => ws.send(/** @type {Uint8Array<ArrayBuffer>} */ (bytes)),
   });
-  ws.onmessage = event => client.receive(new Uint8Array(event.data));
+  ws.onmessage = event =>
+    client.receive(new Uint8Array(/** @type {ArrayBuffer} */ (event.data)));
   void closed.then(() => client.close());
   const bootstrap = client.bootstrap();
   return {

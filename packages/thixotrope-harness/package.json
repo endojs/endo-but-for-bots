@@ -57,12 +57,14 @@
   "devDependencies": {
     "@endo/ses-ava": "workspace:^",
     "@playwright/test": "^1.64.1",
+    "@types/ws": "^8",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "esbuild": "^0.28.2",
     "eslint": "catalog:dev",
     "happy-dom": "^20.14.6",
-    "typescript": "catalog:dev"
+    "typescript": "catalog:dev",
+    "ws": "^8.22.0"
   },
   "files": [],
   "sesAvaConfigs": {
