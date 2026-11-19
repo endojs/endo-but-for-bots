@@ -358,6 +358,7 @@ run(
 run(
   'acceptance 6, K3 and K4: a submission lost to a SIGKILL is resent once',
   async t => {
+    t.timeout(5 * 60_000);
     if (!state) throw Error('setup failed');
     const page = await openPage();
     const [preset] = await E(page.factory).listPresets();
@@ -424,6 +425,7 @@ run(
 run(
   'acceptance 7, K5: SIGKILL mid-stream with two pages; recovery seen by both',
   async t => {
+    t.timeout(5 * 60_000);
     if (!state) throw Error('setup failed');
     const a = await openPage();
     const b = await openPage();

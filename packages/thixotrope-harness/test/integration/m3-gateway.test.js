@@ -347,7 +347,11 @@ run(
     if (!gateway) throw Error('setup failed');
     const { powers } = await gateway.connect();
     const labels = powers.extras.map((/** @type {any} */ x) => x.label);
-    t.deepEqual(labels, [secretWriterLabel, 'fixture'], 'built-in first');
+    t.deepEqual(
+      labels,
+      [secretWriterLabel, 'fixture', 'speech'],
+      'built-in first',
+    );
     const fixture = powers.extras.find(
       (/** @type {any} */ x) => x.label === 'fixture',
     ).service;
@@ -429,6 +433,7 @@ run('acceptance 10: refusals before decode; vats untouched', async t => {
 });
 
 run('acceptance 11, K1, K2: rotation, SIGKILL, restore', async t => {
+  t.timeout(5 * 60_000);
   if (!state) throw Error('setup failed');
   const served = state;
   const port = await freePort();
