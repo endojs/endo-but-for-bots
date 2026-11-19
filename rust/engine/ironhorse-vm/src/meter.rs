@@ -369,13 +369,22 @@ impl Meter {
     /// `fxCheckMetering`: on continue, advance `meterCount` by the
     /// interval; on refusal, signal an abort. An exhausted meter
     /// (`index == u64::MAX`) aborts without consulting `host`, armed or not.
+    ///
+    /// Where XS departs: when the next deadline `index + interval` is not
+    /// representable, `fxCheckMetering` wraps `meterCount` and restarts the
+    /// window by resetting `meterIndex` to 0, which would erase the accrued
+    /// cost. Ironhorse fails closed instead and aborts (with `index`
+    /// unchanged). An honest run reaches that only after about `2^48`
+    /// computrons; a restored raw `interval` can reach it at once.
     #[inline]
     pub fn check<F: FnMut(u64) -> bool>(&mut self, host: &mut F) -> MeterCheck {
         self.check_inner(host, false)
     }
 
     /// Compilation receipts require a monotone accumulated index. Saturate
-    /// the next deadline instead of adopting XS's execution-window wrap/reset.
+    /// an unrepresentable next deadline at `u64::MAX` and continue, where
+    /// [`Self::check`] aborts; the exhausted state still refuses once the
+    /// index reaches the ceiling.
     pub(crate) fn check_compilation<F: FnMut(u64) -> bool + ?Sized>(
         &mut self,
         host: &mut F,
@@ -417,30 +426,20 @@ impl Meter {
         }
         if self.interval != 0 && self.index > self.count {
             self.last_reported = self.computrons();
-            if host(self.last_reported) {
-                if monotone {
-                    self.count = self.index.saturating_add(self.interval);
-                    return MeterCheck::Continue;
-                }
-                // XS advances `meterCount` in unsigned (`txU8`)
-                // arithmetic, which wraps on overflow; mirror that with a
-                // wrapping add so the guard below can observe the wrap.
-                self.count = self.index.wrapping_add(self.interval);
-                // `fxCheckMetering`'s overflow-wrap guard (xsRun.c:4475):
-                // if advancing `meterCount` wrapped it below `meterIndex`,
-                // restart the window at zero. Practically unreachable at
-                // u64 width, but parity is the whole premise.
-                if self.count < self.index {
-                    self.index = 0;
-                    self.count = self.interval;
-                }
-                MeterCheck::Continue
-            } else {
-                MeterCheck::Abort
+            if !host(self.last_reported) {
+                return MeterCheck::Abort;
             }
-        } else {
-            MeterCheck::Continue
+            match self.index.checked_add(self.interval) {
+                Some(next) => self.count = next,
+                // Compilation keeps its monotone receipt: saturate.
+                None if monotone => self.count = u64::MAX,
+                // Execution fails closed rather than adopting
+                // `fxCheckMetering`'s wrap-and-reset (xsRun.c:4475),
+                // which would erase the accrued cost.
+                None => return MeterCheck::Abort,
+            }
         }
+        MeterCheck::Continue
     }
 }
 
@@ -541,22 +540,31 @@ mod tests {
     }
 
     #[test]
-    fn check_wrap_guard_restarts_window() {
-        // Force `meterCount` to wrap: with the index already past the
-        // count so the check fires, an interval large enough that
-        // `index + interval` overflows u64 must reset the window to
-        // `interval` rather than leave `count` below `index`.
+    fn check_fails_closed_when_the_next_deadline_wraps() {
+        // `fxCheckMetering` would wrap `meterCount` here and reset
+        // `meterIndex` to 0, erasing the accrued cost. A restored raw
+        // `interval` reaches this at once: index(8) > count(4) fires the
+        // check, and 8 + (u64::MAX - 2) overflows. Ironhorse aborts with
+        // the index and window untouched, even though the host approved.
         let mut m = Meter::new();
-        m.index = 8; // index(8) > count(4): the check fires
+        m.index = 8;
         m.count = 4;
-        m.interval = u64::MAX - 2; // advancing count by this overflows u64
-        let out = m.check(&mut |_| true);
-        assert_eq!(out, MeterCheck::Continue);
-        assert_eq!(m.index, 0, "wrap guard resets meterIndex to 0");
-        assert_eq!(
-            m.count, m.interval,
-            "wrap guard resets meterCount to interval"
-        );
+        m.interval = u64::MAX - 2;
+        let mut consulted = 0;
+        let out = m.check(&mut |_| {
+            consulted += 1;
+            true
+        });
+        assert_eq!(out, MeterCheck::Abort);
+        assert_eq!(consulted, 1, "the host is still consulted first");
+        assert_eq!(m.index, 8, "the accrued cost is kept");
+        assert_eq!(m.count, 4);
+        // A refusing host aborts as before.
+        assert_eq!(m.check(&mut |_| false), MeterCheck::Abort);
+        // The compilation check keeps its monotone receipt: it saturates
+        // the deadline and continues.
+        assert_eq!(m.check_compilation(&mut |_| true), MeterCheck::Continue);
+        assert_eq!((m.index, m.count), (8, u64::MAX));
     }
 
     /// A meter restored to `index` with checks un-armed.
