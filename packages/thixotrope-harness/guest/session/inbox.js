@@ -416,16 +416,14 @@ const makeInbox = runtime => {
     const { mail } = runtime.services;
     if (message.type === 'package') {
       if (mail !== undefined) {
-        E(mail)
-          .post(
-            harden({
-              to: harden([message.from]),
-              body: replyBody(turn),
-              attachments: harden([]),
-              inReplyTo: message.postmark,
-            }),
-          )
-          .then(ignore, ignore);
+        E.sendOnly(mail).post(
+          harden({
+            to: harden([message.from]),
+            body: replyBody(turn),
+            attachments: harden([]),
+            inReplyTo: message.postmark,
+          }),
+        );
       }
       remove(message);
       return;
