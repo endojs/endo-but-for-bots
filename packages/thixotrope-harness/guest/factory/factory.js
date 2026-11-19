@@ -340,6 +340,7 @@ export const makeFactoryKit = ({
       // answered by the manager only after the bind.
       let maker = takeSpare(creation) ?? (await loadProgram(creation, program));
       const services = await buildSessionServices({
+        importing,
         admin,
         backend: resolved.backend,
         preset: resolved.preset,

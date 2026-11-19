@@ -36,6 +36,7 @@ const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
  * @typedef {object} ServicesContext
  * @property {any} admin the AgentHostAdmin
  * @property {any} backend this session's Backend
+ * @property {boolean} [importing] an import restores data without granting live endowments
  * @property {any} preset this session's Preset
  * @property {string} key the session key
  * @property {any} [host] an unbound `SessionHostFacet` minted with a pool
@@ -87,7 +88,8 @@ const execVat = async ({ makeExecVat }) =>
  * rolls back the creation). No field when there are none (`chat-only`).
  * @type {ServiceBuilder}
  */
-const presetEndowments = async ({ preset, presetSnapshot }) => {
+const presetEndowments = async ({ preset, presetSnapshot, importing }) => {
+  if (importing) return {};
   const at = presetSnapshot?.revision;
   if (typeof at !== 'number') return {};
   const endowments = presetEndowmentsAt(preset, at);

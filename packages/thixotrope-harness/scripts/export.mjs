@@ -44,7 +44,8 @@
  * label as a session's.
  *
  * Not exported (documented losses): exec scope bindings (the exec vat's
- * scope is not in any record); secret values (re-create them); preset
+ * scope is not in any record); workspace files and shell home (the imported
+ * environment starts empty); secret values (re-create them); preset
  * endowments and built-in presets' edits (objects are not exported; a
  * built-in comes back as shipped). An archived turn's records come back in segment order: tool results
  * in call order, and a `TurnResolved` sealed after its turn right after it.
@@ -222,6 +223,7 @@ const exportPresets = async operator => {
  * @param {Map<string, any>} byLabel
  */
 const importPresets = async (operator, records, byLabel) => {
+  const imported = [];
   const catalog = await E(operator).getPresets();
   for (const { backend: label, ...rest } of records) {
     /** @type {Record<string, unknown>} */
@@ -235,9 +237,10 @@ const importPresets = async (operator, records, byLabel) => {
       record.backend = backend;
     }
     const { revision } = await E(catalog).configuration();
-    await E(catalog).create(harden(record), revision);
+    const { preset } = await E(catalog).create(harden(record), revision);
+    imported.push(preset);
   }
-  return records.length;
+  return imported;
 };
 
 /** @param {any} backend */
@@ -324,6 +327,9 @@ export const exportState = async ({ client, file, recordsPerLine = 512 }) => {
               config: await plain(head.config),
               usage: head.usage,
               ...(head.archive === undefined ? {} : { archive: head.archive }),
+              ...(head.execution === undefined
+                ? {}
+                : { execution: head.execution }),
               ...(head.hold === undefined ? {} : { hold: head.hold }),
             },
           });
@@ -455,6 +461,7 @@ export const importState = async ({
     const label = await labelOf(backend);
     if (!byLabel.has(label)) byLabel.set(label, backend);
   }
+  const importedPresets = [];
   const totals = {
     presets: 0,
     records: 0,
@@ -554,7 +561,9 @@ export const importState = async ({
       if (Object.keys(changes).length > 0)
         await E(root).configure(harden(changes));
     } else if (line.type === 'presets') {
-      totals.presets += await importPresets(operator, line.records, byLabel);
+      const added = await importPresets(operator, line.records, byLabel);
+      importedPresets.push(...added);
+      totals.presets += added.length;
     } else if (line.type === 'session') {
       if (current !== undefined) await abandon('starts another session');
       const { head } = line;
@@ -572,6 +581,38 @@ export const importState = async ({
         at: head.config.createdAt,
         userInitiated: head.userInitiated,
       };
+      const saved = head.config.preset;
+      if (saved?.objects?.length || head.execution !== undefined) {
+        // Only restore the selected template objects. Importing an old
+        // session must never grant a destination preset's live endowments.
+        const candidates = [
+          ...importedPresets,
+          ...(await E(factory).listPresets()),
+        ];
+        for (const preset of candidates) {
+          const view = await E(preset).describe();
+          if (!view.builtIn && !importedPresets.includes(preset)) continue;
+          if (
+            view.label === saved?.label &&
+            view.template === saved.template &&
+            view.networkPolicy === saved.networkPolicy &&
+            view.endowments.length === 0 &&
+            view.objects.length === saved.objects.length &&
+            view.objects.every(
+              (object, i) =>
+                object.kind === saved.objects[i].kind &&
+                object.label === saved.objects[i].label,
+            )
+          ) {
+            options.preset = preset;
+            break;
+          }
+        }
+        if (!options.preset)
+          throw Error(
+            'Cannot restore the session environment from its exported preset',
+          );
+      }
       const made = await E(root).importSession(harden(options));
       const writers = await E(admin).writersFor(made.session);
       current = {
@@ -586,7 +627,13 @@ export const importState = async ({
       };
       sessions.push(made.session);
       await E(made.internal).importState(
-        harden({ part: 'head', usage: head.usage }),
+        harden({
+          part: 'head',
+          usage: head.usage,
+          ...(head.execution === undefined
+            ? {}
+            : { execution: head.execution }),
+        }),
       );
     } else if (line.type === 'records') {
       const s = /** @type {NonNullable<typeof current>} */ (current);
