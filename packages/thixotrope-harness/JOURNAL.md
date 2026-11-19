@@ -15072,3 +15072,80 @@ Reading: one command over 60 s (the browser case, 2 min 4 s under a shared slot)
 `0142a2963f`, `f26eda0a01` and this journal commit; nothing pushed; no change to
 `packages/thixotrope` or `rust/**`.
 Fit: neutral.
+
+### J-0870 2026-11-19 W6.3a OCI runtime and image pin - built
+Evidence: `resources/environments/impl/runtime-oci.js`, `resources/environments/impl/images.js`,
+`test/fixtures/fake-bin/oci-cli.mjs`, `test/adapter/environments-runtime-oci.test.js` (31 tests
+against the fake CLI, 3 `[real-runtime]` tests skipped), commit `52621c77e4`; four runs in a row
+pass, about 2 s a run (wall).
+Reading: `makeOciRuntime({ binary: 'podman' | 'docker', exec?, controlTimeoutMs? })` answers the
+5.3 `Runtime` (`kind`, `check`, `start`, `exec`, `stop`, `remove`, `sweep`; the typedefs are
+imported from `runtime-fake.js`, A.3's variables from its `fakeCommandEnv('/home/node', ...)`, so
+the two runtimes cannot drift). `start` builds 5.3's `run` argv (`--detach --pull never`, label
+`thix.state=<tag>`, uid 1000, `--cap-drop ALL --read-only --tmpfs /tmp --security-opt
+no-new-privileges --network none`, the configured or default pids, memory and CPUs, `--log-driver
+none`, the two `--volume` mounts, `--workdir /workspace`, exactly the six A.3 variables, the pin,
+`sleep infinity`); a name already in use is kept when running, else removed and run again. `exec`
+runs `exec <name> setsid sh -c <wrapper> /tmp/thix-c<n>.pid <argv...>`: the wrapper records its
+pid (the group id), runs argv as positional parameters (never parsed by a shell) and removes the
+record; a timeout runs `exec <name> sh -c <signaller> <pidfile> TERM`, `KILL` after `killGraceMs`,
+and stops waiting on the CLI one grace later. `stop`/`remove` are `rm --force` (podman adds `--time
+0 --ignore`). `sweep(tag)` lists `ps --all --filter label=thix.state=<tag>` and removes in batches
+of 32, relisting while a listing was cut. `isDigestPin` is the distribution grammar restricted to
+`<name>@sha256:<64 lowercase hex>` (no tag; a registry only with a dot, a port or `localhost`);
+`checkImagePin({ runtime, image })` refuses a non-digest pin before any CLI call, then asks the
+runtime (`image exists` / `image inspect`; `fake` decides alone). The fake CLI plays an engine in
+a directory (containers, labels, images, an unreachable engine, scripted answers), refuses flags
+the named binary lacks (docker has no `--userns keep-id`, no `rm --time/--ignore`), and runs exec
+argv as host processes in the workspace with the container's `--env` only.
+Fit: neutral.
+
+### J-0871 2026-11-19 W6.3a departures from the contract text - finding
+Reading: (1) podman's user namespace is `--userns keep-id:uid=1000,gid=1000`, not bare `keep-id`:
+bare keep-id maps the daemon user's own uid, so with `--user 1000:1000` the files a command writes
+would belong to a subordinate uid on the host, not the daemon user (5.3's stated intent; podman
+4.3+; `[real-runtime: podman]`). (2) The wrapper is `sh -c`, not `sh -lc`: a login shell sources
+the image's profile, which can reset `PATH` and add variables, against R3-45/A.3's exact list. (3)
+`stop` removes the container (`rm --force`) instead of keeping a stopped one: with `sleep infinity`
+as PID 1 a `stop` would wait out its timeout (PID 1 ignores SIGTERM), the root is read-only and
+`/tmp` a tmpfs, so a kept container holds nothing; the next `start` runs a fresh one. So `stop` and
+`remove` are the same call, and a command running at `stop` gets SIGKILL with no grace (the grace
+is the timeout path's). (4) A signal inside the container reaches the CLI as exit `128 + n`; only
+the runtime's own timeout kill is reported as `signal` (with `exitCode: null`), so an OOM kill reads
+`exitCode: 137`. (5) `exec` into a container that is gone or stopped throws `runtimeFailed('the
+container is not running')`, recognised by the CLI's own error line on an empty stdout; the runner
+does not yet restart on it.
+Fit: neutral.
+
+### J-0872 2026-11-19 W6.3a no CLI text crosses - finding
+Reading: the runtime CLI's messages name host paths (mount sources, the socket), so every failure
+is classified into a fixed text (`imageRefused`; `runtimeFailed` with "the <binary> engine is not
+reachable", "<binary> run failed (exit N)", "<binary> is not installed", "the state directory
+cannot be mounted", "invalid container name"); the CLI's stderr is read for classification only and
+no `cause` is kept. A state path containing `:` or `,` is refused, not escaped (the `-v` syntax
+cannot carry it). The CLI process gets only the host variables an engine needs (`PATH`, `HOME`,
+`XDG_RUNTIME_DIR`, `DOCKER_HOST`, ...), never the adapter's whole environment; the container gets
+A.3's six. A test scripts a `run` failure whose stderr holds the workspace path and checks the
+error does not.
+Fit: suits (D-M6-14 is a property of one module's error paths, checkable without a vat).
+
+### J-0873 2026-11-19 W6.3a what the fake CLI cannot show - finding
+Reading: everything isolation-shaped is `[real-runtime]`, gated in the same test file by
+`THIX_HARNESS_REAL_RUNTIME=podman|docker` with `THIX_HARNESS_REAL_IMAGE` a digest pin present
+locally: uid/gid 1000, `CapEff` 0, a read-only root with writable `/workspace`, `/home/node` and
+`/tmp`, only `lo`, the environment list, a trapping timeout killed by SIGKILL, stop, and a sweep of
+two containers. Expected at the owner run: the runtimes add `HOSTNAME` (podman also `container`)
+to the environment (the test allows both, neither is a host variable); an image loaded rather
+than pulled has no repository digest, so `image exists <name>@sha256:` refuses it and the operator
+must tag it by digest; the image must have `setsid` (util-linux or busybox). Docker was installed
+with its daemon stopped and podman absent: no real-runtime test ran here.
+Fit: awkward (the boundary that matters most is the one this machine cannot exercise).
+
+### J-0874 2026-11-19 W6.3a bundles and time record - process
+Evidence: `node scripts/bundle-guest.mjs`; first command 2026-11-19T02:23:28Z.
+Reading: W6.3a adds no guest code (adapter modules only): 0 of M6's 6,400 bytes (base 233,126; the
+shared tree measured 241,270, all other units' uncommitted session edits). `lint:duplicates` 1.84 %
+(ceiling 2.05 %), none in this unit's files. No perf row is this unit's (the container rows are
+W6.7's, `[real-runtime]`). No command over 60 s. Nothing pushed; no change to
+`packages/thixotrope` or `rust/**`; no container runtime started or installed.
+Fit: neutral.
