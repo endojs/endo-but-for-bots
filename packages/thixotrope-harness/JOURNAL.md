@@ -14900,3 +14900,39 @@ Reading: over 60 s: unit and adapter lanes 67 s, `session.perf` in a shared slot
 m1a-slice 155 s. Commits `b95cf790a0` and this journal commit; nothing pushed; no change to
 `packages/thixotrope` or `rust/**`.
 Fit: neutral.
+
+### J-12460 2026-11-19 W9.7 the splitArgs inspector operation - built
+Evidence: `03c8c9598a`; `guest/exec/split-args.js`, seam X1 in `guest/exec/inspect.js` (one
+dispatch entry, the import, the op in the request typedef and the header list).
+Reading: D-M9-14 as written, with four precisions the contract left open. (1) The residual is
+the model's own text with string-value literals cut out (a literal scan after a validating
+`JSON.parse`), not a parse-and-stringify round trip, which would turn `1.0` into `1` and round an
+unsafe integer inside a `raw` value. Keys are never replaced. (2) A value is staged when it is over
+`splitStringUnits` or when it begins with the placeholder prefix `"\u0000s"` (however escaped), so
+every residual string with that prefix is a placeholder. (3) When the residual is still over
+`inlineBytes`, more values are staged, longest first, up to `splitStagedStrings`; past that, or
+with more than 16 long values, or one value over `mailBodyUnits`, the call fails before anything
+is staged (harness texts `splitTooManyText`, `splitResidualText`, `splitStringTooLongText`). (4) The
+source bound is its own `SPLIT_SOURCE_BYTES` = 6 x `mailBodyUnits` + 8 x `inlineBytes` (6,356,992):
+`argumentText`'s `execSourceBytes` (262,144) would refuse acceptance 14's 1 MiB task. Exhaustion
+from a page read, the parse or a staging call propagates to the inspector's catch (`exhausted`).
+Fit: good; the vat boundary makes the split cheap to state (data in, handles out).
+
+### J-12461 2026-11-19 W9.7 sizes and timings - measured
+Evidence: `03c8c9598a`; `node scripts/bundle-guest.mjs session exec`; Node probe over
+`perf/_window.mjs` `runWindow`, PERF_WINDOW_SCALE 0.5 (5 s windows), fake in-process Content.
+Reading: session program 233,126 before and after (the unit adds nothing to it); exec program
+64,500 -> 72,745 (limit 120,000). `exec.splitArgs.1MiB.node` median 3.11 ms, p95 5.77 (1,356
+samples, 271/s); `exec.splitArgs.4KiB.node` median 0.07 ms (41,160 samples). Unit test file 8
+tests in about 1 s; the four existing exec suites 64 passed unchanged.
+Fit: the compute is negligible; in a vat the cost is the deliveries: a 1 MiB task is 52 page
+reads plus 86 appends of `blobPieceBytes`, about 138 answered calls, so 4.5-10 s at 33-70 ms each
+(J-10192, J-0161), not measured here. A `BlobWriters.stage(text)` taking a whole page per call, or
+a Content read larger than `blobPageBytes`, would cut it; recorded, no core request (the frame
+ceiling bounds the piece size).
+
+### J-12462 2026-11-19 W9.7 time record - process
+Evidence: first command 2026-11-19T02:23:29Z.
+Reading: no command over 60 s; no supervisor, browser or run lock used; nothing pushed; no
+change to `packages/thixotrope` or `rust/**`.
+Fit: neutral.
