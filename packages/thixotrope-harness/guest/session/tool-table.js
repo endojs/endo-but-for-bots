@@ -63,6 +63,7 @@ import { objectToolEntries } from './tools/objects.js';
 import { inspectionToolEntries } from './tools/inspection.js';
 import { packageToolEntries } from './tools/mentions.js';
 // slot: shell
+import { shellToolEntries } from './environment.js';
 // slot: viewImage
 // slot: mail
 // slot: requests
@@ -161,6 +162,7 @@ export const toolTable = harden([
   ...inspectionToolEntries,
   ...packageToolEntries,
   // slot: shell
+  ...shellToolEntries,
   // slot: viewImage
   // slot: mail
   // slot: requests

@@ -125,6 +125,7 @@ export const makeSession = (
     turnOf: runner.turnById,
     claim: () => runner.claimNext(),
     cancelCurrent: () => runner.cancelCurrent(),
+    admit: () => runtime.hooks.admit(),
   });
 
   runner.attach({ queue });
@@ -155,10 +156,25 @@ export const makeSession = (
     config,
     info,
     rowReporter,
+    execution: runtime.environment,
   });
   const refuseIfDeleting = () => {
     if (fence.closed()) throw Error(texts.sessionDeleting);
   };
+  // m6-interfaces.md R-3 (a), D-M6-20: a stopped or stopping session
+  // refuses user-facing starts before anything is written.
+  const refuseIfStopped = () => {
+    const refusal = runtime.hooks.admit();
+    if (refusal !== undefined) throw Error(refusal);
+  };
+  /**
+   * The `execution` event (seam S-3), published after the crank's own
+   * flush so its rev follows any in-turn batch of this crank.
+   */
+  const announce = () =>
+    runner.publishOutside([
+      { type: 'execution', ...runtime.environment.executionState() },
+    ]);
 
   /**
    * Run one Session method's crank work and publish its events at the end.
@@ -228,6 +244,7 @@ export const makeSession = (
      */
     enqueueOnce(submission, requestId, at) {
       refuseIfDeleting();
+      refuseIfStopped();
       return inCrank(() => enqueue(submission, requestId, at));
     },
     /** @param {string} requestId */
@@ -245,6 +262,7 @@ export const makeSession = (
      */
     startTurn(submission, at) {
       refuseIfDeleting();
+      refuseIfStopped();
       runner.see(at);
       return runner.startTurn(
         submissionField(submission),
@@ -275,6 +293,7 @@ export const makeSession = (
      */
     enqueueMessageOnce(submission, requestId, at, attachments) {
       refuseIfDeleting();
+      refuseIfStopped();
       return inCrank(() => {
         checkAttachments(submission, attachments);
         return enqueue(submission, requestId, at, attachments);
@@ -284,17 +303,35 @@ export const makeSession = (
     grants() {
       return runtime.grants.facet;
     },
-    // WX.1: the guard's environment methods (m6-interfaces.md 15.1) answer
-    // as for a session without a shell environment until the `environment`
-    // part replaces these three bodies (seam R-3 (b)).
+    /**
+     * Emergency stop (m6-interfaces.md 4.5, R4-8): crank E1 marks the
+     * part `stopping`, holds the queue `stopped`, cancels the current turn
+     * and sends the control's stop; the answer (E2) is `stopped`, or
+     * `stopIncomplete` with the state left `stopping`.
+     */
     emergencyStop() {
-      throw Error(texts.noEnvironmentToStop);
+      const { environment } = runtime;
+      const wasStopped = environment.executionState().state === 'stopped';
+      const stopping = environment.beginStop();
+      if (wasStopped) return stopping;
+      inCrank(() => {
+        queue.hold('stopped', texts.holdStopped);
+        runner.cancelCurrent();
+      });
+      announce();
+      return stopping.finally(() => {
+        announce();
+      });
     },
+    /** 4.5: running again; the hold stays until a new message or send-now. */
     resume() {
-      throw Error(texts.noEnvironmentToStop);
+      return runtime.environment.resume().then((/** @type {any} */ state) => {
+        announce();
+        return state;
+      });
     },
     getExecutionState() {
-      return harden({ state: 'running', supported: false });
+      return runtime.environment.executionState();
     },
   });
 

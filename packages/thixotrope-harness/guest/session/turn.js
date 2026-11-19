@@ -1143,6 +1143,7 @@ export const makeTurnRunner = ({
    */
   const claimNext = () => {
     if (current !== undefined || fence.closed()) return undefined;
+    if (hooks.admit() !== undefined) return undefined;
     const item = queue.first();
     if (item !== undefined) {
       // The receipt keeps the turn id, not the turn (m2-interfaces.md 5.3).

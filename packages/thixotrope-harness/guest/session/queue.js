@@ -116,6 +116,9 @@ harden(assertNoActiveTurn);
  *   for; does nothing by default
  * @param {() => void} [options.cancelCurrent] cancels the running turn
  *   (R6-44: send-now on the queue head while a turn runs); nothing by default
+ * @param {() => (string | undefined)} [options.admit] the session's
+ *   admission (`RuntimeHooks.admit`, m6-interfaces.md R-4): `sendNow`
+ *   throws its refusal before it changes anything; admits by default
  * @returns {Queue}
  */
 export const makeQueue = ({
@@ -123,6 +126,7 @@ export const makeQueue = ({
   turnOf = turnId => turnId,
   claim: claimNext = () => undefined,
   cancelCurrent = () => {},
+  admit = () => undefined,
 } = {}) => {
   /**
    * The QueueEntry class, defined once per queue on first use. `makeExo`
@@ -159,6 +163,8 @@ export const makeQueue = ({
             pending.edit(this.state.internal, submission);
           },
           sendNow() {
+            const refusal = admit();
+            if (refusal !== undefined) throw Error(refusal);
             const { internal: self } = this.state;
             submissions.sendNow(self);
             claimNext();

@@ -77,6 +77,7 @@ import { grantsPart } from './tools/granted.js';
 import { execPart } from './tools/exec.js';
 import { packagesPart } from './packages.js';
 // slot: environment
+import { environmentPart } from './environment.js';
 // slot: compaction
 // slot: inbox
 // slot: subagents
@@ -187,6 +188,7 @@ export const requiredParts = harden([
   'exec',
   'packages',
   // slot: environment
+  'environment',
   // slot: compaction
   // slot: inbox
   // slot: subagents
@@ -200,6 +202,7 @@ export const runtimeParts = harden([
   execPart,
   packagesPart,
   // slot: environment
+  environmentPart,
   // slot: compaction
   // slot: inbox
   // slot: subagents
@@ -315,6 +318,9 @@ export const makeRuntime = ({
       return made.get('packages');
     },
     // slot: environment
+    get environment() {
+      return made.get('environment');
+    },
     // slot: compaction
     // slot: inbox
     // slot: subagents
