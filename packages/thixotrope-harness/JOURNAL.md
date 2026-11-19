@@ -14248,3 +14248,28 @@ Reading: commits `aa28cb219a` (guards moved, in-flight bytes), `c05e0d566b` (con
 shape) and this journal commit. Over 60 s: none (probes, tsc, eslint and prettier each under 60 s).
 Not run: any supervisor, integration test, perf check or cargo. No other contract edited.
 Fit: neutral.
+
+### J-1420 2026-11-18 WP.0 the four settled contracts folded into the milestone plan - decision
+Evidence: `designs/m6-interfaces.md` 6-14, `m8-interfaces.md` 10-19, `m9-interfaces.md` 6-14,
+`m11-interfaces.md` 11-17; the cross-check J-1410..J-1417; the settle entries J-0813..J-0816,
+J-1014..J-1016, J-1115..J-1119, J-1313..J-1316.
+Decision: `milestones.md` gains one section above M6 for the group (WX.1 and its owned files,
+WX.F and its four cross-lane tests, the merge order M11, M6, M8, M9 with a fold after each, the
+session-program caps, all owner questions with defaults, core requests CC-090..CC-120 with status).
+The three questions two lanes asked are merged: G-1 session program (M6 O-12, M8 Q-7, M9 O-M9-8),
+G-2 data-reference step 1 (M6 O-11, M8 Q-8), G-3 Talk without a runner (M6 O-13, M11 O-11). The
+M6, M8, M9 and M11 sections keep goal, P and R, dependencies, owns and condensed work-unit,
+acceptance and perf tables; the contracts stay the reference. "Order and parallelism" gains the
+merge table and the ownership check a per-file table of the lanes' seams. M7 and M10 take the
+M6 path moves (`EVI/egress/`, `EVI/publishing/`, one batched `EV/durable.js` change); M7 also R3-10,
+the internet-dependent preset parts and M9's N1; M12 and M13 note what they now read or decide.
+The conventions name `60-environments.js`, `70-voice.js` and M11's `speech.js`.
+Reading: the asked caps sum to 50,768 bytes, 263,251 in all, so even M9's proposed 270,336 leaves
+7,085; M11's regression and perf lists are keyed `M11`, against review rule 1 (noted for its fold).
+Fit: neutral.
+
+### J-1421 2026-11-18 WP.0 time record - process
+Evidence: first command 2026-11-18T23:54:14Z; last command logged with the WP.0 report.
+Reading: commit `5c0cd9e3f4` (milestones.md) and this journal commit. No contract, guard or code
+file edited. Not run: any supervisor, integration test, perf check or cargo.
+Fit: neutral.
