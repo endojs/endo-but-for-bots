@@ -567,15 +567,15 @@ test('export pages round-trip into a new inbox: kept, read-only, nothing starts,
   // The packages counter resumes above the highest imported number at
   // the import, so a package opened before the next delivery (an imported
   // queue entry's) cannot reuse one.
+  /** @type {number} */
   const opened = /** @type {any} */ (target.runtime).packages.table.open({
     labels: harden([]),
     values: new Map(),
     turnId: 'queued',
   });
-  t.true(opened > 5);
-  t.deepEqual(target.internal.deliverMail(envelope(1)), {
-    number: opened + 1,
-  });
+  // Above 5 (the page applied again above skipped one number: harmless).
+  t.is(opened, 7);
+  t.deepEqual(target.internal.deliverMail(envelope(1)), { number: 8 });
   t.is(target.runtime.hooks.nextTurn().text, 'message 1');
   // ... and the session is not new any more.
   t.throws(() => target.inbox.importPage(pages[0]), {
