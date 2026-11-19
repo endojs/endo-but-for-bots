@@ -39,6 +39,9 @@ use ironhorse_vm::{Interp, RunOutcome, NATIVE_STACK_BYTES};
 #[path = "../../stack-lanes/cases.rs"]
 mod cases;
 #[path = "../../stack-lanes/paint.rs"]
+// The stack painter writes and reads raw stack memory below the live frames;
+// it is the only code exempt from the crate's `unsafe_code` denial.
+#[allow(unsafe_code)]
 mod paint;
 use cases::{cases, Case};
 use paint::stage;

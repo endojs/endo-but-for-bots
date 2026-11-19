@@ -51,6 +51,8 @@ fn grew(bytes: usize) {
 // SAFETY: every method forwards its arguments to `System` unchanged, so each
 // upholds the `GlobalAlloc` contract exactly as `System` does. Counting only
 // touches atomics, which never allocate or unwind.
+// The crate denies `unsafe_code` (Cargo.toml); this impl is its only exemption.
+#[allow(unsafe_code)]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let p = System.alloc(layout);

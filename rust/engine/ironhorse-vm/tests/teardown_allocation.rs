@@ -47,6 +47,8 @@ fn note_allocation() {
 // SAFETY: every method forwards its arguments to `System` unchanged, so each
 // upholds the `GlobalAlloc` contract exactly as `System` does. Counting only
 // touches a thread-local `Cell`, which never allocates or unwinds.
+// The workspace denies `unsafe_code`; this impl is the binary's only exemption.
+#[allow(unsafe_code)]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         note_allocation();

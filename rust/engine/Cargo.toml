@@ -30,6 +30,17 @@ publish = false
 [profile.release]
 overflow-checks = true
 
+# Unsafe policy (design § Minimizing `unsafe`). `deny` rather than `forbid` so
+# the few sanctioned sites can carry a scoped, commented
+# `#[allow(unsafe_code)]`: the `xs-oracle` FFI crate root, the counting
+# allocators of two ironhorse-vm test binaries, and the stack painter that
+# `stack_height.rs` includes. Every library root other than xs-oracle keeps
+# its own `#![forbid(unsafe_code)]`, which nothing inside it can relax.
+# `scripts/test-crate-graph.py` asserts all of this, including that every
+# member opts in with `[lints] workspace = true`.
+[workspace.lints.rust]
+unsafe_code = "deny"
+
 # Incremental W0 gate: only warning families observed with Rust 1.88.0
 # are grandfathered. New default Clippy warnings fail CI via -D warnings;
 # remove these named allowances as each family is cleaned up.

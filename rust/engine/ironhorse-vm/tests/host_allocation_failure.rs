@@ -65,6 +65,8 @@ fn release(bytes: usize) {
 // `alloc_zeroed` and `realloc` (a refused `realloc` leaves the block
 // untouched). The bookkeeping only touches a thread-local `Cell`, which never
 // allocates or unwinds.
+// The workspace denies `unsafe_code`; this impl is the binary's only exemption.
+#[allow(unsafe_code)]
 unsafe impl GlobalAlloc for CappedAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if !admit(layout.size() as isize) {

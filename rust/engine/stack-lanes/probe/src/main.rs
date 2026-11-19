@@ -41,6 +41,9 @@
 #[path = "../../cases.rs"]
 mod cases;
 #[path = "../../paint.rs"]
+// The stack painter writes and reads raw stack memory below the live frames;
+// it is the only code exempt from the crate's `unsafe_code` denial.
+#[allow(unsafe_code)]
 mod paint;
 
 use std::io::{Read, Write};
