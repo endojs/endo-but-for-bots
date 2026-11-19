@@ -17676,3 +17676,13 @@ blobs again produced the same SHA-256 digests. The final canonical lint run at
 against 1.77%. Changes after that verification update the results and documentation.
 The per-file regression and performance times are in `designs/process.md`. J-1451
 records the older core file whose updated observation lacks a standalone pass.
+
+### J-1453 2026-11-19 WX.F performance and lifecycle follow-up
+
+Follow-up starts on the integrated branch at `53ce64395a`. The first assignment covers
+worker retirement in a real daemon, including loss of the original worker and subsequent
+use of a fresh worker. Further work compares a compacted 300-turn restart with the
+359 ms context budget, profiles creation and Git log, and profiles mail delivery and
+subagent ask. The M9 allocation comparison uses the same emitter for the unmodified
+WX.1 guest tree and the isolated M9 tree (J-12541). The seven-file M6 source checkpoint
+remains in its original checkout. J-1451 and J-1452 are the pre-change results.
