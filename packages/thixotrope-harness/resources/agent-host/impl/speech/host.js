@@ -63,12 +63,12 @@ import {
   audioLimits,
   audioTimeouts,
   frameKinds,
-  speechTextOf,
   speechTexts,
   streamNumbers,
   sttFormat,
 } from './audio-protocol.js';
 import { makePlayback } from './playback.js';
+import { checkTtsOptions } from './voice-catalogue.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { GatewayContext } from '../gateway/protocol.js' */
@@ -103,32 +103,6 @@ const messageOf = error =>
 
 /** @param {Uint8Array} bytes */
 const digestOf = bytes => createHash('sha256').update(bytes).digest();
-
-/**
- * R5-41, D-M11-19: every option finite and in `ttsRanges`, the voice one of
- * the catalogue's; a missing option takes the catalogue's default.
- * @param {Record<string, unknown>} options
- * @param {TtsCatalogue} catalogue
- * @returns {CheckedTtsOptions}
- */
-const checkTtsOptions = (options, catalogue) => {
-  const merged = { ...catalogue.defaults, ...options };
-  for (const [option, range] of Object.entries(ttsRanges)) {
-    const value = /** @type {any} */ (merged)[option];
-    if (
-      typeof value !== 'number' ||
-      !Number.isFinite(value) ||
-      value < range.min ||
-      value > range.max
-    ) {
-      throw Error(speechTextOf.outOfRange(option, range.min, range.max));
-    }
-  }
-  if (!catalogue.voices.some(entry => entry.id === merged.voice)) {
-    throw Error(speechTextOf.unknownVoice(String(merged.voice)));
-  }
-  return harden(/** @type {CheckedTtsOptions} */ (merged));
-};
 
 /**
  * One direction of one settings revision.
