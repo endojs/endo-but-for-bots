@@ -106,13 +106,14 @@ export const objectToolDescriptions = harden({
 
 /**
  * Read a local tool's arguments: refused when staged (2.4.2) or not
- * closed JSON; otherwise the values.
+ * closed JSON; otherwise the values. Exported for the other session-site
+ * tools (WX.1; m8-interfaces.md S-10c, m9-interfaces.md L1, D-M9-23).
  * @param {string} tool
  * @param {any} args
  * @param {ArgSpec} spec
  * @returns {{ values: Map<string, any> } | { outcome: any }}
  */
-const readArgs = (tool, args, spec) => {
+export const readArgs = (tool, args, spec) => {
   if (isStaged(args)) {
     const bytes = /** @type {number} */ (fieldBytes(args));
     return {
@@ -125,6 +126,7 @@ const readArgs = (tool, args, spec) => {
   if (!parsed.ok) return { outcome: failed(parsed.text) };
   return { values: parsed.values };
 };
+harden(readArgs);
 
 /**
  * The method names line of a remote capability (as `exec/render.js`).
@@ -134,8 +136,15 @@ export const capabilityLine = names =>
   `[remote capability] callable methods: ${JSON.stringify(names)}`;
 harden(capabilityLine);
 
-/** @param {any} context */
-const labelsOf = context => context?.runtime?.labels;
+/**
+ * The label lookup of the object tools: the session's label map from a
+ * `ToolContext` (`labelsOf(context).get(label)` answers a binding).
+ * Exported for the tools that resolve labels the same way (WX.1;
+ * m9-interfaces.md L1, D-M9-23).
+ * @param {any} context
+ */
+export const labelsOf = context => context?.runtime?.labels;
+harden(labelsOf);
 
 /**
  * Run `work` over the label map; a refusal thrown by it is a failed result.

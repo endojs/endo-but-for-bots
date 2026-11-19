@@ -13669,6 +13669,610 @@ process.md, README, milestones.md status parts, the unit reports. No code, test 
 changed. Scratch `tmp/CL-CLOSE` removed.
 Fit: neutral.
 
+### J-0810 2026-11-18 W6.0 the M6 contract: one environments resource - decision
+Evidence: `designs/m6-interfaces.md` (sections 2, 6, 8), `resources/environments/interfaces.js`
+(51 guards and shapes built in Node with the guest prelude; every interface's method list equals
+its guard's; no absent Git method on the writer; a settings record with an extra key refused);
+`designs/arch-review/step3-plan.md` at `53a8dbb9ea` (read before fixing the session seams);
+`resources/agent-host/durable.js` (attach pattern), `pkg/src/native/contract.js`, `pkg/src/control/supervisor.js`
+`installNative` (no grants, no configuration), `packages/git/src/native-git-backend.js`
+(`GIT_BASE_ARGS`, `EXECUTABLE_REPO_CONFIG`).
+Reading: a container's `/workspace` is the workspace directory, so two resources would pass a host
+path or a guessed key between processes; one resource keeps every identity in its manager and
+finds a session's directory from the presence it was handed. Configuration travels in the service
+key's spec, since `installNative` carries none (AR-SYN-28; CC-091 asked). Commands on the turn path
+go through a per-incarnation `ShellPort` (vat -> adapter -> vat 70-76 ms) instead of the manager
+(164-175 ms per call), and a break from it is the command's unknown outcome, not a restart: the
+environments adapter can be rebuilt while the agent-host lease lives. The guard table sits beside
+the resource: no harness vat program bundles it and no browser reaches it, and in `guest/lib/` it
+would have to join or be excluded from the gateway vocabulary, which the vocabulary test refuses
+for uncovered interfaces. Session seams (part `environment`, an `admit` hook, `Session` methods)
+are designed against step 3 and marked provisional until it merges.
+Decision: D-M6-1..D-M6-14 as written; work units W6.0b (shared guard entries, first and alone),
+W6.1-W6.6 in parallel, W6.7 integration, W6.8 fold; core requests CC-090..CC-092.
+Fit: good for identities and restart (lazy, one registration); awkward where the core has no
+service shape or configuration (the attach and argv workarounds a second time).
+
+### J-0811 2026-11-18 W6.0 adapter-side costs of a command and of git - measure
+Evidence: scratch probe (outside the tree, removed): Node 22 `child_process.spawn` and the
+system git on a 10,000-file repository (100 directories x 100 files, 30 modified, 2 untracked,
+1,002 commits), load average 7.6 (other contract writers and lanes running).
+Reading: spawn `/usr/bin/true` median 1.02 ms, p95 1.37 ms (n 200); `sh -c true` 2.31 ms (n 100);
+`git status --porcelain=v2 -z --untracked-files=normal` median 30.1 ms, p95 31.1 ms (n 30), 3,755
+bytes; `git log --max-count=50` 11.8 ms (n 30); `git diff --numstat` 24.9 ms (n 30); a command
+writing 10 MiB to stdout, drained, 329 ms (n 5). The Docker CLI is installed but its daemon was
+not running (no socket); podman is absent; no container cost was measured.
+Decision: the M6 budgets are dominated by vat and manager hops, not by git or spawning:
+`environments.runTrue` <= 150 ms, `gitStatus` <= 1 s, `gitLog` <= 500 ms, `tooBig` <= 2 s
+(contract section 10); every container figure is `[real-runtime]`, recorded by the owner.
+Fit: neutral.
+
+### J-0812 2026-11-18 W6.0 departures from the spec in M6 - decision
+Evidence: SPEC R3-46, R4-81, R7-39, A.3 `runCommand`; architecture 3.4 and D-16.
+Reading: home is deleted with its session (R3-46 keeps it until an administrator disposes of it:
+the operator's delete is taken as that disposal, G-29); a failed environment stop is retried at the
+next adapter start instead of quarantining the session (R4-81; D-16); containers get configurable
+memory, process and CPU limits (W-12; R7-39 found none); `runCommand` takes no stdin (A.3 has none;
+architecture 3.4's `stdin?: Blob` dropped); the shell tool texts for an unknown outcome, a stop on
+cancel and a stop on a session without a shell are the harness's own.
+Decision: as listed; owner questions O-3, O-4, O-6, O-10 in the contract.
+Fit: neutral.
+
+### J-1310 2026-11-18 W11.0 cost of carrying 85 ms PCM blocks - measure
+Evidence: a scratch probe outside the tree (no supervisor, no vat), Node 22.23, `@endo/init` and
+the guest prelude, load 2.0-2.5. (a) 2,720-byte binary frames (85 ms of 16 kHz s16le) echoed
+through M3's `GW/server.js` `makeGatewayServer` (`onSocket` on `/ws`) by a Node `WebSocket`
+client, 10 s window: round trip median 0.055 ms, p95 0.063, p99 0.075, n 177,638; the server's
+`send` 0.003 ms. (b) the same block as base64 inside a JSON record, encode and decode: 0.009 ms
+median, 3,653 bytes (34 % over the raw block). (c) one JSON line with the base64 block through a
+Node child's stdin and its reply line, 10 s: median 0.022 ms (lines may coalesce; read as under
+0.05 ms). (d) spawn of a Node child to its first stdout line: median 20.5 ms, p95 24.5, n 20.
+Reading: the harness side of an audio block costs well under 0.1 ms; the M11 budgets derive from
+these (`speech.audioForward` <= 1 ms, `speech.partialRelay` <= 2 ms, `speech.engineRespawn`
+<= 100 ms). Real engine latencies were not measured (no engine, no credentials; owner rows).
+Fit: good: audio needs no vat and costs the adapter almost nothing per block.
+
+### J-1311 2026-11-18 W11.0 the M11 contract - decision
+Evidence: `designs/m11-interfaces.md` (`dc591b715f`) and its files: `AH/speech/audio-protocol.js`,
+`engine-protocol.js`, `engine-types.js`, `guest/lib/voice-preferences.js`,
+`guest/lib/speech-guards.js`, `ui/src/voice/endpointing-defaults.js`, `texts.js` (`c7e57d0031`,
+`e219e26315`). Read: architecture, milestones conventions and M11, process, m3-m5 contracts as
+built, arch-review harness.md 1-5 and 8, core.md, step3-plan.md (cleanup lane), spec section 5,
+A.5 and the R items M11 cites, Endo voice sources at `1315bef86`.
+Decisions (D-M11-1..20): audio is adapter-only; no manager change (speech settings with
+`ReadGrant`s in the factory's `Voice`, read through the gateway's `Operator`); one binary `/audio`
+socket per page bound by a one-time token, streams opened by guarded CapTP calls; the speech view
+is an in-process `Live` subscriber (no channel tap); engine kinds `process` (Moonshine, Piper) and
+`openai-audio` (key via grant), all acceptance against fakes, fake speech server on loopback; no
+session part; timeouts and backpressure on every stream; spoken prompt only for voice-started
+sessions; replay per turn. Seams H1-H11, of which H2, H5, H7 are provisional until step 3 merges.
+`speech-guards.js` exports builders, not tables, so the zero-skip vocabulary test stays green until
+W11.5 lists it (checked: 3 tests pass). No core request (CC-120..CC-129 unused).
+Fit: good: the only vat traffic M11 adds is a handful of factory calls per page and launch.
+
+### J-1312 2026-11-18 W11.0 time record - process
+Time: first command 22:51:35Z; contract committed 23:18Z. Over 60 s: none (the probe 21 s, tsc
+2 s, lint and prettier under 30 s each). Not run: any supervisor, integration test, perf check or
+cargo. tsc and eslint clean on the new files; `lint:duplicates` 3.07 % under the 3.25 % ceiling
+(the other contract writers' new files included).
+Fit: neutral.
+
+### J-1110 2026-11-18 W9.0 what the M9 contract was built from - read
+Evidence: ARCH (facts, D-1..D-18, sections 9 and 12), milestones.md (conventions, the review's
+rules, the M9 section and its dependants M12, M13), process.md, m2 (delete, holds, the archive),
+m5 (packages, labels, the inspector, the membrane, the session seams), the review (harness.md 1-5
+and 8, core.md AR-SYN-15 and -24), CORE-CHANGES (CC-026..028), the step-3 plan as written by P3
+(read in full once it appeared), the core's `src/mail` (mailbox, contact), the spec's R/P items
+of M9 and its A.1/A.3 reshaping rows, and Fae's inbox loop, subagent and workflow tools at
+1315bef86 for the fixed texts. Code read where the contract fixes a seam: `turn.js` claim and
+`claimNext`, `recovery.js` steps, `packages.js`, `runtime-parts.js`, `tool-table.js`,
+`tool-args.js`, factory `factory.js`, `services.js`, `rows.js`, `delete.js`, `AH/blobs.js`
+(`writersFor`), the guard modules and `vocabulary-tables.js` with its test.
+Reading: the inbox, `turnSources`, `recoverySteps`, `onDelete` and `packages.open` seams were all
+anticipated by earlier contracts; step 3 turns the session-side ones into runtime parts. Two
+needs had no seam: a cross-session copy of a staged text (17.3 refuses another session's handle)
+and parsing a staged argument JSON in the session (no `JSON.parse` there).
+Fit: good.
+
+### J-1111 2026-11-18 W9.0 envelope sizes - measure
+Evidence: a Node probe under SES lockdown with the guest prelude (removed after the run):
+`messageBytes` of the largest values the new shapes admit.
+Reading: a package envelope with an 8,192-byte body, 32 attachments of 80-unit labels and a
+256-unit sender title: 11,380 string bytes (J-10125 measured 11,021 encoded bytes for the
+Composer's similar submit). A form envelope at the field bounds alone (32 fields, 64-unit names,
+512-unit descriptions, 256-unit defaults, a 4,096-unit description): 32,061 string bytes, over
+`frameBytes`. Every shape of `guards/mail.js` and `guards/post-office.js` builds (43 entries), a
+`definition` envelope is refused, and the two method-guard spreads make valid interfaces.
+Decision: `mailLimits.envelopeBytes` = `frameBytes` - 2,048 = 22,528 bounds an envelope as a
+whole (as `presetRecordBytes` does), checked by the post office before delivery
+(`mailTextOf.envelopeTooLarge`); form defaults 256 units.
+Fit: good.
+
+### J-1112 2026-11-18 W9.0 fixed texts and their sources - decision
+Evidence: `guest/lib/guards/mail.js` `mailTexts`, `mailTextOf`; `guards/post-office.js`
+`postOfficeTexts`, `postOfficeTextOf`.
+Reading: Fae's words at 1315bef86 for the package note and the request/form turn text
+(`session-factory.js` 1736-1748), the unanswered rejection (1617), the tree limit, name, task,
+timeout, in-flight, no-subagent, timeout and stopped texts (`subagent.js`), the workflow answers
+(`workflow-tools.js`), `sent` and `replied` (`tool-makers.js`), and R3-214's mail-fraud text.
+The harness's own: `spawned` (Fae's names a mail path the harness does not have), the inbox,
+operator-inbox and recipient bounds, `notAnAddress`, `recipientLost`, `bodyCut`,
+`dismissUnhandled`, `answerTooLarge`, `envelopeTooLarge`, `systemPromptTooLong`, the form-kind
+texts, `askAbandoned`, `subagentExists`, `subagentLost`, and the post office's. The em dash is a
+`—` escape (guest ASCII rule).
+Fit: neutral.
+
+### J-1113 2026-11-18 W9.0 the M9 decisions - decision
+Evidence: `designs/m9-interfaces.md` section 2 (D-M9-1..20), sections 6, 7 and 13.
+Reading: the harness builds its own mail rather than reusing or wrapping the core's (placement in
+the session vat, bounded state, typed requests and staged bodies, and independence from
+AR-SYN-15's ruling). All mail goes through one post office in the factory vat, which stamps the
+sender, recognises addresses by amplification (no session calls an object it did not mint), and
+holds the only object that may copy a blob for another owner: `RelayWriters.copy` on the
+ownerless writers `AgentHostAdmin.writersFor()` already answers, an adapter change with no
+manager-part change. Inbox and subagents are runtime parts as the step-3 plan says, but their
+tools are static table entries so a granted tool cannot silence them (a deviation from P3 2.4,
+with the reason). At most one turn per message across a restart (departs from R4-59's re-run);
+an ask across a restart ends with the outcome-unknown text (recovery's step order is fixed).
+Staged tool arguments are split by the exec vat. Core requests CC-110 (C-10), CC-111 (handoff of
+relayed presences), CC-112 (factory idle-sleep exemption). Session program share for M9:
+16,384 bytes, against 25-27 KB left after step 3 for M6, M8 and M9 together (owner question
+O-M9-8).
+Fit: good (every M9 object is a harness object passed by reference; names appear only as labels,
+model-facing numbers and the operator's idempotency key).
+
+### J-1114 2026-11-18 W9.0 time record - process
+Evidence: first command 2026-11-18T22:51:33Z; last command logged with the W9.0 report.
+Reading: commits `fc2edcaa13` (guards, limits, texts) and `cdfcccd18d` (the contract). Over 60 s:
+none (the probes and tsc under 10 s, prettier and eslint under 30 s each). Not run: any
+supervisor, integration test, perf check or cargo. tsc and eslint clean on the new files;
+`lint:duplicates` 3.03 % under the 3.25 % ceiling with the other contract writers' new files.
+Fit: neutral.
+
+### J-1010 2026-11-18 W8.0 plan sizing and image envelope costs - measure
+Evidence: scratch Node probe outside the tree (removed with the scratchpad), Node in this checkout,
+load 3.39 / 3.15 / 2.74; 15 repetitions each, median (max). The plan's sizing as lal
+`planContextCompaction` does it (one `JSON.stringify` of the whole history, then one per group from
+the newest back) over synthetic histories of user 300 B, assistant 600 B with one 200 B tool call,
+and a 400 B result per turn: 100 turns (166 KB) 0.26 (0.54) ms; 400 turns (667 KB, about 150,000
+tokens) 0.89 (1.49) ms; 1,600 turns (2.7 MB) 3.42 (4.89) ms. A 2 MiB image: base64 0.12 (0.22) ms;
+the envelope `prefix + JSON.stringify({ mimeType, data })` 6.08 (7.64) ms; `JSON.parse` plus the
+base64 alphabet check 11.63 (12.04) ms; SHA-256 of the envelope 1.11 (1.62) ms.
+Reading: the plan is cheap next to the projection it runs on (7.5 ms per prepare at 5,000 turns,
+J-0491), so `compaction.plan` gets 50 ms, not the milestone's 500 ms. Decoding an image envelope
+costs about 12 ms per image per request; with the 20-image cap a request pays at most about 240 ms
+in the adapter unless `images.js` keeps decoded images (`images.requestBuild` <= 15 ms per image).
+Fit: good.
+
+### J-1011 2026-11-18 W8.0 the M8 contract - design
+Evidence: `designs/m8-interfaces.md` (commits `0b2cd62150`, `3ca6137191`, `748d54b70c` and the
+wording commit after it); `arch-review/step3-plan.md` (read in its worktree, present for this unit);
+the code at `9bb9f4f2ea`: `guest/session/turn.js` (`epoch: 0`, `beforeRound` with no way to shape
+the request), `context-source.js` (the `boundary` option M2 left), `AH/context-cache.js` (the
+sealed part held as projected transcript, no record indices), `AH/projection-hooks.js` (hooks see
+the tail's records only), `guest/lib/interfaces.js` (`Backend.open` returns `S.TurnPorts`,
+`makeBackend` takes `S.BackendSpec`: both checked by the installed manager), `AH/providers/round.js`
+(prepare, dispatch, stream), lal `providers/context-compaction.js` and fae `session-factory.js`.
+Reading: what the code changed in the milestone's plan. (1) A new `TurnPorts.images` or a script
+field would be a manager reinstall, so `viewImage` rides `TurnPorts.tools` and the scripted backend
+answers a fixed summary (D-M8-11, D-M8-13). (2) The cache cannot name cut points in the sealed
+part, so a boundary is always in the kept records (D-M8-4); the sealed part becomes empty at an
+accepted compaction and the cache rebases with no vat page. (3) A `Compaction` record can be
+sealed while it is still the latest, so the summary is placed by a projection marker and one hook
+over the whole transcript (D-M8-5). (4) Parts may not hold the record log (step 3, 2.3), so the
+epoch and boundary live in a context window object made beside the archive, and the part reaches
+it through `runtime.contextWindow`. (5) lal refuses compaction while any unknown outcome is in the
+context, which would end compaction for a session's life; the contract pins the boundary only
+while the turn is kept and unresolved (D-M8-7, Q-1). (6) Images travel as hosted-agent's envelope
+inside an ordinary StagedText (D-M8-8): no blob, archive, delete or export change. (7) The
+milestone's file list (`guest/lib/{context-compaction,compaction-checkpoint,image-result}.js`,
+`guest/session/compaction.js` as a `turn-hooks.js` entry) is replaced by section 11's units, named
+by concept. No manager change (D-M8-15); no core change needed (CC-100 conditional, CC-101 a wish).
+Fit: good: the vat decides and records, the adapter plans, summarizes and carries bytes; the cost
+is about 20 one-line or append-only seams in shared files (section 10).
+
+### J-1012 2026-11-18 W8.0 shared budgets and cross-lane seams with M6 and M9 - read
+Evidence: `designs/m6-interfaces.md` B-1, O-12, 3.4, T-1, L-1; `designs/m9-interfaces.md` D-M9-19,
+O-M9-8, S1, S6 (both written beside this contract); `guest/lib/guards/{context,images}.js`
+measured without comments: 2,860 and 1,516 bytes.
+Reading: the session program limit (240,000) has about 24,000-27,000 bytes left after step 3;
+M6 asks 9,000, M9 16,384 and M8 9,000 (34,384). M8 moved its adapter-only guards and texts into
+the Node-only `guest/lib/image-guards.js` and `AH/providers/compaction-texts.js` to keep its share.
+M6's workspace is a `Git` exo in M6's manager vat with text reads only, so a workspace image needs
+M6 to answer `openImage(path)` with an adapter-side `ImageSource` (seam X-1), or every 196 KB
+page would pass the 65,536-byte frame ceiling into M6's manager vat. Part table order (M6
+`workspace`, M8 `compaction`, M9 `inbox`, `subagents`, all after `packages`) does not matter to
+M8: its hooks touch only its own state. `tool-table.js` gets one appended entry per lane.
+Decision: owner question Q-7 (the shared budget); X-1 requested from M6 in section 10.
+
+### J-1013 2026-11-18 W8.0 time record - process
+Evidence: first command 2026-11-18T22:51:34Z; last command logged with the W8.0 report.
+Reading: commits `0b2cd62150` (guards, texts, limits), `3ca6137191` (the contract), `748d54b70c`
+(module split, X-1), the wording commit, and this journal commit. Over 60 s: none (the probe,
+tsc, eslint, prettier, `lint:duplicates` and the vocabulary test each under 30 s). Not run: any
+supervisor, integration test, perf check or cargo. tsc and eslint clean on the new files; the
+gateway vocabulary test passes with the new modules; `lint:duplicates` 3.03 % under the 3.25 %
+ceiling with the other contract writers' files present.
+Fit: neutral.
+
+### J-1410 2026-11-18 WX.0 what the cross-check of M6, M8, M9 and M11 read and measured - measure
+Evidence: `designs/m6-interfaces.md`, `m8-interfaces.md`, `m9-interfaces.md`, `m11-interfaces.md`
+in full; their committed tables (`resources/environments/interfaces.js`,
+`guest/lib/guards/{context,images,mail,post-office}.js`, `guest/lib/{image-guards,mail-limits,
+speech-guards,voice-preferences}.js`, `AH/speech/{audio-protocol,engine-protocol,engine-types}.js`,
+`AH/providers/compaction-texts.js`, `ui/src/voice/`); `arch-review/step3-plan.md` at `53a8dbb9ea`
+and the step-3 code as built in the cleanup lane at `dbdfa7ee6f` (`runtime-parts.js`, `turn.js`
+`claim`/`claimNext`, `tool-table.js` sites, `factory/starts.js`, `factory/delete.js`,
+`providers/api.js`); `milestones.md` conventions, review rules and the M6-M13 sections;
+`arch-review/core.md` 5; `spike-data-references.md` 1; `CORE-CHANGES.md` CC-026..CC-028.
+Probes (no supervisor): `node scripts/bundle-guest.mjs` in both lanes; comment-stripped sizes
+(`stripComments`, indentation dropped) of the new session-side tables; every new text table
+loaded with the guest prelude and compared key by key.
+Reading: session program 206,907 bytes here, **212,483 bytes on the step-3 tree** (room 27,517 of
+240,000). Stripped: `guards/mail.js` 8,504 + `mail-limits.js` 782, `guards/context.js` 2,351,
+`guards/images.js` 1,412; for scale, existing session modules: `packages.js` 2,312,
+`tools/objects.js` 4,836, `tools/mentions.js` 4,671, `tools/exec.js` 5,757, `tools/granted.js`
+6,129. No text, shape or interface name collides between the new tables and `session.js`/
+`factory.js` (only `mailTextOf` and `environmentTexts` share `timeoutInvalid`, `stopped`, and they
+stay in separate tables). No new tool name collides with a built-in. No host name, address,
+personal path or key-shaped value in the four contracts or their files.
+
+### J-1411 2026-11-18 WX.0 the session program does not hold the four lanes as written - decision
+Evidence: J-1410; `test/unit/m1a-session-program.test.js` asserts `bundle.bytes <=
+limits.sessionProgramBytes`; J-10192 (cold create about 20 ms per KB).
+Reading: the stated shares are M6 9,000 + M8 9,000 + M9 16,384 + M11 0 = 34,384 against 27,517
+of room: 6,867 over before any lane builds. M9's share is not derived: its guards alone strip to
+9,286 bytes, leaving about 7 K for six modules (inbox and subagents parts, three tool modules,
+`mail-text.js`) whose nearest existing peers strip to 2.3-6.1 K each, so 25-35 K is the likely M9
+total; expected sum 257-267 K. M8's Q-7 prices a raise at 10 us a byte; J-10192 measured about
+20 ms per KB.
+Decision: blocker until the owner rules (raise `sessionProgramBytes` in `limits.js` and
+`scripts/provision-steps.js`, about +1.1 s on the 6.1 s cold create per +55 KB and hidden by the
+spare pool; or move M9's factory-checked texts and draft rules from `guards/mail.js` into
+`guards/post-office.js`). The PM then fixes per-lane caps that sum to the ruled limit before
+W6.4, W8.1 and W9.8 start; the group fold measures the sum once.
+
+### J-1412 2026-11-18 WX.0 shared files: one seam unit before the lanes - decision
+Evidence: M6 6.1-6.4 (S-1..S-4, R-1..R-3, T-1, L-1, F-1..F-5, P-1, P-2, K-2); M8 10 (G-1..G-4,
+S-5..S-20); M9 6 (S1..S10, F1..F7, V1, A1); M11 11 (H1..H10); `test/unit/guards-split.test.js`
+(every entry must equal a before-split snapshot entry); `gateway-vocabulary-tables.test.js`
+(key and method sets deep-equal the 258/141 pin).
+Reading: every lane edits `guards/session.js` or `guards/factory.js` (and M6, M8
+`guest/lib/interfaces.js`) in its own "first, alone" unit (W6.0b, W8.G, W9.8/W9.9, W11.7), and
+each such entry fails `guards-split.test.js`, which has no "added" category, and the vocabulary
+pin; only M6 names the snapshot (S-4) and its fix (new digests in a before-split fixture) changes
+what the test proves. Three lanes change the step-3 part API that the built `runtime-parts.js`
+types: M6 `PartHooks.admit`, M8 `HookTurn.reading` and `Runtime.contextWindow`, M9 `nextTurn`
+answering `take`; and three edit `turn.js` on the claim path (M6 admission, M8 `startIndex` and
+`roundRequest`, M9 `claimNext`); M8 says M9 only, M9 says none. Partner names disagree: M8 and M9
+call M6's part `workspace` and its control `envControl` (M6: part `environment`, service
+`environment`); M11 calls M9's method `getInbox` (M9: `getMail`); M6 says no partner on
+`label-seeds.js` (M9 adds `user`). Provisioning numbers: M6 `60-environments.js` and M11
+`60-voice.js`. M8 inside its lane: W8.3 (S-14) and W8.5 (S-18) both own `AH/index.js`.
+Decision: a cross-lane seam unit WX.1, one agent, after step 3 merges and before any lane unit,
+applies every shared guard entry (M6 15, M8 G-1..G-3, M9 S9, S10, F6, M11 appendix A) in one
+commit; replaces the before-split check of `guards-split.test.js` by an `added` list in
+`guard-fold-map.json` (or retires it: its proof is done); re-pins the vocabulary once; adds the
+four part-API members to the typedefs; fixes the part table order `powers, inspector, grants,
+exec, packages, environment, compaction, inbox, subagents` and the tool order shell, `viewImage`,
+mail, requests, subagents; names `environment` everywhere; gives M11 `70-voice.js`. Lanes then
+add only their own part, entries and table lines. W8.5's `index.js` line moves to W8.3.
+
+### J-1413 2026-11-18 WX.0 objects designed twice, and part state an export drops - decision
+Evidence: M6 D-M6-6 (`EVI/blob-access.js`, BlobWriters pieces of 12,288 bytes from the
+environments adapter), O-11; M8 D-M8-10, X-1 (pulled `ImageSource` pages of 262,144 characters),
+CC-100, CC-101; M9 D-M9-4 (hard-link `RelayWriters.copy`); M11 D-M11-3 (`/audio`, never stored);
+spike-data-references 1 (step 1, harness only, names the workspace and containers adapters,
+`runCommand` stdin and `viewImage`; adapter paging measured +2.9-3.0 MB of hub log per MiB);
+step3-plan 2.3 (a part holds no state that must survive export or a restart); `tools/exec.js`
+`abandon` (built).
+Reading: (a) data between two adapters is designed twice (M6 pushes vat-sized pieces, M8 pulls
+large pages) and X-1 is not in M6's contract at all (no `openImage` in `gitWriterMethodNames`).
+The one design is the spike's step 1 (adapter reads the file it is pointed at), M6 first, M8's X-1
+its second user; until the owner adopts it, X-1 is built by M6 W6.2 as M8 specifies, both lanes
+accept the hub-log cost, and CC-100 is asked once for both. (b) In-flight call tables with a
+cancel and a recovery text are built a third time (exec `abandon`, M6 `calls`/`stillOurs`, M9
+asks by generation): WX.1 exports one bounded per-part call table from `tools/exec.js`. (c) M9's
+inbox messages and M6's execution state live only in part heaps: M9 S7 exports the waiting bodies
+but not the messages (an import gets blobs no record names; an M13 upgrade loses waiting mail and
+kept requests); an imported stopped shell session runs again. Both must enter the export (M9
+records or an export section; M6 the hold, already queue state, plus `execution`). (d) Delete hooks:
+the built `makeDeletions({ admin, rows, starts, hooks })` passes `{ row, session }`; M9's
+parameter form fits it, M6's F-4 signature change does not: the kit passes `hooks: [subagents
+.deleteChildren, environment release closed over the settings]`, children first. (e) M11 H2's
+`startCount: () => epoch` becomes the built `starts` object (M9 already uses `starts.next()`).
+
+### J-1414 2026-11-18 WX.0 owner rules, budgets and the box - read
+Evidence: the four contracts' decisions, perf tables and test plans; `milestones.md` "Done means"
+(integration files under 5 minutes); `guest/lib/limits.js` `frameBytes` ("into or out of a vat").
+Reading: no secret path, lifetime cap or deleted transcript content found. Names: `speak(session,
+turnId)` (M11 D-M11-7), `subagents/<name>` (M9), the `voice=` fragment and `responseKey` fall under
+the owner's exceptions (page re-finding, model text, client idempotency key). Placement: M6's
+`resources/environments/interfaces.js` is neither under `guest/lib/guards/` nor listed in
+`vocabulary-tables.js` (M6 O-8); one exclusion line there satisfies the rule's letter; M8's
+`image-guards.js` exclusion should be unconditional. M11 lets a gateway page call
+`Voice.configureSpeech` with engine argv (a page holding the sign-in runs commands); M6 keeps the
+equivalent on the provisioning-only admin: move it there. Budgets: M8 `images.viewFromVat` (1 s)
+assumes 262,144-character pages out of a vat, over `frameBytes`; at 20,480-character pages 1 MiB is
+68 deliveries, about 4.8 s. M9 `mail.inboxCrank` p95 200 ms is below its own basis (32 handles x
+7-15 ms = 224-480 ms). M9 `mail.throughput`/`mail.hubGrowth` post packages, which start turns, so
+1,000 in 120 s overrun the 256-message inboxes. M6 `stopCleanup`, `cancel`, `coldStart` have no
+measured basis; M6 gives no wall time for `perf/environments.perf.mjs` (7 windows plus fixtures).
+Counts and N-run rows (M8 `compaction.record`, M11 `voice.deliveries`, M6 `restart` 5 runs, M9
+`burst8` 3 runs) should be labelled gates or put in windows. M9 `mail-restart` is estimated at 6
+minutes: split it. M6 adds four files to the `core` regression list: give them their own list.
+
+### J-1415 2026-11-18 WX.0 core requests against core.md 5 and the spike - decision
+Evidence: M6 CC-090..CC-092; M8 CC-100, CC-101; M9 CC-110..CC-112; M11 none (CC-120 conditional);
+`arch-review/core.md` 5 steps 2-4; `spike-data-references.md` 1.
+Reading: CC-090 and CC-091 are one core change, AR-SYN-28, already in core step 4 with the
+`WORKSPACE_VERSION` bump: one row. CC-110 is core C-10 (step 2): cite it, do not re-request.
+CC-100 is a policy record of core step 3's persisted session kinds and also covers M6's staged
+output; its condition (adapter frames in `hub-log.jsonl`) is already measured by the spike, so
+M8's P-B4 only confirms it at 128 KiB pages. CC-101 is the spike's step 2, which needs C-1 and C-2
+(core step 3) first and comes after the harness-only step 1: withdraw it from this group. CC-111
+belongs with core step 3's handoff question. CC-092 also serves M11's K11-1 process check (one test
+helper for both). CC-112 stands alone.
+
+### J-1416 2026-11-18 WX.0 acceptance gaps, merge order and folds - decision
+Evidence: the four acceptance lists against the R and P numbers of their milestone sections;
+spec R3-13, R3-30, R4-70, R8-29.
+Reading: cross-lane items nobody proves before the merge: the complete `voice` preset (R3-13: M6
+objects, M11 pin), `viewImage` of a workspace path (R3-30, X-1), a subagent of a shell preset with
+its own workspace and shell (R4-70), mail delivered to a stopped session. Unclaimed: R4-70's
+subscription selector (M9 inherits backend, model, effort, preset only); R8-29 (engines started
+fresh at every start; M11 starts lazily: a departure to record); M11 cites none of R2-6, R2-20,
+R3-244, R3-245, R6-53, R8-17, R8-29 and maps R5-1..R5-62 only through P items; M6 does not state
+R3-10 (M7) and R3-16 (open decision 5) as deferred. A Talk on a state without an environment runner
+fails with `runnerRequired` (the `voice` preset needs a shell): owner question.
+Decision: order WX.1, lanes, then merge M11 (fewest guest seams), M6 (X-1, the `voice` preset),
+M8, M9 (largest runner and factory seams), each followed by its own fold (M11 F-1..F-9, M6 W6.8,
+M8 18, M9 W9.F) and one group fold WX.F: vocabulary and bundle measured once, the four cross-lane
+acceptance tests above, provisional seams re-anchored, regression lists, `architecture.md`,
+`milestones.md` (the four contracts' tables) and the ownership-check row for the group.
+
+### J-1417 2026-11-18 WX.0 time record - process
+Evidence: first command 2026-11-18T23:26:38Z; last command logged with the WX.0 report.
+Reading: reading the four contracts and the step-3 plan and code took most of the time; probes
+(two bundles, size and key comparisons) each under 30 s. Not run: any supervisor, integration
+test, perf check or cargo. No contract changed; journal only.
+Fit: neutral.
+
+### J-1014 2026-11-18 W8.0 settle: M8 seams against the step-3 code as built - read
+Evidence: `arch-review/step3-plan.md` at `53a8dbb9ea`; the cleanup lane at `cecfa12809`:
+`guest/session/runtime-parts.js` (`PartName`, `requiredParts`, `runtimeParts`, `makeRuntime`,
+`combineHooks`), `turn.js` (`hookTurn`, `roundRequest`'s `base: { count, epoch: 0, ... }`,
+`invoke`'s `beforeRound` before the `round > 0` `thinking` emit, `claim`'s
+`records.append(started)`), `records.js` (`append` answers the index), `session.js`
+(`makeRuntime` before `makeRecordLog`), `turn-import.js` (`importTurns`), `archive.js` (seal
+`epoch: 0`), `tools/objects.js` (`readArgs` private, label lookup `runtime.labels.get`),
+`usage.js`, `providers/api.js` (`apiStream`, `wire.body({ ..., req })`), `anthropic.js`
+(`anthropicKind.readModels`), `endpoint.js`, `index.js` (`adapterTools`, open handler).
+Reading: every [step 3] seam of the M8 contract names a real function; none stays provisional.
+Three changed: S-6 must move the record log above `makeRuntime` (the window needs only the log,
+so `makeContextWindow({ records })`); S-10c reduces to the `export` keyword on `readArgs`; S-20
+lives in `anthropic.js`, which W8.6 already owns for S-19, so it moves to W8.6. `compaction` goes
+into `requiredParts` (the runner calls the part).
+
+### J-1015 2026-11-18 W8.0 settle: the cross-check issues assigned to M8 - decision
+Evidence: J-1410..J-1417 (X-01, X-02, X-03, X-04, X-06, X-10, X-11, X-12, X-13, X-14, X-15, X-16,
+X-17); J-10192 (cold create about 20 ms per KB); J-0461, J-9043 (about 70 ms per delivery).
+Decision: `m8-interfaces.md` gains D-M8-17..D-M8-21 and table 2.1. Shared guard lines,
+the part-API typedefs, the `makeRuntime` `contextWindow` option, the part and tool orders, the
+split-test change, the vocabulary re-pin and the `readArgs` export are WX.1's; W8.G is done by
+WX.1. The session-program share is a request (9,000, derived from J-1410's stripped 3,763 plus
+peers); W8.1 and W8.4 wait for the owner's ruling and the PM's cap, the adapter units do not. X-1
+is built by M6 W6.2 as specified (owner question Q-8 for the spike's step 1). A source in a vat
+answers pages of at most 20,480 characters, so `images.viewFromVat` is re-derived: 69 pages x
+70 ms = 4.8 s, budget 6 s recorded. Count rows are gate rows; `compaction.rebuild` is measured
+over a 60 s window. CC-100 is asked unconditionally for M6 and M8 into core step 3; CC-101 is
+withdrawn and recorded as spike step 2. Acceptance 19 (viewImage of a workspace path) belongs to
+WX.F. The S-18 `index.js` line moves to W8.3; W8.5's first commit is the `makeImageTool` export.
+Merge order M11, M6, M8, M9; build-unit journal ranges: PM assigns.
+Fit: good; no M8 behaviour changed, only who applies which seam and when.
+
+### J-1016 2026-11-18 W8.0 settle time record - process
+Evidence: first command 2026-11-18T23:40:38Z, last 2026-11-18T23:47:40Z (before this commit).
+Reading: reading the step-3 code and editing the contract; no probe needed beyond reading.
+Commit `15f86101eb`. Not run: any supervisor, integration test, perf check or cargo.
+
+### J-1313 2026-11-18 W11.0 settle: the M11 session share and the step-3 anchors - measure
+Evidence: `node scripts/bundle-guest.mjs --out <scratch>` on this tree (module lists);
+`step3-plan.md` at `53a8dbb9ea`; the cleanup lane at `cecfa12809`: `guest/factory/starts.js`,
+`factory.js` (`createSession` l.361, `Operator` l.420, kit return l.539), `main.js`
+(`makeHarnessRoot` call), `root.js` (`makeHarnessRoot`), `GW/server.js` upgrade handler after
+HR-SYN-35, `GW/index.js` `incarnationParts`, `GW/extensions.js` `makeExtensionServices`,
+`makeLargeCalls`, `AH/index.js` `makeGatewayService` call (l.439-453) and `secrets().readKey`
+(l.264).
+Reading: session 206,907 bytes bundles `guards/base.js` and `guards/session.js` only; factory
+155,427 bundles `guards/factory.js`; exec 61,688. So appendix A grows the factory program only:
+M11's session share is 0 (cross-check X-01), checked as byte identity, not a cap. Step 3 built the
+start count as an object (`current()`, `next()`), keeps the Origin check before extension upgrade
+routes, and passes one shared `context` to every extension's `make` and `target`. No seam of M11
+touches a runtime part or the provider shell; no anchor stays provisional.
+
+### J-1314 2026-11-18 W11.0 settle: speech settings authority and the key reader - decision
+Evidence: cross-check X-11 (b), (c); `vocabulary.js` `collectNames` (method names are a union of
+all interface guards); `root.js` `HarnessRoot.configure` (sets the pool, answers `PoolStatus`);
+`Operator.getSecrets` (a page already holds `SecretsAdmin`).
+Decision: D-M11-21: `configureSpeech` leaves `Voice` for `HarnessRoot.configureSpeech` (provisioning
+step `70-voice.js`); `Voice.speechSettings()` stays readable (no new authority: the page holds
+`SecretsAdmin` and no gateway method reads a key through a grant). D-M11-22: the gateway service
+takes `extensionPowers` `[{ extension, powers }]`; the speech extension object imported by
+`AH/index.js` is matched by identity against the loader's, and only its `make`/`target` receive
+`readGrant`. Assumption A-5 (one module instance for `require` and `import`) proved first by W11.5;
+if it fails W11.5 stops and the PM rules on a file-name fallback. Rejected: a `SpeechAdmin` facet,
+a `HarnessSettings.speech` field, a `serve` config field (manager part), a method-name exclusion.
+
+### J-1315 2026-11-18 W11.0 settle: the other cross-check items for M11 - decision
+Evidence: X-02, X-09, X-10, X-12, X-14, X-17; spec R2-6, R2-20, R3-13, R3-244, R3-245, R5-1..R5-71,
+R6-53, R8-17, R8-29, R8-43.
+Decision: H1 (appendix A, now with `HarnessRoot.configureSpeech`), H3 and H4 are WX.1's; W11.7 and
+W11.8 start from WX.1. Provisioning step `70-voice.js`. `makeVoice({ ..., starts })`; partner text
+`getMail`. Appendix C maps every voice spec item to an acceptance item, a departure or an owner;
+R8-29 recorded as departure D-M11-23 (engines fresh per incarnation, started at first use; O-12).
+Talk without a runner: D-M11-25, O-11 (default refuse). New acceptance 19-22; the cross-lane
+`voice-preset.test.js` is WX.F's. `voice.deliveries` is a gate row inside the `voice.speakOpen`
+window. Merge M11 first; F-7 waits for M6 or moves to WX.F. Work-unit journal ranges: PM assigns.
+`GW/extensions/README.md` has one owner (W11.9). None of the issues was declined.
+
+### J-1316 2026-11-18 W11.0 settle: time record - process
+Evidence: first command 2026-11-18T23:40:37Z; last command logged with the settle report.
+Reading: reading the contract, the cross-check entries, `step3-plan.md` and the built step-3
+blocks took most of the time; one bundle probe (under 1 minute). Not run: any supervisor,
+integration test, perf check or cargo. Other contracts not edited.
+Fit: neutral.
+
+### J-0813 2026-11-18 W6.0 settle: the M6 contract against the cross-check and the built step 3 - decision
+Evidence: `designs/m6-interfaces.md` (settle record table after the contents); J-1410..J-1417
+(issues X-01..X-17); `arch-review/step3-plan.md` at `53a8dbb9ea`; the step-3 code at `cecfa12809`
+in the cleanup lane: `runtime-parts.js` (`RuntimePart`, `requiredParts`, `combineHooks`),
+`turn.js` `claimNext` (`hooks.nextTurn` asked only when the queue is unheld), `session.js`
+(`refuseIfDeleting`, one `enqueue`), `queue.js` `sendNow` (releases the hold, then claims),
+`export.js` head and import branches, `tool-table.js` sites, `tools/exec.js` `abandon`,
+`factory/delete.js` `makeDeletions({ admin, rows, starts, hooks })`, `factory.js`, `services.js`.
+Reading: every provisional seam now has its real line (R-1 five lines incl. `requiredParts`; R-2 one
+`claimNext` line; R-3 `refuseIfStopped` beside `refuseIfDeleting`). The part API change itself
+(`PartHooks.admit` and its fan-out) and every shared guard entry are WX.1's (X-02, X-03), so the
+draft's W6.0b is withdrawn. Two seams were missing from the draft: `QueueEntry.sendNow` releases
+the hold before it claims, so a stopped session needs R-4 in `queue.js` (refuse before the
+release), and the export needs X-E (`execution` on the head page). The delete hooks follow the
+built signature: the factory kit passes them (X-05), `delete.js` is unchanged.
+Decision: contract committed (`d7753ef851` and the settle-record commit); no seam left provisional.
+Fit: neutral.
+
+### J-0814 2026-11-18 W6.0 settle: workspace images, withdrawal in the adapter, the table's place - decision
+Evidence: M8 X-1 and 6.2 (`openImage(path)` in the image tool's descent); `guest/lib/
+image-guards.js` `ImageSource`, `guards/images.js` `imageLimits`; J-10126, J-10127 (a call frame
+over the ceiling is refused before it is journaled); `gateway-vocabulary-tables.test.js` (every
+`guest/lib` module that exports guards, listed or excluded, must contribute its interface names).
+Reading: (a) the draft's D-M6-9 said the manager refuses `ShellPort` calls, but a `ShellPort` is an
+adapter object the manager never sees: withdrawal must happen in the adapter too.
+`EnvironmentsOps.stop(key, { withdraw })`, `resume(key)` and `PendingWork.withdrawn` do it, also for
+the adapter-side `ImageSource` of X-1. (b) `openImage` is a read on both Git facets that answers
+one handle through the manager; pages go adapter to adapter. Exec code can reach it, and a 196,608-
+byte page toward the exec vat is over the frame ceiling: the hub is expected to refuse it as it
+refuses a call frame (J-10127, measured for calls only); W6.7 probes it, with a clamp to
+`blobPageBytes` as the fallback. (c) The table moves to `guest/lib/guards/environments.js`
+(the owner's placement rule); one `vocabularyExclusions` line plus WX.1's not-browser-sendable rule
+in the vocabulary test keeps the gateway pin unchanged (the same change serves M8's
+`image-guards.js`). The path shape imports M8's `imageLimits` instead of copying it.
+Decision: guard file updated and probed (prelude loaded under `@endo/init`: every interface's
+method guards equal its `environmentMethodNames` list; `ImagePath`, `StopOptions`, `PendingWork`
+build); eslint and `tsc` clean.
+Fit: neutral.
+
+### J-0815 2026-11-18 W6.0 settle: budgets, windows, core requests - decision
+Evidence: X-13, X-14, X-15; J-0811, J-0494, J-9043, J-9382, J-0193, J-1410, J-10192; `core.md` 5.
+Reading: `cancel`, `stopCleanup` and `coldStart` had no measured basis: now recorded rows.
+`tooBig`, `bundles` and `restart` are counts or N-run checks: now gate rows. The perf file was about
+9 minutes with fixtures: the two git rows move to `perf/environments-git.perf.mjs` (about 3
+minutes), leaving about 6 minutes. M6's integration files get their own regression list
+`environments`. CC-090 and CC-091 are one core-step-4 change (one row under AR-SYN-28); CC-092's
+finder becomes one shared test helper for M6 and M11; CC-100 (M8) is asked for M6's staged output
+and image pages too. The session program share (X-01) stays an owner ruling: M6 derives about
+8.5 K from the stripped peers and asks a 9,000-byte cap.
+Decision: sections 10 and 12 rewritten; O-12 states the default (raise the limit), O-13 added
+(Talk without a runner: refuse with `runnerRequired`).
+Fit: neutral.
+
+### J-0816 2026-11-18 W6.0 settle time record - process
+Evidence: first command 2026-11-18T23:40:35Z; last command logged with the settle report.
+Reading: reading the cross-check, the step-3 plan and the built step-3 code took most of the
+time; one guard-table load probe (seconds), eslint, prettier and `tsc` (under 2 minutes). Not run:
+any supervisor, integration test, perf check or cargo. No other contract edited. Build units use
+journal ranges the PM assigns; J-0817..J-0829 stay with the contract.
+Fit: neutral.
+
+### J-1115 2026-11-18 W9.0 settle: what the M9 contract was aligned against - read
+Evidence: the cross-check WX.0 (J-1410..J-1417, issues X-01..X-17); `arch-review/step3-plan.md`
+at `53a8dbb9ea` (present; read in full); the step-3 code as built in the cleanup lane at
+`e5edbed850`: `guest/session/runtime-parts.js` (`PartName`, `requiredParts`, getters,
+`combineHooks`), `turn.js` `claim(input, at, take, item)` and `claimNext`, `session.js` (the fence,
+`inCrank`, `SessionInternal`, `makeSessionExport` call), `export.js` (`extras`, `blobPage`, the
+`queue` page and `importState`), `label-seeds.js`, `tool-table.js` (`site` on every entry),
+`packages.js`, `guest/factory/factory.js` (`makeDeletions` before `create`, `recover` with
+`starts.next()`), `delete.js` (`hooks` parameter, `{ row, session }`), `starts.js`,
+`subscription-options.js`, `guards/session.js` (`SessionExportPage`, `importChunkView`).
+Reading: the built `claim` already takes `take` and `combineHooks.nextTurn` passes the answer
+through, so the two runner changes are two lines of `claimNext` (WX.1's). The built delete hooks
+take the table as a parameter, so `delete.js` needs no edit; `deletions` is made before `create`,
+so the subagents hook closes over `subagents` late. The export page guards admit a closed list of
+parts, so the inbox page needs one shared guard line (S9b). In the harness the subscription
+selector of R4-70 is the pool Backend object itself.
+Fit: good.
+
+### J-1116 2026-11-18 W9.0 settle: the session-side size of M9's tables - measure
+Evidence: a Node probe with `bundle-guest.mjs` `stripComments` and indentation dropped (removed
+after the run); the tables loaded under `@endo/init` and the guest prelude, every shape and
+interface built (44 entries), both method-guard spreads valid, an `InboxExportMessage` checked and
+a `definition` one refused.
+Reading: `guards/mail.js` 8,746 bytes before; the factory-only entries (drafts, answers, the
+subagent list: 713 bytes; the post office's, mailbox's and tree's texts: 1,505 bytes) moved to
+`guards/post-office.js`, which the session program never imports: 6,270; with the export shape and
+the `imported` text added at the settle: 6,698. `mail-limits.js` 910 with `postInFlightBytes`.
+Decision: M9's share 32,768 (7,608 measured + 23,300 estimated from peer modules, rounded up);
+default asked of the owner: `sessionProgramBytes` 270,336 for the four lanes (commits
+`aa28cb219a`, `c05e0d566b`).
+Fit: good.
+
+### J-1117 2026-11-18 W9.0 settle: cross-check issues applied to the M9 contract - decision
+Evidence: `designs/m9-interfaces.md` status table "Cross-check issues", D-M9-18, -19, -21..-24,
+sections 3, 5, 6, 7, 8, 9, 10, 12, 13, 14.
+Reading: X-01 share re-derived and the limit left to the owner (O-M9-8). X-02/X-03 every shared
+guard line and both runner lines moved to WX.1 (section 6.2: S2, S2b, S9, S9b, S10, F6, V1, G1,
+L1, C1); M9 units refuse to make them. X-04 part and tool order fixed, `environment` used. X-05
+`delete.js` untouched, hooks passed by the kit, children first. X-07 the inbox is an export page,
+imported messages kept and read-only (D-M9-21, KM14, acceptance 21). X-08 asks on the shared call
+table. X-10 `starts` passed; `getMail` kept. X-12 subscription selector inherited through the
+Backend (acceptance 7); the two cross-lane items listed for WX.F (8.2). X-13 `inboxCrank` p95 550
+ms, `throughput` >= 3/s with turns and inboxes under their bound, `hubGrowth` from a 120 s window.
+X-14 gate rows apart; `mail-restart` split into `-delivery` and `-turn` (each under 4 minutes).
+X-15 CC-110 recorded as C-10, CC-111 routed to core step 3. X-16 the label lookup imported, the
+in-flight envelopes bounded by 4 MiB. X-17 M9 merges last of the four, then W9.F, then WX.F.
+Not applied here: the M11 text `getInbox` and the Talk question (M11's and the owner's).
+Fit: good.
+
+### J-1118 2026-11-18 W9.0 settle: work units re-read - decision
+Evidence: `designs/m9-interfaces.md` section 7.
+Reading: group A (W9.1..W9.7) own disjoint new files plus `AH/blobs.js` (W9.6) and
+`guest/exec/inspect.js` (W9.7); group B splits the session seams (W9.8) from the factory seams
+(W9.9); W9.10 owns only new test and perf files; W9.F after the merge. Every unit waits for WX.1
+and the PM's program cap. Build units' journal ranges: "PM assigns" (inside J-1100..J-1199);
+J-1110..J-1129 stay with this contract unit.
+Fit: neutral.
+
+### J-1119 2026-11-18 W9.0 settle: time record - process
+Evidence: first command 2026-11-18T23:40:38Z; last command logged with the W9.0 settle report.
+Reading: commits `aa28cb219a` (guards moved, in-flight bytes), `c05e0d566b` (contract and export
+shape) and this journal commit. Over 60 s: none (probes, tsc, eslint and prettier each under 60 s).
+Not run: any supervisor, integration test, perf check or cargo. No other contract edited.
+Fit: neutral.
+
+### J-1420 2026-11-18 WP.0 the four settled contracts folded into the milestone plan - decision
+Evidence: `designs/m6-interfaces.md` 6-14, `m8-interfaces.md` 10-19, `m9-interfaces.md` 6-14,
+`m11-interfaces.md` 11-17; the cross-check J-1410..J-1417; the settle entries J-0813..J-0816,
+J-1014..J-1016, J-1115..J-1119, J-1313..J-1316.
+Decision: `milestones.md` gains one section above M6 for the group (WX.1 and its owned files,
+WX.F and its four cross-lane tests, the merge order M11, M6, M8, M9 with a fold after each, the
+session-program caps, all owner questions with defaults, core requests CC-090..CC-120 with status).
+The three questions two lanes asked are merged: G-1 session program (M6 O-12, M8 Q-7, M9 O-M9-8),
+G-2 data-reference step 1 (M6 O-11, M8 Q-8), G-3 Talk without a runner (M6 O-13, M11 O-11). The
+M6, M8, M9 and M11 sections keep goal, P and R, dependencies, owns and condensed work-unit,
+acceptance and perf tables; the contracts stay the reference. "Order and parallelism" gains the
+merge table and the ownership check a per-file table of the lanes' seams. M7 and M10 take the
+M6 path moves (`EVI/egress/`, `EVI/publishing/`, one batched `EV/durable.js` change); M7 also R3-10,
+the internet-dependent preset parts and M9's N1; M12 and M13 note what they now read or decide.
+The conventions name `60-environments.js`, `70-voice.js` and M11's `speech.js`.
+Reading: the asked caps sum to 50,768 bytes, 263,251 in all, so even M9's proposed 270,336 leaves
+7,085; M11's regression and perf lists are keyed `M11`, against review rule 1 (noted for its fold).
+Fit: neutral.
+
+### J-1421 2026-11-18 WP.0 time record - process
+Evidence: first command 2026-11-18T23:54:14Z; last command logged with the WP.0 report.
+Reading: commit `5c0cd9e3f4` (milestones.md) and this journal commit. No contract, guard or code
+file edited. Not run: any supervisor, integration test, perf check or cargo.
+Fit: neutral.
 ### J-10200 2026-11-18 P3 step 3 plan written - decision
 Unit P3 of the review's step 3, at `9bb9f4f2ea`: `designs/arch-review/step3-plan.md` (387 lines),
 read from the code (`guest/session/turn.js`, `session.js`, `recovery.js`, `runtime-parts.js`,
@@ -14105,3 +14709,194 @@ the closure measure (a TypeScript-parser script over `guest` and `AH/impl`, now 
 `step3-plan.md` 2, the journal J-10077..J-10249, the code headers of the step 3 modules. Not run:
 browser perf, gateway perf, the other perf files, a perf run of the old tree (createCold and
 exec.trivial delivery baselines). Scratch `tmp/T3-CLOSE` removed. Fit: neutral.
+
+### J-1425 2026-11-19 WX.1 what the seam unit read, and the exo rule the contracts missed - read
+Evidence: `milestones.md` the group's section; `m6-interfaces.md` 6.1, 15; `m8-interfaces.md` 10,
+11, 4.6, 4.7; `m9-interfaces.md` 6.2, D-M9-5, D-M9-21..D-M9-24; `m11-interfaces.md` 11, appendix A;
+`step3-plan.md` 2; `runtime-parts.js`, `turn.js`, `turn-types.js` as built at `ea4e2c1c11`;
+`packages/exo/src/exo-tools.js` 398-400; J-1410..J-1421, J-10250..J-10254.
+Reading: the settled contracts resolve step 3's two limits without a new runner hook: M8's part
+writes `active.compactionAsk` in `beforeRound` and the runner reads it (S-5b), M9's `nextTurn`
+answers a `take` that `claim`'s existing third parameter runs. One rule none of them names: an exo
+refuses to be made when its guard lists a method its behaviour lacks ("methods ... not implemented
+by"), so adding `Session.emergencyStop`, `SessionInternal.deliverMail`, `TurnSink.compacted`,
+`Operator.getMail`/`getVoice` or `HarnessRoot.configureSpeech` to the guards alone would stop every
+session, the factory and seven TurnSink test fakes from being made.
+Fit: neutral.
+
+### J-1426 2026-11-19 WX.1 shared guard entries, and a "not built here" body per new method - decision
+Evidence: `5a27bf2fc9`; the contracts' lines listed in its message.
+Decision: every lane's guard entry applied as listed (M6 15.1-15.4, M8 G-1..G-4, M9 S9, S9b, S10,
+F6, V1, M11 H1, H3). Each new method of an existing interface gets the body its "not there"
+case has: `emergencyStop`/`resume` refuse `noEnvironmentToStop`, `getExecutionState` answers
+`{ running, supported: false }` (what M6 3.8 says for a session without an environment);
+`deliverMail` answers `{ refused }`, `cancelMail` nothing; `compacted` answers `{ go: false }`
+(M8 4.2's answer to an ask no longer pending); `configureSpeech` refuses `speechNotWired` (M11 H2b's
+own absent case); `getMail`/`getVoice` refuse one new text, `notBuiltYet`, which the group fold
+deletes. Each lane replaces its bodies in the seam it already owns (R-3, S5, S-5d, F1, H2, H2b).
+`importChunkView` also gets `execution` (M6 X-E reads it from the import chunk; 15.1 named only the
+export page). Rejected: guard entries held back as builders until each lane (every lane would
+re-pin the snapshot and vocabulary, the failure WX.1 exists to prevent).
+Fit: neutral.
+
+### J-1427 2026-11-19 WX.1 bundle sizes and the lanes' session program allowances - measure
+Evidence: `node scripts/bundle-guest.mjs` at `ea4e2c1c11` (from `git archive`, scratch) and at
+`4c4a011dac`; module-stub variants and a keyword attribution of the bundle diff (scratch scripts).
+Reading: before/after: session 212,484 / 233,126 (+20,642), exec 62,623 / 64,500 (+1,877:
+`mail-limits.js`, `SplitArgs`, the three attachment shapes), factory 156,955 / 192,892 (+35,937:
+`guards/post-office.js`, `guards/mail.js`, the voice guards). Of the session's +20,642: the mail
+modules 9,457, `guards/context.js` 2,985, the shell descriptions 2,097 (stubbed variants); by
+lane over all lines about 2,600 environments, 5,400 context window, 11,200 mail, 1,300 shared part
+API (keyword attribution, about +/- 1 KB). Remaining over 233,126: 6,400 / 3,500 / 21,500 / 0.
+Fit: neutral.
+
+### J-1428 2026-11-19 WX.1 the mail guard module and the session table import each other - decision
+Evidence: `eslint import/no-cycle` on `guards/session.js` <-> `guards/mail.js`; S9, S9b.
+Decision: `guards/mail.js` reads `Attachments`, `EdgeLabel`, `Reason`, `StagedText` from
+`guards/base.js`; `EdgeLabel`, `Attachment`, `Attachments` move there unchanged (the same entries
+answer through every table; snapshot digests unchanged); `SplitArgs` moves to `base.js` (the exec
+program checks `InspectOutcome`, S10 said "at the fold") and `mailTables().shapes.SplitArgs`
+answers that object. Two lines of M9's contract file change; M9's fold has less to move. Rejected:
+lazy reads of the session table from `mail.js` (an ESM cycle, refused by the lint rule).
+Fit: neutral.
+
+### J-1429 2026-11-19 WX.1 the one re-base of the pinned tests - decision
+Evidence: `6535027dc4`.
+Decision: `guard-fold-map.json` gains `added` (25 entries with reasons) and `vocabularyAdded`
+(70 keys, 33 methods); 35 entries enter `changed` with reasons (the widened guards and the shapes
+that carry them). `guards-split.test.js` admits an added entry only through the map;
+`gateway-vocabulary-tables.test.js` pins 258 + 70 keys and 141 + 33 methods from the same list,
+checks named files exist (builder-only modules, M8 G-4) and exempts `notBrowserSendable`
+modules (`guards/environments.js`, `image-guards.js`, D-M6-10) from contributing names. The m1b,
+m2, m5 interface tests leave WX.1's entries out through `_contract-tables.js` `seamLater`, as
+`m5Later` does for M5.
+Fit: neutral.
+
+### J-1430 2026-11-19 WX.1 the part API: admit, take, the restart hold, the context window - decision
+Evidence: `628a30884f`; m6 15.3, m8 T-1, T-2, m9 S2, S2b.
+Decision: `PartHooks.admit` / `RuntimeHooks.admit` (first refusal in table order, later parts not
+asked); `NextTurn.take`; `claimNext` asks sources under a `restart` hold and passes `take`;
+`makeRuntime({ contextWindow })`; `HookTurn.reading`, `ActiveTurn.startIndex`, `compactionAsk`
+optional (the context lane sets them). The rule that a part writes only `systemNote` and
+`compactionAsk` of `ActiveTurn` is written in the typedefs, not enforced by hardening (it would
+freeze the runner's own record). The claim-path `admit` calls (M6 R-2, R-3, R-4) are the
+environments lane's (the group's section gives WX.1 only S2 in `claimNext`). No send and no crank
+added to a turn that uses none of it.
+Fit: neutral.
+
+### J-1431 2026-11-19 WX.1 the part and tool orders as slotted tables - decision
+Evidence: `628a30884f`, `c7d4b0d9a3`.
+Decision: `PartName` names all nine parts and `Runtime` the four to come (optional), so the lanes'
+five-line R-1/S1/S-7 seams become four lines each, every one directly below its own
+`// slot: <name>` comment (import, `requiredParts`, `runtimeParts`, getter); the tool table has a
+slot per group (shell, `viewImage`, mail, requests, subagents). Lines of two lanes never touch, so
+git merges them without conflict. No part and no tool registered; `requiredParts` gains a part in
+the lane commit that adds it (a required part that does not exist yet would stop every session).
+Tests check the order as a subsequence, so a lane adding its line keeps them green.
+Fit: better.
+
+### J-1432 2026-11-19 WX.1 the shared call table and the object tools' exports - decision
+Evidence: `3d27f12cbd`; D-M6-17, D-M9-22, X-08, S-10c, L1.
+Decision: `guest/session/tools/call-table.js` `makeCallTable({ max = callWindow })`: `open`,
+`end`, `answer(opId, generation)`, `endTurn(turn, outcome, quiet)`, an `onEnd(outcome, quiet)`
+per call for a deadline's disarm; first ending wins, late answers ignored, bounded. Exec keeps its
+own one-at-a-time queue (not this table's shape). `readArgs` and `labelsOf` exported from
+`tools/objects.js`. No vat program imports the table yet (bundles unchanged by it).
+Fit: neutral.
+
+### J-1433 2026-11-19 WX.1 the session program limit is the harness's own everywhere - decision
+Evidence: `432bb9a0c3`; `guest/lib/limits.js:132`, `scripts/provision-steps.js:129`,
+`guest/factory/root.js:50` (`maxProgramBytes`, was `execSourceBytes` 262,144);
+`packages/thixotrope/src/core/evaluate-source.js:14` (`STAGING_FRAME_BYTES` bounds one message,
+never a total); J-0195 (400 k evaluated in one crank).
+Decision: no engine or core limit sits between 240,000 and 270,336, so the limit is 270,336 in
+`limits.js`, `provision-steps.js`, the program store (now the larger of the staged-source bound
+and the budget), README, `architecture.md` D-4, 11, 12.9; the unit test prints the base and
+checks every cap agrees and that the store keeps a program of the whole budget.
+Fit: neutral.
+
+### J-1434 2026-11-19 WX.1 reservations, core rows and journal ranges - decision
+Evidence: `f793f1c42e`, `212ee092ad`, `18ab149fd0`.
+Decision: `60-environments.js` and `70-voice.js` named in the step loader's header and its test;
+empty regression and perf lists `environments`, `context`, `mail`, `voice` (M11 H8/H9 asked for an
+`M11` key: by concept instead). CORE-CHANGES rows CC-090 (CC-091 merged), CC-092, CC-100, CC-101
+(spike step 2), CC-110 (C-10), CC-111, CC-112, CC-120, all requested, not built. Journal ranges:
+twenty a unit inside each milestone's hundred (M6 from J-0830 holds three before J-0900, M7's;
+M8 from J-1030 three before M9's J-1100; M9 from J-1130 three; M11 from J-1330 three), the rest in
+the overflow blocks J-12000..J-12799, review and fix blocks J-12800..J-12959; M11 asked 30 a
+unit, the PM set 20.
+Fit: neutral.
+
+### J-1435 2026-11-19 WX.1 verification: lanes, lint, shared integration files - measured
+Evidence: `4c4a011dac`; 6 shared slots.
+Reading: `corepack yarn test` 1,339 passed, 116 skipped, 67 s (three failures by design at
+`7bf6b5b38d`: none left). `lint:types` clean; `lint:eslint` 0 errors (the two errors the step-3
+tree carried, in `m1a-queue.bench.mjs` and `turn-runner-golden.test.js`, cleared in `4c4a011dac`,
+no assertion changed); `lint:duplicates` 1.86 % (524 of 28,221 lines, 26 clusters; ceiling
+2.05 %). `corepack yarn test:integration --jobs 5` m1a-slice, m1a-provision, m2-queue, m2-turns,
+m3-gateway, m5-objects, m5-snapshot and the browser m3-ui: all pass, 340 s wall, 1,538 s held
+(templates rebuilt in the files; m5o 52 s). Not run: perf, the other regression files.
+Fit: good: the shared changes moved nothing these files see.
+
+### J-1436 2026-11-19 WX.1 time record - process
+Evidence: first command 2026-11-19T01:23:07Z; last command logged with the WX.1 report.
+Reading: over 60 s: the unit and adapter lanes (66-67 s, six runs), the integration batch
+(340 s). Commits `5a27bf2fc9`..`4c4a011dac` and this journal commit. Nothing pushed; no change to
+`packages/thixotrope` or `rust/**`.
+Fit: neutral.
+
+### J-1480 2026-11-19 WX.1-QC the four contracts against WX.1, line by line - finding
+Evidence: `git diff 7bf6b5b38d..ea6804f6de`; m6-interfaces.md 6.1 and 15, m8-interfaces.md 10,
+m9-interfaces.md 6.2, m11-interfaces.md 11 and appendix A.
+Reading: every line given to WX.1 is in (M6 15.1-15.4, M8 G-1..G-5, T-1, T-2, S-10c, M9 S2, S2b,
+S9, S9b, S10, F6, V1, G1, L1, C1, M11 H1, H3, H4); the shell descriptions equal agent-tools
+`json-tools/shell.js` at `1315bef86` word for word. Lane-owned lines built: only the bodies an exo
+needs for its guard (session.js, standin-session.js, turn.js `compacted`, factory.js
+`getMail`/`getVoice`, root.js `configureSpeech`; checked against `packages/exo/src/exo-tools.js`
+398-400) and the six-line import change in `guards/mail.js` that breaks the cycle. One gap: 15.2
+says a unit test keeps `texts.runnerRequired` equal to `environmentTexts.runnerRequired`; none
+did. Added `test/unit/shared-guard-texts.test.js` (`b95cf790a0`, also the shell argument names).
+Lanes still edit `test/unit/runtime-parts.test.js` lines 32-40 (the exact part lists), M6, M8 and
+M9 the same two lines; and `turn-types.js` only if M8 makes `startIndex` required (keep optional).
+Fit: good, with the test added.
+
+### J-1481 2026-11-19 WX.1-QC behaviour of existing sessions - measured
+Evidence: `b95cf790a0`; unit and adapter lanes; `test:integration m1a-slice`.
+Reading: the golden turn test's digest is unchanged (only a loop bound typed); `guards-split`
+and the vocabulary pin pass with exactly the 25 added, 35 changed, 70 keys and 33 methods listed
+in `6535027dc4`. The claim path adds no message or crank: `admit` is combined but not called;
+`claimNext` asks turn sources under a `restart` hold, and with no source part `nextTurn()` is
+undefined. Unit and adapter lanes 1,339 passed, 116 skipped, 67 s; m1a-slice 6 passed, 154 s
+held. tsc clean; eslint 0 errors on the changed files; `lint:duplicates` 1.85 %.
+Fit: good.
+
+### J-1482 2026-11-19 WX.1-QC the session program limit and cold create - measured
+Evidence: `ea6804f6de`; `node perf/session.perf.mjs --shared`, INSTALL_N 1, shared slot.
+Reading: 270,336 in `limits.js`, `provision-steps.js`, `root.js` `maxProgramBytes`
+(max of 262,144 and 270,336), README, architecture D-4, 11, 12.9; the core bounds only one staged
+message (`STAGING_FRAME_BYTES`). Bundles 233,126 / 64,500 / 192,892 as reported.
+`session.createCold` median 6,672 ms (n 5, under load 1.4-2.0) against 6,379 at step 3: +293 ms
+for +20,642 bytes of program, about 14 ms per KB, so the program growth, not the limit, moved it.
+The context share of WX.1's growth, measured by bundling a copy without the context lines:
+4,975 bytes (WX.1: about 5,400). M8's own estimate of what it still adds (part and window 3,500,
+entry 1,500, `guards/images.js` 1,412, blocks 300) is about 6,700 against 3,500 left: the PM's
+call before W8.1, from the 5,800 spare.
+Fit: neutral.
+
+### J-1483 2026-11-19 WX.1-QC the vocabulary - finding
+Evidence: `guest/lib/vocabulary-tables.js` at `ea6804f6de`.
+Reading: excluded and not browser-sendable: `guards/environments.js` (manager vat and adapter),
+`image-guards.js` (adapter); excluded as slices: `guards/context.js` (spread by `guards/session.js`,
+so its names are counted), `guards/images.js` (no guard). Every browser-reached method (`Session`
+environment methods, `Operator.getMail`/`getVoice`, `Voice`, `Speech`, `AudioPort`, the operator
+mailbox) is in a listed table. Listed though no browser reaches it: `RelayWriters` (adapter,
+factory-held), as V1 asks; `interfaces.js` already lists `AgentHostAdmin` the same way, so this
+follows the existing rule rather than breaking it.
+Fit: good.
+
+### J-1484 2026-11-19 WX.1-QC time record - process
+Evidence: first command 2026-11-19T02:08:31Z.
+Reading: over 60 s: unit and adapter lanes 67 s, `session.perf` in a shared slot 82 s,
+m1a-slice 155 s. Commits `b95cf790a0` and this journal commit; nothing pushed; no change to
+`packages/thixotrope` or `rust/**`.
+Fit: neutral.

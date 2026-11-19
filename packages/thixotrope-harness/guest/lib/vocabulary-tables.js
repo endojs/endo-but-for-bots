@@ -12,9 +12,14 @@
  * an entry of an exported table) is either listed in `vocabularyTables` or
  * named in `vocabularyExclusions` with the reason; `test/adapter/
  * gateway-vocabulary-tables.test.js` checks both directions and that every
- * interface guard such a module exports contributes its keys and methods.
- * A new or renamed table module is therefore a red test, not a silently
- * narrower gateway.
+ * interface guard such a module exports contributes its keys and methods,
+ * except a module excluded as not browser-sendable (`notBrowserSendable`:
+ * its objects are reached only by a vat or an adapter, never through the
+ * gateway, so its names stay out of the vocabulary; D-M6-10). A listed or
+ * excluded module may also be one that exports only builders (a function
+ * answering its tables): the test checks that the file exists. A new or
+ * renamed table module is therefore a red test, not a silently narrower
+ * gateway.
  *
  * Node only: no vat program imports this module (it would bundle every
  * table). The guest prelude must be on `globalThis` before it is imported.
@@ -22,6 +27,11 @@
 import * as base from './interfaces.js';
 import * as m3 from './interfaces-m3.js';
 import * as m4 from './interfaces-m4.js';
+// The cross-lane seam unit (WX.1): mail (m9-interfaces.md V1) and speech
+// (m11-interfaces.md H3).
+import { mailTables } from './guards/mail.js';
+import { postOfficeTables } from './guards/post-office.js';
+import * as speech from './speech-guards.js';
 
 /**
  * @typedef {object} VocabularyTable
@@ -43,6 +53,21 @@ export const vocabularyTables = harden([
   },
   { file: 'interfaces-m3.js', patterns: () => m3.vocabularyShapes() },
   { file: 'interfaces-m4.js', patterns: () => m4.vocabularyShapes() },
+  // Mail and subagents (m9-interfaces.md 6.2 V1; WX.1); the fold moves the
+  // entries into the vat tables and these two lines go.
+  {
+    file: 'guards/mail.js',
+    patterns: () => [...Object.values(mailTables().shapes)],
+  },
+  {
+    file: 'guards/post-office.js',
+    patterns: () => [
+      ...Object.values(postOfficeTables().shapes),
+      ...Object.values(postOfficeTables().interfaces),
+    ],
+  },
+  // Voice (m11-interfaces.md 11 H3; WX.1).
+  { file: 'speech-guards.js', patterns: () => speech.vocabularyShapes() },
 ]);
 
 /**
@@ -57,4 +82,22 @@ export const vocabularyExclusions = harden({
     'the session slice of interfaces.js, re-exported whole by it',
   'guards/factory.js':
     'the factory slice of interfaces.js, re-exported whole by it',
+  // WX.1: the four lanes' guard modules that are not listed.
+  'guards/environments.js':
+    'environments manager vat and adapter table; no browser path reaches these objects',
+  'image-guards.js':
+    'adapter and source guards (builders), not browser-sendable',
+  'guards/context.js': 'the context slice of guards/session.js, spread by it',
+  'guards/images.js': 'the viewImage description and limits, not a guard',
 });
+
+/**
+ * Excluded modules whose objects no browser path reaches (D-M6-10; m8
+ * G-4): their interface guards need not contribute their names, and do
+ * not. Each is also in `vocabularyExclusions`.
+ * @type {readonly string[]}
+ */
+export const notBrowserSendable = harden([
+  'guards/environments.js',
+  'image-guards.js',
+]);

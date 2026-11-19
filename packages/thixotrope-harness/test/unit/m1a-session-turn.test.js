@@ -1596,3 +1596,97 @@ test('turn sources are not asked while the queue is held', async t => {
   t.is(asked, 1);
   t.is(s.session.getCurrentTurn()?.input, 'from a source');
 });
+
+test('a restart hold holds only the queue: a turn source still starts, its take runs before any record (WX.1, m9 S2)', async t => {
+  /** @type {any} */
+  let queue;
+  /** @type {any[]} */
+  const takes = [];
+  let offered = false;
+  /** @type {any} */
+  let sessionRef;
+  const source = () => {
+    if (offered) return undefined;
+    return harden({
+      text: 'from a source',
+      at: AT,
+      take: (/** @type {any} */ info) => {
+        offered = true;
+        // Before TurnStarted: the session still shows the settled turn.
+        takes.push([info.turnId, sessionRef.getCurrentTurn()]);
+      },
+    });
+  };
+  const s = await setup({
+    makeQueue: (/** @type {any} */ options) => {
+      queue = makeQueue(options);
+      return queue;
+    },
+    parts: harden([
+      ...runtimeParts,
+      harden({
+        name: 'probe',
+        make: () => harden({ hooks: harden({ nextTurn: source }) }),
+      }),
+    ]),
+  });
+  sessionRef = s.session;
+  // The source has nothing yet when the first turn is claimed.
+  offered = true;
+  const first = s.session.enqueueOnce(harden({ text: 'one' }), requestId(), AT);
+  await drain();
+  s.session.enqueueOnce(harden({ text: 'two' }), requestId(), AT);
+  queue.hold('restart', texts.holdRestart);
+  offered = false;
+  s.lastRound().sink.dispatching(0);
+  s.lastRound().sink.roundFinal(result(0, 'done'));
+  await drain();
+  t.is(first.turn.getStatus().state, 'completed');
+  t.is(takes.length, 1);
+  const [turnId, atTake] = takes[0];
+  t.is(atTake, undefined, 'take ran before the turn was current');
+  const current = s.session.getCurrentTurn();
+  t.is(current?.input, 'from a source');
+  t.is(current?.turn.getStatus().turnId, turnId);
+  t.is(queue.holdReason(), 'restart', 'the queue stays held');
+  t.is(s.session.listPending().entries.length, 1);
+});
+
+test('every other hold still holds a turn source with a take (WX.1, m9 S2)', async t => {
+  for (const why of ['stopped', 'refused', 'interrupted', 'unavailable']) {
+    /** @type {any} */
+    let queue;
+    let asked = 0;
+    const source = () => {
+      asked += 1;
+      return harden({ text: 'from a source', at: AT, take: () => {} });
+    };
+    // eslint-disable-next-line no-await-in-loop
+    const s = await setup({
+      makeQueue: (/** @type {any} */ options) => {
+        queue = makeQueue(options);
+        return queue;
+      },
+      parts: harden([
+        ...runtimeParts,
+        harden({
+          name: 'probe',
+          make: () => harden({ hooks: harden({ nextTurn: source }) }),
+        }),
+      ]),
+    });
+    asked = 0;
+    s.session.enqueueOnce(harden({ text: 'one' }), requestId(), AT);
+    // eslint-disable-next-line no-await-in-loop
+    await drain();
+    s.session.enqueueOnce(harden({ text: 'two' }), requestId(), AT);
+    queue.hold(why, texts.holdStopped);
+    t.is(queue.holdReason(), why);
+    s.lastRound().sink.dispatching(0);
+    s.lastRound().sink.roundFinal(result(0, 'done'));
+    // eslint-disable-next-line no-await-in-loop
+    await drain();
+    t.is(asked, 0, why);
+    t.is(s.session.getCurrentTurn(), undefined, why);
+  }
+});

@@ -32,6 +32,7 @@ import {
   m2MethodNames,
   beforeM5,
   m5Later,
+  seamLater,
 } from './_contract-tables.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -479,7 +480,10 @@ test('the folded tables hold every M1a, M1b and M2 shape, and nothing else', t =
   ]);
   t.deepEqual(
     Object.keys(shapes)
-      .filter(name => !m5Later.shapes.includes(name))
+      .filter(
+        name =>
+          !m5Later.shapes.includes(name) && !seamLater.shapes.includes(name),
+      )
       .sort(),
     [...known].sort(),
   );
@@ -808,7 +812,8 @@ test('every M2 interface has method names and samples; a stub exo accepts them',
       !(name in M1A_METHODS) &&
       !(name in m1bMethodNames) &&
       !(name in m2Interfaces) &&
-      !m5Later.interfaces.includes(name),
+      !m5Later.interfaces.includes(name) &&
+      !seamLater.interfaces.includes(name),
   );
   t.deepEqual(
     [...fresh, ...Object.keys(m2Interfaces)].sort(),
@@ -982,9 +987,14 @@ test('the fixed M2 texts', t => {
   );
   t.is(texts.sessionDeleting, 'This session is being deleted');
   t.is(texts.unknownTurn, 'Unknown turn');
-  // One letter per record kind, all distinct (SealRequest.kinds).
-  t.is(new Set(archiveKindLetters.map(([, letter]) => letter)).size, 8);
-  t.is(new Set(archiveKindLetters.map(([kind]) => kind)).size, 8);
+  // One letter per record kind, all distinct (SealRequest.kinds): M2's
+  // eight, then the context window's three (WX.1, m8 G-1).
+  t.is(new Set(archiveKindLetters.map(([, letter]) => letter)).size, 11);
+  t.is(new Set(archiveKindLetters.map(([kind]) => kind)).size, 11);
+  t.deepEqual(
+    archiveKindLetters.slice(8).map(([kind]) => kind),
+    ['compaction-started', 'compaction', 'compaction-skipped'],
+  );
   // M1a's texts the M2 units use are unchanged.
   t.is(
     texts.blankSystemPrompt,

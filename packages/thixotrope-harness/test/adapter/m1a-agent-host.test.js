@@ -137,6 +137,8 @@ const makeFakeTurn = ({ dispatch = true, events = [] } = {}) => {
     },
     // The folded TurnSink guard (M2 W2.0) has M1b's progress.
     progress: () => false,
+    // WX.1: the context window's method; nothing here asks to compact.
+    compacted: () => harden({ go: false }),
   });
   return { turn, sink, events, finals, failures, deadlines };
 };

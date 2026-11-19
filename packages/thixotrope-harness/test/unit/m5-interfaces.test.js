@@ -26,6 +26,7 @@ import {
 } from '../../guest/lib/interfaces.js';
 import { harnessNames } from '../../resources/agent-host/impl/gateway/vocabulary.js';
 /* eslint-enable import/no-relative-packages */
+import { beforeSeam } from './_contract-tables.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { Far, makeExo, matches } = /** @type {GuestGlobals} */ (globalThis);
@@ -378,7 +379,8 @@ test('the widenings in interfaces.js agree with shapes and still refuse what M2 
 test('one Session guard: the M2 methods first, then enqueueMessageOnce and grants (F2 fold)', t => {
   const guards = /** @type {any} */ (interfaces.Session).payload.methodGuards;
   t.deepEqual(Object.keys(guards), [...methodNames.Session]);
-  t.deepEqual(methodNames.Session.slice(-3), [
+  // WX.1's environment methods follow M5's (`seamLater`).
+  t.deepEqual(beforeSeam('Session', methodNames.Session).slice(-3), [
     'findTurn',
     'enqueueMessageOnce',
     'grants',
@@ -405,7 +407,7 @@ test('M5 interfaces keep every earlier method first, then M5s, in the stated ord
   checkNames(t, interfaces, methodNames);
   t.deepEqual(methodNames.ExecScope, ['run', 'abandon', 'inspect']);
   t.deepEqual(methodNames.Composer, ['submit', 'edit']);
-  t.deepEqual(methodNames.Operator.slice(-3), [
+  t.deepEqual(beforeSeam('Operator', methodNames.Operator).slice(-3), [
     'getSecrets',
     'getPresets',
     'getInventory',

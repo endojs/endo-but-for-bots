@@ -149,9 +149,60 @@ export const m5Later = harden({
 });
 
 /**
- * An interface's method names without the ones M5 added at its end.
+ * What the cross-lane seam unit (WX.1) brought into the plain tables for
+ * the M6, M8, M9 and M11 contracts (`guard-fold-map.json` `added` and
+ * `changed`), so that an earlier milestone's "nothing else" checks still
+ * name only that milestone's entries: the new shapes and interfaces, and
+ * the methods added to an interface an earlier milestone defined (at its
+ * end, or for `TurnSink` before M1b's `progress`).
+ */
+export const seamLater = harden({
+  shapes: harden([
+    'SplitArgs',
+    'ExecutionState',
+    'CompactionAsk',
+    'CompactionStarted',
+    'Compaction',
+    'CompactionSkipped',
+    'CompactionResult',
+    'CompactionReply',
+    'VoicePreferences',
+    'VoicePreferencesPatch',
+    'VoiceSessionRequest',
+    'VoiceSessionAnswer',
+    'SpeechInSettings',
+    'SpeechOutSettings',
+    'SpeechSettings',
+  ]),
+  interfaces: harden(['Voice']),
+  /** @type {Readonly<Record<string, readonly string[]>>} */
+  methods: harden({
+    Session: harden(['emergencyStop', 'resume', 'getExecutionState']),
+    SessionInternal: harden(['deliverMail', 'cancelMail']),
+    Operator: harden(['getMail', 'getVoice']),
+    HarnessRoot: harden(['configureSpeech']),
+    TurnSink: harden(['compacted']),
+  }),
+});
+
+/**
+ * An interface's method names without the ones WX.1 added.
  * @param {string} name
  * @param {readonly string[]} names
  */
-export const beforeM5 = (name, names) =>
-  names.slice(0, names.length - (m5Later.methods[name]?.length ?? 0));
+export const beforeSeam = (name, names) =>
+  names.filter(method => !seamLater.methods[name]?.includes(method));
+
+/**
+ * An interface's method names without the ones M5 added at its end (and
+ * the ones WX.1 added after them).
+ * @param {string} name
+ * @param {readonly string[]} names
+ */
+export const beforeM5 = (name, names) => {
+  const earlier = beforeSeam(name, names);
+  return earlier.slice(
+    0,
+    earlier.length - (m5Later.methods[name]?.length ?? 0),
+  );
+};

@@ -119,11 +119,17 @@ const core = {
   liveBatchDeliveries: 256,
   /**
    * The bundled session program (architecture D-4, perf `session.program`);
-   * 200,000 until M5's merge raised it (M5 contract O-1, W5.9). 236,583
-   * bytes after the M3-M5 merge; 213,712 since X1 split the interface
-   * tables per vat program (`guards/`, O-1's alternative).
+   * 200,000 until M5's merge raised it (M5 contract O-1, W5.9), 240,000
+   * until the group of M6, M8, M9 and M11 (owner question G-1, the PM's
+   * working default until the owner rules; WX.1): 270,336. 236,583 bytes
+   * after the M3-M5 merge; 213,712 since X1 split the interface tables per
+   * vat program (`guards/`, O-1's alternative); 212,484 after step 3. The
+   * per-lane caps over that base are in `milestones.md` (the group's
+   * section); `test/unit/m1a-session-program.test.js` prints the base.
+   * The factory's program store keeps at least this much
+   * (`guest/factory/root.js` `maxProgramBytes`).
    */
-  sessionProgramBytes: 240_000,
+  sessionProgramBytes: 270_336,
 
   // ---- M1b contract settings (W1b.0; designs/m1b-interfaces.md) ----
   /** A piece a vat appends to a BlobWriter, bytes (architecture 6: frameBytes / 2). */

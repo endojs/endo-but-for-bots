@@ -21,6 +21,7 @@
 import { interfaces, shapes } from '../lib/guards/factory.js';
 import { limits } from '../lib/limits.js';
 import { utf8Bytes } from '../lib/bounded.js';
+import { voiceTexts } from '../lib/voice-preferences.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { RowTable } from './rows.js' */
@@ -40,11 +41,16 @@ export const programPieceBytes = limits.frameBytes - PIECE_ENVELOPE_BYTES;
 /** Most pieces of one program. */
 export const MAX_PROGRAM_PIECES = 64;
 /**
- * The largest program the store keeps: the staged-source bound. The
- * session program's budget is `sessionProgramBytes` (240,000), checked by
- * provisioning and the `session.program` perf row, not here.
+ * The largest program the store keeps: the staged-source bound, or the
+ * session program's budget when that is larger (`sessionProgramBytes`,
+ * 270,336 since WX.1 against `execSourceBytes` 262,144), so a program
+ * provisioning accepts is never refused here. The budget itself is checked
+ * by provisioning and the `session.program` perf row, not here.
  */
-export const maxProgramBytes = limits.execSourceBytes;
+export const maxProgramBytes = Math.max(
+  limits.execSourceBytes,
+  limits.sessionProgramBytes,
+);
 
 /**
  * @typedef {object} SessionProgram
@@ -261,6 +267,12 @@ export const makeHarnessRoot = ({
     exportState: cursor => needExports().exportPage(cursor),
     /** @param {any} options M2 W2.7: a creation listed once imported */
     importSession: options => needExports().importSession(options),
+    // WX.1: the guard's speech method (m11-interfaces.md appendix A); the
+    // voice lane wires it (seam H2b) and keeps this refusal for a root
+    // made without it.
+    configureSpeech: () => {
+      throw Error(voiceTexts.speechNotWired);
+    },
   });
 };
 harden(makeHarnessRoot);

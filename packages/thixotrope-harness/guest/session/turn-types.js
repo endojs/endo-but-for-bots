@@ -39,7 +39,10 @@
  */
 
 /**
- * @typedef {object} ActiveTurn the current turn (vat-internal, mutable)
+ * @typedef {object} ActiveTurn the current turn (vat-internal, mutable).
+ *   The runner owns it. A runtime part reads it through `HookTurn.active`
+ *   and writes only the fields marked "a part writes" below, in the hook
+ *   named there; nothing else of it (runtime-parts.js; WX.1).
  * @property {any} turn
  * @property {any} sink
  * @property {string} turnId
@@ -70,7 +73,14 @@
  * @property {number} [deadlineMs] the turn deadline fired (M2 seam 4): the
  *   cancel settles `failed` with `textOf.turnDeadline`
  * @property {string | undefined} systemNote a line every round request of
- *   this turn adds to the stored prompt (R4-29, set by an `onClaim` hook)
+ *   this turn adds to the stored prompt (R4-29; a part writes it, in
+ *   `onClaim`)
+ * @property {number} [startIndex] the index of this turn's `TurnStarted`
+ *   record (m8-interfaces.md T-1, set in the claim crank by the runner
+ *   once the context window is built, seam S-5a)
+ * @property {any} [compactionAsk] this round's `CompactionAsk`
+ *   (m8-interfaces.md T-1, 4.1; a part writes it, in `beforeRound`; the
+ *   runner puts it into the round request, seam S-5b)
  */
 
 export {};

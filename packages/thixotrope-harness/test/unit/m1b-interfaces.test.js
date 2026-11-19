@@ -26,6 +26,7 @@ import {
 import { makeLivePublishing } from '../../guest/session/live.js';
 /* eslint-enable import/no-relative-packages */
 import {
+  beforeSeam,
   m1bInterfaces,
   m1bMethodNames,
   m1bShapes,
@@ -483,7 +484,13 @@ test('every M1b interface has method names and samples; a stub exo accepts them'
   );
   const calls = [];
   for (const [name, names] of Object.entries(m1bMethodNames)) {
-    t.deepEqual(Object.keys(methodSamples[name]), [...names], name);
+    // TurnSink's `compacted` (WX.1, `seamLater`) has its samples with the
+    // context window's tests.
+    t.deepEqual(
+      Object.keys(methodSamples[name]),
+      beforeSeam(name, names),
+      name,
+    );
     const exo = stubExo(name);
     for (const [method, { args }] of Object.entries(methodSamples[name])) {
       calls.push(

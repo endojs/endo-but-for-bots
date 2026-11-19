@@ -503,7 +503,7 @@ test('loadSessionProgram refuses bad pieces', t => {
   for (let i = 0; i < 11; i += 1)
     programs.load({ digest, index: i, count: 20, text: piece });
   t.throws(() => programs.load({ digest, index: 11, count: 20, text: piece }), {
-    message: /at most 262144 bytes/,
+    message: /at most 270336 bytes/,
   });
   t.is(programs.current(), undefined);
 });

@@ -900,6 +900,15 @@ export const makeTurnRunner = ({
         active.checkpoint = { round, partial };
         return true;
       },
+      /**
+       * WX.1: the guard's context-window method (m8-interfaces.md G-1). No
+       * round asks to compact until the `compaction` part does, so the
+       * answer is the one for an ask no longer pending; the part replaces
+       * this body (seam S-5d).
+       */
+      compacted() {
+        return harden({ go: false });
+      },
     },
   );
 
@@ -1125,9 +1134,11 @@ export const makeTurnRunner = ({
 
   /**
    * Claim the first waiting entry (or a turn source's turn) if idle and the
-   * queue is not held. A held queue holds turn sources too (J-9150); M9's
-   * inbox must revisit this for the `restart` hold (R4-65: agents are not
-   * dormant after restart).
+   * queue is not held. A held queue holds turn sources too (J-9150), except
+   * the `restart` hold, which holds only the user's queue (R4-65;
+   * m9-interfaces.md D-M9-5, seam S2): a turn source is still asked then.
+   * A source's `take(info)` runs in `claim` before any record, as the
+   * queue's claim does.
    * @returns {ActiveTurn | undefined}
    */
   const claimNext = () => {
@@ -1142,9 +1153,10 @@ export const makeTurnRunner = ({
         item,
       );
     }
-    if (queue.holdReason() !== undefined) return undefined;
+    const hold = queue.holdReason();
+    if (hold !== undefined && hold !== 'restart') return undefined;
     const next = hooks.nextTurn();
-    if (next !== undefined) return claim(next.text, next.at);
+    if (next !== undefined) return claim(next.text, next.at, next.take);
     return undefined;
   };
 

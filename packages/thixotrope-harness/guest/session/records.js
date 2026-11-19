@@ -59,7 +59,7 @@ harden(plainBytes);
 /**
  * Record kind -> its shape's name in `shapes` (the alternatives of
  * `shapes.TurnRecord`).
- * @type {Map<string, 'TurnStarted' | 'Dispatched' | 'Partial' | 'RoundSettled' | 'ToolIntents' | 'ToolResult' | 'TurnSettled' | 'TurnResolved'>}
+ * @type {Map<string, 'TurnStarted' | 'Dispatched' | 'Partial' | 'RoundSettled' | 'ToolIntents' | 'ToolResult' | 'TurnSettled' | 'TurnResolved' | 'CompactionStarted' | 'Compaction' | 'CompactionSkipped'>}
  */
 const shapeOfKind = new Map([
   ['turn-started', 'TurnStarted'],
@@ -70,6 +70,10 @@ const shapeOfKind = new Map([
   ['tool-result', 'ToolResult'],
   ['turn-settled', 'TurnSettled'],
   ['turn-resolved', 'TurnResolved'],
+  // The context window's kinds (m8-interfaces.md 10 G-3; WX.1).
+  ['compaction-started', 'CompactionStarted'],
+  ['compaction', 'Compaction'],
+  ['compaction-skipped', 'CompactionSkipped'],
 ]);
 
 /**

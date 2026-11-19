@@ -17,6 +17,7 @@ import {
   requiredParts,
   runtimeParts,
 } from '../../guest/session/runtime-parts.js';
+import { toolTable } from '../../guest/session/tool-table.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @param {readonly any[]} parts */
@@ -33,7 +34,10 @@ test('the table: powers, inspector, grants, exec, packages; all required', t => 
     runtimeParts.map(part => part.name),
     ['powers', 'inspector', 'grants', 'exec', 'packages'],
   );
-  t.deepEqual([...requiredParts], ['powers', 'inspector', 'grants', 'exec', 'packages']);
+  t.deepEqual(
+    [...requiredParts],
+    ['powers', 'inspector', 'grants', 'exec', 'packages'],
+  );
   const runtime = /** @type {any} */ (runtimeOf(runtimeParts));
   for (const name of requiredParts) t.truthy(runtime[name]);
   t.false('session' in runtime);
@@ -115,4 +119,129 @@ test("the parts' tool sources, in table order, after the grants part's", t => {
   t.is(runtime.toolSources.length, 2);
   t.is(runtime.toolSources[0], runtime.grants.tools);
   t.is(runtime.toolSources[1], extra);
+});
+
+/**
+ * The part order fixed for every part to come (WX.1; m8-interfaces.md
+ * D-M8-18, m9-interfaces.md D-M9-24). A lane adds its part at its place.
+ */
+const PART_ORDER = harden([
+  'powers',
+  'inspector',
+  'grants',
+  'exec',
+  'packages',
+  'environment',
+  'compaction',
+  'inbox',
+  'subagents',
+]);
+
+/**
+ * @param {readonly string[]} names
+ * @param {readonly string[]} order
+ */
+const inOrder = (names, order) => {
+  const places = names.map(name => order.indexOf(name));
+  return places.every(
+    (place, i) => place >= 0 && (i === 0 || place > places[i - 1]),
+  );
+};
+
+test('the table and the required list follow the fixed part order (WX.1)', t => {
+  t.true(
+    inOrder(
+      runtimeParts.map(part => part.name),
+      PART_ORDER,
+    ),
+  );
+  t.true(inOrder(requiredParts, PART_ORDER));
+  // Every part of the table so far is required; a later part joins
+  // `requiredParts` in the commit that adds it to `runtimeParts`.
+  t.deepEqual(
+    [...requiredParts],
+    runtimeParts.map(part => part.name),
+  );
+});
+
+test('admit answers the first refusal in table order, or undefined (WX.1, m6 15.3)', t => {
+  /** @type {string[]} */
+  const asked = [];
+  /** @param {string} name @param {() => (string | undefined)} admit */
+  const probe = (name, admit) =>
+    harden({ name, make: () => harden({ hooks: harden({ admit }) }) });
+  t.is(runtimeOf(runtimeParts).hooks.admit(), undefined, 'no part admits');
+  const runtime = runtimeOf([
+    ...runtimeParts,
+    probe('a', () => {
+      asked.push('a');
+      return undefined;
+    }),
+    probe('b', () => {
+      asked.push('b');
+      return 'b refuses';
+    }),
+    probe('c', () => {
+      asked.push('c');
+      return 'c refuses';
+    }),
+  ]);
+  t.is(runtime.hooks.admit(), 'b refuses');
+  t.deepEqual(
+    asked,
+    ['a', 'b'],
+    'the parts after the first refusal are not asked',
+  );
+});
+
+test("nextTurn passes a source's take through unchanged (WX.1, m9 S2b)", t => {
+  const take = () => {};
+  const answer = harden({ text: 'from a', at: 1, take });
+  const runtime = runtimeOf([
+    ...runtimeParts,
+    harden({
+      name: 'a',
+      make: () => harden({ hooks: harden({ nextTurn: () => answer }) }),
+    }),
+  ]);
+  t.is(runtime.hooks.nextTurn(), answer);
+});
+
+test('the context window option is the runtime member, undefined by default (WX.1, m8 T-1)', t => {
+  t.is(runtimeOf(runtimeParts).contextWindow, undefined);
+  const contextWindow = harden({ epoch: () => 0 });
+  const runtime = makeRuntime({
+    labels: makeLabels(),
+    services: harden({}),
+    config: harden({}),
+    contextWindow,
+  });
+  t.is(runtime.contextWindow, contextWindow);
+  // The parts still to come have no getter yet.
+  for (const name of ['environment', 'compaction', 'inbox', 'subagents']) {
+    t.false(name in runtime, name);
+  }
+});
+
+test('the static tool table follows the fixed tool order after the package entries (WX.1)', t => {
+  const names = toolTable.map(entry => entry.name);
+  const after = names.slice(names.indexOf('adoptTool') + 1);
+  t.true(
+    inOrder(after, [
+      'runCommand',
+      'inspectShell',
+      'viewImage',
+      'listMessages',
+      'send',
+      'reply',
+      'dismiss',
+      'resolveRequest',
+      'rejectRequest',
+      'submitForm',
+      'spawnSubagent',
+      'askSubagent',
+      'stopSubagent',
+    ]),
+    after.join(', '),
+  );
 });

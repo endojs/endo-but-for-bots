@@ -347,7 +347,7 @@ absent meanwhile.
 
 | Command | What it does |
 | --- | --- |
-| `node scripts/bundle-guest.mjs [program ...]` | Bundles `guest/<program>/main.js` into `dist-guest/<program>.js` without comments, refusing any module outside `guest/`. Sizes after step 3 of the review (`804398c4d9`; bytes, budget): session 212,484 (240,000), exec 62,623 (120,000), factory 156,955 (after the fold, `bd4c811b7b`: 206,907, 61,688, 155,427; X-CLOSE: 214,690, 63,826, 164,836) |
+| `node scripts/bundle-guest.mjs [program ...]` | Bundles `guest/<program>/main.js` into `dist-guest/<program>.js` without comments, refusing any module outside `guest/`. Sizes after the cross-lane seam unit WX.1 (bytes, budget): session 233,126 (270,336 since WX.1, owner question G-1's default; 240,000 before), exec 64,500 (120,000), factory 192,892; after step 3 of the review (`804398c4d9`): 212,484, 62,623, 156,955 (after the fold, `bd4c811b7b`: 206,907, 61,688, 155,427; X-CLOSE: 214,690, 63,826, 164,836) |
 
 ## Disk
 

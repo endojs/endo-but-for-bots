@@ -336,7 +336,8 @@ const runTrace = async () => {
   const c = await makeTracedSession(trace, 's3');
   for (const page of pages) {
     if (page.part === 'records') {
-      for (let from = 0; from < page.records.length; from += 2) {
+      const count = /** @type {number} */ (page.records.length);
+      for (let from = 0; from < count; from += 2) {
         trace.push([
           'import',
           c.internal.importState(

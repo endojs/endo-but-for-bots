@@ -288,10 +288,12 @@ Confirmed by spike S6 (J-0183..J-0185, J-9045). Cost of a cold session vat: `E(v
 (about 140 ms; the vat boots with its first message), the session program staged by
 `evaluateSource`, and one evaluating crank; 6.4 s for a 246 KB program, of which staging is about
 10 us per byte (fact 2) and the boot about 3.5 s [inferred from install times]. Disk 17.3 MB per
-sleeping vat. **The session program bundle is therefore bounded**, first to 200 KB and since M5 to
-240,000 bytes (`limits.sessionProgramBytes`, M5 O-1; `bundle-guest.mjs` reports the size; section
-11 `session.program`; 212,484 after step 3 of the harness review, J-10250), which keeps a cold
-create near the 6 s budget. The
+sleeping vat. **The session program bundle is therefore bounded**, first to 200 KB, since M5 to
+240,000 bytes (M5 O-1) and since the cross-lane seam unit WX.1 to 270,336 bytes
+(`limits.sessionProgramBytes`, owner question G-1, the PM's default until the owner rules; about
++1.2 s of cold create, hidden by the spare pool; `bundle-guest.mjs` reports the size; section 11
+`session.program`; 212,484 after step 3 of the harness review, J-10250; 233,126 after WX.1),
+which keeps a cold create near the 6 s budget. The
 factory keeps `poolSize` (default 2) spare session vats already loaded with the session program and 1
 spare exec vat, refilled in the background after each take with up to 4 creations in parallel (four
 lanes scale almost linearly: 50 spares in 108.7 s), so `createSession` costs a wake plus one
@@ -1234,7 +1236,7 @@ too. The other rows below are design settings, kept in the module that enforces 
 | Exec source, **staged** in `frameBytes` pages then evaluated in one crank | 262,144 (`config/defaults.js` `execSourceBytes`) | 262 k staged in 3.9 s, evaluating crank 175 ms; one message of 150 k halts (J-0195) | none |
 | Crank budget (`THIXOTROPE_CRANK_BUDGET`, daemon-wide) | 50,000,000 (`config/defaults.js` `crankBudget`, set by `scripts/serve.mjs`) | runaway ends in 242-271 ms; 100 M buys nothing (J-0143) | n/a |
 | Crashes in a row before a vat is given up (`THIXOTROPE_MAX_DELIVERY_ATTEMPTS`) | 5 (`config/defaults.js` `maxDeliveryAttempts`, set by `scripts/serve.mjs`) | D-17; J-9046, J-9051 | n/a |
-| Session program bundle | 240,000 bytes since M5 (`limits.sessionProgramBytes`; 200 KB before; checked by `bundle-guest.mjs` output and the `session.program` perf row) | cold session vat 6.4 s for a 246 KB program (J-9045) | n/a |
+| Session program bundle | 270,336 bytes since WX.1 (`limits.sessionProgramBytes`, owner question G-1's default; 240,000 since M5, 200 KB before; checked by `bundle-guest.mjs` output and the `session.program` perf row; the factory's program store keeps at least as much) | cold session vat 6.4 s for a 246 KB program (J-9045) | n/a |
 | Staging chunk for program sources | `frameBytes` units for ASCII, `frameBytes / 3` units otherwise | `evaluateSource` default 8,192 units (J-0186) | n/a |
 | previews (messages / tool calls and results) | 1,024 / 256 | | n/a |
 | Message string (submission, through the Composer) | 200,000 characters (staged as a Blob; the limit is WS message size and context, not frame cost) | | 100,000,000 (R4-97) - lower; open decision 1 |
@@ -1380,7 +1382,7 @@ milestone by itself.
 | `exec` first call in a session (spare exec vat) | <= 750 ms | a spare take is 157-176 ms (J-9045); was 1.5 s; M1b 541 ms, now 285-298 ms (J-9382) |
 | `exec` 100 answered sends / 100 `sendOnly` | <= 8 s / <= 1 s | S1 from a probe vat: 100 answered 9.4-10.6 s until all answers were back, 100 `sendOnly` 490-513 ms (J-0143, before CORE-4); exec vat: 7.0 s (J-9368) -> 1.3-1.4 s after CORE-11 (J-9382); `sendOnly` not measurable until M5's `powers` |
 | Session create with spare pool / without | <= 750 ms / <= 6 s; without **depends on C-5** | take 157-176 ms (was 1.5 s); cold 6.4 s for a 246 KB program (J-9045); M1a cold 6.14 s for the 157 KB session program (J-9192); M1b with the pool 1.2 s (miss), after CORE-11/12 849-864 ms (pass under 1.25 x), cold 4.5 s (J-9382) |
-| `session.program` session program bundle size | <= 240,000 bytes (200 KB until M5) | M1a: 157,493 bytes (J-9192); after step 3 of the review 212,484 (J-10250) |
+| `session.program` session program bundle size | <= 270,336 bytes since WX.1 (240,000 until then, 200 KB until M5) | M1a: 157,493 bytes (J-9192); after step 3 of the review 212,484 (J-10250); after WX.1 233,126 |
 | Session list, 100 sessions | <= 200 ms per 50-row page; 0 session vats woken | |
 | Session watch snapshot, 1,000-turn session | <= 300 ms; <= `frameBytes` | |
 | History page (32 turns) | <= 300 ms; **depends on C-5** or W2.5's record bound | M1a: 0.77 ms in Node with the structural guard (18 ms strict) (J-9153); in a vat 568-596 ms at 22 turns of 7 records, 869 ms on a 1,000-turn session: the page crank's own marshalling (J-9382, J-9383, J-9387) |
@@ -1435,8 +1437,9 @@ milestone by itself.
    (`guest/lib/retired.js`).
 9. Code shipped into vats is frozen there: keep vat programs thin, state as plain records, so
    `exportState`/`importState` (M2) can move it to a new program version. The session program bundle
-   stays at or below `limits.sessionProgramBytes` (240,000 bytes since M5; 200 KB before): every
-   spare vat pays about 10 us per byte to load it (D-4).
+   stays at or below `limits.sessionProgramBytes` (270,336 bytes since WX.1, owner question G-1's
+   default; 240,000 since M5; 200 KB before): every spare vat pays about 10 us per byte to load it
+   (D-4).
 10. **No data-dependent record keys crossing into a vat, and none created inside one.** Every distinct
     property name a vat ever receives or creates takes one of its about 57,000 names for life
     (`vatKeyNames`, fact 4). Keys of records sent to or built in a vat come from a fixed vocabulary

@@ -28,6 +28,7 @@
  * contract change.
  */
 import { limits } from '../limits.js';
+import { mailLimits } from '../mail-limits.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 
@@ -279,6 +280,9 @@ export const inspectOps = harden([
   'readSources',
   'toolSchema',
   'toolExecute',
+  // Mail and subagents (m9-interfaces.md 6.2 S10; WX.1): split a tool's
+  // staged JSON arguments into inline JSON and staged strings.
+  'splitArgs',
 ]);
 
 /** M1b's shapes (W1b.0); in `shapes` since M2 W2.0. */
@@ -357,7 +361,31 @@ const m1bShapeBuilders = {
       }),
       record({ status: 'ok', description: S.ToolDescription }),
       record({ status: 'exhausted' }),
+      // `splitArgs` (m9-interfaces.md 6.2 S10; WX.1).
+      record({ status: 'split', split: S.SplitArgs }),
     ),
+  /**
+   * An endowment, inventory or attachment label (R3-22: 80 characters).
+   * With `Attachment` and `Attachments`, moved here from `./session.js`
+   * unchanged by WX.1: `./mail.js` reads them and `./session.js` imports
+   * `./mail.js`, so they live below both (no import cycle).
+   */
+  EdgeLabel: () => text(limits.endowmentLabelUnits),
+  /** One attachment of a message (R3-8): its label and the object. */
+  Attachment: () => record({ label: S.EdgeLabel, value: M.remotable() }),
+  /** A message's attachments (R4-99: 32 slots). */
+  Attachments: () => list(S.Attachment, limits.maxAttachments),
+  /**
+   * The exec vat's `splitArgs` answer (m9-interfaces.md D-M9-14, seam S10;
+   * moved here from `./mail.js` by WX.1): the arguments' JSON with every
+   * long string replaced by a placeholder (`"\u0000s<k>"`), and the staged
+   * strings in placeholder order (owned by the session).
+   */
+  SplitArgs: () =>
+    record({
+      json: text(limits.inlineBytes),
+      staged: list(S.StagedText, mailLimits.splitStagedStrings),
+    }),
 };
 
 /**
