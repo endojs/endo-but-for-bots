@@ -94,7 +94,7 @@ const directionValid = direction => {
 /**
  * @param {object} powers
  * @param {PresetCatalogKit} powers.catalog M5's preset catalogue kit
- * @param {(options: Record<string, any>) => Promise<any>} powers.create the
+ * @param {(options: Record<string, any>, pinned?: import('./session-options.js').PinnedBackend) => Promise<any>} powers.create the
  *   kit's local `createSession` (a local call: answers the `Session`)
  * @param {RowTable} powers.rows `ofSession(session).key`
  * @param {HarnessSettings} [powers.settings] the default backend and model
@@ -160,13 +160,15 @@ export const makeVoice = ({ catalog, create, rows, settings, starts }) => {
     let warning;
     const { backend, modelId } = record;
     if (backend !== undefined && modelId !== undefined) {
-      const known = await E(backend)
-        .resolveModel(modelId)
-        .then(
-          () => true,
-          () => false,
-        );
-      if (!known) {
+      // Fetch both current catalogue answers for this invocation. A fallback
+      // or a concurrent preset edit can make the description unnecessary.
+      const model = E(backend).resolveModel(modelId);
+      const description = E(backend).describe();
+      void description.catch(() => undefined);
+      try {
+        const pinned = { backend, modelId, model: await model, description };
+        return { options: harden(options), pinned, warning };
+      } catch {
         const fallback = settings?.defaultBackend();
         const fallbackModel = settings?.defaultModelId();
         if (fallback !== undefined) options.backend = fallback;
@@ -174,7 +176,7 @@ export const makeVoice = ({ catalog, create, rows, settings, starts }) => {
         warning = voiceTextOf.voiceModelUnavailable(modelId);
       }
     }
-    return { options: harden(options), warning };
+    return { options: harden(options), warning, pinned: undefined };
   };
 
   /**
@@ -204,8 +206,8 @@ export const makeVoice = ({ catalog, create, rows, settings, starts }) => {
     const ours = () =>
       invocationId !== undefined && claims.get(invocationId) === claim;
     try {
-      const { options, warning } = await creationOf(request);
-      const session = await create(options);
+      const { options, warning, pinned } = await creationOf(request);
+      const session = await create(options, pinned);
       const key = /** @type {any} */ (rows.ofSession(session)).key;
       if (ours())
         claims.set(

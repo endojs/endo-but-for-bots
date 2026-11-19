@@ -51,7 +51,12 @@ const NOT_YET = harden(['networkPolicy']);
  */
 
 /**
+ * @typedef {{ backend: any, modelId: string, model: any, description: Promise<any> }} PinnedBackend
+ */
+
+/**
  * @typedef {object} OptionsContext
+ * @property {PinnedBackend} [pinned] this shortcut invocation's backend reads
  * @property {any} [presetSnapshot] the local catalogue or parent snapshot
  * @property {any} defaultPreset the built-in `chat-only` preset
  * @property {any} [defaultBackend] M2 (W2.2, R4-21):
@@ -97,9 +102,15 @@ const basics = async (options, resolved, { defaultPreset, defaultBackend }) => {
 };
 
 /** @type {OptionResolver} */
-const describeObjects = async (_options, resolved, { presetSnapshot }) => {
+const describeObjects = async (
+  _options,
+  resolved,
+  { presetSnapshot, pinned },
+) => {
   const [info, snapshot] = await Promise.all([
-    E(resolved.backend).describe(),
+    pinned && pinned.backend === resolved.backend
+      ? pinned.description
+      : E(resolved.backend).describe(),
     presetSnapshot ?? E(resolved.preset).snapshot(),
   ]);
   mustMatch(info, shapes.BackendInfo);
@@ -130,9 +141,13 @@ const catalogueModel = async (options, resolved, context) => {
       throw Error(texts.modelRequired);
     if (defaultBackend !== undefined) modelId = defaultModelId;
   }
-  const answer = await (modelId === undefined
-    ? E(resolved.backend).resolveModel()
-    : E(resolved.backend).resolveModel(modelId));
+  const pinned = context.pinned;
+  const answer =
+    pinned && pinned.backend === resolved.backend && pinned.modelId === modelId
+      ? pinned.model
+      : await (modelId === undefined
+          ? E(resolved.backend).resolveModel()
+          : E(resolved.backend).resolveModel(modelId));
   mustMatch(answer, shapes.ResolvedModel);
   resolved.modelId = answer.modelId;
   if (answer.contextLength !== undefined)

@@ -254,6 +254,72 @@ test('Talk on the built-in voice preset needs its objects (D-M11-25); a chosen u
   t.is(rows.size(), 1);
 });
 
+test('each pinned API shortcut launch reads the backend and model once', async t => {
+  const { kit } = kitSetup();
+  const voice = await E(kit.operator).getVoice();
+  let descriptions = 0;
+  let lookups = 0;
+  const backend = Far('Backend', {
+    describe() {
+      descriptions += 1;
+      return harden({ kind: 'openrouter', label: 'API' });
+    },
+    resolveModel() {
+      lookups += 1;
+      return harden({ modelId: 'pinned' });
+    },
+  });
+  const preset = await userPreset(kit.catalog, { backend, modelId: 'pinned' });
+  await E(voice).setVoicePreset(
+    preset,
+    kit.catalog.facet.configuration().revision,
+  );
+  await E(voice).startVoiceSession();
+  await E(voice).startVoiceSession();
+  t.is(descriptions, 2);
+  t.is(lookups, 2);
+});
+
+test('a shortcut whose preset changes during preflight describes the newly selected backend', async t => {
+  const { kit, rows } = kitSetup();
+  const voice = await E(kit.operator).getVoice();
+  const { makePromiseKit } = /** @type {GuestGlobals} */ (globalThis);
+  const started = makePromiseKit();
+  const gate = makePromiseKit();
+  const old = Far('Backend', {
+    describe() {
+      throw Error('Old backend unavailable');
+    },
+    async resolveModel() {
+      started.resolve(undefined);
+      await gate.promise;
+      return harden({ modelId: 'previous' });
+    },
+  });
+  const preset = await userPreset(kit.catalog, {
+    backend: old,
+    modelId: 'previous',
+  });
+  await E(voice).setVoicePreset(
+    preset,
+    kit.catalog.facet.configuration().revision,
+  );
+  const creation = E(voice).startVoiceSession();
+  await started.promise;
+  await E(preset).save(
+    harden({
+      label: 'Talker',
+      template: 'general',
+      backend: makeBackend(['current']),
+      modelId: 'current',
+    }),
+    kit.catalog.facet.configuration().revision,
+  );
+  gate.resolve(undefined);
+  const { session } = await creation;
+  t.is(rows.ofSession(session)?.modelId, 'current');
+});
+
 test('the creation options: spoken, the shortcut preset, title and at passed through', async t => {
   const { catalog, created, facet } = voiceSetup();
   const preset = await userPreset(catalog);

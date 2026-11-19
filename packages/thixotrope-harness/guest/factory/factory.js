@@ -262,11 +262,11 @@ export const makeFactoryKit = ({
    * session's snapshot: its prompt and config come from it, not from a new
    * snapshot of the live preset (m9-interfaces.md D-M9-10, 4.4).
    * @param {Record<string, any>} options
-   * @param {{ importing?: boolean, parent?: Row, endowments?: readonly { label: string, value: any }[], link?: (row: Row) => void, presetSnapshot?: any }} how
+   * @param {{ importing?: boolean, parent?: Row, endowments?: readonly { label: string, value: any }[], link?: (row: Row) => void, presetSnapshot?: any, pinned?: import('./session-options.js').PinnedBackend }} how
    */
   const create = async (
     options,
-    { importing, parent, endowments, link, presetSnapshot },
+    { importing, parent, endowments, link, presetSnapshot, pinned },
   ) => {
     // M5 W5.1 (2.3 step 1): the preset (given or default) and its model
     // defaults, refused here before any row or vat (R4-6).
@@ -291,6 +291,7 @@ export const makeFactoryKit = ({
     // resolver; W2.9 wiring).
     const context = {
       defaultPreset: catalog.defaultPreset(),
+      pinned,
       presetSnapshot: presetSnapshot ?? catalog.snapshotFor(filled.preset),
       admin,
     };
@@ -466,7 +467,8 @@ export const makeFactoryKit = ({
     (await create(options, { importing: false })).session;
   const voice = makeVoice({
     catalog,
-    create: createSession,
+    create: async (options, pinned) =>
+      (await create(options, { importing: false, pinned })).session,
     rows,
     settings: harnessSettings,
     starts,
