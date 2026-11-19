@@ -14900,3 +14900,525 @@ Reading: over 60 s: unit and adapter lanes 67 s, `session.perf` in a shared slot
 m1a-slice 155 s. Commits `b95cf790a0` and this journal commit; nothing pushed; no change to
 `packages/thixotrope` or `rust/**`.
 Fit: neutral.
+
+### J-12600 2026-11-19 W11.4 the openai-audio speech engines - built
+Evidence: `6591bd9408`; `AH/speech/openai-audio.js`, `test/fixtures/fake-speech-server.mjs`,
+`test/adapter/speech-openai-audio.test.js` (30 cases pass, the `[real-provider]` case skipped
+without `THIX_HARNESS_REAL_SPEECH=provider`; five repeats, no flake, about 1 s each).
+Reading: `makeOpenAiSpeechIn(options) -> SttEngine` and `makeOpenAiSpeechOut(options) ->
+TtsEngine` of `engine-types.js`, options `{ settings, readGrant, log?, timeouts?, limits?,
+fetch? }`, and `openAiAudioKind = { speechIn, speechOut }` for W11.5's `kinds.js`. The base URL
+goes through `providerBaseUrl` in the maker (a refused URL throws `BASE_URL_REFUSED` before any key
+read); the key is read through `readGrant(settings.key)` once per request and sent as a bearer;
+`HttpFailure`, `failureKind`, `requestSignalOf`, `postJson`, `bodyChunks`, `boundedChunks`,
+`discardBody` imported from `providers/http.js`, nothing copied. Speech in: partials by
+re-transcription every `partialIntervalMs` when the audio changed and is under `partialMaxBytes`,
+one in flight, older and post-END answers dropped; the final after END with an `engineTimeoutMs`
+deadline (`engineTimeout`); any failed request aborts `engineFailed`; `sttIdleMs` and the
+utterance bound as for the process kind. Speech out: one request per sentence in order, PCM in
+whole samples and frames of at most `pcmFrameBytes - 4`, `drained()` awaited after each frame with
+the `synthTimeoutMs` clock stopped while waiting; 401/403 or a key failure abort the playback
+`synthFailed`, every other failure (429, 5xx, hang, stalled or empty body) is `sentence-failed`
+and the next sentence is asked. Log lines carry kind, direction, stage and status only; the tests
+assert no key and no provider body in any log line or event.
+Fit: good.
+
+### J-12601 2026-11-19 W11.4 latency against the fake server - measured
+Evidence: `6591bd9408`; a scratch script through `perf/_window.mjs` `runWindow`/`windowMs` and
+`perf/_harness.mjs` `summarize`, `PERF_WINDOW_SCALE=0.1` (6 s windows), no supervisor.
+Reading: `provider.final.fake` (END to final of a 1 s utterance: WAV build, multipart, loopback
+HTTP, the fake's multipart parse, bounded JSON read) median 0.289 ms, p95 0.666, p99 1.447, n
+16,735; `provider.firstPcm.fake` (sentence to the first PCM frame) median 0.240 ms, p95 0.386, p99
+1.149, n 20,295. The engine adds well under 1 ms to what a real provider costs; the
+`provider.*` rows stay `[real-provider]` owner rows (contract 14.1), so no budget is set here.
+Fit: good.
+
+### J-12602 2026-11-19 W11.4 contract gaps found while building - finding
+Evidence: contract sections 3.3, 5.2, 6.3; `engine-types.js`.
+Reading: (1) the engine-maker signature is not fixed by the contract; W11.4 chose the options
+record above. (2) `UtteranceSink` has no way to carry the `utteranceTooLong` note of section 5.2:
+the engine ends the utterance at the bound and the route must add the note from its own byte
+count. (3) The fake speech server's modes cannot come from an `x-fake-mode` header alone (the
+product never sends one): the server also takes a per-request queue (`setModes`). (4) 6.3 names no
+behaviour for speech-out failures; W11.4 applies D-M11-10's sentence-failed rule, with 401/403
+fatal. (5) There is no fixed text for an unusable `defaultVoice` of this kind; the catalogue's
+`warning` is `speechTextOf.unknownVoice(id)`.
+Fit: neutral.
+
+### J-12603 2026-11-19 W11.4 time record - process
+Evidence: first command 2026-11-19T02:22:37Z.
+Reading: no command over 60 s (package tsc 7 s, the adapter test about 1 s). Commits `6591bd9408`
+and this journal commit; nothing pushed; session bundle 233,126 bytes before and after (M11's
+cap 0: this unit adds no guest code); no change to `packages/thixotrope` or `rust/**`.
+Fit: neutral.
+
+### J-1370 2026-11-19 W11.3 speech text and the speech view of a turn - built
+Evidence: `c5b4f2eaa5`, `6fb874f701`; `AH/speech/code-filter.js` (`makeCodeFilter`,
+`INSPECTED_LINE_UNITS`), `AH/speech/speech-text.js` (`makeSpeechText`, `stripMarkdown`,
+`MIN_SENTENCE_UNITS`, `ABBREVIATIONS`), `AH/speech/turn-view.js` (`openTurnView`); tests
+`test/unit/speech-text.test.js` (14) and `test/adapter/speech-turn-view.test.js` (12), 26 passing.
+Reading: contract section 7 as written, with these choices. The code filter is Endo's,
+unchanged in behaviour, plus `held()`. The sentence split is incremental: each push scans only
+the units it added (Endo's chunker rescanned its buffer per push and looked back with a regex
+over everything before each period, quadratic on a long reply); the abbreviation and list-marker
+checks look back a bounded number of units; a run of `sentenceUnits` with no boundary is cut at
+its last whitespace, never inside a surrogate pair. `lineBreak()` starts a fresh code filter (an
+unclosed fence in one message does not silence the next) and releases a chunk under 10 units
+alone, so no sentence spans a tool call. The view reads `Live.subscribe(session)` in process,
+compares a final with the round's text only (whitespace collapsed; a revised final adds
+nothing), reads a staged final through `Content` a page at a time, treats every abort as the
+end, ends on another turn's `turn-start` (a channel gap) and aborts `turnNotFound` when the
+channel drops it. Views are counted per `Live` and per session in `WeakMap`s.
+Fit: good. The channel's snapshot-then-deliveries contract is exactly what a speech view needs;
+no session crank, no vat delivery.
+
+### J-1371 2026-11-19 W11.3 speech text and view latency - measured
+Evidence: `6591bd9408` (the lane head when measured; my files identical to `6fb874f701`); a
+scratch script through `perf/_window.mjs` `runWindow`/`windowMs` and `perf/_harness.mjs`
+`summarize`, 10 s windows, no supervisor, shared machine.
+Reading: `speechText.push40` (one 40-unit delta through `SpeechText.push`) median 0.003 ms, p99
+0.004, n 3,610,417. `speechView.deltaToSink` (`publishDelta` in the real channel to
+`TurnTextSink.text` through the view's `Live` subscription) median 0.058 ms, p95 0.064, p99
+0.155, n 148,900. Both are a small part of the 20 ms `speech.firstAudio` budget (W11.9's row).
+The unit tests also bound the probes: 1 MiB with no punctuation keeps sentences at most 1,000
+units and the backlog under one chunk plus 1,000 units; 1 MiB of sentences pushed 7 units at a
+time is split in well under 2 s.
+Fit: good.
+
+### J-1372 2026-11-19 W11.3 contract gaps found while building - finding
+Evidence: contract section 7; `engine-types.js` `OpenTurnViewOptions`, `SpeechText`.
+Reading: (1) `OpenTurnViewOptions` carries no limits; `openTurnView` also takes an optional
+`limits: { speakViewsPerSession, sentenceBacklogUnits }` (defaults from `audioLimits`), the
+host's test lever of 3.3. (2) The view count of step 1 needs a registry the options do not name:
+it is kept in the module, by `Live` object, then by session. (3) A settled turn whose final was
+staged has only the fold's preview in its snapshot, so replaying a finished turn through `speak`
+plays that preview, not the whole staged final; the full text is `Speech.replay`'s (D-M11-17).
+(4) An aborted turn's fold closes its streaming text into a message, so its replay ends with a
+newline (harmless for speech). (5) The round's text and a staged final are kept up to
+`sentenceBacklogUnits`; over it, the final adds nothing.
+Fit: neutral.
+
+### J-1373 2026-11-19 W11.3 time record - process
+Evidence: first command 2026-11-19T02:22:38Z.
+Reading: no command over 60 s (package tsc about 3 s, both test files under 2 s, the probe 20 s).
+Commits `c5b4f2eaa5`, `6fb874f701` and this journal commit; nothing pushed; session bundle
+233,126 bytes before and after (M11's cap 0: this unit adds no guest code); no change to
+`packages/thixotrope` or `rust/**`.
+Fit: neutral.
+
+### J-1330 2026-11-19 W11.1 speech in, process kind - built
+Evidence: `edf702bfbe` (`AH/speech/child-engine.js`), `03b9283077` (`AH/speech/stt-process.js`,
+`AH/speech/engines/moonshine_daemon.py`, `test/fixtures/fake-stt.mjs`); tests
+`test/adapter/speech-child-engine.test.js` (10) and `test/adapter/speech-stt-process.test.js` (11,
+plus one `[real-moonshine]` case skipped unless `THIX_HARNESS_REAL_SPEECH=moonshine`), 21 passing,
+three runs in a row.
+Reading: `child-engine.js` exports `spawnEngineProcess(options, handlers)` (one child: the
+`engineEnvironment` allowlist only, its own process group so a kill reaches `uv run`'s Python
+child, stderr discarded, JSON lines through a bounded reader or raw bytes, a ready line within
+`engineLoadMs`, `terminate()` = end of input, SIGTERM to the group, SIGKILL after `killGraceMs`,
+`pauseOutput`/`resumeOutput`/`queuedBytes` for the speech-out unit's backpressure),
+`makeRestartPacing` (at most `failuresInWindow` timestamps), `makeChildEngine` (a resident
+engine, respawned on next use), `makeLineReader`, `engineEnvironmentOf`, `afterMs` (unref'd
+host timer). `stt-process.js` exports `makeProcessSttEngine(settings, options)`: one resident
+engine per settings revision; whole samples forwarded (an odd byte carried, the trailing one
+dropped at END); `listening` the first sink call, after `open` returned; partials forwarded until
+END (dropped after, as Endo's `finish`); bounds `utteranceBytes` (the engine ends the utterance,
+`tooLong()` true, the final follows), `sttBacklogBytes` (stdin queue x 3/4, abort `backlog`),
+`engineLineBytes`; timeouts `sttIdleMs`, `engineTimeoutMs` (counted only while the engine is
+ready, from 1 s of audio without output and from END), `engineLoadMs`. A test SIGKILLs an
+adapter-like parent and finds its engine gone within 5 s (end of input, D-M11-15).
+Fit: good. Engines are ordinary adapter children; nothing of speech in touches a vat or the hub.
+
+### J-1331 2026-11-19 W11.1 speech-in engine costs - measured
+Evidence: `03b9283077`; a scratch script through `perf/_window.mjs` `runWindow`/`windowMs` and
+`perf/_harness.mjs` `summarize`, `PERF_WINDOW_SCALE=0.25` (15 s windows; 7.5 s for the respawn),
+under `run-lock.mjs --shared`, the fake engine, no supervisor, load average 7.9-10.3.
+Reading: `stt.process.audioCall` (one 2,720-byte block: base64 and the line write, paced 1 ms
+apart) median 0.015 ms, p95 0.033, p99 0.046, n 11,756, 0 aborts. `stt.process.partialRoundTrip`
+(the block completing 0.5 s of audio to the partial at the sink: two pipe hops and the fake's
+parse) median 0.043 ms, p95 0.093, p99 0.148, n 5,675. `stt.process.respawnToReady` (engine
+SIGKILLed, then the next `open` to ready) median 28.1 ms, p95 30.6, p99 34.1, n 244. All far under
+W11.9's `speech.audioForward` (1 ms), `speech.partialRelay` (2 ms) and `speech.engineRespawn`
+(100 ms) budgets; those rows add the socket and are W11.9's. A first unpaced attempt wrote blocks
+back to back with no await and hit the 2 MiB backlog bound on purpose of the bound: the numbers
+above are the paced run.
+Fit: good.
+
+### J-1332 2026-11-19 W11.1 contract gaps found while building - finding
+Evidence: contract 6.2, 3.3, 5.2; `engine-types.js` `SttEngine`, `UtteranceSink`, `Utterance`.
+Reading: (1) "Utterance `n` is engine stream `u<n>`" cannot hold: one engine serves every port of
+the incarnation and each port numbers its first utterance 1, and `SttEngine.open(sink)` takes no
+number; engine ids are `u<k>` from the engine's own wrapping counter. (2) `UtteranceSink` has no
+way to carry the `utteranceTooLong` note of the `end` event; the utterance answers `tooLong()`
+(type `ProcessUtterance`), which the route reads at the final. (3) The settings' `command` is used
+as the whole argv; `language` is not appended (the provisioning default carries `--lang`).
+(4) `engineTimeoutMs` would kill an engine still loading its model (600 s allowed), so its timer
+runs only while the engine is ready. (5) With the real Moonshine, partials come only when the
+text changes, so 11 s of continuous non-speech audio after a word would time the engine out; the
+client's endpointing ends such an utterance first (1.2 s of silence), so this is left as written.
+(6) Pacing holds a start for `backoffMs` without waiting: an utterance opened meanwhile aborts
+`engineUnavailable` at once (the user is waiting).
+Fit: neutral.
+
+### J-1333 2026-11-19 W11.1 time record - process
+Evidence: first command 2026-11-19T02:22:37Z.
+Reading: no command over 60 s (package tsc about 3 s, both test files under 2 s, the perf smoke
+about 50 s). Commits `edf702bfbe`, `03b9283077` and this journal commit; nothing pushed; session
+bundle 233,126 bytes before and after (M11's cap 0: this unit adds no guest code); no change to
+`packages/thixotrope` or `rust/**`; `lint:duplicates` 1.68 % (ceiling 2.05 %).
+Fit: neutral.
+
+### J-12640 2026-11-19 W11.6 client audio modules - built
+Evidence: `5a2adbb1ea`, `6378458547`, `064f7a9440`, `33d4d597be`, `ac6f288303`, `498c197b35`.
+Reading: `AH/speech/capture-worklet.js` (an `AudioWorkletProcessor` that averages the context's
+rate down to 16 kHz s16le across render quanta and posts 1,360-sample blocks with their RMS, the
+buffer transferred; rates and block size come from `processorOptions`, so the page's constants
+stay the one source; it imports nothing since the extension serves it as one file);
+`UI/src/voice/capture.js` (`openCapture` asks `getUserMedia` and makes the context before
+anything is awaited, answers the `Capture` at once so the mic can be turned off while the prompt
+is open, `started` rejects with a reason from the DOM error's name); `endpointing.js` (the
+pure `makeEndpointer(defaults, { immediate, busy, audible })` with `block(rms, atMs)`,
+`makePreRoll`, `keptFinal`, `makeSpokenDraft` for the grace send, `meterFraction`);
+`audio-socket.js` (frame codec and `openAudioSocket`: HELLO on open, READY, streams claimed by
+the number a CapTP call answers); `playback.js` (`makePlayer`: gapless at each frame's rate, one
+track at a time); `wake-lock.js` (Endo's wake lock, ported, plus `wakeWanted`). Tests: 49 in
+`test/unit/voice-{endpointing,audio-socket,playback,capture,wake-lock}.test.js`, about 3 s.
+Session bundle 233,126 bytes before and after (digest `06aceb9a1412`): nothing here is guest code.
+Fit: good.
+
+### J-12641 2026-11-19 W11.6 both sockets race for a stream's first frame - finding
+Evidence: `audio-socket.js` at `ac6f288303`; `voice-audio-socket.test.js` "events before its
+number are held".
+Reading: a stream is opened by a CapTP call on `/ws` and its frames travel on `/audio`, and the
+server sends `phase: listening` (or the first PCM) as soon as it opened the stream, so the
+`/audio` frame can arrive before the CapTP answer that names it. The client holds frames of
+unclaimed numbers (at most `streamsPerPort` numbers and `pcmBufferedBytes` in all, the oldest
+number dropped first and its stream aborting with `speechTexts.backlog` when claimed) and queues
+an utterance's audio until its number comes (at most `sttBacklogBytes`, then the utterance
+aborts and only an ABORT goes out). Frames for a number the page has ended are dropped, not held.
+The contract's section 4 does not state the race; W11.5's server needs nothing for it.
+Fit: neutral (a cost of D-M11-3's two sockets, bounded on the client).
+
+### J-12642 2026-11-19 W11.6 hardening byte views is the client's hot cost - measured
+Evidence: `498c197b35` against `ac6f288303`; scratch probe through `perf/_window.mjs`
+`runWindow`, 5 s windows (smoke, `VOICE_PROBE_MS=5000`), batches of 1,000 operations, Node under
+the SES lockdown the page bundle also runs.
+Reading: one 2,720-byte AUDIO frame encoded and decoded: median 599.6 us (p99 608.2) while the
+decoded record was `harden`ed (it walks every index of the payload view), 0.834 us (p99 1.164)
+with the record `Object.freeze`d: about 700 x. Other rows at `498c197b35`: `endpointer.block`
+1.24 us (p99 1.40); an EVENT decode (a 120-unit partial) 2.16 us (p99 2.59); one 128-frame
+quantum resampled 48 to 16 kHz 1.45 us (p99 1.64), so a 2.67 ms quantum costs 0.05 % of its
+time. An 85 ms block's whole client path (resample, endpoint, frame) is under 25 us.
+Fit: neutral: harden on a record that carries bytes is a trap for any adapter or page code that
+moves audio: never harden a record that holds a byte view
+on a per-block path.
+
+### J-12643 2026-11-19 W11.6 endpointing differs from Endo in two places - finding
+Evidence: `endpointing.js` at `5a2adbb1ea`; `voice-endpointing.test.js`.
+Reading: (1) Endo measures minimum speech from onset to the END decision, which includes the
+1,200 ms trailing silence, so its 400 ms minimum never discards anything; here speech is the span
+from the onset block to the last block above the threshold, so acceptance 6's 400 ms burst is
+discarded (340 ms of loud block starts) and a 600 ms one is kept. (2) A discarded blip during the
+grace window re-arms the pending text's send (`makeSpokenDraft().dropped`), where Endo left the
+text in the box unsent. Barge-in follows Endo's code, not the defaults file's comment: the
+barge-in threshold is max(minimum, speech threshold x 3), not floor x 3.
+Fit: neutral.
+
+### J-12644 2026-11-19 W11.6 time record - process
+Evidence: first command 2026-11-19T02:22:38Z, last 2026-11-19T02:38:56Z.
+Reading: no command over 60 s (unit tests about 3 s, `lint:types` 3 s, probe 20 s). Nothing
+started a supervisor or a browser; no run lock taken. `lint:duplicates` 1.68 %. tsc: no error
+in this unit's files (errors remain in other units' files in this worktree, uncommitted or
+theirs). Commits as listed in J-12640 and this journal commit; nothing pushed.
+Fit: neutral.
+
+### J-12660 2026-11-19 W11.7 factory Voice, configureSpeech and the voice step - built
+Evidence: `77d6929e5b`, `eb0abc3d2e`, `4d1b8c860d`.
+Reading: `guest/factory/voice.js` `makeVoice({ catalog, create, rows, settings, starts })`
+answers `{ facet, configureSpeech }` (contract 3.1): preferences (a five-field record, numbers
+finite and in `ttsRanges`, refused as one crank before any change), the shortcut preset (the
+chosen one while `catalog.recordOf` accepts it, else the built-in `voice`; a stale catalogue
+revision answers `presetStale`, a foreign or deleted preset `presetNotUsable`), launch claims
+(a `Map` by invocation id, at most 32, the oldest forgotten; a claim is replaced, never mutated,
+so a creation that finishes after its claim was re-run or forgotten writes nothing), G-11 by
+`E(backend).resolveModel(modelId)` and the speech settings (both `off`, revision 0, until the
+root writes them; the estimate is string units x 3 against `frameBytes - 2,048`, an empty
+command or a default speed out of range is `speechSettingsInvalid`; a given `revision` is
+ignored, the factory numbers its own). Seams H2 (`factory.js`: import, one `makeVoice` call
+after `createSession`, `getVoice`, `configureSpeech` in the kit) and H2b (`main.js` one line,
+`root.js` `needSpeech()` keeping `speechNotWired` for a root without the kit).
+`scripts/provision-steps/70-voice.js`: `options.voice = { speech?, voiceBackend?, voiceModelId? }`,
+a provider key by `keyLabel` (one Secret by label, `secretsByLabel` imported from
+`40-subscriptions.js`, a fresh `makeReadGrant()` only when the settings change), the Moonshine
+command as the `process` speech-in default (`moonshineCommand(language)`, language `en`), the
+built-in `voice` preset's backend (by label in `listBackends()`) and model saved with
+`Preset.save` unless already pinned; idempotent (a second run is `skipped`, no new grant).
+Tests: `test/unit/factory-voice.test.js` 11 and `voice-provision-step.test.js` 4 (about 2 s);
+`test/integration/voice-session.test.js` (acceptance 8, 9, 13, 14, 19, 22; 151.0 s wall with a
+template rebuild, 76 s and 16 s of test) and `voice-restart.test.js` (K11-3, K11-4, K11-5;
+96.8 s wall, 37.5 s of test), both in the `voice` regression list.
+Fit: good.
+
+### J-12661 2026-11-19 W11.7 bundles and install.factory - measured
+Evidence: `node scripts/bundle-guest.mjs` at `6493d955c7` and `4d1b8c860d`; `perf/session.perf.mjs`
+at `4d1b8c860d` (`--shared`, `INSTALL_N=2`, `PERF_WINDOW_SCALE=0.2`, load average 5.3-6.7 with
+three other lanes' agents busy).
+Reading: session program 233,126 bytes before and after, digest `06aceb9a1412` unchanged; exec
+64,500 bytes, digest `6f1d6d607b6b` unchanged (D-M11-24: M11 adds 0 session bytes). Factory
+program 192,892 -> 199,356 bytes (+6,464, under the contract's 8-12 KB estimate since WX.1 had
+already put the guards in). `install.factory` median 7,833 ms (7,678-7,833, n 2; budget 15 s;
+earlier records 6.3-7.3 s at lower load), `session.createCold` 6,720 ms median (n 3, a smoke
+window). In the integration test, through one control client: `setPreferences` 26 ms,
+a duplicate launch 44.5 ms, `startVoiceSession` 7.8 s (cold: the m1a template has no spares;
+`voice.startSession`'s 950 ms budget is with a pool and is W11.9's row). Single samples, not
+windows: recorded, not budget evidence.
+Fit: neutral.
+
+### J-12662 2026-11-19 W11.7 launch claims ride on orthogonal persistence - finding
+Evidence: `voice-restart.test.js` at `4d1b8c860d`, its `voice-restart` row
+(`preferencesAfterKill: old`, `cutLaunch: re-run`, `extraSessions: 0`).
+Reading: R6-60's idempotent launch needs no store: a claim in the factory heap, stamped with
+`starts.current()`, survives a SIGKILL with the crank that wrote it, and the start count tells a
+claim cut off by a restart from one still running without a clock or a lease. K11-4's kill
+landed before the claim's creation made its vat; the redelivered launch re-ran it and the start
+listener had rolled the half-made row back: no extra session. The other branch (creation
+completed by recovery, then a redelivery answering `duplicate`) is reachable only by timing and
+was not hit in this run; the unit test covers the re-run racing an old continuation (the
+re-run keeps the claim). K11-3's kill also landed before the write (old record); the new-record
+branch was not observed. The cost the contract names stays: a launch interrupted inside the
+creation window may leave one extra listed session (O-8).
+Fit: good (the start count is the right handle; nothing here needed a core change).
+
+### J-12663 2026-11-19 W11.7 contract differences - finding
+Evidence: contract 1.4, 14.2, section 12 W11.7 row; `factory-voice.test.js`.
+Reading: (1) "the refusal at 22,529 bytes": an estimate of units x 3 is a multiple of three, so
+the test refuses 7,510 units (22,530) and keeps 7,509 (22,527) around the 22,528 bound.
+(2) The step's key field is named `keyLabel` (the contract says "with a key label"); a `key`
+given in the options is refused, so no value can be passed by mistake. (3) `startVoiceSession`
+with a G-11 fallback but no factory default backend or model leaves that field to the preset,
+so the creation then fails on the missing model, as `createSession` would. (4) The voice
+provisioning step needed one line in the shared pin `test/unit/m1a-provision-steps.test.js`
+(`'voice'` in both lists, below WX.1's reserved comment), and the comment above `getMail` in
+`factory.js` was reworded (it said voice refused): both touch lines next to the M6 and M9 lanes'.
+Fit: neutral.
+
+### J-12664 2026-11-19 W11.7 time record - process
+Evidence: first command 2026-11-19T02:22:38Z, last 2026-11-19T02:39:48Z.
+Reading: over 60 s: `voice-session.test.js` 151.0 s and `voice-restart.test.js` 96.8 s (both
+`test:integration`, shared slots), `perf/session.perf.mjs` smoke 116 s (`run-lock --shared`).
+Unit tests about 2-5 s, `lint:types` about 3 s (no error in this unit's files; errors remain in
+other units' files), `lint:duplicates` 1.67 %. Nothing pushed.
+Fit: neutral.
+
+### J-1350 2026-11-19 W11.2 speech out, process kind - built
+Evidence: `8ac806f435` (`AH/speech/voice-catalogue.js`, `test/fixtures/fake-tts.mjs`,
+`test/fixtures/voices/`), `e13f02f75e` (`AH/speech/tts-process.js`); tests
+`test/unit/speech-voice-catalogue.test.js` (6) and `test/adapter/speech-tts-process.test.js` (11,
+plus one `[real-piper]` case skipped unless `THIX_HARNESS_REAL_SPEECH=piper`), 17 passing, three
+runs in a row.
+Reading: `voice-catalogue.js` exports `readVoiceCatalogue(dir)` (`<id>.onnx` beside an
+`<id>.onnx.json` whose `audio.sample_rate` is a positive integer; broken voices skipped and
+counted; metadata over `metadataBytes` skipped; at most `maxVoices` in name order; an unreadable
+directory lists none), `checkTtsOptions(options, catalogue)` (the five fields only, defaults from
+the catalogue, R5-41 texts) and `voiceDisplayName` (Endo's). `tts-process.js` exports
+`makeProcessTtsEngine(settings, options)`: catalogue read once per engine, defaults
+`defaultVoice`/`defaultSpeed` over `ttsDefaults`; an unusable default voice or speed turns
+speech out `off` with a warning and every synthesis aborts `speechOutOff`; one Piper per playback
+started at the first sentence with `piperFlags` (`--length-scale` = 1 / speed); sentences
+written in lock step with the output (the next is written at the previous one's first PCM);
+whole samples forwarded at the voice's rate; one quiet timer (`synthTimeoutMs`: a sentence with
+no PCM is reported `sentenceFailed(index)`, its process killed, the next sentence on a new
+process; after the input is closed a lingering process is ended), never running while the output
+is paused; two failed sentences in a row or an unspawnable command abort `synthFailed`;
+backpressure by pausing stdout until `PlaybackSink.drained()`; unwritten sentences bounded by
+`sentenceBacklogUnits` (`textBacklog`); a warm spare (`spareSynth`, default on) for the latest
+playback's options, `warm(options?)` to start it.
+Fit: good. Piper's per-sentence burst output suits a lock-step writer; nothing touches a vat.
+
+### J-1351 2026-11-19 W11.2 speech-out engine costs - measured
+Evidence: `e13f02f75e`; a scratch script through `perf/_window.mjs` `runWindow`/`windowMs` and
+`perf/_harness.mjs` `summarize`, `PERF_WINDOW_SCALE=0.25` (15 s windows), under `run-lock.mjs
+--shared`, the fake Piper (`fake-tts.mjs`), no supervisor, load average 2.2-4.6.
+Reading: `tts.process.firstPcm.cold` (open, one 26-character sentence, end; spare off; sentence
+written to its first PCM at the sink, including the Node child's spawn) median 26.3 ms, p95 28.1,
+p99 29.4, n 542, 0 failures. `tts.process.firstPcm.spare` (the same with the warm spare, 60 ms
+between replies for the renewed spare to start) median 5.0 ms, p95 5.4, p99 5.7, n 219, 0
+failures. The spare removes the spawn (about 21 ms with the fake; with real Piper it also removes
+the model load, the owner row `tts.firstAudio`). W11.9's `speech.firstAudio` (median 20 ms)
+needs the spare or an already running process: a cold start alone is over it with the fake.
+Fit: good.
+
+### J-1352 2026-11-19 W11.2 contract gaps found while building - finding
+Evidence: contract 6.2, D-M11-12, 3.3; `engine-types.js` `TtsEngine`, `Synthesis`,
+`PlaybackSink`; `AH/speech/host.js` (W11.5, uncommitted when read).
+Reading: (1) Piper's raw output has no sentence boundary, so "a sentence with no PCM within
+`synthTimeoutMs`" needs a known start per sentence: sentences are written in lock step (the next
+at the previous one's first PCM), which keeps the pipelining (Piper writes a sentence's audio
+after synthesizing it) and gives each written sentence a start. With paused output the tail of
+sentence k can arrive after k+1 was written and credit k+1 early, so a reported failed index can
+be one later than the sentence that hung, never earlier. (2) `TtsEngine` has no way to learn the
+shared preferences, so the warm spare follows the latest playback's options (at first the
+catalogue defaults) and `warm(options?)` is an extra method (type `ProcessTtsEngine`) the host
+may call with `Voice.getPreferences()`; a playback with other options drops the spare. (3) There
+is no fixed text for "the default voice is unusable": the warning joins `unknownVoice(id)` (or
+`outOfRange('speed', ...)`) and `speechOutOff`. (4) A process that keeps failing is bounded per
+playback (two failed sentences in a row abort `synthFailed`), not by `engineRestart` pacing,
+which is a rate across utterances of a resident engine. (5) `fake-tts.mjs`'s `hang-on=<index>`
+counts sentences across every process logging to the same `--log` file, so it names one sentence
+of a playback even across a respawn. (6) `host.js` carries its own `checkTtsOptions`; the
+contract puts it in `voice-catalogue.js`.
+Fit: neutral.
+
+### J-1353 2026-11-19 W11.2 time record - process
+Evidence: first command 2026-11-19T02:36:05Z.
+Reading: no command over 60 s (the perf smoke 31 s under `run-lock --shared`, both test files
+under 3 s, package tsc about 4 s). Commits `8ac806f435`, `e13f02f75e` and this journal commit;
+nothing pushed; session bundle 233,126 bytes before and after (digest `06aceb9a14...`; M11's cap 0:
+this unit adds no guest code); no change to `packages/thixotrope` or `rust/**`;
+`lint:duplicates` 1.66 % (ceiling 2.05 %).
+Fit: neutral.
+
+### J-12620 2026-11-19 W11.5 speech host, /audio route, playback, kinds and the extension - built
+Evidence: `aa004f2606`, `69fa32328c`, `e867eaa129`, `c4cf4d6dc3`, `b8535f265f`.
+Reading: seams H5 (`GW/server.js`: the handshake and connection counts moved unchanged into a
+server-scope `accept(request, raw, head, { maxMessageBytes, onSocket })` answering the socket or
+`undefined`; `/ws` and extension upgrade routes call it after the path and Origin checks;
+`GatewaySocket.bufferedBytes()`), H6 (`GW/index.js` `extensionPowers`, the operator holder in
+the service closure, `operator()` on the context, `contextFor(extension)` made once per listed
+extension object with the getter of `stateDir` kept; `extensions.js` `contextFor` on both
+helpers, defaulting to `context` so M3's and M4's tests run unchanged; `protocol.js` typedefs)
+and H7 (`AH/index.js`: the import and one `extensionPowers` entry with `secrets().readKey`).
+`AH/speech/host.js` `makeSpeechHost({ context, kinds, pipeline, options })`: settings cache read
+through `E(E(operator).getVoice()).speechSettings()` at first use and at a stale `openAudio`;
+engines per direction and revision (idle ones stopped at a new revision, busy ones after their
+last stream); ports with SHA-256 token digests and a `timingSafeEqual` bind; odd and even stream
+numbers; utterances and playbacks; `configuration`, `status`, `replay` (inline texts and Blobs
+read through `Content` a page at a time). `route.js` frame codec, HELLO deadline and binding;
+`playback.js` text source to `SpeechText` to `Synthesis` to PCM frames with `drained()`
+backpressure (polls `bufferedBytes()` every 5 ms while over 1 MiB); `kinds.js` the one module
+naming engine modules (`process` and `openai-audio`, both directions, each adapted from the
+host's `EngineContext`; the playback option check is `voice-catalogue.js` `checkTtsOptions`). `GW/extensions/speech.js`: service `speech`, routes `/audio` and the
+capture worklet, `Speech.replay` a LargeCall. Tests: `gateway-speech-extension` 5,
+`speech-audio-route` 9, `speech-host` 11 (one runs the fake process engines through the
+incarnation's kinds), `speech-timeouts` 3 (28 in about 4 s).
+Fit: good.
+
+### J-12621 2026-11-19 W11.5 A-5: require(esm) and import share one extension object - measured
+Evidence: `69fa32328c`, `test/adapter/gateway-speech-extension.test.js`; Node 22.23.4.
+Reading: `loadGatewayExtensions()` over `GW/extensions/` answers, for `speech`, the very object
+`import { gatewayExtension } from '.../speech.js'` answers (`t.is`), and the same holds for two
+probe extensions loaded from a test directory; through a bound `makeGatewayService` only the
+listed probe's context carries `readGrant`, the other's has no such property, both have
+`operator()` answering the bind's operator. No fallback to a file-name match was needed. In the
+real adapter (`m3-gateway.test.js`, a supervisor) the speech extension loads with no skip and its
+service is in every page's extras.
+Fit: good (an object at the code-loading boundary works because Node keeps one module record).
+
+### J-12622 2026-11-19 W11.5 audio path numbers - measured
+Evidence: `e867eaa129`; adapter tests, no supervisor, shared machine with other lanes.
+Reading: backpressure: a raw client that stops reading after READY, replaying 2.5 Mi units of
+text at 32 PCM bytes per unit (80 MiB possible): synthesis paused at 1,575,328 / 1,574,720 /
+1,574,720 bytes (3 runs) and did not move in the next 500 ms; the socket stayed open (never near
+the 8 MiB send bound) and resumed when the client read again. 1,000 sockets with wrong tokens in
+rounds of 8: 1.0-1.2 s, each closed 4103, no port left, connections back to 1. Session bundle
+233,126 and exec 64,500 bytes before and after (M11 cap 0: no guest file touched); factory
+199,356 (W11.7's growth). `lint:duplicates` 1.66 % (524 of 31,617), no cluster in these files.
+Fit: neutral.
+
+### J-12623 2026-11-19 W11.5 contract differences and a pinned list - finding
+Evidence: `69fa32328c`, `c4cf4d6dc3`; `test:integration m3-gateway` 107.8 s held.
+Reading: (1) `makeSpeechHost` takes a fourth input, `pipeline: { openTurnView, makeSpeechText }`,
+given by the extension, so host tests use stand-in views (the view is W11.3's subject).
+(2) Engines emit `phase`, `sttIdle` and the utterance length bound themselves (W11.1, W11.4), so
+the host only forwards; it reads `utterance.tooLong?.()` for the `end` note. (3) Late frames: after
+a server abort, a stream's late frames are ignored; after a normal server end only a late ABORT is;
+anything else for a closed stream closes `protocol` (the contract's probe holds for the page's own
+closed streams). (4) `transcribe`/`speak` on a port whose socket is not bound answer
+`speechTexts.portClosed` (no text for "not yet bound"). (5) `GatewayContext.operator` is typed
+optional so existing fake contexts type-check. (6) The host's `stop()` is not called by the gateway
+(an extension has no unbind hook): ports close with their sockets at unbind and engines die with
+the process. (8) The host never calls the process speech-out engine's `warm(options)`, so the
+warm spare (D-M11-12) is not started for the shared preferences yet. (7) `test/integration/m3-gateway.test.js` l.350 pins the extras labels to
+`[secretWriter, fixture]`; with the speech extension the list is `[secretWriter, fixture, speech]`,
+so acceptance 16 fails until that line names `speech` (an M3 file in the core regression list).
+Fit: poor at (7) (a pinned list of all extensions breaks for every new extension).
+
+### J-12624 2026-11-19 W11.5 time record - process
+Evidence: first command 2026-11-19T02:22:38Z.
+Reading: over 60 s: adapter tests importing `AH/index.js` 61 s; `test:integration m3-gateway` twice,
+107.9 s each (shared slot). Commits `aa004f2606`, `69fa32328c`, `e867eaa129`, `c4cf4d6dc3`,
+`b8535f265f` and this journal commit; nothing pushed; no change to `packages/thixotrope` or `rust/**`.
+Fit: neutral.
+
+### J-12680 2026-11-19 W11.8 the voice UI feature - built
+Evidence: `541034968f` (H10), `ccb6ce177b`, `ae18dd5922`, `6433ad7140`.
+Reading: seam H10 in `ui/src/controller/index.js`: `onSubmission(listener) -> unsubscribe`, a
+`Set` told `{ sessionKey, session, requestId, receipt }` after each answered `send` (a listener's
+throw never fails the send), cleared in `attach`. `ui/src/voice/feature.js`: `voice.controls`
+(`composer.addon`: mic, speaker, meter with floor and threshold markers, Talk, one note line),
+`voice.panel` (`app.panel` "Voice": Spoken replies, voice, the four sliders, the shortcut preset)
+and `voice.replay` (`message.renderer`, settled turns only), each `when` the connection serves the
+`speech` extra. `ui/src/voice/state.js` `makeVoiceState(io)`: per page the player, wake lock,
+mic (W11.6's capture, endpointer, pre-roll, spoken draft), auto-speak (page memory, on while speech
+out is wired, R5-55) and the launch id used; per connection (rebuilt whenever the controller hands
+a new `FeatureContext`, i.e. every attach) `Speech`, `Voice`, configuration, server preferences,
+the port and its socket (opened at first need, reopened with `audioReconnectDelay` while the mic is
+on), the submission listener and at most 8 receipts waiting for their turn. Settings resolve field
+by field (server, `thix-voice:settings` cache, `configuration().defaults`, `ttsDefaults`), a change
+is used at once, cached, written once after 300 ms and restarts the running playback (R5-50).
+Auto-speak: a started receipt gives its turn (`turnId`, else `Turn.getStatus()`), a queued one is
+read once (`getSubmissionReceipt`) after the active view's next running turn; another page's turn
+is never spoken. Dictation: onset cancels the grace send, stops playback, opens `transcribe` and
+sends the pre-roll first; partials and finals replace the box through `replaceInput`; the grace
+timer sends what the box holds if the mic is on, the session is the one dictated to and no
+utterance is open; mic off discards a box that only holds the dictation. Barge-in shows
+"continuing in background…" until the turn is no longer busy; a cancelled spoken turn stops its
+playback (R5-48). Talk opens the mic inside the tap, then `startVoiceSession`, selects the key once
+listed (at most 10 s) and shows the warning; `#...&voice=<id>` does the same once per page with
+the endpointer in invocation mode. Replay sends the turn's assistant texts as pieces (inline cut at
+white space to 8,192 units, a staged text's Blob, a sealed text read with `readContent`; at most 64
+pieces and 300,000 inline units). Shortcut: the catalogue read by object, chosen with its revision;
+a stale revision shows the factory's text and re-reads. Test: `test/unit/voice-state.test.js`, 21
+cases, `Speech`/`AudioPort`/`Voice` as exos on the real guards over M3's controller and fake powers.
+Fit: good (the feature only decides; every byte of audio stays in the page and the adapter).
+
+### J-12681 2026-11-19 W11.8 sizes and costs - measured
+Evidence: `6433ad7140`; unit runs, no supervisor, shared machine (other lanes building).
+Reading: session program 233,126 bytes before and after, digest `06aceb9a1412` unchanged (M11 cap
+0: no guest file touched); exec 64,500. UI bundle with the voice feature (and W11.6's modules,
+first bundled now): `main` 308,123 bytes, css 34,384, total 342,989 bytes, 114,498 gzip (budget
+600 KiB, `m3-ui-build` `ui.bundle` 99 ms). `voice-state.test.js` 21 tests in about 1.3 s; the UI
+unit lane (m3-ui, m4-ui, m5-w58, voice) 178 tests in 1.7 s, all passing. `lint:duplicates` 1.61 %
+(524 of 32,495), no cluster in these files. Vat traffic of the feature: page load 2 factory
+cranks (`getVoice`, `getPreferences`) plus `configuration()` (gateway-local, none); a preference
+change 1 factory crank per 300 ms window; Talk/launch 1 (`startVoiceSession`, then creation); the
+panel 1 `getPreferences`, 1 `getVoicePreset`, 1 catalogue read and one `describe` per preset; a
+spoken started turn 1 session crank (`Turn.getStatus`, no `turnId` in a live receipt), a spoken
+queued turn 1 (`getSubmissionReceipt`, whose answer carries the `Turn`, so 2 when its `turnId` is
+absent). A page that will not speak reads nothing for its sends (a test pins 0 receipt and 0
+status reads).
+Fit: neutral (two cranks per spoken turn at most, all outside the turn's own crank chain).
+
+### J-12682 2026-11-19 W11.8 contract differences - finding
+Evidence: `ccb6ce177b`; `designs/m11-interfaces.md` D-M11-13, section 9, H10; `ui/src/controller/
+index.js` `featureContext` (a hardened record made anew at every attach); `ui/src/voice/texts.js`.
+Reading: (1) State: neither the contract's `WeakMap` by `powers` nor a field of `FeatureContext`
+(it is hardened and has no per-feature cache until step 5 (a)): one `VoiceState` per page found
+by `context.controller` (`statesByPage` in `state.js`) and bound to the context object, whose
+identity marks a connection; F-5 replaces that lookup. (2) The page binds in `when` (a side
+effect): the shell has no feature start hook, and the launch link and auto-speak must work before
+any voice control renders. (3) `texts.js` has one microphone text, so every capture failure reason
+shows `micUnavailable`. (4) An utterance whose onset comes before the port's READY is not opened
+(the blocks go to the pre-roll); calibration (1 s) hides it in normal mode, an invocation launch
+could lose its first words if the port is slower than the permission prompt. (5) Talk dictates
+into the box of the session active at the onset; if the onset beats the new session's row, the
+grace send is skipped. (6) H10 is 25 lines with its comments, not 10-15. (7) A live turn's replay
+uses the fold's previews (the fold keeps no Blob).
+Fit: poor at (1)-(2): the UI seam has no place for per-connection feature state or a start hook.
+
+### J-12683 2026-11-19 W11.8 time record - process
+Evidence: first command 2026-11-19T02:39:37Z.
+Reading: no command over 60 s (the longest, the UI unit lane, 1.7 s; `lint:types` 2.7 s). Commits
+`541034968f`, `ccb6ce177b`, `ae18dd5922`, `6433ad7140` and this journal commit; nothing pushed;
+no change to `packages/thixotrope`, `rust/**` or a guest file; no integration or browser run.
+Fit: neutral.

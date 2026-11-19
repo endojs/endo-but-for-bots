@@ -279,6 +279,27 @@ export const uiTextOf = Object.freeze({
  * @property {string} stateDir the daemon's state directory (read only)
  * @property {(event: Record<string, unknown>) => void} log a structured
  *   line; never a message body, secret or fragment
+ * @property {() => any} [operator] the `Operator` presence of the current
+ *   bind (the factory vat's; `undefined` before the first bind), as a
+ *   signed-in page receives it (M11's speech host reads `getVoice()`);
+ *   always present on the gateway's own context (`GW/index.js`)
+ * @property {(grant: any) => Promise<string>} [readGrant] only on the
+ *   context of an extension `GW/index.js` was given powers for
+ *   (`ExtensionPowers`, compared by the extension object's identity;
+ *   m11-interfaces.md D-M11-22): reads a key through its `ReadGrant` in
+ *   this process. Every other extension's context has no `readGrant`
+ */
+
+/**
+ * Extra context fields for one extension, given to `makeGatewayService` by
+ * the adapter (`AH/index.js`). `extension` is the very `gatewayExtension`
+ * object the adapter imported; the loader's object for the same file is
+ * that object (Node's `require` of an ES module shares the module cache),
+ * so the object, not a file or extension name, picks the receiver.
+ *
+ * @typedef {object} ExtensionPowers
+ * @property {GatewayExtension} extension
+ * @property {{ readGrant?: (grant: any) => Promise<string> }} powers
  */
 
 /**
@@ -286,10 +307,25 @@ export const uiTextOf = Object.freeze({
  * `/audio`). `path` is matched exactly; `/`, `/ws` and `/assets/*` are the
  * gateway's own and cannot be taken.
  *
+ * An `upgrade` route's `handle` receives a fourth argument, `accept(request,
+ * raw, head, { maxMessageBytes, onSocket })`: the gateway's handshake and
+ * connection counts (M11 seam H5), answering the accepted `GatewaySocket`
+ * (`server.js`) or `undefined` when it refused (the refusal written and
+ * logged). The path and Origin are checked before `handle` is called.
+ *
  * @typedef {object} GatewayRoute
  * @property {'http' | 'upgrade'} kind
  * @property {string} path
- * @property {(request: any, socketOrResponse: any, head?: any) => void | Promise<void>} handle
+ * @property {(request: any, socketOrResponse: any, head?: any, accept?: UpgradeAccept) => void | Promise<void>} handle
+ */
+
+/**
+ * @callback UpgradeAccept
+ * @param {any} request
+ * @param {any} raw
+ * @param {any} head
+ * @param {{ maxMessageBytes: number, onSocket: (socket: any) => void }} options
+ * @returns {any} the accepted `GatewaySocket`, or `undefined` (refused)
  */
 
 /**

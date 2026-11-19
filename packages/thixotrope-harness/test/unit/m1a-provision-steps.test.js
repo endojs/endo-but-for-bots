@@ -114,6 +114,7 @@ test('the provisioning steps install, load the program, and re-run as a no-op', 
       // Reserved (WX.1), each line added with its file and skipped without
       // its option: 60-environments.js (options.environments), then
       // 70-voice.js.
+      ['voice', true],
     ],
   );
   t.deepEqual(reports, first);
@@ -198,6 +199,7 @@ test('the steps table is the M1a list, then M1b W1b.5 appends', async t => {
       'gateway',
       'subscriptions',
       'm5 fixtures',
+      'voice',
     ],
   );
 });

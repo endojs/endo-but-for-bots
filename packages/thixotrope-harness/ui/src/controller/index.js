@@ -206,6 +206,14 @@ export const makeController = ({
 
   /** @type {Set<() => void>} */
   const listeners = new Set();
+  /**
+   * Submission listeners (`onSubmission`; m11-interfaces.md H10, D-M11-20):
+   * told `{ sessionKey, session, requestId, receipt }` after each `send` is
+   * answered; cleared on every attach (a feature registers again on the
+   * connection's new `FeatureContext`).
+   * @type {Set<(notice: Record<string, any>) => void>}
+   */
+  const submissionListeners = new Set();
 
   /** @type {any} */
   let powers;
@@ -1000,6 +1008,7 @@ export const makeController = ({
     viewEpoch += 1;
     powers = newPowers;
     context = undefined;
+    submissionListeners.clear();
     viewSubscription = undefined;
     update({ connection: 'open', connectionMessage: undefined, status: '' });
     try {
@@ -1090,6 +1099,17 @@ export const makeController = ({
       };
     },
     attach,
+    /**
+     * @param {(notice: Record<string, any>) => void} listener told after
+     *   each answered send of this page (H10)
+     * @returns {() => void} unsubscribe
+     */
+    onSubmission: listener => {
+      submissionListeners.add(listener);
+      return () => {
+        submissionListeners.delete(listener);
+      };
+    },
     /**
      * The connection layer's state (net/connection.js); `open` is set by
      * `attach`.
@@ -1214,6 +1234,14 @@ export const makeController = ({
             false,
           );
           clearDraft(storage, key, requestId);
+          const notice = { sessionKey: key, session, requestId, receipt };
+          for (const listener of [...submissionListeners]) {
+            try {
+              listener(notice);
+            } catch {
+              // a feature's listener must not fail the send
+            }
+          }
           if (state.activeKey === key && state.view) {
             updateView({ input: { text: '', caret: 0 }, sendError: undefined });
           }

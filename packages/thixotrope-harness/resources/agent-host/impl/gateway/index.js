@@ -80,7 +80,7 @@ import { makeSignInStore } from './signin.js';
 import { makeStaticHandler } from './static.js';
 import { harnessNames } from './vocabulary.js';
 
-/** @import { GatewayContext, GatewayExtension } from './protocol.js' */
+/** @import { ExtensionPowers, GatewayContext, GatewayExtension } from './protocol.js' */
 
 const { E, makeExo } = /** @type {any} */ (globalThis);
 
@@ -130,6 +130,9 @@ const messageOf = error =>
  * @param {string} [options.assetsDir] default `GW/assets/`
  * @param {() => number} [options.now]
  * @param {Record<string, number>} [options.serverLimits] tests only
+ * @param {ExtensionPowers[]} [options.extensionPowers] extra context fields
+ *   per extension object (m11-interfaces.md D-M11-22: the speech
+ *   extension's `readGrant`); an extension not listed gets the plain context
  */
 export const makeGatewayService = ({
   live,
@@ -146,6 +149,7 @@ export const makeGatewayService = ({
   assetsDir = defaultAssetsDir,
   now = () => Date.now(),
   serverLimits = undefined,
+  extensionPowers = [],
 }) => {
   /** @type {string | undefined} */
   let stateDirMade;
@@ -183,6 +187,13 @@ export const makeGatewayService = ({
   // Gateway-local, and never an argument of a call toward a vat (X-FIX).
   markNeverLeaves(localWriter);
 
+  /**
+   * The operator of the current bind (each bind sets it; a page and an
+   * extension read it at each use).
+   * @type {{ current: any }}
+   */
+  const operatorOf = { current: undefined };
+
   /** @type {GatewayContext} */
   const context = harden({
     live,
@@ -204,7 +215,40 @@ export const makeGatewayService = ({
       return stateDirNow();
     },
     log,
+    operator: () => operatorOf.current,
   });
+
+  /** @type {Map<GatewayExtension, Record<string, unknown>>} */
+  const powersOf = new Map(
+    extensionPowers.map(({ extension, powers }) => [extension, powers]),
+  );
+  /** @type {Map<GatewayExtension, GatewayContext>} */
+  const contexts = new Map();
+  /**
+   * The context `extension` receives: with its powers when its object is
+   * listed in `extensionPowers` (identity), else the plain one. Made once
+   * per extension and kept; the getter of `stateDir` stays a getter.
+   * @param {GatewayExtension} extension
+   * @returns {GatewayContext}
+   */
+  const contextFor = extension => {
+    const powers = powersOf.get(extension);
+    if (powers === undefined) return context;
+    const kept = contexts.get(extension);
+    if (kept !== undefined) return kept;
+    /** @type {GatewayContext} */
+    const made = harden(
+      Object.defineProperties(
+        /** @type {GatewayContext} */ ({}),
+        {
+          ...Object.getOwnPropertyDescriptors(context),
+          ...Object.getOwnPropertyDescriptors(powers),
+        },
+      ),
+    );
+    contexts.set(extension, made);
+    return made;
+  };
 
   /** @type {GatewayExtension[]} */
   const extensions = loadGatewayExtensions({
@@ -222,13 +266,14 @@ export const makeGatewayService = ({
     if (incarnation === undefined) {
       const extras = makeExtensionServices({
         extensions,
-        context,
+        contextFor,
         log,
         builtIn: [{ label: secretWriterLabel, service: localWriter }],
       });
       const { isLargeCall } = makeLargeCalls({
         extensions,
         context,
+        contextFor,
         builtIn: [{ target: composer, methods: ['submit', 'edit'] }],
         log,
       });
@@ -297,8 +342,7 @@ export const makeGatewayService = ({
           ? {}
           : { perMinute: config.signInFailuresPerMinute }),
       });
-      /** @type {{ current: any }} */
-      const operatorOf = { current: config.operator };
+      operatorOf.current = config.operator;
       const bridge = makeBridge({
         makeBootstrap: makeBootstrapFactory({
           signIn,

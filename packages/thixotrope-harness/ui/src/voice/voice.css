@@ -1,0 +1,80 @@
+/* The voice controls, panel and replay (M11; R5-56). */
+.thix-voice-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+}
+.thix-voice-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.thix-voice-mic,
+.thix-voice-speaker,
+.thix-voice-talk,
+.thix-voice-replay {
+  border: 1px solid var(--fl-border);
+  border-radius: 999px;
+  background: var(--fl-surface2);
+  color: var(--fl-text);
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.7rem;
+  cursor: pointer;
+}
+.thix-voice-mic.on,
+.thix-voice-speaker.on {
+  background: var(--fl-surface3);
+  border-color: var(--fl-text-muted);
+}
+.thix-voice-mic:disabled,
+.thix-voice-speaker:disabled,
+.thix-voice-talk:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.thix-voice-meter {
+  position: relative;
+  flex: 1 1 4rem;
+  min-width: 4rem;
+  height: 0.5rem;
+  border-radius: 4px;
+  background: var(--fl-surface2);
+  overflow: hidden;
+}
+.thix-voice-meter-fill {
+  height: 100%;
+  background: var(--fl-text-muted);
+}
+.thix-voice-meter-floor,
+.thix-voice-meter-threshold {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 100%;
+}
+.thix-voice-meter-floor {
+  background: var(--fl-border);
+}
+.thix-voice-meter-threshold {
+  background: var(--fl-text);
+}
+.thix-voice-note,
+.thix-voice-off {
+  color: var(--fl-text-muted);
+  font-size: 0.8rem;
+}
+.thix-voice-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-width: 32rem;
+}
+.thix-voice-setting {
+  display: grid;
+  grid-template-columns: 10rem 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+}

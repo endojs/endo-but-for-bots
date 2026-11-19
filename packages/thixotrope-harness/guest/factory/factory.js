@@ -45,6 +45,7 @@ import { makeFactoryExport } from './export.js';
 import { makeExecHandle } from './pool.js';
 import { buildSessionServices } from './services.js';
 import { resolveCreateOptions } from './session-options.js';
+import { makeVoice } from './voice.js';
 
 /** @import { StartCount } from './starts.js' */
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -360,6 +361,13 @@ export const makeFactoryKit = ({
   /** @param {Record<string, any>} options */
   const createSession = async options =>
     (await create(options, { importing: false })).session;
+  const voice = makeVoice({
+    catalog,
+    create: createSession,
+    rows,
+    settings: harnessSettings,
+    starts,
+  });
 
   /**
    * M2 W2.7: the catalogue of a backend (the request's, else the default,
@@ -423,15 +431,13 @@ export const makeFactoryKit = ({
     getSecrets: () => E(admin).getSecrets(),
     getPresets: () => catalog.facet,
     getInventory: () => inventory.facet,
-    // WX.1: the guard's mail and voice methods (m9-interfaces.md F6,
-    // m11-interfaces.md H1) refuse until their lanes replace these bodies
-    // (seams F1, H2).
+    // WX.1: the guard's mail method (m9-interfaces.md F6) refuses until
+    // its lane replaces this body (seam F1).
     getMail: () => {
       throw Error(texts.notBuiltYet);
     },
-    getVoice: () => {
-      throw Error(texts.notBuiltYet);
-    },
+    /** M11 (m11-interfaces.md 3.1, seam H2): the shared voice records. */
+    getVoice: () => voice.facet,
   });
 
   const exports = makeFactoryExport({
@@ -559,6 +565,7 @@ export const makeFactoryKit = ({
     pendingCreations: () => creations.size,
     deletions,
     exports,
+    configureSpeech: voice.configureSpeech,
   });
 };
 harden(makeFactoryKit);

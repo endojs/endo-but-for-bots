@@ -127,6 +127,8 @@ const STATUS_TEXT = harden({
  * @property {(fn: (bytes: Buffer) => void) => void} onMessage
  * @property {(fn: (code: number, reason: string) => void) => void} onClose
  *   called once, with the code the closing side gave (1006: no close frame)
+ * @property {() => number} bufferedBytes bytes queued in the send buffer
+ *   (an extension's backpressure, M11 `/audio`)
  *
  * @typedef {object} GatewayServer
  * @property {number} port
@@ -429,6 +431,8 @@ const makeWebSocket = ({ raw, address, maxMessageBytes, gone }) => {
     onClose: fn => {
       closeHandlers.push(fn);
     },
+    /** Bytes queued in the send buffer (backpressure of `/audio`, H5). */
+    bufferedBytes: () => raw.writableLength,
   });
   return { socket, receive };
 };
@@ -645,6 +649,100 @@ export const makeGatewayServer = async ({
     }
   });
 
+  /**
+   * The handshake and the connection counts (seam H5 of m11-interfaces.md):
+   * answers the accepted `GatewaySocket`, or `undefined` when refused (the
+   * refusal written and logged). `/ws` and every extension upgrade route
+   * accept through it after the path and Origin checks, so an extension
+   * socket counts like any other.
+   * @param {import('node:http').IncomingMessage} request
+   * @param {import('node:stream').Duplex} raw
+   * @param {Buffer | undefined} head
+   * @param {{ maxMessageBytes: number, onSocket: (socket: GatewaySocket) => void }} acceptOptions
+   * @returns {GatewaySocket | undefined}
+   */
+  const accept = (
+    request,
+    raw,
+    head,
+    { maxMessageBytes, onSocket: socketHandler },
+  ) => {
+    const address = addressOf(request);
+    /**
+     * @param {string} rule
+     * @param {number} status
+     * @param {string} body
+     */
+    const refuse = (rule, status, body) => {
+      log({ event: 'ws-refused', rule, status, address });
+      refuseUpgrade(raw, status, body);
+    };
+    const key = request.headers['sec-websocket-key'];
+    const upgrade = String(request.headers.upgrade ?? '').toLowerCase();
+    if (
+      request.method !== 'GET' ||
+      upgrade !== 'websocket' ||
+      request.headers['sec-websocket-version'] !== '13' ||
+      typeof key !== 'string' ||
+      Buffer.from(key, 'base64').length !== 16
+    ) {
+      refuse('handshake', 400, 'Bad WebSocket handshake');
+      return undefined;
+    }
+    const fromAddress = perAddress.get(address) ?? 0;
+    if (
+      sockets.size >= bounds.maxConnections ||
+      fromAddress >= bounds.connectionsPerAddress
+    ) {
+      refuse('connections', 503, 'Too many connections');
+      return undefined;
+    }
+    const acceptValue = createHash('sha1')
+      .update(key + WS_GUID)
+      .digest('base64');
+    raw.write(
+      [
+        'HTTP/1.1 101 Switching Protocols',
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Accept: ${acceptValue}`,
+        '',
+        '',
+      ].join('\r\n'),
+    );
+    const tcp = /** @type {import('node:net').Socket} */ (raw);
+    tcp.setNoDelay?.(true);
+    tcp.setKeepAlive?.(true, KEEPALIVE_MS);
+    tcp.setTimeout?.(0);
+    perAddress.set(address, fromAddress + 1);
+    /** @type {GatewaySocket} */
+    let socket;
+    const made = makeWebSocket({
+      raw,
+      address,
+      maxMessageBytes,
+      gone: code => {
+        sockets.delete(socket);
+        const left = (perAddress.get(address) ?? 1) - 1;
+        if (left > 0) perAddress.set(address, left);
+        else perAddress.delete(address);
+        log({ event: 'ws-close', address, code });
+      },
+    });
+    socket = made.socket;
+    sockets.add(socket);
+    log({ event: 'ws-open', address });
+    try {
+      socketHandler(socket);
+    } catch {
+      log({ event: 'ws-handler-failed', address });
+      socket.close(wsCloseCodes.internal, 'internal error');
+      return undefined;
+    }
+    if (head && head.length > 0) made.receive(head);
+    return socket;
+  };
+
   server.on('upgrade', (request, raw, head) => {
     const { path, query } = splitTarget(request.url);
     const refusal = refusalOf(path, query);
@@ -675,76 +773,17 @@ export const makeGatewayServer = async ({
     }
     if (route) {
       Promise.resolve()
-        .then(() => route.handle(request, raw, head))
+        .then(() => route.handle(request, raw, head, accept))
         .catch(() => {
           log({ event: 'route-failed', kind: 'upgrade' });
           raw.destroy();
         });
       return;
     }
-    const key = request.headers['sec-websocket-key'];
-    const upgrade = String(request.headers.upgrade ?? '').toLowerCase();
-    if (
-      request.method !== 'GET' ||
-      upgrade !== 'websocket' ||
-      request.headers['sec-websocket-version'] !== '13' ||
-      typeof key !== 'string' ||
-      Buffer.from(key, 'base64').length !== 16
-    ) {
-      refuse('handshake', 400, 'Bad WebSocket handshake');
-      return;
-    }
-    const fromAddress = perAddress.get(address) ?? 0;
-    if (
-      sockets.size >= bounds.maxConnections ||
-      fromAddress >= bounds.connectionsPerAddress
-    ) {
-      refuse('connections', 503, 'Too many connections');
-      return;
-    }
-    const accept = createHash('sha1')
-      .update(key + WS_GUID)
-      .digest('base64');
-    raw.write(
-      [
-        'HTTP/1.1 101 Switching Protocols',
-        'Upgrade: websocket',
-        'Connection: Upgrade',
-        `Sec-WebSocket-Accept: ${accept}`,
-        '',
-        '',
-      ].join('\r\n'),
-    );
-    const tcp = /** @type {import('node:net').Socket} */ (raw);
-    tcp.setNoDelay?.(true);
-    tcp.setKeepAlive?.(true, KEEPALIVE_MS);
-    tcp.setTimeout?.(0);
-    perAddress.set(address, fromAddress + 1);
-    /** @type {GatewaySocket} */
-    let socket;
-    const made = makeWebSocket({
-      raw,
-      address,
+    accept(request, raw, head, {
       maxMessageBytes: bounds.wsMessageBytes,
-      gone: code => {
-        sockets.delete(socket);
-        const left = (perAddress.get(address) ?? 1) - 1;
-        if (left > 0) perAddress.set(address, left);
-        else perAddress.delete(address);
-        log({ event: 'ws-close', address, code });
-      },
+      onSocket,
     });
-    socket = made.socket;
-    sockets.add(socket);
-    log({ event: 'ws-open', address });
-    try {
-      onSocket(socket);
-    } catch {
-      log({ event: 'ws-handler-failed', address });
-      socket.close(wsCloseCodes.internal, 'internal error');
-      return;
-    }
-    if (head && head.length > 0) made.receive(head);
   });
 
   await new Promise((resolve, reject) => {
