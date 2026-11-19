@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-02 |
-| **Updated** | 2026-09-13 |
+| **Updated** | 2026-11-19 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Approved (2026-07-02, program supervisor `port-xs-to-rust-memory-safe-engine`; all ten open questions resolved, see § Resolved Questions) |
 | **Revised** | 2026-07-04 — **metering doctrine: accuracy over parity** (maintainer directive). The meter is Ironhorse's own release-versioned deterministic cost model, a proxy for real (wall-clock) execution cost, NOT a reproduction of XS's computron counts. The XS differential oracle is retained for **result** correctness only; computron comparison is demoted to advisory telemetry. This selects the "stated determinism-equivalence proof" branch the § Prompt already permitted. See § Metering (requirement 1a) and § Agoric consensus compatibility for the authoritative statement. |
@@ -757,7 +757,9 @@ differential harness, not an interpreter integrity gap.
 The budget is zero in shipped engine crates, enforced by
 `#![forbid(unsafe_code)]` on every library root in the `rust/engine` workspace
 except the audited `xs-oracle` FFI harness, checked by the Cargo-metadata test.
-Some harness binary roots lack that declaration; the check does not claim otherwise.
+Every other target (binaries, tests, examples) inherits `unsafe_code = "deny"`
+from `[workspace.lints.rust]`, and the same check enumerates the few scoped
+`allow(unsafe_code)` exemptions (test allocators and the stack-painting probe).
 This is a workspace-source rule, not a claim that transitive dependencies or
 the daemon contain no C.
 The index-arena design is what makes this achievable: no raw

@@ -873,22 +873,19 @@ jobs:
           python3 rust/engine/scripts/test-crate-graph.py
           python3 rust/engine/scripts/crate-graph.py --check
 
-      - name: Install pinned rustfmt
-        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt
-
       - name: Check generated compiler opcode table
         run: |
           python3 rust/engine/scripts/test-compiler-opcodes.py
           python3 rust/engine/scripts/generate-compiler-opcodes.py --check
 
       - name: Check ironhorse engine formatting
-        run: cargo +1.88.0 fmt --manifest-path rust/engine/Cargo.toml --all -- --check
+        run: cargo fmt --manifest-path rust/engine/Cargo.toml --all -- --check
       # The stack-lanes probes and the snapshot footprint harness are standalone
       # cargo roots outside the workspace (rust/engine/stack-lanes/probe/Cargo.toml,
       # rust/engine/stack-lanes/memory/probe/Cargo.toml,
       # rust/engine/ironhorse-snapshot/footprint/Cargo.toml), so `fmt --all` never sees them.
       - name: Check standalone-root formatting
-        run: rustfmt +1.88.0 --edition 2021 --check rust/engine/stack-lanes/probe/src/main.rs rust/engine/stack-lanes/cases.rs rust/engine/ironhorse-snapshot/footprint/src/main.rs rust/engine/stack-lanes/memory/probe/src/main.rs
+        run: rustfmt --edition 2021 --check rust/engine/stack-lanes/probe/src/main.rs rust/engine/stack-lanes/cases.rs rust/engine/ironhorse-snapshot/footprint/src/main.rs rust/engine/stack-lanes/memory/probe/src/main.rs
 
       # Every member of the repo-root workspace, on the root
       # rust-toolchain.toml's compiler (rustup installs it and its rustfmt on
@@ -1221,18 +1218,23 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ironhorse-oracle-
 
-      - name: Install pinned lint toolchain
-        run: rustup toolchain install 1.88.0 --profile minimal --component clippy
-
+      # Lints run on the toolchain pinned by rust/engine/rust-toolchain.toml,
+      # the same compiler that builds and tests the engine.
       - name: Check engine build warnings
         working-directory: rust/engine
         env:
           RUSTFLAGS: -D warnings
-        run: cargo +1.88.0 build --locked --workspace
+        run: cargo build --locked --workspace
 
       - name: Check engine Clippy warnings
         working-directory: rust/engine
-        run: cargo +1.88.0 clippy --locked --workspace --no-deps -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --no-deps -- -D warnings
+
+      - name: Check engine rustdoc warnings
+        working-directory: rust/engine
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --workspace --no-deps --document-private-items
 
       - name: Vendor test262 at the pinned SHA
         # `corpus_compiler_totality.rs` compiles every test262 source and
