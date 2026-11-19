@@ -32,7 +32,6 @@
  */
 import { textOf } from '../lib/guards/base.js';
 import { limits } from '../lib/limits.js';
-import { mailLimits } from '../lib/mail-limits.js';
 import { chunkText, messageOf, utf8Bytes } from '../lib/bounded.js';
 import { failed, isKeysExhausted } from './render.js';
 
@@ -61,7 +60,7 @@ const PREFIX_LITERAL = '"\\u0000';
  * arguments. A model's arguments past it are refused unread.
  */
 export const SPLIT_SOURCE_BYTES =
-  6 * mailLimits.mailBodyUnits + 8 * limits.inlineBytes;
+  6 * limits.mailBodyUnits + 8 * limits.inlineBytes;
 
 /** Page reads one split may make (a page may stop short of `maxBytes`). */
 const MAX_PAGES = 2 * Math.ceil(SPLIT_SOURCE_BYTES / limits.blobPageBytes) + 2;
@@ -88,7 +87,7 @@ export const splitStringTooLongText = (units, limit) =>
 harden(splitStringTooLongText);
 /** @param {number} limit */
 export const splitResidualText = limit =>
-  `The tool arguments do not fit in ${limit} bytes even with ${mailLimits.splitStagedStrings} strings staged`;
+  `The tool arguments do not fit in ${limit} bytes even with ${limits.splitStagedStrings} strings staged`;
 harden(splitResidualText);
 
 /**
@@ -182,27 +181,27 @@ const chooseLiterals = (text, literals) => {
   const optional = [];
   for (const literal of literals) {
     const span = literal.end - literal.start;
-    const mayBeLong = span - 2 > mailLimits.splitStringUnits;
+    const mayBeLong = span - 2 > limits.splitStringUnits;
     const value =
       mayBeLong || text.startsWith(PREFIX_LITERAL, literal.start)
         ? decode(literal)
         : '';
-    if (value.length > mailLimits.mailBodyUnits)
+    if (value.length > limits.mailBodyUnits)
       return {
-        refusal: splitStringTooLongText(value.length, mailLimits.mailBodyUnits),
+        refusal: splitStringTooLongText(value.length, limits.mailBodyUnits),
       };
     const must =
-      value.length > mailLimits.splitStringUnits ||
+      value.length > limits.splitStringUnits ||
       value.startsWith(SPLIT_PLACEHOLDER_PREFIX);
     (must ? chosen : optional).push(literal);
   }
-  if (chosen.length > mailLimits.splitStagedStrings)
+  if (chosen.length > limits.splitStagedStrings)
     return {
-      refusal: splitTooManyText(chosen.length, mailLimits.splitStagedStrings),
+      refusal: splitTooManyText(chosen.length, limits.splitStagedStrings),
     };
   // The largest placeholder literal: `"\u0000s15"`.
   const placeholderBytes = JSON.stringify(
-    splitPlaceholder(mailLimits.splitStagedStrings - 1),
+    splitPlaceholder(limits.splitStagedStrings - 1),
   ).length;
   const saved = (/** @type {Literal} */ literal) =>
     utf8Bytes(text.slice(literal.start, literal.end)) - placeholderBytes;
@@ -211,7 +210,7 @@ const chooseLiterals = (text, literals) => {
   optional.sort((a, b) => b.end - b.start - (a.end - a.start));
   for (const literal of optional) {
     if (bytes <= limits.inlineBytes) break;
-    if (chosen.length === mailLimits.splitStagedStrings) break;
+    if (chosen.length === limits.splitStagedStrings) break;
     const less = saved(literal);
     if (less > 0) {
       decode(literal);

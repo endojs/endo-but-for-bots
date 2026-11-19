@@ -12,8 +12,6 @@ import { text, list, record, count, R, done, lazyTable } from './base.js';
 import * as below from './session.js';
 // The cross-lane seam unit (WX.1): mail's operator method and settings
 // (m9-interfaces.md 6.2 F6) and voice (m11-interfaces.md appendix A, H1).
-import { postOfficeTables, postOfficeMethodNames } from './post-office.js';
-import { mailLimits } from '../mail-limits.js';
 import { voiceLimits } from '../voice-preferences.js';
 
 export { reservedLabels } from './session.js';
@@ -23,6 +21,39 @@ export { reservedLabels } from './session.js';
 const { M } = /** @type {GuestGlobals} */ (globalThis);
 
 // ---------------------------------------------------------------- names
+
+/** What a MailAddress designates (`describe().kind`). */
+export const addressKinds = harden(['session', 'operator', 'subagent']);
+/** States of an operator request or form (`RequestInfo.state`). */
+export const requestStates = harden([
+  'open',
+  'answered',
+  'rejected',
+  'submitted',
+  'cancelled',
+  'failed',
+]);
+
+/** Method names per interface, in declaration order. */
+export const postOfficeMethodNames = harden({
+  MailAddress: harden(['describe']),
+  Outbox: harden(['post']),
+  RequestTicket: harden(['describe', 'answer', 'submit']),
+  OperatorMailbox: harden([
+    'send',
+    'request',
+    'form',
+    'list',
+    'rev',
+    'addressOf',
+  ]),
+  OperatorMessage: harden(['describe', 'take', 'reply', 'dismiss']),
+  RequestHandle: harden(['describe', 'whenSettled', 'cancel']),
+  Delegation: harden(['spawn', 'children']),
+  SubagentHandle: harden(['describe', 'ask', 'cancelAsk', 'stop']),
+  /** The method M9 adds to `Operator` (seam in `./factory.js`). */
+  Operator: harden(['getMail']),
+});
 
 /**
  * Preset templates (R3-11..R3-17; Fae `preset-catalog.js` templates).
@@ -58,8 +89,29 @@ export const templateObjectKinds = harden([
  * word, and the harness's own fixed texts. Builders use these constants and
  * functions; tests compare against them.
  */
+const q = value => JSON.stringify(value);
+
+/**
+ * The texts the factory composes (the post office, the operator's mailbox,
+ * the subagent tree); a session forwards them as tool results and never
+ * builds them, so they stay out of the session program (D-M9-19). Fae's
+ * words where a source is named, else the harness's own (J-1112).
+ */
+
 export const texts = harden({
   ...below.texts,
+  /** R3-214 (daemon mail.js:1252-1258): a reply naming a postmark that was not delivered to the replier. */
+  mailFraud: 'Mail fraud: unrecognized parcel',
+  /** Harness: `send` to an object the post office did not mint (never called). */
+  notAnAddress: 'The recipient is not a mail address',
+  /** Harness: a settled or cancelled request answered again. */
+  requestClosed: 'This request is already settled or was cancelled',
+  /** A request or form whose sender cancelled it. */
+  requestCancelled: 'The request was cancelled by its sender',
+  /** `addressOf` / `send` with a Session this factory did not make. */
+  notASession: 'Not a session of this harness',
+  /** `take` of an edge the message does not carry. */
+  noAttachment: 'The message has no attachment with that edge name',
   /** R4-6, adapted to object passing (Endo: "use backendId and modelId"). */
   modelOption:
     'createSession option "model" is unsupported; use backend and modelId',
@@ -131,6 +183,55 @@ export const texts = harden({
  */
 export const textOf = harden({
   ...below.textOf,
+  /** @param {number} limit */
+  operatorInboxFull: limit =>
+    `The operator's inbox is full (${limit} messages); try again after the operator dismisses some`,
+  /** @param {string} title */
+  recipientLost: title =>
+    `The recipient ${q(title)} stopped working (its session was lost); the message was not delivered`,
+  /**
+   * Harness: a stray body (a reply, a value) kept inline (strayBodyBytes).
+   * @param {number} units the original length
+   */
+  bodyCut: units =>
+    `\n[Message cut from ${units} characters; only this prefix was kept]`,
+  /**
+   * @param {number} bytes
+   * @param {number} limit
+   */
+  envelopeTooLarge: (bytes, limit) =>
+    `The message is ${bytes} bytes with its form fields and attachment labels; the limit is ${limit}`,
+  /**
+   * R4-71 (Fae subagent-admission.js).
+   * @param {number} limit
+   */
+  treeLimit: limit =>
+    `Subagent tree limit of ${limit} reached; use existing helpers or finish the task yourself.`,
+  /** @param {string} name */
+  subagentLost: name =>
+    `Subagent ${q(name)} stopped working (its session was lost); stop it and spawn another`,
+  /**
+   * Fae subagent.js askTool, non-retaining form (R4-72).
+   * @param {readonly string[]} edges
+   */
+  answerAttachments: edges =>
+    `\n\n(System: the reply attached object(s) with edge name(s) ${edges
+      .map(edge => `"${edge}"`)
+      .join(
+        ', ',
+      )}, which this session does not retain. To keep one, ask the subagent to store it under a pet name and tell you the name.)`,
+  /**
+   * R4-70: a child's title.
+   * @param {string} parentTitle
+   * @param {string} name
+   */
+  childTitle: (parentTitle, name) => `${parentTitle} / ${name}`,
+  /** @param {number} limit */
+  postOfficeBusy: limit =>
+    `The post office has ${limit} deliveries in flight; try again shortly`,
+  /** @param {string} title */
+  requestFailed: title =>
+    `The request could not be delivered: ${q(title)} stopped working`,
   /**
    * createSession options M1a does not implement yet.
    * @param {string} name
@@ -333,13 +434,13 @@ const m1bShapeBuilders = {
         // Environments (m6-interfaces.md 15.2, seam S-2; WX.1).
         environments: M.remotable('EnvironmentsAdmin'),
         // Subagents (m9-interfaces.md 6.2 F6; WX.1): the defaults in
-        // `mailLimits` are the ceilings.
-        maxDescendants: M.and(count, M.lte(mailLimits.maxDescendants)),
-        maxDepth: M.and(count, M.lte(mailLimits.maxDepth)),
+        // `limits` are the ceilings.
+        maxDescendants: M.and(count, M.lte(limits.maxDescendants)),
+        maxDepth: M.and(count, M.lte(limits.maxDepth)),
         askTimeoutSeconds: M.and(
           count,
-          M.gte(mailLimits.minAskTimeoutSeconds),
-          M.lte(mailLimits.askTimeoutSeconds),
+          M.gte(limits.minAskTimeoutSeconds),
+          M.lte(limits.askTimeoutSeconds),
         ),
       },
     ),
@@ -762,7 +863,7 @@ const m2Versions = {
       getPresets: M.call().returns(R('PresetCatalog')),
       getInventory: M.call().returns(R('Inventory')),
       // Mail (m9-interfaces.md 6.2 F6; WX.1).
-      ...postOfficeTables().operatorMethods(),
+      getMail: M.call().returns(R('OperatorMailbox')),
       // Voice (m11-interfaces.md appendix A, H1; WX.1).
       getVoice: M.call().returns(R('Voice')),
     }),
@@ -806,6 +907,170 @@ export const m2VersionMethodNames = harden({
  * Every shape this module and the modules below it hold, by name, built on
  * first use and kept (see `lazyTable`).
  */
+const postOfficeShapeBuilders = {
+  // The shapes the factory checks and the session only builds or
+  // receives from harness-minted exos (moved out of `./mail.js` so the
+  // session program does not carry them; m9-interfaces.md D-M9-19).
+  /** One submitted value: JSON text of the field's kind (no data keys). */
+  FormValue: () =>
+    record({
+      name: text(limits.formFieldNameUnits),
+      json: text(limits.requestAnswerBytes),
+    }),
+  FormSubmission: () => list(S.FormValue, limits.formFields),
+  /**
+   * What a session posts (`Outbox.post`): recipients are objects (a
+   * MailAddress or a SubagentHandle; anything else is refused by the post
+   * office without being called).
+   */
+  MailDraft: () =>
+    record(
+      {
+        to: list(M.remotable(), limits.recipientsPerSend),
+        body: below.shapes.MailBody,
+        attachments: S.Attachments,
+      },
+      { inReplyTo: count },
+    ),
+  /** One recipient's outcome, in `to` order. */
+  PostResult: () => record({}, { postmark: count, refused: S.Reason }),
+  PostReceipt: () =>
+    record({ results: list(S.PostResult, limits.recipientsPerSend) }),
+  /** A typed answer to a request (JSON text) or its rejection. */
+  RequestAnswer: () =>
+    M.or(
+      record({ json: text(limits.requestAnswerBytes) }),
+      record({ rejected: S.Reason }),
+    ),
+  /** `Delegation.spawn` argument (R4-70). */
+  SpawnRequest: () =>
+    record(
+      {
+        name: text(limits.subagentNameUnits),
+        attachments: S.Attachments,
+        at: count,
+      },
+      // Inline only (D-M9-20): the factory composes the child's prompt
+      // as text in the creation's resolver.
+      { systemPrompt: text(limits.inlineBytes) },
+    ),
+  SpawnAnswer: () =>
+    record({ handle: R('SubagentHandle'), title: text(limits.titleUnits) }),
+  /** `SubagentHandle.ask` argument (R4-72). */
+  AskRequest: () =>
+    record({
+      task: below.shapes.MailBody,
+      attachments: S.Attachments,
+      at: count,
+    }),
+  /**
+   * The answer, already cut to the tool limit by the adapter's copy
+   * (`cutFrom`: the answer's length in units when cut); `edges` are the
+   * reply's attachment labels, reported, never kept (R4-72).
+   */
+  AskAnswer: () =>
+    record(
+      {
+        text: below.shapes.MailBody,
+        edges: list(S.EdgeLabel, limits.maxAttachments),
+      },
+      { cutFrom: count },
+    ),
+  SubagentState: () => M.or('ready', 'asking', 'lost', 'stopping'),
+  SubagentInfo: () =>
+    record({
+      name: text(limits.subagentNameUnits),
+      handle: R('SubagentHandle'),
+      state: S.SubagentState,
+    }),
+  /** `Delegation.children()`: a parent's live children (<= 64 by guard). */
+  SubagentList: () => list(S.SubagentInfo, 64),
+  AddressKind: () => M.or(...addressKinds),
+  AddressInfo: () =>
+    record({ title: text(limits.titleUnits), kind: S.AddressKind }),
+  RequestState: () => M.or(...requestStates),
+  /** What a request ticket tells the session that holds it. */
+  TicketInfo: () =>
+    record({ kind: M.or('request', 'form'), state: S.RequestState }),
+  /**
+   * The operator's message: recipients are Sessions or MailAddresses; the
+   * body is inline (the operator stages nothing in M9; D-M9-9).
+   */
+  OperatorDraft: () =>
+    record(
+      {
+        to: list(M.remotable(), limits.recipientsPerSend),
+        body: text(limits.inlineBytes),
+        attachments: S.Attachments,
+      },
+      { inReplyTo: count },
+    ),
+  /** A reply from the operator's inbox (`OperatorMessage.reply`). */
+  OperatorReply: () =>
+    record({ body: text(limits.inlineBytes), attachments: S.Attachments }),
+  RequestDraft: () =>
+    record(
+      { to: M.remotable(), description: text(limits.requestDescriptionUnits) },
+      { responseKey: text(limits.responseKeyUnits) },
+    ),
+  FormDraft: () =>
+    record(
+      {
+        to: M.remotable(),
+        description: text(limits.requestDescriptionUnits),
+        fields: list(below.shapes.FormField, limits.formFields),
+      },
+      { responseKey: text(limits.responseKeyUnits) },
+    ),
+  RequestInfo: () =>
+    record(
+      {
+        kind: M.or('request', 'form'),
+        state: S.RequestState,
+        postmark: count,
+      },
+      {
+        json: text(limits.requestAnswerBytes),
+        values: S.FormSubmission,
+        reason: S.Reason,
+      },
+    ),
+  /** One row of the operator's inbox. The body is read through `Content`. */
+  OperatorMessageView: () =>
+    record(
+      {
+        message: R('OperatorMessage'),
+        number: count,
+        type: below.shapes.MailType,
+        from: R('MailAddress'),
+        fromTitle: text(limits.titleUnits),
+        body: below.shapes.MailBody,
+        edges: list(S.EdgeLabel, limits.maxAttachments),
+        at: count,
+      },
+      { inReplyTo: count, values: S.FormSubmission, cutFrom: count },
+    ),
+  PageOptions: () =>
+    record(
+      {},
+      { after: count, limit: M.and(count, M.lte(limits.operatorPageRows)) },
+    ),
+  OperatorMailPage: () =>
+    record(
+      {
+        messages: list(S.OperatorMessageView, limits.operatorPageRows),
+        rev: count,
+      },
+      { next: count },
+    ),
+  SubagentDescription: () =>
+    record({
+      name: text(limits.subagentNameUnits),
+      state: S.SubagentState,
+      depth: count,
+    }),
+};
+
 export const shapes = lazyTable(
   {
     ...m1aShapeBuilders,
@@ -813,6 +1078,7 @@ export const shapes = lazyTable(
     ...m2ShapeBuilders,
     ...presetShapeBuilders,
     ...voiceShapeBuilders,
+    ...postOfficeShapeBuilders,
   },
   below.shapes,
 );
@@ -825,6 +1091,72 @@ const B = shapes;
  * interface name, built on first use and kept. Where M1b or M2 extended an
  * interface this is the latest version (the M2 fold, m2-interfaces.md 1.3).
  */
+const postOfficeInterfaceBuilders = {
+  /**
+   * Factory exo, one per session, per subagent and one for the operator.
+   * Held by sessions (label `user`, mail `from`, attachments) and the
+   * operator. The post office recognises it by rights amplification.
+   */
+  MailAddress: () =>
+    M.interface('MailAddress', {
+      describe: M.call().returns(S.AddressInfo),
+    }),
+  /** Factory exo, one per session (`SessionServices.mail`); binds the sender. */
+  Outbox: () =>
+    M.interface('Outbox', {
+      post: M.callWhen(S.MailDraft).returns(S.PostReceipt),
+    }),
+  /** Factory exo, one per request or form, carried in its envelope. */
+  RequestTicket: () =>
+    M.interface('RequestTicket', {
+      describe: M.call().returns(S.TicketInfo),
+      answer: M.call(S.RequestAnswer).returns(done),
+      submit: M.call(S.FormSubmission).returns(done),
+    }),
+  /** Factory exo, one (`Operator.getMail()`). */
+  OperatorMailbox: () =>
+    M.interface('OperatorMailbox', {
+      send: M.callWhen(S.OperatorDraft).returns(S.PostReceipt),
+      request: M.callWhen(S.RequestDraft).returns(R('RequestHandle')),
+      form: M.callWhen(S.FormDraft).returns(R('RequestHandle')),
+      list: M.call().optional(S.PageOptions).returns(S.OperatorMailPage),
+      rev: M.call().returns(count),
+      addressOf: M.call(R('Session')).returns(R('MailAddress')),
+    }),
+  /** Factory exo, one per message in the operator's inbox. */
+  OperatorMessage: () =>
+    M.interface('OperatorMessage', {
+      describe: M.call().returns(S.OperatorMessageView),
+      take: M.call(S.EdgeLabel).returns(M.remotable()),
+      reply: M.callWhen(S.OperatorReply).returns(S.PostReceipt),
+      dismiss: M.callWhen().returns(done),
+    }),
+  /** Factory exo: the operator's side of a request or form. */
+  RequestHandle: () =>
+    M.interface('RequestHandle', {
+      describe: M.call().returns(S.RequestInfo),
+      whenSettled: M.callWhen().returns(S.RequestInfo),
+      cancel: M.call().returns(done),
+    }),
+  /**
+   * Factory exo, one per session below the depth limit
+   * (`SessionServices.subagents`); absent at the limit (R4-69).
+   */
+  Delegation: () =>
+    M.interface('Delegation', {
+      spawn: M.callWhen(S.SpawnRequest).returns(S.SpawnAnswer),
+      children: M.call().returns(S.SubagentList),
+    }),
+  /** Factory exo, one per child; also a mail address of the child. */
+  SubagentHandle: () =>
+    M.interface('SubagentHandle', {
+      describe: M.call().returns(S.SubagentDescription),
+      ask: M.callWhen(S.AskRequest).returns(S.AskAnswer),
+      cancelAsk: M.call().returns(done),
+      stop: M.callWhen().returns(done),
+    }),
+};
+
 export const interfaces = lazyTable(
   {
     ...m1aInterfaceBuilders,
@@ -832,12 +1164,14 @@ export const interfaces = lazyTable(
     ...m2Versions,
     ...presetInterfaceBuilders,
     ...voiceInterfaceBuilders,
+    ...postOfficeInterfaceBuilders,
   },
   below.interfaces,
 );
 
 /** Method names per interface of `interfaces`, in declaration order. */
 export const methodNames = harden({
+  ...postOfficeMethodNames,
   ...m1aMethodNames,
   ...m1bMethodLists,
   ...m2NewMethodNames,

@@ -339,7 +339,7 @@ export const makeTurnRunner = ({
     } else {
       emit({ type: 'end', turnId: active.turnId, status });
     }
-    hooks.onSettle(hookTurn(active));
+    hooks.onSettle(Object.freeze({ ...hookTurn(active), final }));
     restActivity = status === 'failed' ? 'error' : 'passive';
     report({
       activity: restActivity,

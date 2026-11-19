@@ -252,7 +252,10 @@ export const makeSessionExport = ({
   const importState = chunk => {
     if (fence.closed()) throw Error(texts.sessionDeleting);
     const { part } = chunk;
-    if (importing === 2) return progress();
+    if (importing === 2) {
+      part !== 'inbox' || Fail`no import is open`;
+      return progress();
+    }
     if (part === 'head') {
       if (importing === 0) {
         (records.count() === 0 && runner.current() === undefined) ||

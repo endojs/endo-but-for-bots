@@ -38,11 +38,10 @@
  */
 import { textOf } from '../../lib/guards/session.js';
 import {
-  mailTextOf,
-  mailTexts,
+  textOf as mailTextOf,
+  texts as mailTexts,
   mailToolArgumentNames,
-} from '../../lib/guards/mail.js';
-import { mailLimits } from '../../lib/mail-limits.js';
+} from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
 import { parseClosedArgs } from '../../lib/tool-args.js';
 import { messageOf } from '../../lib/bounded.js';
@@ -104,10 +103,10 @@ const readStrings = (span, name, staged, labels = false) => {
   for (;;) {
     while (' \t\r\n,'.includes(span[i])) i += 1;
     if (span[i] === ']' || (i > 0 && i === span.length)) return { list };
-    if (span[i] !== '"' || list.length === mailLimits.mailParts) {
+    if (span[i] !== '"' || list.length === limits.mailParts) {
       return refused(
         textOf.argumentsNotJson(
-          `argument "${name}" must be a string or an array of at most ${mailLimits.mailParts} strings`,
+          `argument "${name}" must be a string or an array of at most ${limits.mailParts} strings`,
         ),
       );
     }
@@ -187,7 +186,7 @@ const draftOf = (context, values, staged) => {
  */
 const readMailArgs = async (tool, { opId, args }, ports, context) => {
   const bytes = /** @type {number} */ (fieldBytes(args));
-  const most = mailLimits.mailBodyUnits;
+  const most = limits.mailBodyUnits;
   if (!isStaged(args) || bytes > most) {
     if (bytes > most) return refused(mailTextOf.bodyTooLong(bytes, most));
     const read = readArgs(tool, args, specs[tool]);
@@ -325,7 +324,7 @@ const listMessagesEntry = harden({
     if ('outcome' in read) return read.outcome;
     return ok(
       listingText(
-        context.runtime.inbox.views({ limit: mailLimits.listMessagesPage }),
+        context.runtime.inbox.views({ limit: limits.listMessagesPage }),
       ),
     );
   },
@@ -348,12 +347,9 @@ const sendEntry = harden({
     );
     if ('outcome' in to) return to.outcome;
     const labels = to.list;
-    if (labels.length === 0 || labels.length > mailLimits.recipientsPerSend) {
+    if (labels.length === 0 || labels.length > limits.recipientsPerSend) {
       return failed(
-        mailTextOf.tooManyRecipients(
-          labels.length,
-          mailLimits.recipientsPerSend,
-        ),
+        mailTextOf.tooManyRecipients(labels.length, limits.recipientsPerSend),
       );
     }
     const recipients = [];

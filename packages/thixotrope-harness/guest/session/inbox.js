@@ -4,7 +4,7 @@
  * D-M9-5..D-M9-8, D-M9-13, D-M9-21, section 3.2).
  *
  * Messages live in one `Map<number, InboxMessage>` in number order (at most
- * `mailLimits.inboxMessages`, waiting, handling or kept); a message never
+ * `limits.inboxMessages`, waiting, handling or kept); a message never
  * crosses a vat. Its number is the packages counter's (`packages.table.
  * reserve`, D-M9-7), so `adopt` reaches its attachments under the same
  * number during its turn.
@@ -35,13 +35,12 @@
 import { textOf } from '../lib/guards/session.js';
 import {
   inboxStates,
-  mailTextOf,
-  mailTexts,
+  textOf as mailTextOf,
+  texts as mailTexts,
   mailTypes,
   turnStartingTypes,
-} from '../lib/guards/mail.js';
+} from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
-import { mailLimits } from '../lib/mail-limits.js';
 import { cutText, messageBytes } from '../lib/bounded.js';
 import { mailTurnInput, mailTurnNote } from '../lib/mail-text.js';
 import { isStaged } from './staging.js';
@@ -104,7 +103,7 @@ const makeInbox = runtime => {
    */
   const remember = (seq, outcome) => {
     outcomes.set(seq, outcome);
-    if (outcomes.size > mailLimits.deliveryOutcomesKept) {
+    if (outcomes.size > limits.deliveryOutcomesKept) {
       outcomes.delete(/** @type {number} */ (outcomes.keys().next().value));
     }
     return outcome;
@@ -145,10 +144,10 @@ const makeInbox = runtime => {
       return harden({ ...outcomes.get(seq), duplicate: true });
     }
     lastSeq = seq;
-    if (messages.size >= mailLimits.inboxMessages) {
+    if (messages.size >= limits.inboxMessages) {
       return remember(
         seq,
-        harden({ refused: mailTextOf.inboxFull(mailLimits.inboxMessages) }),
+        harden({ refused: mailTextOf.inboxFull(limits.inboxMessages) }),
       );
     }
     const number = packages().reserve(floor);
@@ -200,9 +199,9 @@ const makeInbox = runtime => {
    * @param {{ limit?: number }} [options]
    * @returns {InboxView[]}
    */
-  const views = ({ limit = mailLimits.listMessagesPage } = {}) => {
+  const views = ({ limit = limits.listMessagesPage } = {}) => {
     const all = [...messages.values()];
-    const count = Math.min(limit, mailLimits.listMessagesPage, all.length);
+    const count = Math.min(limit, limits.listMessagesPage, all.length);
     /** @type {InboxView[]} */
     const out = [];
     for (let i = all.length - 1; out.length < count; i -= 1) {
@@ -333,8 +332,8 @@ const makeInbox = runtime => {
         // A page sent again: applied once.
         known.imported || Fail`only a new session imports mail`;
       } else {
-        messages.size < mailLimits.inboxMessages ||
-          Fail`an imported inbox holds at most ${mailLimits.inboxMessages}`;
+        messages.size < limits.inboxMessages ||
+          Fail`an imported inbox holds at most ${limits.inboxMessages}`;
         add(number, item, {
           attachments: harden([]),
           edges: item.edges,
@@ -392,8 +391,7 @@ const makeInbox = runtime => {
   const replyBody = turn => {
     const { active } = turn;
     if (active.state === 'completed') {
-      // The settle's final text (seam: `HookTurn.final`, asked of the PM).
-      const final = /** @type {any} */ (turn).final ?? '';
+      const final = turn.final ?? '';
       return typeof final === 'string'
         ? cutText(final, limits.inlineBytes)
         : final;

@@ -46,17 +46,16 @@
  * used as record keys.
  */
 import { limits } from '../lib/limits.js';
-import { mailLimits } from '../lib/mail-limits.js';
 import {
-  postOfficeTables,
-  postOfficeTexts,
-  postOfficeTextOf,
-} from '../lib/guards/post-office.js';
+  interfaces as factoryInterfaces,
+  texts as postOfficeTexts,
+  textOf as postOfficeTextOf,
+} from '../lib/guards/factory.js';
 import {
-  mailTexts,
-  mailTextOf,
+  texts as mailTexts,
+  textOf as mailTextOf,
   subagentNameSource,
-} from '../lib/guards/mail.js';
+} from '../lib/guards/session.js';
 import { utf8Bytes } from '../lib/bounded.js';
 import { stagePrompt } from '../session/prompt.js';
 
@@ -66,7 +65,7 @@ import { stagePrompt } from '../session/prompt.js';
 /** @import { PostOffice } from './post-office.js' */
 const { makeExo, makePromiseKit } = /** @type {GuestGlobals} */ (globalThis);
 
-const ML = mailLimits;
+const ML = limits;
 const NAME = RegExp(subagentNameSource);
 /** Units an ask answer's copy keeps before the tool limit's framing (4.3 step 5). */
 export const ANSWER_UNITS = limits.toolOutputUnits - 1280;
@@ -131,7 +130,7 @@ const DEPTH_WALK = 64;
  * @param {any} [powers.admin] the AgentHostAdmin: an inline answer longer
  *   than `inlineBytes` with its note is staged through `writersFor()`
  * @param {{ current: () => Record<string, any> }} [powers.settings] the
- *   harness settings (`maxDescendants`, `maxDepth`; defaults `mailLimits`)
+ *   harness settings (`maxDescendants`, `maxDepth`; defaults `limits`)
  */
 export const makeSubagents = ({
   create,
@@ -142,7 +141,7 @@ export const makeSubagents = ({
   admin,
   settings,
 }) => {
-  const I = postOfficeTables().interfaces;
+  const I = factoryInterfaces;
 
   /** @param {string} name */
   const setting = name => {
@@ -271,9 +270,10 @@ export const makeSubagents = ({
 
   /**
    * The answer a reply makes for the parent (4.3 step 5).
+   * @param {Node} node
    * @param {any} reply `post-office.js` `Reply`
    */
-  const answerOf = async reply => {
+  const answerOf = async (node, reply) => {
     const edges = harden(
       reply.attachments.map((/** @type {any} */ a) => a.label),
     );
@@ -281,19 +281,22 @@ export const makeSubagents = ({
       edges.length === 0 ? '' : postOfficeTextOf.answerAttachments(edges);
     const { body } = reply;
     if (typeof body === 'object') {
-      const text = await postOffice.copy(
-        body.blob,
-        note === ''
-          ? { maxUnits: ANSWER_UNITS }
-          : { maxUnits: ANSWER_UNITS, suffix: note },
-      );
+      const text = await postOffice.copy(body.blob, {
+        maxUnits: ANSWER_UNITS,
+        suffix: note,
+        from: node.row.session,
+        to: node.parent.session,
+      });
       return harden({ text, edges });
     }
     const full = `${body}${note}`;
     if (utf8Bytes(full) <= limits.inlineBytes) {
       return harden({ text: full, edges });
     }
-    return harden({ text: await stagePrompt(admin, full), edges });
+    return harden({
+      text: await stagePrompt(admin, full, node.parent.session),
+      edges,
+    });
   };
 
   /**
@@ -329,7 +332,7 @@ export const makeSubagents = ({
     /** @param {any} reply */
     const onReply = reply => {
       if (open.closed) return;
-      answerOf(reply).then(
+      answerOf(node, reply).then(
         answer => {
           if (open.closed) return;
           finish();

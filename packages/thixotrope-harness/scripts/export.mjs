@@ -393,6 +393,11 @@ export const exportState = async ({ client, file, recordsPerLine = 512 }) => {
                 entries: await plain(part.entries),
                 ...(part.hold === undefined ? {} : { hold: part.hold }),
               });
+            } else if (part.part === 'inbox') {
+              await out.write({
+                type: 'inbox',
+                messages: await plain(part.messages),
+              });
             } else if (part.part === 'end') {
               await out.write({ type: 'end' });
             }
@@ -673,6 +678,17 @@ export const importState = async ({
           ...(line.hold === undefined ? {} : { hold: line.hold }),
         }),
       );
+    } else if (line.type === 'inbox') {
+      if (current === undefined) throw Error('no import is open for inbox');
+      await flush();
+      try {
+        const messages = await staged(line.messages);
+        await E(current.internal).importState(
+          harden({ part: 'inbox', messages }),
+        );
+      } catch (error) {
+        await abandon(`contains a refused inbox page (${String(error)})`);
+      }
     } else if (line.type === 'end') {
       await flush();
       const s = /** @type {NonNullable<typeof current>} */ (current);

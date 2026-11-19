@@ -63,8 +63,7 @@ import { view } from './guards/session.js';
 import * as below from './guards/factory.js';
 // The cross-lane seam unit (WX.1): method names the context window
 // (m8-interfaces.md G-2) and mail (m9-interfaces.md S9) add.
-import { contextMethodNames } from './guards/session.js';
-import { mailMethodNames } from './guards/mail.js';
+import { contextMethodNames, mailMethodNames } from './guards/session.js';
 
 export { execArgumentNames, inspectOps } from './guards/base.js';
 export {
@@ -1344,7 +1343,21 @@ const m2VersionMethodNames = harden({
  * first use and kept (see `lazyTable`).
  */
 export const shapes = lazyTable(
-  { ...m1aShapeBuilders, ...m1bShapeBuilders, ...m2ShapeBuilders },
+  {
+    ...m1aShapeBuilders,
+    ...m1bShapeBuilders,
+    ...m2ShapeBuilders,
+    CopyOptions: () =>
+      record(
+        {},
+        {
+          maxUnits: count,
+          suffix: text(1024),
+          from: R('Session'),
+          to: R('Session'),
+        },
+      ),
+  },
   below.shapes,
 );
 /** Shorthands inside this module. */
@@ -1358,6 +1371,11 @@ const B = shapes;
  */
 export const interfaces = lazyTable(
   {
+    RelayWriters: () =>
+      M.interface('RelayWriters', {
+        open: M.callWhen().returns(R('BlobWriter')),
+        copy: M.callWhen(R('Blob'), S.CopyOptions).returns(S.StagedText),
+      }),
     ...m1aInterfaceBuilders,
     ...m1bInterfaceBuilders,
     ...m2InterfaceBuilders,
@@ -1368,6 +1386,8 @@ export const interfaces = lazyTable(
 
 /** Method names per interface of `interfaces`, in declaration order. */
 export const methodNames = harden({
+  ...below.methodNames,
+  RelayWriters: harden(['open', 'copy']),
   ...m1aMethodNames,
   ...m1bMethodLists,
   ...m2NewMethodNames,

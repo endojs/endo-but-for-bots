@@ -33,7 +33,10 @@
  * Nothing here is exported with the session (D-M9-21): an imported row has
  * a `Delegation` of its own and no children. Guest rules.
  */
-import { mailTexts, mailTextOf } from '../lib/guards/mail.js';
+import {
+  texts as mailTexts,
+  textOf as mailTextOf,
+} from '../lib/guards/session.js';
 import { texts } from '../lib/guards/session.js';
 import { makeCallTable } from './tools/call-table.js';
 
