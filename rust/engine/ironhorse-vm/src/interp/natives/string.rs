@@ -71,10 +71,13 @@ impl Interp {
             let n = self.to_number_f64(code, value)?;
             match m {
                 NativeMethod::StringFromCharCode => {
+                    // ToUint16 (§7.1.9): truncate(ℝ(n)) modulo 2^16. Float
+                    // `%` is exact, so the remainder fits i64; an `as i64`
+                    // cast of `n` itself saturates at and above 2^63.
                     let integer = if !n.is_finite() || n == 0.0 {
                         0i64
                     } else {
-                        n.trunc() as i64
+                        (n.trunc() % 65536.0) as i64
                     };
                     out.push(integer.rem_euclid(0x1_0000) as u16);
                 }
