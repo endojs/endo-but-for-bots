@@ -28,7 +28,7 @@ use crate::format::{
 };
 use crate::sink::Sink;
 use crate::slot_codec::{decode_slots, SLOT_RECORD_BYTES};
-use crate::wire::{be_u32_at, be_u64_at, chunk_at, wire_len};
+use crate::wire::{be_u32_at, be_u64_at, chunk_at, reserve_hint, wire_len};
 use ironhorse_vm::snapshot_api::{
     CollatorData, DateTimeFormatData, IntlTables, IteratorRow, ListFormatData, LocaleData,
     NumberFormatData, PluralRulesData, SegmentIteratorData, SegmenterData, SegmentsData,
@@ -102,6 +102,15 @@ impl MeterImage {
     }
 
     pub(crate) fn decode(p: &[u8]) -> Result<MeterImage, SnapshotError> {
+        let meter = MeterImage::decode_fields(p)?;
+        meter.validate()?;
+        Ok(meter)
+    }
+
+    /// [`MeterImage::decode`] before the cost-table check: the framing
+    /// alone, which guarantee SNAP-3 proves total and exact (the check
+    /// hashes the whole cost table, which is out of a solver's reach).
+    fn decode_fields(p: &[u8]) -> Result<MeterImage, SnapshotError> {
         if p.len() < 28 {
             return Err(SnapshotError::Corrupt("METR header"));
         }
@@ -127,15 +136,13 @@ impl MeterImage {
             .map_err(|_| SnapshotError::Corrupt("METR version not utf8"))?
             .to_string();
         let cost_table_digest = <[u8; 32]>::try_from(digest).map_err(|_| version_string())?;
-        let meter = MeterImage {
+        Ok(MeterImage {
             cost_table_version,
             cost_table_digest,
             index,
             interval,
             count,
-        };
-        meter.validate()?;
-        Ok(meter)
+        })
     }
 
     /// Reject a name or digest mismatch before restoring any meter state.
@@ -863,7 +870,7 @@ pub(crate) fn decode_strings(p: &[u8]) -> Result<Vec<String>, SnapshotError> {
     // `count` (up to `u32::MAX`) from reserving gigabytes before the
     // per-entry bounds check below rejects the truncation (fuzz trophy
     // `malformed_string_count_does_not_over_allocate`).
-    let mut out = Vec::with_capacity(count.min(p.len() / 4));
+    let mut out = Vec::with_capacity(reserve_hint(count, p.len(), 4));
     let mut i = 4;
     for _ in 0..count {
         let len =
@@ -913,7 +920,7 @@ pub(crate) fn decode_names(p: &[u8]) -> Result<Vec<SymbolName>, SnapshotError> {
     // `count` (up to `u32::MAX`) from reserving gigabytes before the
     // per-entry bounds check below rejects the truncation (fuzz trophy
     // `malformed_string_count_does_not_over_allocate`).
-    let mut out = Vec::with_capacity(count.min(p.len() / 4));
+    let mut out = Vec::with_capacity(reserve_hint(count, p.len(), 4));
     let mut i = 4;
     for _ in 0..count {
         let len =
@@ -959,7 +966,7 @@ pub(crate) fn decode_u32s(p: &[u8]) -> Result<Vec<u32>, SnapshotError> {
     // entry); a malformed `count` must not reserve gigabytes before the
     // per-entry bounds check below rejects it (fuzz trophy
     // `malformed_u32_count_does_not_over_allocate`).
-    let mut out = Vec::with_capacity(count.min(p.len() / 4));
+    let mut out = Vec::with_capacity(reserve_hint(count, p.len(), 4));
     let mut i = 4;
     for _ in 0..count {
         out.push(be_u32_at(p, i).ok_or(SnapshotError::Corrupt("u32 list entry"))?);
@@ -1022,7 +1029,7 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
     // bytes per entry); a malformed `free_count` must not reserve gigabytes
     // before the per-entry bounds check below rejects it (fuzz trophy
     // `malformed_heap_free_count_does_not_over_allocate`).
-    let mut free = Vec::with_capacity(free_count.min(p.len() / 4));
+    let mut free = Vec::with_capacity(reserve_hint(free_count, p.len(), 4));
     for _ in 0..free_count {
         free.push(be_u32_at(p, i).ok_or(SnapshotError::Corrupt("HEAP free list"))?);
         i += 4;
@@ -11991,5 +11998,79 @@ mod regexp_utf16_source {
             }
             assert!(ironhorse_vm::regexp_source_compiles(&decoded[0].source, ""));
         }
+    }
+}
+
+/// SNAP-3 beyond the Kani bounds: the same properties over PRNG-driven
+/// payloads and lists far longer than the proofs reach.
+#[cfg(test)]
+mod framing_properties {
+    use super::*;
+    use crate::wire::SplitMix;
+
+    /// `decode_u32s` accepts a payload only if re-encoding gives it back,
+    /// and round-trips every list; payloads up to 64 bytes, lists up to 40.
+    #[test]
+    fn u32_lists_are_exact_and_round_trip() {
+        let mut rng = SplitMix(0x5A42);
+        let mut accepted = 0;
+        for _ in 0..200_000 {
+            let len = rng.below(65) as usize;
+            let mut p = rng.bytes(len);
+            if len >= 4 && rng.below(2) == 0 {
+                // A count that matches the length, so acceptance is common.
+                p[..4].copy_from_slice(&(((len - 4) / 4) as u32).to_be_bytes());
+            }
+            if let Ok(list) = decode_u32s(&p) {
+                accepted += 1;
+                assert_eq!(encode_u32s(&list), p);
+            }
+        }
+        assert!(accepted > 10_000, "only {accepted} accepted");
+        for n in 0..40 {
+            let list: Vec<u32> = (0..n).map(|_| rng.next() as u32).collect();
+            assert_eq!(decode_u32s(&encode_u32s(&list)), Ok(list));
+        }
+    }
+
+    /// The `METR` framing accepts a payload only if re-encoding gives it
+    /// back, on payloads up to 120 bytes, and round-trips version strings
+    /// of up to 40 bytes.
+    #[test]
+    fn meter_fields_are_exact_and_round_trip() {
+        let mut rng = SplitMix(0x3E7E);
+        let mut accepted = 0;
+        for _ in 0..100_000 {
+            let len = 56 + rng.below(65) as usize;
+            let mut p = rng.bytes(len);
+            if rng.below(2) == 0 {
+                p[24..28].copy_from_slice(&(len.saturating_sub(60) as u32).to_be_bytes());
+                for b in &mut p[28..len.saturating_sub(32).max(28)] {
+                    *b &= 0x7F;
+                }
+            }
+            if let Ok(meter) = MeterImage::decode_fields(&p) {
+                accepted += 1;
+                assert_eq!(meter.encode(), p);
+            }
+        }
+        assert!(accepted > 10_000, "only {accepted} accepted");
+        for n in 0..40 {
+            let meter = MeterImage {
+                cost_table_version: (0..n)
+                    .map(|_| char::from(b'a' + rng.below(26) as u8))
+                    .collect(),
+                cost_table_digest: rng.bytes(32).try_into().unwrap(),
+                index: rng.next(),
+                interval: rng.next(),
+                count: rng.next(),
+            };
+            assert_eq!(MeterImage::decode_fields(&meter.encode()), Ok(meter));
+        }
+        // The full decoder still checks the cost table after the framing.
+        assert_eq!(
+            MeterImage::decode(&MeterImage::current().encode()),
+            Ok(MeterImage::current())
+        );
     }
 }

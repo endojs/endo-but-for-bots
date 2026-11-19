@@ -173,16 +173,49 @@ fn parse_atoms(mut buf: &[u8]) -> Result<Vec<Atom<'_>>, AtomError> {
 const PAIRWISE_DUPLICATE_SCAN_MAX: usize = 64;
 
 /// The first atom (in file order) whose tag an earlier atom already used.
+///
+/// Under Kani only the pairwise shape is compiled: `BTreeSet`'s node code
+/// is beyond the solver (three symbolic tags did not finish symbolic
+/// execution in 300 s). That loses nothing for the SNAP-1 proofs, whose
+/// inputs of at most 48 bytes hold at most five atoms, so the threshold
+/// below selects the pairwise shape for every one of them (each harness
+/// asserts its bound against [`PAIRWISE_DUPLICATE_SCAN_MAX`]). The set
+/// shape and the two shapes' agreement are covered by ordinary tests.
 fn first_duplicate(atoms: &[Atom<'_>]) -> Option<FourCc> {
-    if atoms.len() <= PAIRWISE_DUPLICATE_SCAN_MAX {
-        atoms.iter().enumerate().find_map(|(i, a)| {
-            let earlier = atoms.get(..i)?;
-            earlier.iter().any(|b| b.tag == a.tag).then_some(a.tag)
-        })
-    } else {
-        let mut seen = std::collections::BTreeSet::new();
-        atoms.iter().find(|a| !seen.insert(a.tag.0)).map(|a| a.tag)
+    #[cfg(kani)]
+    {
+        first_duplicate_pairwise(atoms)
     }
+    #[cfg(not(kani))]
+    {
+        first_duplicate_with(atoms, PAIRWISE_DUPLICATE_SCAN_MAX)
+    }
+}
+
+/// [`first_duplicate`] with the shape threshold as a parameter, so tests
+/// can run both shapes on the same input and check they agree.
+#[cfg(not(kani))]
+fn first_duplicate_with(atoms: &[Atom<'_>], pairwise_max: usize) -> Option<FourCc> {
+    if atoms.len() <= pairwise_max {
+        first_duplicate_pairwise(atoms)
+    } else {
+        first_duplicate_set(atoms)
+    }
+}
+
+/// The allocation-free `O(n^2)` shape.
+fn first_duplicate_pairwise(atoms: &[Atom<'_>]) -> Option<FourCc> {
+    atoms.iter().enumerate().find_map(|(i, a)| {
+        let earlier = atoms.get(..i)?;
+        earlier.iter().any(|b| b.tag == a.tag).then_some(a.tag)
+    })
+}
+
+/// The `O(n log n)` shape for many atoms.
+#[cfg(not(kani))]
+fn first_duplicate_set(atoms: &[Atom<'_>]) -> Option<FourCc> {
+    let mut seen = std::collections::BTreeSet::new();
+    atoms.iter().find(|a| !seen.insert(a.tag.0)).map(|a| a.tag)
 }
 
 /// A parsed atom container: the `XS_M` envelope unwrapped into its atom
@@ -383,6 +416,111 @@ mod tests {
                 Some(AtomError::DuplicateAtom(FourCc(*b"BBBB")))
             );
         }
+    }
+
+    /// The reference meaning of the duplicate check: the first atom whose
+    /// tag an earlier atom already used.
+    fn naive_first_duplicate(tags: &[[u8; 4]]) -> Option<FourCc> {
+        (0..tags.len())
+            .find(|&k| tags[..k].contains(&tags[k]))
+            .map(|k| FourCc(tags[k]))
+    }
+
+    /// SNAP-1: both duplicate-check shapes agree with the reference on
+    /// PRNG-driven tag lists of up to 300 atoms over alphabets small enough
+    /// to repeat and large enough not to, and the threshold picks the set
+    /// shape above 64 atoms (the shape Kani does not reach).
+    #[test]
+    fn duplicate_shapes_agree_with_the_reference() {
+        let mut rng = crate::wire::SplitMix(0xD0B1);
+        for _ in 0..3_000 {
+            let n = rng.below(301) as usize;
+            let alphabet = 1 + rng.below(1_000) as u32;
+            let tags: Vec<[u8; 4]> = (0..n)
+                .map(|_| (rng.below(u64::from(alphabet)) as u32).to_be_bytes())
+                .collect();
+            let atoms: Vec<Atom<'_>> = tags
+                .iter()
+                .map(|&t| Atom {
+                    tag: FourCc(t),
+                    payload: &[],
+                })
+                .collect();
+            let want = naive_first_duplicate(&tags);
+            assert_eq!(first_duplicate_pairwise(&atoms), want);
+            assert_eq!(first_duplicate_set(&atoms), want);
+            assert_eq!(first_duplicate(&atoms), want);
+        }
+    }
+
+    /// SNAP-1(a, b, c, d) beyond the Kani bounds: written containers of up
+    /// to 12 atoms round-trip, and PRNG mutations of them (byte changes,
+    /// truncation, extension) either refuse or parse to atoms that tile the
+    /// input and rewrite to exactly it.
+    #[test]
+    fn containers_round_trip_and_accepted_bytes_are_canonical() {
+        let mut rng = crate::wire::SplitMix(0xA70A);
+        let mut accepted_mutants = 0;
+        for _ in 0..20_000 {
+            let k = rng.below(13) as usize;
+            let mut w = AtomWriter::new();
+            let mut list = Vec::new();
+            for _ in 0..k {
+                let tag = (rng.below(16) as u32).to_be_bytes();
+                let len = rng.below(20) as usize;
+                let payload = rng.bytes(len);
+                w.atom(FourCc(tag), &payload).unwrap();
+                list.push((tag, payload));
+            }
+            let bytes = w.finish().unwrap();
+            let tags: Vec<[u8; 4]> = list.iter().map(|(t, _)| *t).collect();
+            match AtomReader::parse(&bytes) {
+                Ok(r) => {
+                    assert_eq!(naive_first_duplicate(&tags), None);
+                    let got: Vec<([u8; 4], Vec<u8>)> = r
+                        .atoms()
+                        .iter()
+                        .map(|a| (a.tag.0, a.payload.to_vec()))
+                        .collect();
+                    assert_eq!(got, list);
+                }
+                Err(e) => assert_eq!(
+                    Some(e),
+                    naive_first_duplicate(&tags).map(AtomError::DuplicateAtom)
+                ),
+            }
+            let mut mutant = bytes.clone();
+            match rng.below(3) {
+                0 if !mutant.is_empty() => {
+                    let at = rng.below(mutant.len() as u64) as usize;
+                    mutant[at] = rng.next() as u8;
+                }
+                1 => mutant.truncate(rng.below(mutant.len() as u64 + 1) as usize),
+                _ => {
+                    let extra = 1 + rng.below(9) as usize;
+                    mutant.extend(rng.bytes(extra));
+                }
+            }
+            if let Ok(r) = AtomReader::parse(&mutant) {
+                accepted_mutants += 1;
+                let mut at = ATOM_HEADER;
+                let mut w = AtomWriter::new();
+                for a in r.atoms() {
+                    assert_eq!(
+                        a.payload.as_ptr() as usize - mutant.as_ptr() as usize,
+                        at + ATOM_HEADER
+                    );
+                    at += ATOM_HEADER + a.payload.len();
+                    w.atom(a.tag, a.payload).unwrap();
+                }
+                assert_eq!(at, mutant.len());
+                assert_eq!(w.finish().unwrap(), mutant);
+            }
+        }
+        assert!(
+            accepted_mutants > 1_000,
+            "only {accepted_mutants} mutants accepted"
+        );
     }
 
     const XS_M_TAG: [u8; 4] = *b"XS_M";

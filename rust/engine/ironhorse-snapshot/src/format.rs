@@ -699,3 +699,78 @@ mod tests {
         assert!(!s.is_compatible_with(&Signature::new("ironhorse-worker-v2")));
     }
 }
+
+/// SNAP-3 beyond the Kani bounds, over PRNG-driven payloads.
+#[cfg(test)]
+mod framing_properties {
+    use super::*;
+    use crate::wire::SplitMix;
+
+    #[test]
+    fn version_decode_is_exact_and_round_trips() {
+        let mut rng = SplitMix(0x7E25);
+        for _ in 0..100_000 {
+            let len = rng.below(17) as usize;
+            let mut p = rng.bytes(len);
+            if len >= 4 && rng.below(2) == 0 {
+                p[..4].copy_from_slice(&IRONHORSE_MAGIC);
+            }
+            if let Ok(version) = Version::decode(&p) {
+                assert_eq!(version.encode(), p);
+                assert!(version.is_readable());
+            }
+        }
+        for format_version in (0..IRONHORSE_FORMAT_VERSION + 3).chain([u32::MAX]) {
+            for slot_width in 0..=u8::MAX {
+                for endian in 0..3 {
+                    let version = Version {
+                        format_version,
+                        slot_width,
+                        endian,
+                    };
+                    let back = Version::decode(&version.encode());
+                    assert_eq!(back.is_ok(), version.is_readable());
+                    if let Ok(back) = back {
+                        assert_eq!(back, version);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn signature_decode_is_exact_and_round_trips() {
+        let mut rng = SplitMix(0x5165);
+        let mut boot = 0;
+        for _ in 0..100_000 {
+            let len = rng.below(80) as usize;
+            let mut p = rng.bytes(len);
+            if len >= 4 && rng.below(2) == 0 {
+                p[..4].copy_from_slice(b"IHB1");
+            }
+            if let Ok(signature) = Signature::decode(&p) {
+                boot += usize::from(signature.boot.is_some());
+                assert_eq!(signature.encode(), p);
+            }
+        }
+        assert!(boot > 1_000, "only {boot} boot signatures");
+        for host in ["", "a", "ironhorse-worker-v1", "IHB1"] {
+            let signature = Signature {
+                host: host.to_string(),
+                boot: Some([7; 32]),
+            };
+            assert_eq!(Signature::decode(&signature.encode()), Ok(signature));
+        }
+        // The one non-round-trip, by construction unreachable from a decode:
+        // a legacy (digest-less) signature whose host starts with the boot
+        // magic encodes to bytes that decode as the boot form (or refuse).
+        let legacy = Signature {
+            host: "IHB1".to_string(),
+            boot: None,
+        };
+        assert_eq!(
+            Signature::decode(&legacy.encode()),
+            Err(SignatureError::Truncated)
+        );
+    }
+}
