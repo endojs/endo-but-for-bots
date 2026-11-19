@@ -2624,8 +2624,8 @@ mod tests {
 
     /// Regression for continuous-fuzz finding `783be6e6106bad98` (target
     /// `differential_source`). The 6-byte input `00 00 66 69 27 44` folds into
-    /// `((((true + 327155712) && (!true)) || ((~570425344) * (true + 327155712)))
-    /// + (!(...)))`, which collapses (the `&&` is `false`, so the `||` takes its
+    /// `((((true + 327155712) && (!true)) || ((~570425344) * (true + 327155712))) +
+    /// (!(...)))`, which collapses (the `&&` is `false`, so the `||` takes its
     /// right operand; the outer `!(...)` is `false` → `0`) to the single product
     /// `(~570425344) * (327155712 + 1) = -570425345 * 327155713`. Its exact value
     /// `-186617910456745985` overflows 2^53 and rounds to the double

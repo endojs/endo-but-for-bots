@@ -5,8 +5,8 @@
 //! one thing `xst` never had: a differential oracle.
 //!
 //! This module is the runner core (rollout step 1): full YAML frontmatter
-//! ([`crate::frontmatter`]), the ironhorse not-yet-implemented feature skip list
-//! + `--features-include`, sloppy+strict double-run mode selection, negative
+//! ([`crate::frontmatter`]), the ironhorse not-yet-implemented feature skip list +
+//! `--features-include`, sloppy+strict double-run mode selection, negative
 //! verdicts (constructor name vs `negative.type`, stack/memory aborts accepted for an expected
 //! `RangeError`), the dual-run oracle wiring (verdict + observable agreement
 //! gating, computron advisory, `--gate-meter-exact`, `--repeat N`

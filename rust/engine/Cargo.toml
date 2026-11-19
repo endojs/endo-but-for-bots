@@ -50,7 +50,6 @@ all = { level = "warn", priority = -1 }
 collapsible_else_if = "allow"
 collapsible_if = "allow"
 default_constructed_unit_structs = "allow"
-doc_lazy_continuation = "allow"
 explicit_counter_loop = "allow"
 field_reassign_with_default = "allow"
 get_first = "allow"

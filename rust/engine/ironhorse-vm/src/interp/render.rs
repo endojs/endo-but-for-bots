@@ -455,8 +455,8 @@ impl Interp {
     }
 
     /// The descriptive string of a symbol value (XS's `fxSymbolToString`):
-    /// `Symbol(` + the description (empty when the description is `undefined`)
-    /// + `)`. A symbol carries `Payload::Reference(desc)`, the description slot
+    /// `Symbol(` + the description (empty when the description is `undefined`) +
+    /// `)`. A symbol carries `Payload::Reference(desc)`, the description slot
     /// (a `String` or `undefined`).
     pub(super) fn render_symbol_lossy(&self, sym: Slot) -> String {
         String::from_utf16_lossy(&self.symbol_descriptive_units(sym))

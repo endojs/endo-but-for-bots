@@ -979,8 +979,8 @@ struct FinalizationRegistryData {
     changed: bool,
 }
 
-/// An `ArrayBuffer` instance's internal state (XS's `XS_ARRAY_BUFFER_KIND`
-/// + `XS_BUFFER_INFO_KIND` internal slots: the backing-store address, the
+/// An `ArrayBuffer` instance's internal state (XS's `XS_ARRAY_BUFFER_KIND` +
+/// `XS_BUFFER_INFO_KIND` internal slots: the backing-store address, the
 /// byte length and the maximum byte length). Kept in the
 /// [`Interp::array_buffers`] side table like [`CollectionData`]; the backing
 /// bytes live in the chunk arena at `data`, relocated by the slide-compactor.

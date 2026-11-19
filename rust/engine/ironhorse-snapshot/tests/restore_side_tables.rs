@@ -2,8 +2,8 @@
 //! PR #600). The side-table completeness ledger
 //! (`ironhorse_snapshot::sidetable`) once claimed `GlobalProps` and
 //! `SymbolTables` were covered by the arena / serialized atoms, but
-//! `Interp::restore_snapshot_state` reinstates arenas + stack + `symbol_names`
-//! + meter only — the `global_props` id→slot index and the `symbol_ids`
+//! `Interp::restore_snapshot_state` reinstates arenas + stack + `symbol_names` +
+//! meter only — the `global_props` id→slot index and the `symbol_ids`
 //! inverse map + the then-extant `next_intern_id` counter (all derived,
 //! HashMap-resident, not arena state) stayed at their empty fresh-boot
 //! values. A runtime global materialized in an earlier crank then vanished
