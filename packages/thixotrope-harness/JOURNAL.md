@@ -15401,7 +15401,7 @@ be answered as a duplicate; it runs after the row is dropped instead. (2) `setti
 the tree is `{ current }` over `harnessSettings`, but `makeHarnessSettings.set` stores no
 `maxDescendants`, `maxDepth` or `askTimeoutSeconds` (F6 admits them in the guard only), so the
 tree reads `mailLimits` until `root.js` stores them (acceptance 8's "`maxDepth` 0 in the
-settings" needs that). (3) The composed prompt grew from 3,769 to 5,979 bytes plain (6,275
+settings" needs that). (3) The composed prompt grew from 3,765 to 5,979 bytes plain (6,275
 spoken; mail 909, delegation 1,301, two separators): a preset's instructions stay inline up to
 about 2.2 KB instead of 4.4 KB before the prompt is staged; `m5-w51-factory`'s over-frame preset
 was cut from 1,300 to 400 units of instructions to keep its prompt inline. (4) Pins changed with
