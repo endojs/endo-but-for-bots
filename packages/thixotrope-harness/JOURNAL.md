@@ -17429,3 +17429,11 @@ skips and three TODOs. The legacy 200-turn context case passed its clean and SIG
 restarts after template preparation moved outside the timed case. The M3 history and
 reconnect browser suites passed their bounded retries. J-12544 records the 12 lane-specific
 mail daemon checks including the corrected repeated-recipient case.
+### J-12545 2026-11-19 M9 subagent workload smoke
+
+The scripted subagent benchmark exercised all four live workloads in a shared slot. The 1%
+spawn and ask windows each completed one sample: 1,955 ms to spawn, 1,126 ms ask overhead.
+Both exceeded their targets. The eight-child bursts took 31,036, 28,180 and 27,409 ms against
+a 30,000 ms maximum, exceeding the maximum once. All three subtree stops removed exactly three
+sessions, in 2,525, 1,958 and 2,175 ms. The benchmark exited 1 for its budget misses. In the
+repeat of the five-file daemon suite, the in-flight delivery/reconnect case also passed again.
