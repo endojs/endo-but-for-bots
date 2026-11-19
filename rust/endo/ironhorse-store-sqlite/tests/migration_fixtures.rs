@@ -5,6 +5,7 @@
 //! root-tree bump. `close()` folds the WAL, so the committed .sqlite
 //! is one self-contained deterministic-enough file (page content is
 //! what migration reads; free-page noise is irrelevant to it).
+#![forbid(unsafe_code)]
 
 mod common;
 

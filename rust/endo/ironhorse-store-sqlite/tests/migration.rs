@@ -1,4 +1,5 @@
 //! Matching-boot schema migration and refusal of unfingerprinted historical stores.
+#![forbid(unsafe_code)]
 
 mod common;
 

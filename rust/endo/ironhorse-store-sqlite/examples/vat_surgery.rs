@@ -1,5 +1,6 @@
 //! Offline experiment: SQL inspection and guarded heap-value repairs.
 //! See ../VAT_SURGERY.md. This does not install a vat or edit a live store.
+#![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
 use std::error::Error;

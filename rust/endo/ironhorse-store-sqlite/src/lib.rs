@@ -30,6 +30,7 @@
 //! `forbid(unsafe_code)` and zero-C (design § Crate and dependency
 //! layout); SQLite's C is the same bundled `rusqlite` the daemon
 //! already compiles.
+#![forbid(unsafe_code)]
 
 use std::path::Path;
 

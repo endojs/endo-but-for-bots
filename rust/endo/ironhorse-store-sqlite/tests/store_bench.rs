@@ -43,6 +43,7 @@
 //! ```sh
 //! cargo test --release -p ironhorse-store-sqlite --test store_bench -- --ignored --nocapture
 //! ```
+#![forbid(unsafe_code)]
 
 use std::cell::RefCell;
 use std::rc::Rc;

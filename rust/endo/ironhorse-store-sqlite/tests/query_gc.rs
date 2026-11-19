@@ -6,6 +6,7 @@
 //! committed epoch (a store from before the table or its marker, or
 //! one last committed by a build that does not keep the marker). An
 //! index the store does attest is trusted as stored (issue #1330).
+#![forbid(unsafe_code)]
 
 use std::cell::RefCell;
 use std::rc::Rc;

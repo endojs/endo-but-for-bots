@@ -1,6 +1,7 @@
 //! SQLite cross-version lock for the boot-layout compatibility gate. The
 //! committed store was produced by exact commit `8047fd52f`, before the
 //! current boot graph landed, and must be rejected before arena adoption.
+#![forbid(unsafe_code)]
 
 mod common;
 

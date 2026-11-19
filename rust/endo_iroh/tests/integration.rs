@@ -12,6 +12,7 @@
 //! ```text
 //! ENDO_IROH_INTEGRATION=1 cargo test -p endo_iroh --test integration -- --nocapture
 //! ```
+#![forbid(unsafe_code)]
 
 use std::time::Duration;
 

@@ -8,6 +8,7 @@
 //! instrument rather than hand-mirrored tests; the real-JS lifecycle
 //! scenarios in `engine_lifecycle.rs` remain this backend's own
 //! deeper coverage (full close/reopen cycles, sidecar removal).
+#![forbid(unsafe_code)]
 
 use ironhorse_snapshot::store_suite::{
     boundary_collection_twins, checkpoint_acceptance, lazy_working_set_bound, metamorphic_suite,

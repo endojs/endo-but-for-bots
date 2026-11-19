@@ -22,6 +22,7 @@
 //! `link_intrinsics`; every later independently compiled crank passes through
 //! `relink_crank`, the production boundary that maps its local symbol ids into
 //! the retained realm and keeps its function bytecode alive.
+#![forbid(unsafe_code)]
 
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, resume_from_store, MachineSnapshot,

@@ -18,6 +18,7 @@
 //! tests. By default the n0 preset is used, so `listen` is dialable by node
 //! id alone across networks (given outbound access to iroh's relay and
 //! discovery services).
+#![forbid(unsafe_code)]
 
 use std::process::ExitCode;
 
