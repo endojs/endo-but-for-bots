@@ -244,49 +244,97 @@ await runPerf('mail', async ({ provision }) => {
         ],
       });
     }
-    /** @param {number} ms @param {boolean} edges */
+    /**
+     * @param {number} ms
+     * @param {boolean} edges
+     */
     const measureThroughput = async (ms, edges) => {
-      let largest = 0;
       let posts = 0;
-      // Each sender alternates its two recipients. Concurrent consumers share
-      // one inbox page request; each consumes only its own reply.
-      /** @type {Promise<any> | undefined} */
-      let page;
-      const readPage = () => {
-        page ??= E(mailbox)
-          .list()
-          .finally(() => {
-            page = undefined;
-          });
-        return page;
-      };
+      let largest = 0;
+      let active = 0;
+      let maxActive = 0;
+      let ackBacklog = 0;
+      let finished = 0;
+      let stopped = false;
+      /** @type {Map<number, () => void>} */
+      const pending = new Map();
       const start = performance.now();
-      await Promise.all(
-        clients.map(async c => {
-          let n = 0;
-          do {
-            const { postmark } = await post(
-              c.mailbox,
-              c.sessions[n % 2],
-              edges ? c.attachments : [],
+      // Each client issues just one send at a time, but can use its second
+      // recipient while the first recipient is processing its turn.
+      const senders = clients.map(async c => {
+        const credits = c.sessions.map(() => Promise.resolve());
+        let n = 0;
+        while (!stopped) {
+          const slot = n % credits.length;
+          await credits[slot];
+          if (stopped || (n && performance.now() - start >= ms)) break;
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+          const { postmark } = await post(
+            c.mailbox,
+            c.sessions[slot],
+            edges ? c.attachments : [],
+          );
+          if (stopped) break;
+          credits[slot] = new Promise(resolve =>
+            pending.set(postmark, resolve),
+          );
+          ackBacklog = Math.max(ackBacklog, pending.size);
+          n += 1;
+        }
+        finished += 1;
+      });
+      const drain = waitFor(
+        async () => {
+          if (stopped || (finished === clients.length && !pending.size))
+            return true;
+          if (!pending.size) return false;
+          let after = 0;
+          let seen = 0;
+          for (;;) {
+            const page = await E(mailbox).list(harden({ after }));
+            seen += page.messages.length;
+            await Promise.all(
+              page.messages.map(async message => {
+                const release = pending.get(message.inReplyTo);
+                if (!release) return;
+                await E(message.message).dismiss();
+                pending.delete(message.inReplyTo);
+                posts += 1;
+                active -= 1;
+                release();
+              }),
             );
-            const reply = await waitFor(
-              async () => {
-                const { messages } = await readPage();
-                largest = Math.max(largest, messages.length);
-                return messages.find(m => m.inReplyTo === postmark);
-              },
-              60_000,
-              'the recipient turn and its reply',
-            );
-            await E(reply.message).dismiss();
-            posts += 1;
-            n += 1;
-          } while (performance.now() - start < ms);
-        }),
+            if (page.next === undefined) break;
+            after = page.next;
+          }
+          largest = Math.max(largest, seen);
+          return false;
+        },
+        ms + 60_000,
+        'all senders and their completed, dismissed replies',
+        10,
       );
-      const elapsedMs = performance.now() - start;
-      return { posts, largest, w: { samples: posts, ms, elapsedMs, few: 10 } };
+      try {
+        await Promise.all([...senders, drain]);
+      } finally {
+        stopped = true;
+        for (const release of pending.values()) release();
+      }
+      if (active !== 0 || pending.size !== 0)
+        throw Error('Mail window did not drain');
+      return {
+        posts,
+        largest,
+        maxActive,
+        ackBacklog,
+        w: {
+          samples: posts,
+          ms,
+          elapsedMs: performance.now() - start,
+          few: 10,
+        },
+      };
     };
     const rate = await measureThroughput(window, false);
     const perSecond = (rate.posts * 1000) / rate.w.elapsedMs;
@@ -296,6 +344,8 @@ await runPerf('mail', async ({ provision }) => {
       value: perSecond,
       posts: rate.posts,
       largestInbox: rate.largest,
+      maxActiveRecipients: rate.maxActive,
+      maxAcknowledgedAwaitingDismissal: rate.ackBacklog,
       loadAvg: loadAvg(),
       budget: { minimum: 3 },
       pass: perSecond >= 3,
@@ -314,6 +364,8 @@ await runPerf('mail', async ({ provision }) => {
       before,
       after,
       posts: growth.posts,
+      maxActiveRecipients: growth.maxActive,
+      maxAcknowledgedAwaitingDismissal: growth.ackBacklog,
       budget: { maximum: 1.25 },
       pass: ratio <= 1.25,
       ...windowFields(growth.w),
