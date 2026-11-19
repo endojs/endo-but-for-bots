@@ -15262,3 +15262,62 @@ Reading: no command over 60 s; no supervisor, browser or run lock; nothing pushe
 shared file, `packages/thixotrope` or `rust/**`; eslint 0 problems on the unit's five files,
 `tsc` clean for the package, `corepack yarn lint:duplicates` 1.75 % (ceiling 2.05 %).
 Fit: neutral.
+
+### J-12420 2026-11-19 W9.5 subagent tree - built
+Evidence: `91b12e6bfe` (`guest/factory/subagents.js`, `test/unit/subagent-tree.test.js`, 15
+tests, 0.88 s wall time for the file).
+Reading: `makeSubagents({ create, deleteSession, rows, postOffice, starts, admin?, settings? })`
+answers `{ delegationFor(row, from), deleteChildren({ row, session }), restart(current),
+nodeOf(row), status() }`. `delegationFor` mints one `Delegation` per row below `maxDepth` (depth
+from the parent chain: the tree's node, else `row.parent` set by seam F3, so a child's builder
+call during its own creation already sees its depth) and keeps `from` (the row's resolved
+`backend`, `modelId`, `preset`, `reasoningEffort`) as what its children inherit. `spawn` admits in
+the crank that receives it: the name pattern, uniqueness among live children and the parent's
+spawns in flight, and the root tree's live descendants plus its reservations against
+`maxDescendants` (`treeLimit`); the reservation is stamped with `starts.current()`. The child is
+made by the injected `create(options, { parent, endowments, link })` with `title` =
+`childTitle(parent title cut to fit, name)`, the inherited fields, `userInitiated: false`, the
+spawn's `at` and inline `systemPrompt`; `endowments` are the listed attachments. Each child's
+`SubagentHandle` is bound in the post office as the child's address. `ask` posts the task with
+`onReply` (one open ask per child), keeps the postmark when the receipt arrives (a cancel that
+came first cancels the delivery then), and builds the answer: a staged reply copied with
+`maxUnits = toolOutputUnits - 1,280` and the attachment note as `suffix`; an inline one inline, or
+staged through `stagePrompt` when the note takes it past `inlineBytes`. A refused delivery to a
+lost child answers `subagentLost`. `cancelAsk`, `stop` and a restart end the open ask with
+`askAbandoned` and `cancelDelivery` (the child gets `cancelMail`, a late reply is consumed).
+`stop` and `deleteChildren` delete deepest first, one session at a time, and a node leaves the
+tree when its delete completed (or, after a restart, when its row is found dropped).
+`restart(current)` links a reservation whose row the start listener completed (KM10) and
+releases the rest (KM9), and closes asks stamped earlier (KM7, KM8), without awaiting anything.
+Fit: good; rights amplification (the post office's `WeakMap`) makes a handle double as an
+address with no lookup, and heap-resident nodes and reservations stamped with the start count
+need no persistence code of their own.
+
+### J-12421 2026-11-19 W9.5 contract differences - finding
+Evidence: m9-interfaces.md 3.1 (`makeSubagents({ create, deleteSession, rows, postOffice,
+settings, starts })`, `delegationFor(row)`, `create(options, { parent })`), 4.3 step 5, 4.4;
+`guest/factory/session-options.js` `ResolvedOptions`; `guards/factory.js` `CreateOptions`.
+Reading: (1) `delegationFor(row, from)` takes the row's resolved options as a second argument:
+the row holds only `backendTitle` and `modelId` strings, and the tree must pass the Backend
+object (the pool) on; W9.9's `subagentServices` builder has `resolved` in its context (F2).
+(2) `create`'s second argument carries `endowments` (the `CreateOptions` guard admits none, so
+F4's builder must take them from here) and `link(row)`, which W9.9's `create` should call right
+after `rows.add`: without it a creation the start listener completed after a restart (KM10) is
+released, not linked, since the spawn's own `create` promise never answers then. (3) `admin` is
+added: an inline answer plus its attachment note can pass `inlineBytes` and is staged with the
+existing `session/prompt.js` `stagePrompt` (no copy). (4) The preset object is passed on, not
+its snapshot: `CreateOptions` takes a `Preset`, so a child re-snapshots it at spawn time, equal
+to the parent's unless the preset was saved since. (5) A second ask while one is open is refused
+in the factory too (`askInFlight`), as is an ask during `stop` (`askAbandoned`).
+Fit: fair: each difference keeps the other units' interfaces; (1) and (2) are W9.9's wiring.
+
+### J-12422 2026-11-19 W9.5 sizes and time record - process
+Evidence: `node scripts/bundle-guest.mjs` at `91b12e6bfe`; first command 2026-11-19T02:37:42Z.
+Reading: the module is factory-only: session program contribution 0 bytes (the session bundle
+reads 278,805 bytes in this worktree with group A and W9.8's uncommitted seams present, not
+this unit's); factory bundle 192,892 bytes unchanged until W9.9 imports `subagents.js` (18,932
+source bytes before stripping). No rate measured: the perf rows (`subagent.spawn`, `.ask`,
+`.burst8`, `.stop`) need a supervisor and are W9.10's. No command over 60 s; no supervisor or run
+lock; `tsc` clean, eslint 0 errors (4 `safe-await-separator` warnings, as in `post-office.js`),
+`lint:duplicates` 1.73 % (ceiling 2.05 %).
+Fit: neutral.
