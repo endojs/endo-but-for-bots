@@ -25,7 +25,10 @@
 //! `2^-1074`, so the decomposition `significand × 2^exponent` below is exact.
 #![forbid(unsafe_code)]
 
+pub mod arith;
 pub mod float16;
+pub mod index_string;
+pub mod int32;
 pub mod number;
 pub mod relative_index;
 pub mod to_integer;
