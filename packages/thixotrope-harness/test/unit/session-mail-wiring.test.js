@@ -50,6 +50,7 @@ const makeMailSession = async () => {
   /** @type {any} */
   let queue;
   const s = await makeQueueSession({
+    withEnvironment: true,
     parts: runtimeParts,
     makeQueue: options => {
       queue = realMakeQueue(options);
@@ -96,8 +97,12 @@ const heldSession = async reason => {
   const s = await makeMailSession();
   await s.submit('first');
   await s.submit('waiting');
-  s.queue().hold(reason, holdTexts[reason]());
-  await s.finish();
+  if (reason === 'stopped') {
+    await s.session.emergencyStop();
+  } else {
+    s.queue().hold(reason, holdTexts[reason]());
+    await s.finish();
+  }
   return s;
 };
 

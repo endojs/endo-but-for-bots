@@ -40,9 +40,10 @@ const usage = harden({
 /**
  * @param {object} [options]
  * @param {readonly any[]} [options.parts] runtime parts
+ * @param {boolean} [options.withEnvironment]
  * @param {(options: any) => any} [options.makeQueue]
  */
-export const makeQueueSession = async ({ parts, makeQueue } = {}) => {
+export const makeQueueSession = async ({ parts, makeQueue, withEnvironment = false } = {}) => {
   /** @type {any[]} */
   const rounds = [];
   /** @type {any[]} */
@@ -98,7 +99,11 @@ export const makeQueueSession = async ({ parts, makeQueue } = {}) => {
     userInitiated: true,
   });
   const { session, internal } = makeSession(
-    { config, services: { backend, host }, rowReporter },
+    {
+      config,
+      services: { backend, host, ...(withEnvironment ? { environment: Far('EnvironmentControl', { emergencyStop: () => {}, resume: () => {} }) } : {}) },
+      rowReporter,
+    },
     harden({
       ...(parts === undefined ? {} : { parts }),
       ...(makeQueue === undefined ? {} : { makeQueue }),

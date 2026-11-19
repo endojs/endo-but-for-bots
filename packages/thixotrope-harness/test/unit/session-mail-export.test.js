@@ -12,7 +12,6 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { interfaces as factoryInterfaces } from '../../guest/lib/guards/factory.js';
-import { holdTexts } from '../../guest/session/holds.js';
 import { inboxPart } from '../../guest/session/inbox.js';
 import { makeQueue as realMakeQueue } from '../../guest/session/queue.js';
 import { runtimeParts } from '../../guest/session/runtime-parts.js';
@@ -62,6 +61,7 @@ const makeMailSession = async () => {
   /** @type {any} */
   let inbox;
   const s = await makeQueueSession({
+    withEnvironment: true,
     parts: harden([
       ...runtimeParts.filter(
         part => part.name !== 'inbox' && part.name !== 'subagents',
@@ -110,8 +110,7 @@ test('the inbox is exported after the queue and imported kept and read-only', as
   // Idle, with a held entry, so delivered mail waits (D-M9-5).
   await from.submit('first');
   await from.submit('held');
-  from.queue().hold('stopped', holdTexts.stopped());
-  await from.finish();
+  await from.session.emergencyStop();
   const { blob, staged } = stagedText('long mail');
   t.deepEqual(from.internal.deliverMail(envelope(1, { body: staged })), {
     number: 1,
