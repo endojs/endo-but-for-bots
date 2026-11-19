@@ -1,0 +1,12 @@
+Mutant NUM-9-b: days_from_civil drops a century every 200 years instead of every 100.
+--- a/ironhorse-vm/src/interp/temporal.rs
++++ b/ironhorse-vm/src/interp/temporal.rs
+@@ -941,7 +941,7 @@
+     let yoe = y - era * 400;
+     let mp = i128::from(month) + if month > 2 { -3 } else { 9 };
+     let doy = (153 * mp + 2) / 5 + i128::from(day) - 1;
+-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
++    let doe = yoe * 365 + yoe / 4 - yoe / 200 + doy;
+     Some(era * 146097 + doe - 719468)
+ }
+ 

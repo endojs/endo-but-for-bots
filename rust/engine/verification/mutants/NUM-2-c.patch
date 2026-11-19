@@ -1,0 +1,12 @@
+Mutant NUM-2-c: Math.clz32 counts trailing instead of leading zeros.
+--- a/ironhorse-vm/src/interp/numeric.rs
++++ b/ironhorse-vm/src/interp/numeric.rs
+@@ -480,7 +480,7 @@
+ /// number of leading zero bits, 32 for 0.
+ #[inline]
+ pub(super) fn math_clz32(n: u32) -> i32 {
+-    n.leading_zeros() as i32
++    n.trailing_zeros() as i32
+ }
+ 
+ // XS_CODE_MINUS: negate, with -0 and INT_MIN promotion to number.

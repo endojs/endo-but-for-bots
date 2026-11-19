@@ -1,0 +1,12 @@
+Mutant NUM-8-d: Int16 elements decode as unsigned.
+--- a/ironhorse-vm/src/interp.rs
++++ b/ironhorse-vm/src/interp.rs
+@@ -3312,7 +3312,7 @@
+         // Int8
+         4 => Slot::integer(b[0] as i8 as i32),
+         // Int16
+-        5 => Slot::integer(i16::from_le_bytes([b[0], b[1]]) as i32),
++        5 => Slot::integer(u16::from_le_bytes([b[0], b[1]]) as i32),
+         // Int32
+         6 => Slot::integer(i32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+         // Uint8 / Uint8Clamped

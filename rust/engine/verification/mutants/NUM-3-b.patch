@@ -1,0 +1,12 @@
+Mutant NUM-3-b: the Mul fast path gives -0 for +0 times a positive.
+--- a/ironhorse-vm/src/interp/numeric.rs
++++ b/ironhorse-vm/src/interp/numeric.rs
+@@ -396,7 +396,7 @@
+             ArithOp::Mul => {
+                 // XS mxMinusZero: 0 * negative and negative * 0 -> -0.
+                 if x == 0 {
+-                    if y < 0 {
++                    if y > 0 {
+                         return Slot::number(-0.0);
+                     }
+                     return Slot::integer(0);

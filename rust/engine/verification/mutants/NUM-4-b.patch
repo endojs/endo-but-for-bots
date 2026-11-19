@@ -1,0 +1,12 @@
+Mutant NUM-4-b: math_to_integer drops the sign test, so -0 becomes Integer(0).
+--- a/ironhorse-vm/src/interp/numeric.rs
++++ b/ironhorse-vm/src/interp/numeric.rs
+@@ -338,7 +338,7 @@
+ pub(super) fn math_to_integer(number: f64) -> Slot {
+     let integer = number as i32;
+     let check = integer as f64;
+-    if number == check && (number != 0.0 || !number.is_sign_negative()) {
++    if number == check {
+         Slot::integer(integer)
+     } else {
+         Slot::number(number)

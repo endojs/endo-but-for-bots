@@ -1,0 +1,12 @@
+Mutant NUM-5-c: SameValueZero says NaN equals any numeric.
+--- a/ironhorse-vm/src/interp/numeric.rs
++++ b/ironhorse-vm/src/interp/numeric.rs
+@@ -543,7 +543,7 @@
+ /// (`+0` and `-0` are equal, which strict equality already gives).
+ pub(super) fn same_value_zero_immediate(a: &Slot, b: &Slot) -> bool {
+     if let (Some(x), Some(y)) = (numeric_of(a), numeric_of(b)) {
+-        if x.is_nan() && y.is_nan() {
++        if x.is_nan() || y.is_nan() {
+             return true;
+         }
+     }

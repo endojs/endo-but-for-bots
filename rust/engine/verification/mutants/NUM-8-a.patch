@@ -1,0 +1,12 @@
+Mutant NUM-8-a: Uint8Clamped stores wrap like Uint8 instead of clamping and rounding.
+--- a/ironhorse-vm/src/interp.rs
++++ b/ironhorse-vm/src/interp.rs
+@@ -3370,7 +3370,7 @@
+         6 => numeric_kernel::to_int32(bits).to_le_bytes().to_vec(),
+         9 => numeric_kernel::to_uint32(bits).to_le_bytes().to_vec(),
+         // Uint8Clamped (ToUint8Clamp: clamp to [0,255], round half-to-even).
+-        10 => vec![numeric_kernel::to_uint8_clamp(bits)],
++        10 => vec![numeric_kernel::to_uint8(bits)],
+         // Float16
+         11 => f64_to_f16_bits(n).to_le_bytes().to_vec(),
+         _ => return None,

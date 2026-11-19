@@ -1,0 +1,12 @@
+Mutant NUM-7-a: binary16 rounding breaks ties away from zero instead of to even.
+--- a/ironhorse-vm/src/interp.rs
++++ b/ironhorse-vm/src/interp.rs
+@@ -1089,7 +1089,7 @@
+ /// (`xsDataView.c`, adapted from half.sourceforge.net), so every host
+ /// rounds alike and no value is rounded twice through binary32.
+ pub(crate) fn f64_to_f16_bits(value: f64) -> u16 {
+-    let round = |bits: u32, guard: u32, sticky: u32| bits + (guard & (sticky | bits));
++    let round = |bits: u32, guard: u32, sticky: u32| bits + (guard & (sticky | 1));
+     let dbits = value.to_bits();
+     let lo = dbits as u32;
+     let mut hi = (dbits >> 32) as u32;

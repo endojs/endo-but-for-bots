@@ -1,0 +1,12 @@
+Mutant NUM-1-c: the left shift saturates to 0 one bit early, at 2^63 instead of 2^64.
+--- a/ironhorse-vm/src/numeric_kernel.rs
++++ b/ironhorse-vm/src/numeric_kernel.rs
+@@ -34,7 +34,7 @@
+     let significand = (bits & ((1 << 52) - 1)) | (1 << 52);
+     let magnitude = if biased >= 1075 {
+         let shift = biased - 1075;
+-        if shift >= 64 {
++        if shift >= 63 {
+             0
+         } else {
+             significand << shift

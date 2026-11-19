@@ -1,0 +1,12 @@
+Mutant NUM-6-a: the clamp of a relative index at or above len gives len - 1.
+--- a/ironhorse-vm/src/numeric_kernel.rs
++++ b/ironhorse-vm/src/numeric_kernel.rs
+@@ -154,7 +154,7 @@
+         relative as u64
+     } else {
+         // relative ≥ len, +∞, or NaN.
+-        len
++        len.saturating_sub(1)
+     }
+ }
+ 

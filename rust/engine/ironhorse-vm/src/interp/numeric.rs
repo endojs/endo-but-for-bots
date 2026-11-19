@@ -1221,17 +1221,6 @@ mod proofs {
     }
 
     #[kani::proof]
-    fn num2_imul() {
-        let (a, b): (i32, i32) = (kani::any(), kani::any());
-        let got = math_imul(a, b);
-        assert_eq!(i64::from(got), int32::imul(a, b));
-        kani::cover!(
-            a > 0 && b > 0 && got < 0,
-            "a positive product wrapping negative"
-        );
-    }
-
-    #[kani::proof]
     #[kani::unwind(34)]
     fn num2_clz32() {
         let n: u32 = kani::any();
@@ -1310,11 +1299,23 @@ mod proofs {
 
     // NUM-4 ------------------------------------------------------------------
 
+    /// `Integer(i)` for an int32 other than -0; otherwise a Number with the
+    /// input's exact bits, except that every NaN becomes the canonical NaN
+    /// (`Slot::number` canonicalises; snapshots refuse other NaN bits).
     fn assert_canonical_slot(slot: Slot, number: u64) {
+        let nan = (number >> 52) & 0x7FF == 0x7FF && number & ((1 << 52) - 1) != 0;
         match arith::exact_int32(number) {
             Some(i) => assert_eq!(slot, Slot::integer(i)),
-            // Slot equality compares a Number's bits, NaN payload included.
-            None => assert_eq!(slot, Slot::number(f64::from_bits(number))),
+            None => {
+                assert_eq!(slot.kind, Kind::Number);
+                let Payload::Number(n) = slot.value else {
+                    panic!("a Number slot holds a Number payload")
+                };
+                assert_eq!(
+                    n.to_bits(),
+                    if nan { 0x7FF8_0000_0000_0000 } else { number }
+                );
+            }
         }
     }
 

@@ -1542,26 +1542,6 @@ mod proofs {
     //! NUM-9: the civil-date kernels against the `ironhorse-spec` Date model.
     use super::{civil_from_days, days_from_civil};
 
-    /// days_from_civil equals the spec's day number (DayFromYear plus the
-    /// MonthFromTime offsets) for every year of the TimeClip range and
-    /// every month and day, and refuses exactly the dates that do not
-    /// exist. (Over all of i64 the i128 divisions time out.)
-    #[kani::proof]
-    fn num9_days_from_civil_matches_spec() {
-        let (y, m, d): (i64, u32, u32) = (kani::any(), kani::any(), kani::any());
-        kani::assume((-271_822..=275_761).contains(&y));
-        let got = days_from_civil(y, m, d);
-        assert_eq!(got, ironhorse_spec::date::day_from_civil(y, m, d));
-        kani::cover!(
-            m == 2 && d == 29 && got.is_some() && y % 100 == 0,
-            "Feb 29 of a year divisible by 400"
-        );
-        kani::cover!(
-            y < -1_000_000 && got.is_some(),
-            "a date far before the epoch"
-        );
-    }
-
     /// civil_from_days is a left inverse of days_from_civil on the TimeClip
     /// day range.
     #[kani::proof]

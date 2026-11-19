@@ -1,0 +1,12 @@
+Mutant NUM-6-b: a zero relative index is counted from the end.
+--- a/ironhorse-vm/src/numeric_kernel.rs
++++ b/ironhorse-vm/src/numeric_kernel.rs
+@@ -141,7 +141,7 @@
+ #[inline]
+ pub(crate) fn relative_index(relative: f64, len: u64) -> u64 {
+     let bound = len as f64;
+-    if relative < 0.0 {
++    if relative <= 0.0 {
+         let back = -relative;
+         if back >= bound {
+             0

@@ -1,0 +1,12 @@
+Mutant NUM-7-b: binary16 widening stops normalising a subnormal one bit early.
+--- a/ironhorse-vm/src/interp.rs
++++ b/ironhorse-vm/src/interp.rs
+@@ -1129,7 +1129,7 @@
+     let mut abs = u32::from(bits & 0x7FFF);
+     if abs != 0 {
+         hi |= 0x3F00_0000 << u32::from(abs >= 0x7C00);
+-        while abs < 0x400 {
++        while abs < 0x200 {
+             abs <<= 1;
+             hi -= 0x10_0000;
+         }

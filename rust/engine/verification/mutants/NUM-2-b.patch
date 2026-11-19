@@ -1,0 +1,12 @@
+Mutant NUM-2-b: an unsigned shift result of exactly i32::MAX stays a Number.
+--- a/ironhorse-vm/src/interp/numeric.rs
++++ b/ironhorse-vm/src/interp/numeric.rs
+@@ -462,7 +462,7 @@
+     };
+     if let BitOp::Shr = op {
+         let u = (a as u32) >> (b & 0x1f);
+-        if u > i32::MAX as u32 {
++        if u >= i32::MAX as u32 {
+             return Slot::number(u as f64);
+         }
+     }
