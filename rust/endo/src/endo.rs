@@ -1037,6 +1037,9 @@ pub fn start_detached(executable: &str) -> Result<EndoPaths, EndoError> {
     cmd.stdout(log_file.try_clone()?);
     cmd.stderr(log_file);
 
+    // SAFETY: the hook runs in the forked child before exec, where only
+    // async-signal-safe calls are allowed; `setsid` is one, and the closure
+    // allocates nothing and touches no shared state.
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();

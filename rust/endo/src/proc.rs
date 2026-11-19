@@ -32,6 +32,16 @@ pub fn spawn_with_pipes(
     let sup_write_r_raw = sup_write_r.as_raw_fd();
 
     cmd.args(args);
+    // SAFETY: the hook runs in the forked child before exec, where only
+    // async-signal-safe calls are allowed: it makes two `dup2` calls on
+    // plain integers and allocates nothing (`last_os_error` only reads
+    // errno). The two raw fds are open in the child because their
+    // `OwnedFd`s are dropped only after `spawn` returns. `dup2` onto 3 and
+    // 4 yields descriptors without close-on-exec; neither source can
+    // already be 3 or 4 respectively, because `util::pipe` hands out the
+    // lowest free descriptors read end first. The hook stays installed on
+    // the caller's `cmd`: spawning that `Command` again would dup2
+    // descriptors this function has closed.
     unsafe {
         cmd.pre_exec(move || {
             if libc::dup2(child_write_w_raw, 3) < 0 {
@@ -99,6 +109,9 @@ pub fn wire_worker_tasks(
         let raw_fd = write_file.as_raw_fd();
         let mut offset = 0;
         while offset < header.len() {
+            // SAFETY: the pointer and length describe the live tail of
+            // `header`, which `write` only reads; `raw_fd` is borrowed from
+            // `write_file`, which outlives the loop.
             let n = unsafe {
                 libc::write(
                     raw_fd,
@@ -283,6 +296,9 @@ impl tokio::io::AsyncRead for PipeReader {
             let raw_fd = self.0.get_ref().as_raw_fd();
             let unfilled = buf.initialize_unfilled();
             match guard.try_io(|_| {
+                // SAFETY: `unfilled` is an initialised, exclusively borrowed
+                // buffer of `unfilled.len()` bytes, which `read` may write in
+                // full; `raw_fd` is the `AsyncFd`'s own open descriptor.
                 let n = unsafe {
                     libc::read(
                         raw_fd,
@@ -325,6 +341,8 @@ impl tokio::io::AsyncWrite for PipeWriter {
 
             let raw_fd = self.0.get_ref().as_raw_fd();
             match guard.try_io(|_| {
+                // SAFETY: `write` reads `buf.len()` bytes from the live `buf`;
+                // `raw_fd` is the `AsyncFd`'s own open descriptor.
                 let n =
                     unsafe { libc::write(raw_fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
                 if n < 0 {

@@ -10,11 +10,14 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 ))]
 pub fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     let mut fds = [0i32; 2];
+    // SAFETY: `fds` is a writable array of the two `c_int`s `pipe2` fills.
     if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: pipe2 returned successfully, so fds[0] and fds[1] are valid open fds.
+    // SAFETY: pipe2 returned successfully, so fds[0] and fds[1] are valid
+    // open fds, and nothing else owns them yet.
     let read_end = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+    // SAFETY: as above, for the write end.
     let write_end = unsafe { OwnedFd::from_raw_fd(fds[1]) };
     Ok((read_end, write_end))
 }
@@ -33,18 +36,24 @@ pub fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
 )))]
 pub fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     let mut fds = [0i32; 2];
+    // SAFETY: `fds` is a writable array of the two `c_int`s `pipe` fills.
     if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: pipe returned successfully, so fds[0] and fds[1] are valid open fds.
+    // SAFETY: pipe returned successfully, so fds[0] and fds[1] are valid
+    // open fds, and nothing else owns them yet.
     let read_end = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+    // SAFETY: as above, for the write end.
     let write_end = unsafe { OwnedFd::from_raw_fd(fds[1]) };
     for fd in [&read_end, &write_end] {
         let raw = fd.as_raw_fd();
+        // SAFETY: `raw` is borrowed from a live `OwnedFd`; F_GETFD takes no
+        // pointer argument.
         let flags = unsafe { libc::fcntl(raw, libc::F_GETFD) };
         if flags < 0 {
             return Err(io::Error::last_os_error());
         }
+        // SAFETY: as above; F_SETFD takes an integer flag argument.
         if unsafe { libc::fcntl(raw, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -55,10 +64,13 @@ pub fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
 /// Set a file descriptor to non-blocking mode.
 pub fn set_nonblocking(fd: &impl AsRawFd) -> io::Result<()> {
     let raw = fd.as_raw_fd();
+    // SAFETY: `raw` is borrowed from `fd`, which the caller keeps alive for
+    // this call; F_GETFL takes no pointer argument.
     let flags = unsafe { libc::fcntl(raw, libc::F_GETFL) };
     if flags < 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: as above; F_SETFL takes an integer flag argument.
     if unsafe { libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return Err(io::Error::last_os_error());
     }

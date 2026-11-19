@@ -31,5 +31,8 @@ pub fn is_process_running(pid: u32) -> bool {
         return false;
     }
     // kill(pid, 0) checks existence without sending a signal.
+    // SAFETY: `kill` has no memory-safety preconditions, and signal 0 sends
+    // nothing. (A pid above `i32::MAX` wraps negative and asks about a
+    // process group instead; see `cmd_stop`.)
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
