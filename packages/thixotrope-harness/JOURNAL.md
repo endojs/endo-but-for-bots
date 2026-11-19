@@ -18623,3 +18623,30 @@ Image plus log grew from 288,614 to 880,575 B, 3.051047 times fresh
 against the 1.25 limit, after 32 idle cranks. Image went 178,403 to
 230,534 B; log 110,211 to 650,041 B, nine to 61 records after 33
 compactions. Raw rows are in `/private/tmp/thix-qc-mail-factory-final.log`.
+
+### J-12561 2026-11-20 M9 factory candidate integration QC and timing boundaries
+
+The integrated production sources matched `69997bd0c5`; the integration
+checkout also carried the independent retained-message-handle regression.
+The full unit and adapter suite passed 2,006 tests, with 168 skipped and
+three TODOs. Type checking and lint completed with zero errors and 925
+warnings. Duplication was 1.52%. The production session emitter produced
+145,957 bytes, SHA-256
+`9611cc3ef25d553fa10c0a92479a2619ababcb94a1857fa79431cdbb2925c193`.
+The isolated M9 increase remains 21,430 bytes against the 21,500-byte
+allocation. Both factory changes leave the session source identical.
+
+Four installed-daemon files passed 14 tests using the pinned release worker:
+eight mail, one delivery restart, one turn restart, and four list/live
+tests. They held shared slots for 759.7 s in total and completed in
+493.7 s wall time, including roughly 271 s waiting for the release benchmark.
+
+A further join of the two J-12552 factory comparison windows showed 2.05
+and 1.87 ms in native outbound extraction per completed post, and 63.33
+and 55.88 ms in the host between worker answer and return from the outbound
+batch callback, respectively. The latter includes frame parsing, decoding
+and handoff to the hub. Each side averaged 9.01 outbound factory frames per
+completed post. These are component sums across 1,081 and 1,214 factory
+cranks, including the reply drain. They apply to fresh four-client traffic.
+The contractual throughput row runs after the 60 s ACK, session and 255-row
+inbox windows on the same daemon. J-12552 gives the full-release result.

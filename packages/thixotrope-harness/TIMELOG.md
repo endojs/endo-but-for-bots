@@ -625,19 +625,19 @@ and lint jobs are outside this table. The preceding generated block covers Claud
 
 ## QC follow-up to the four-milestone integration
 
-Completed machine-wide acquisitions as of 2026-11-19 14:57 UTC, for follow-up runs
+Completed machine-wide acquisitions as of 2026-11-19 15:14 UTC, for follow-up runs
 requested since 11:25 UTC. The two timing columns sum each acquisition independently.
 Overlapping waits and holds can exceed elapsed wall time. A setup failure counts as
 a nonzero exit even when the actual test or benchmark collected no samples.
 
 | Checkout and work | Finished | Waited (s) | Held (s) | Nonzero exits | Releases without an exit code |
 |---|---:|---:|---:|---:|---:|
-| Integration checkout | 12 | 6316 | 2438 | 1 | 0 |
-| Worker retirement and M9 timing | 16 | 3377 | 3696 | 8 | 4 |
+| Integration checkout | 17 | 7670 | 3341 | 1 | 0 |
+| Worker retirement and M9 timing | 17 | 3377 | 4225 | 8 | 5 |
 | M9 runtime and milestone regression | 64 | 27665 | 9060 | 3 | 2 |
 | Session, voice and environments | 12 | 5502 | 1885 | 6 | 0 |
 | Factory row and ordinary mail diagnostics | 5 | 867 | 595 | 4 | 0 |
-| Subagent and four-client mail diagnostics | 7 | 1502 | 1092 | 0 | 3 |
+| Subagent and four-client mail diagnostics | 8 | 1502 | 1394 | 0 | 3 |
 | Session refill and native phase diagnostics | 3 | 2513 | 384 | 2 | 0 |
 | Session snapshot preparation | 4 | 1706 | 535 | 1 | 0 |
 | Session and environment class diagnostics | 8 | 368 | 1856 | 2 | 0 |

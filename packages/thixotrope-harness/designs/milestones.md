@@ -1959,28 +1959,33 @@ at `1881601aab`, load 1.9-3.2, 690.9 s held, 786 s of wall for the files; J-1226
 
 ## M9. Mail and subagents
 
-**Integrated with open performance gates.** On the latest unscaled run, operator
-acknowledgment passed at 196.128 ms. Four clients and eight recipients completed
-and dismissed 176 posts in 61.369 s, or 2.868 posts/s against the target of 3.
+**Integrated with open performance gates.** The latest candidate, `69997bd0c5`,
+acknowledged operator sends in 216.441 ms (target 200 ms). Four clients and eight
+recipients completed and dismissed 168 posts in 61.282 s, or 2.741 posts/s
+(target 3). The full benchmark exited 1.
 
 | Full run on the pinned worker | Operator ACK median (limit 200 ms) | Completed posts / elapsed | Posts/s (target 3) | Session delivery (limit 300 ms) | Fresh hub growth (limit 1.25×) |
 |---|---:|---:|---:|---:|---:|
 | `17bbccdfed` (J-12549) | 146.447 ms, n=95 | 164 / 61.420 s | 2.670121 | 349 ms | 0.605× |
 | `ecc7171aa2` (J-12550) | 205.186 ms, n=104 | 182 / 60.786 s | 2.994131 | 335 ms | 1.101× |
 | `d333ba1833` (J-12551) | 196.128 ms, n=98 | 176 / 61.369 s | 2.867906 | 345 ms | 2.103× |
+| `69997bd0c5` (J-12552) | 216.441 ms, n=98 | 168 / 61.282 s | 2.741411 | 328 ms | 3.051× |
 
 A collector microbenchmark shared the host during part of the second run's ACK
-window. All three inbox p95 upper bounds were 500 ms (limit 550 ms). J-12549
+window. All four inbox p95 upper bounds were 500 ms (limit 550 ms). J-12549
 corrected the fresh hub denominator used in J-12547. J-1478 compares the
-single-recipient diagnostic with the full run. An isolated collector change
+single-recipient diagnostic with the full run. The latest factory candidate completed
+193 posts in 61.359 s in an instrumented fresh-daemon comparison. The release
+throughput row reuses the daemon from the preceding ACK, session-to-session, and
+255-message inbox phases. An isolated collector change
 improved its microbenchmark while the paired ordinary-mail run completed 51 posts
 on the baseline and 50 on the candidate (J-12560). The factory and VM measurements
 are in the [Ironhorse performance note](ironhorse-performance.md).
 
 The five daemon regression files passed 12 tests across the recorded runs
 (J-12544). The combined branch also passed the stopped-mail and child-environment
-cases. All eight installed mail tests and both restart files passed on the latest
-source (J-1479). The four-deliveries-per-forwarded-mail gate still needs a causally
+cases. The latest candidate passed all eight installed mail tests, both
+restart files and four list/live tests (J-12561). The four-deliveries-per-forwarded-mail gate still needs a causally
 attributed count. All three eight-child bursts and subtree stops passed. Ask
 overhead was 363 ms against 300 ms and spawn was 1,513 ms against 1,500 ms
 (J-12549).
