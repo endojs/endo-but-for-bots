@@ -4,26 +4,18 @@ import '../unit/_m1a-prelude.js';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'ava';
-import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
-import {
-  IMAGE_ENVELOPE_PREFIX,
-  imageTextOf,
-} from '../../guest/lib/interfaces.js';
+import { imageTextOf } from '../../guest/lib/interfaces.js';
 import { imageLimits } from '../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { environmentsAdminName } from '../../scripts/provision-steps/60-environments.js';
-import {
-  integrationEnabled,
-  startFromTemplate,
-  takeIntegrationLock,
-} from '../template/index.js';
-import { makeSlice } from './_m1a-slice.js';
-import { readField, runTurn, turnRecords } from './_m1b.js';
+import { integrationEnabled, takeIntegrationLock } from '../template/index.js';
+import { anthropicEvents } from '../fixtures/fake-provider-server.mjs';
+import { openCompactionState, reply } from './_compaction.js';
+import { runTurn, turnRecords } from './_m1b.js';
 import {
   commandCall,
-  commandTurn,
   environmentKeys,
   environmentsTemplate,
   startEnvironmentSession,
@@ -57,24 +49,23 @@ run(
   'viewImage reads a workspace file with bounded frames in the manager and session vats',
   async t => {
     t.timeout(5 * 60_000);
-    const state = await startFromTemplate(await environmentsTemplate(), {
-      t,
-      snapshotEveryDeliveries: 10_000,
-    });
-    const slice = await makeSlice(state);
+    const { state, slice, server, anthropic, cleanup } =
+      await openCompactionState({
+        template: environmentsTemplate,
+        snapshotEveryDeliveries: 10_000,
+      });
+    t.teardown(cleanup);
     const tool = toolCall('viewImage', {
       petName: 'workspace',
       path: ['picture.png'],
     });
-    const { backend } = await slice.makeBackend(
-      harden({
-        turns: [
-          commandTurn('open workspace', [[commandCall('true')]]),
-          commandTurn('view workspace image', [[tool]]),
-        ],
-      }),
+    server.push(
+      { events: anthropicEvents({ toolCalls: [commandCall('true')] }) },
+      reply('Workspace open'),
+      { events: anthropicEvents({ toolCalls: [tool] }) },
+      reply('Image received'),
     );
-    const session = await startEnvironmentSession(slice, backend);
+    const session = await startEnvironmentSession(slice, anthropic);
     const live = await slice.subscribe(session);
     t.teardown(() => live.stop());
     const prepared = await runTurn(slice, session, live, 'open workspace');
@@ -102,11 +93,16 @@ run(
     const [answer] = toolResultsOf(await turnRecords(viewed.turn));
     t.false(answer.failed);
     t.is(answer.result.preview, imageTextOf.receipt('image/png'));
-    const text = await readField(await E(slice.admin).content(), answer.result);
-    t.true(text.startsWith(IMAGE_ENVELOPE_PREFIX));
-    const envelope = JSON.parse(text.slice(IMAGE_ENVELOPE_PREFIX.length));
-    t.is(envelope.mimeType, 'image/png');
-    t.true(Buffer.from(envelope.data, 'base64').equals(image));
+    const messages = server
+      .requests()
+      .filter(req => req.path === '/v1/messages');
+    const parts = messages.at(-1)?.json.messages.at(-1)?.content;
+    const block = parts?.find(
+      (/** @type {any} */ part) => part.type === 'tool_result',
+    )?.content[0];
+    t.is(block?.type, 'image');
+    t.is(block?.source.media_type, 'image/png');
+    t.true(Buffer.from(block.source.data, 'base64').equals(image));
 
     const managerLabel = `native:${environmentsAdminName}`;
     const relevant = before.filter(

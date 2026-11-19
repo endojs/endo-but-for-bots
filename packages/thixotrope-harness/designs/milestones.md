@@ -1813,9 +1813,8 @@ policy change to next turn <= environment restart time + 1 s.
 ## M8. Compaction, images and context window
 
 **Status: integrated.** The session registers `viewImage` after the shell tools. The lane outcome below records tests before registration. Combined image and compaction runs are recorded in the group journal. Reference: `m8-interfaces.md` (seams 10, work units 11,
-acceptance 12, perf 13, probes 14, fold 18); constants and guards in `guest/lib/guards/context.js`,
-`guest/lib/guards/images.js`, `guest/lib/image-guards.js` (Node only) and
-`AH/providers/compaction-texts.js`, frozen until the fold.
+acceptance 12, perf 13, probes 14, fold 18); the shared guard definitions now live in `guest/lib/guards/session.js` and `guest/lib/interfaces.js`,
+with `guest/lib/limits.js` and `AH/providers/compaction.js` holding the limits and provider texts.
 
 **Goal.** Long sessions keep working: automatic compaction at 70 % of the context window,
 `viewImage` image input, the window known for every backend kind.
@@ -2340,8 +2339,8 @@ Whylip or irrelevant slash commands). They are scheduled after M13 by default on
 
   The PM reconciled `scripts/export.mjs` for execution and inbox pages. The factory deletes
   children before releasing their parent's environment. A child inherits its parent's preset
-  and receives its own workspace. The four regression lists are `voice`, `environments`,
-  `context` and `mail`. Each owns one cross-lane file.
+  and receives its own workspace. The `voice` list owns the voice-preset file, `context` owns
+  the workspace-image file, and `mail` owns the child-environment and stopped-mail files.
 - **{M7, M10, M12}:** M7 `EVI/egress/` (moved from `resources/containers/egress/` by the M6
   contract), `guest/session/{network-policy}.js`, `tools/network.js`, `ui/src/network/`; M10
   `EVI/publishing/` (moved from `resources/workspace/{assets,routes,mime}.js` by the M6 contract),

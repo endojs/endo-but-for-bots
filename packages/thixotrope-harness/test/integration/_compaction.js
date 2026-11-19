@@ -40,8 +40,12 @@ export const OVER_THRESHOLD = 150_000;
  * A served state with the fake provider server and an Anthropic backend
  * whose key is a Secret's read grant. `cleanup()` stops the state and the
  * server and removes the key file (a file's `test.after.always`).
+ * @param {{ template?: typeof sliceTemplate, snapshotEveryDeliveries?: number }} [options]
  */
-export const openCompactionState = async () => {
+export const openCompactionState = async ({
+  template: getTemplate = sliceTemplate,
+  snapshotEveryDeliveries,
+} = {}) => {
   const keyDir = path.join(tmpRoot, `${shortName('k')}`);
   mkdirSync(keyDir, { recursive: true, mode: 0o700 });
   const server = await startFakeProviderServer({
@@ -53,9 +57,10 @@ export const openCompactionState = async () => {
       },
     ],
   });
-  const template = await sliceTemplate();
+  const template = await getTemplate();
   const state = await startFromTemplate(template, {
     secretsKeyFile: path.join(keyDir, 'secrets.key'),
+    snapshotEveryDeliveries,
   });
   const slice = await makeSlice(state);
   const secrets = await E(slice.admin).getSecrets();
