@@ -128,29 +128,61 @@ pub struct Atom<'a> {
     pub payload: &'a [u8],
 }
 
+/// Split one atom off the front of `buf`: its declared total size, its tag,
+/// its payload, and the bytes after it. The checks run in the order the
+/// errors are documented: a short header is [`AtomError::Truncated`], a
+/// size below the header [`AtomError::BadLength`], and a size past the end
+/// of `buf` [`AtomError::Truncated`] again.
+fn split_atom(buf: &[u8]) -> Result<(usize, FourCc, &[u8], &[u8]), AtomError> {
+    let (size, after_size) = buf.split_first_chunk::<4>().ok_or(AtomError::Truncated)?;
+    let (tag, _) = after_size
+        .split_first_chunk::<4>()
+        .ok_or(AtomError::Truncated)?;
+    // Where `usize` is narrower than `u32`, a size that does not convert
+    // could not fit inside `buf` either.
+    let size = usize::try_from(u32::from_be_bytes(*size)).map_err(|_| AtomError::Truncated)?;
+    if size < ATOM_HEADER {
+        return Err(AtomError::BadLength);
+    }
+    let (atom, rest) = buf.split_at_checked(size).ok_or(AtomError::Truncated)?;
+    // `size >= ATOM_HEADER` was checked above, so the header split succeeds.
+    let (_, payload) = atom
+        .split_at_checked(ATOM_HEADER)
+        .ok_or(AtomError::BadLength)?;
+    Ok((size, FourCc(*tag), payload, rest))
+}
+
 /// Parse the atom sequence inside a raw byte slice (no outer envelope),
 /// returning each `(tag, payload)` in order.
 fn parse_atoms(mut buf: &[u8]) -> Result<Vec<Atom<'_>>, AtomError> {
     let mut out = Vec::new();
     while !buf.is_empty() {
-        if buf.len() < ATOM_HEADER {
-            return Err(AtomError::Truncated);
-        }
-        let size = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-        if size < ATOM_HEADER {
-            return Err(AtomError::BadLength);
-        }
-        if size > buf.len() {
-            return Err(AtomError::Truncated);
-        }
-        let tag = FourCc([buf[4], buf[5], buf[6], buf[7]]);
-        out.push(Atom {
-            tag,
-            payload: &buf[ATOM_HEADER..size],
-        });
-        buf = &buf[size..];
+        let (_, tag, payload, rest) = split_atom(buf)?;
+        out.push(Atom { tag, payload });
+        buf = rest;
     }
     Ok(out)
+}
+
+/// Above this many atoms the duplicate-tag check switches from a pairwise
+/// scan to a set. The canonical grammar has a few dozen top-level atoms,
+/// so every container a writer produces takes the allocation-free scan;
+/// the set bounds a crafted container of many tiny atoms (8 bytes each) to
+/// `O(n log n)` instead of the scan's `O(n^2)`, which at a few megabytes
+/// of input is minutes of CPU before any other gate runs.
+const PAIRWISE_DUPLICATE_SCAN_MAX: usize = 64;
+
+/// The first atom (in file order) whose tag an earlier atom already used.
+fn first_duplicate(atoms: &[Atom<'_>]) -> Option<FourCc> {
+    if atoms.len() <= PAIRWISE_DUPLICATE_SCAN_MAX {
+        atoms.iter().enumerate().find_map(|(i, a)| {
+            let earlier = atoms.get(..i)?;
+            earlier.iter().any(|b| b.tag == a.tag).then_some(a.tag)
+        })
+    } else {
+        let mut seen = std::collections::BTreeSet::new();
+        atoms.iter().find(|a| !seen.insert(a.tag.0)).map(|a| a.tag)
+    }
 }
 
 /// A parsed atom container: the `XS_M` envelope unwrapped into its atom
@@ -164,17 +196,7 @@ pub struct AtomReader<'a> {
 impl<'a> AtomReader<'a> {
     /// Parse a whole container, verifying the outer `XS_M` envelope.
     pub fn parse(buf: &'a [u8]) -> Result<AtomReader<'a>, AtomError> {
-        if buf.len() < ATOM_HEADER {
-            return Err(AtomError::Truncated);
-        }
-        let size = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-        if size < ATOM_HEADER {
-            return Err(AtomError::BadLength);
-        }
-        if size > buf.len() {
-            return Err(AtomError::Truncated);
-        }
-        let tag = FourCc([buf[4], buf[5], buf[6], buf[7]]);
+        let (size, tag, payload, _) = split_atom(buf)?;
         if tag != crate::format::XS_M {
             return Err(AtomError::NotContainer(tag));
         }
@@ -182,13 +204,11 @@ impl<'a> AtomReader<'a> {
         if size != buf.len() {
             return Err(AtomError::TrailingBytes);
         }
-        let atoms = parse_atoms(&buf[ATOM_HEADER..size])?;
+        let atoms = parse_atoms(payload)?;
         // At most one of each tag, so `find`'s first-match is also the
         // only match and the encoding is canonical.
-        for (i, a) in atoms.iter().enumerate() {
-            if atoms[..i].iter().any(|b| b.tag == a.tag) {
-                return Err(AtomError::DuplicateAtom(a.tag));
-            }
+        if let Some(tag) = first_duplicate(&atoms) {
+            return Err(AtomError::DuplicateAtom(tag));
         }
         Ok(AtomReader { atoms })
     }
@@ -311,6 +331,58 @@ mod tests {
             appended_atom_size(usize::MAX, 0),
             Err(SnapshotError::Atom(AtomError::TooLarge))
         );
+    }
+
+    /// Regression: the duplicate-tag check was a pairwise scan, so a
+    /// crafted container of many 8-byte empty atoms with distinct tags cost
+    /// `n^2 / 2` tag compares before any other gate ran (here `2^18` atoms,
+    /// 2 MiB of input, about `3.4e10` compares: minutes, a hang under the
+    /// fuzz contract). The set-based check answers in well under a second;
+    /// the bound is generous so only the quadratic shape can trip it.
+    #[test]
+    fn many_tiny_atoms_check_duplicates_in_bounded_time() {
+        let n: u32 = 1 << 18;
+        let mut w = AtomWriter::new();
+        for i in 0..n {
+            w.atom(FourCc(i.to_be_bytes()), &[]).unwrap();
+        }
+        // The same sequence plus a final atom repeating the first tag.
+        let mut dup = AtomWriter::new();
+        for i in 0..n {
+            dup.atom(FourCc(i.to_be_bytes()), &[]).unwrap();
+        }
+        dup.atom(FourCc(0u32.to_be_bytes()), b"x").unwrap();
+        let (distinct, dup) = (w.finish().unwrap(), dup.finish().unwrap());
+
+        let start = std::time::Instant::now();
+        assert_eq!(AtomReader::parse(&distinct).unwrap().atoms().len(), 1 << 18);
+        assert_eq!(
+            AtomReader::parse(&dup).err(),
+            Some(AtomError::DuplicateAtom(FourCc([0; 4])))
+        );
+        assert!(start.elapsed() < std::time::Duration::from_secs(20));
+    }
+
+    /// Both duplicate-check shapes report the FIRST repeating atom in file
+    /// order, so the error does not depend on which shape ran.
+    #[test]
+    fn duplicate_check_reports_the_first_repeat_in_either_shape() {
+        for filler in [0u32, 100] {
+            let mut w = AtomWriter::new();
+            w.atom(FourCc(*b"AAAA"), &[]).unwrap();
+            w.atom(FourCc(*b"BBBB"), &[]).unwrap();
+            for i in 0..filler {
+                w.atom(FourCc((0x1000_0000 + i).to_be_bytes()), &[])
+                    .unwrap();
+            }
+            w.atom(FourCc(*b"BBBB"), &[]).unwrap();
+            w.atom(FourCc(*b"AAAA"), &[]).unwrap();
+            let bytes = w.finish().unwrap();
+            assert_eq!(
+                AtomReader::parse(&bytes).err(),
+                Some(AtomError::DuplicateAtom(FourCc(*b"BBBB")))
+            );
+        }
     }
 
     const XS_M_TAG: [u8; 4] = *b"XS_M";
