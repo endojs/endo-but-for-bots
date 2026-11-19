@@ -17502,6 +17502,45 @@ a 30,000 ms maximum, exceeding the maximum once. All three subtree stops removed
 sessions, in 2,525, 1,958 and 2,175 ms. The benchmark exited 1 for its budget misses. In the
 repeat of the five-file daemon suite, the in-flight delivery/reconnect case also passed again.
 
+### J-12546 2026-11-19 WX.F linked mail and subagent timing windows
+
+At clean `14fdc59e6f` the production session was 145,957 bytes. These
+exclusive, unscaled measurements include the factory's cached envelope
+byte count. The one-minute host load was 82 at the operator row and 53 at
+the ask row. Exclusive applies to the harness lock only.
+
+| Metric | Observed | Strict target | Perf wrapper |
+| --- | --- | --- | --- |
+| Operator send to ACK | median 383.418 ms (97) | 200 ms, miss | 250 ms, miss |
+| Sender round final to recipient provider request | median 380 ms (65) | 300 ms, miss | 375 ms, miss |
+| Four senders, at most four unfinished recipient turns | 121 posted, completed and dismissed / 60.833 s = 1.989 posts/s | 3/s, miss | miss |
+| Full-inbox interval, all deliveries | p95 histogram bound 500 ms | 550 ms, pass | pass |
+| Four-sender hub growth | 757,183 to 1,223,996 bytes after 236 attachment posts, 1.617× | 1.25×, miss | miss |
+| Subagent spawn | median 1,531 ms (11) | 1,500 ms, miss | 1,875 ms, pass |
+| Subagent ask overhead | median 393 ms (52) | 300 ms, miss | 375 ms, miss |
+
+The session-to-session recipient started fresh for its own window. For
+those same 65 sends, the median from the sender's round final to the
+recipient adapter's round start was 328 ms, then 31 ms from round start
+to provider request. Each median is calculated separately. The four-
+sender throughput row allowed one outstanding post per sender and used
+four of the eight recipients concurrently. Its largest inbox contained
+four replies. The linked mail file held its slot 436.6 s and exited 1.
+
+Ask overhead used the parent live tool call and result, subtracting the
+child's live turn start to end per sample, timed by one client clock. The
+parent interval median was 564 ms, the child whole turn 155 ms and the child
+provider interval 5 ms. The old provider-based formula on the same samples
+gave 715 ms. Changing the interval explains the difference between those
+two measurements. In a separate 10.089 s subsection of the ask window, eight
+successful asks were mirrored; the daemon processed 167 deliveries summing
+to 10,704 engine ms, zero snapshots and zero wakes. The counters include all
+work by that daemon and overlapping deliveries.
+
+All three eight-child bursts finished in 16.713–21.844 s against 30 s;
+all three stops removed three sessions in 3.280–3.623 s. The subagents
+file held the slot 265.7 s and exited 1 on ask overhead.
+
 ### J-1446 2026-11-19 WX.F workspace image and local landing
 
 The workspace-image case passed on Ironhorse with the manager and session journals retained
