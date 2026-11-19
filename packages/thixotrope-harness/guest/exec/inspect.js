@@ -34,9 +34,10 @@
  *
  * An answer the hub refused for size (core CC-027: over this vat's inbound
  * frame ceiling, refused before this vat decodes it; the call breaks with
- * `HUB_FRAME_TOO_LARGE`): a granted tool's `execute` answer, or a `help()`
- * answer of `describe`, answers `failed(ANSWER_OVER_FRAME_TEXT)`, which
- * tells the model nothing of it reached the sandbox.
+ * `HUB_FRAME_TOO_LARGE`): a granted tool's `execute` answer answers
+ * `failed(ANSWER_OVER_FRAME_TEXT)`, which tells the model nothing of it
+ * reached the sandbox. A refused `help()` answer of `describe` is like any
+ * other `help()` failure: the methods, documentation `unavailable`.
  */
 import { textOf } from '../lib/guards/base.js';
 import { limits } from '../lib/limits.js';
@@ -336,7 +337,6 @@ export const makeInspector = ({ writers, content }) => {
         }
       } catch (error) {
         if (isKeysExhausted(error)) throw error;
-        if (isFrameRefusal(error)) return failed(ANSWER_OVER_FRAME_TEXT);
         // Some guarded capabilities support only zero-argument help().
         if (method !== undefined) {
           try {
@@ -347,7 +347,6 @@ export const makeInspector = ({ writers, content }) => {
             }
           } catch (again) {
             if (isKeysExhausted(again)) throw again;
-            if (isFrameRefusal(again)) return failed(ANSWER_OVER_FRAME_TEXT);
             // Preserve the discovered callable interface even without docs.
           }
         }

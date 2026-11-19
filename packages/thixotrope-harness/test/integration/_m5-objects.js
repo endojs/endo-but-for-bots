@@ -30,12 +30,14 @@ import { ensureTemplate } from '../template/index.js';
  * recorded result (a text or a StagedText): the exec vat stopped
  * (`inspectTerminated`), the hub refused the answer for size before the
  * exec vat decoded it (`hubRefused`: core CC-027, the inspector's
- * `ANSWER_OVER_FRAME_TEXT`), or the exec vat decoded, cut and staged it
- * (`staged`); undefined for anything else. One predicate for m5-objects'
- * 200 KB help, m5-security's 300 KB granted answer and perf/exec-m5's
- * probe b.
+ * `ANSWER_OVER_FRAME_TEXT`, a granted tool's answer), the hub refused a
+ * `help()` answer and `describeCapability` shows the methods with its
+ * documentation `unavailable` (`helpUnavailable`, an ok result), or the
+ * exec vat decoded, cut and staged it (`staged`); undefined for anything
+ * else. One predicate for m5-objects' 200 KB help, m5-security's 300 KB
+ * granted answer and perf/exec-m5's probe b.
  * @param {any} result
- * @returns {'inspectTerminated' | 'hubRefused' | 'staged' | undefined}
+ * @returns {'inspectTerminated' | 'hubRefused' | 'helpUnavailable' | 'staged' | undefined}
  */
 export const tooBigOutcome = result => {
   if (result === textOf.errorResult(texts.inspectTerminated)) {
@@ -43,6 +45,22 @@ export const tooBigOutcome = result => {
   }
   if (result === textOf.errorResult(ANSWER_OVER_FRAME_TEXT)) {
     return 'hubRefused';
+  }
+  if (typeof result === 'string') {
+    /** @type {any} */
+    let shown;
+    try {
+      shown = JSON.parse(result);
+    } catch {
+      shown = undefined;
+    }
+    if (
+      shown?.documentationScope === 'unavailable' &&
+      Array.isArray(shown.methods) &&
+      shown.methods.includes('help')
+    ) {
+      return 'helpUnavailable';
+    }
   }
   if (
     typeof result === 'object' &&

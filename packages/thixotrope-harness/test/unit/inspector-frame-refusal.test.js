@@ -1,10 +1,11 @@
 // @ts-check
 // The inspector (guest/exec/inspect.js) when the hub refused an answer for
 // size (core CC-027): the guest copy of the hub's text equals the core's
-// FRAME_TOO_LARGE export; a granted tool's execute answer or a help()
-// answer refused that way answers the model ANSWER_OVER_FRAME_TEXT; an
-// error that only quotes the text, or any other error, keeps its old
-// outcome.
+// FRAME_TOO_LARGE export; a granted tool's execute answer refused that way
+// answers the model ANSWER_OVER_FRAME_TEXT; an error that only quotes the
+// text, or any other error, keeps its old outcome. A help() answer refused
+// that way keeps the pre-step-3 outcome of describe: the methods, with
+// documentation 'unavailable' (no model-text change there).
 import './_m1a-prelude.js';
 
 import test from '@endo/ses-ava/test.js';
@@ -58,7 +59,7 @@ test('a granted tool answer refused for size answers the frame text', async t =>
   t.not(other.text, ANSWER_OVER_FRAME_TEXT);
 });
 
-test('a help() answer refused for size answers the frame text, with or without a method', async t => {
+test('a help() answer refused for size keeps the methods, documentation unavailable, with or without a method', async t => {
   const { inspect } = inspector();
   const big = Far('Big', {
     help: () => {
@@ -66,23 +67,26 @@ test('a help() answer refused for size answers the frame text, with or without a
     },
     read: () => 'x',
   });
-  t.deepEqual(await inspect(harden({ op: 'describe', target: big })), {
-    status: 'failed',
-    text: ANSWER_OVER_FRAME_TEXT,
-  });
-  t.deepEqual(
-    await inspect(harden({ op: 'describe', target: big, method: 'read' })),
-    { status: 'failed', text: ANSWER_OVER_FRAME_TEXT },
-  );
-  // Any other help() failure keeps the methods, documentation unavailable.
+  for (const request of [
+    { op: 'describe', target: big },
+    { op: 'describe', target: big, method: 'read' },
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    const described = await inspect(harden(request));
+    t.is(described.status, 'ok');
+    const shown = JSON.parse(described.text);
+    t.is(shown.documentationScope, 'unavailable');
+    t.true(shown.methods.includes('help'));
+    t.true(shown.methods.includes('read'));
+    t.false(described.text.includes(ANSWER_OVER_FRAME_TEXT));
+  }
+  // Any other help() failure is the same outcome.
   const failing = Far('Failing', {
     help: () => {
       throw Error('no help here');
     },
   });
-  const described = await inspect(
-    harden({ op: 'describe', target: failing }),
-  );
-  t.is(described.status, 'ok');
-  t.is(JSON.parse(described.text).documentationScope, 'unavailable');
+  const other = await inspect(harden({ op: 'describe', target: failing }));
+  t.is(other.status, 'ok');
+  t.is(JSON.parse(other.text).documentationScope, 'unavailable');
 });

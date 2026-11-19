@@ -18,7 +18,8 @@
  * What the queue decides and what it leaves to the session:
  * - `enqueueOnce` answers duplicates, applies the bounds, appends the entry
  *   and, for a new entry, releases every hold except `interrupted`. It never
- *   starts a turn: the session claims (`SessionCore.claimNext()`) after it.
+ *   starts a turn: the session claims (the runner's `claimNext()`,
+ *   turn.js) after it.
  * - `first()` is the entry the session may claim, `undefined` while a hold
  *   is set. `claim(item, turnId)` removes it and turns its receipt
  *   `started` with the turn id, in the caller's crank. A started receipt
@@ -111,8 +112,8 @@ harden(assertNoActiveTurn);
  *   turn id, or undefined when the session no longer keeps the turn (an
  *   archived one); the identity by default (tests)
  * @param {() => unknown} [options.claim] the session's claim of the next
- *   entry (`SessionCore.claimNext`), which `sendNow` asks for; does nothing
- *   by default
+ *   entry (the runner's `claimNext()`, turn.js), which `sendNow` asks
+ *   for; does nothing by default
  * @param {() => void} [options.cancelCurrent] cancels the running turn
  *   (R6-44: send-now on the queue head while a turn runs); nothing by default
  * @returns {Queue}

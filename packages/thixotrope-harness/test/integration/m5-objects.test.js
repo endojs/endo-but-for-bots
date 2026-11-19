@@ -23,8 +23,8 @@
  *   with a search; a fixture whose `help()` answers 200 KB gives a cut,
  *   staged result, `texts.inspectTerminated` (the contract expected the
  *   latter; this worker decodes the answer, J-0771) or, since core CC-027,
- *   the inspector's `ANSWER_OVER_FRAME_TEXT` (the hub refused the answer
- *   for size), and the session's next turn runs normally.
+ *   the methods with documentation `unavailable` (the hub refused the
+ *   help() answer for size), and the session's next turn runs normally.
  *
  *   THIX_AGENT=W5.5 corepack yarn test:integration test/integration/m5-objects.test.js
  */
@@ -319,9 +319,9 @@ run('acceptance 3 (remote), 4, 5, 8 and K7', async t => {
   // staged it (no halt at this worker), or the exec vat stopped and the
   // session said so (J-0771), or (since core CC-027) the hub refused the
   // help's frame toward the exec vat (over THIXOTROPE_VAT_FRAME_BYTES)
-  // before the vat decoded it and describeCapability says so
-  // (ANSWER_OVER_FRAME_TEXT). All keep the session working; no halt
-  // (J-10124).
+  // before the vat decoded it, the help() call broke and describeCapability
+  // shows the methods with documentation `unavailable` (helpUnavailable).
+  // All keep the session working; no halt (J-10124).
   const outcome = tooBigOutcome(big[0]);
   t.not(outcome, undefined, JSON.stringify(big).slice(0, 300));
   const terminated = outcome === 'inspectTerminated';
@@ -330,6 +330,8 @@ run('acceptance 3 (remote), 4, 5, 8 and K7', async t => {
     t.true(isStaged(big[0]), 'a cut answer over inlineBytes is staged');
     t.true(Number(big[0].bytes) <= 3 * limits.inspectResultUnits);
     t.true(big[0].preview.startsWith('{"methods":'));
+  } else if (outcome === 'helpUnavailable') {
+    t.false(big[1], 'a refused help() keeps an ok result with the methods');
   } else {
     t.true(big[1], 'a stopped vat or a refused answer is a failed result');
   }

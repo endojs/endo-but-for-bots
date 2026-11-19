@@ -145,6 +145,7 @@ run('acceptance 10: the membrane and untrusted answers', async t => {
   // answers ANSWER_OVER_FRAME_TEXT. Also no halt (J-10124).
   const outcome = tooBigOutcome(answer[0]);
   t.not(outcome, undefined, JSON.stringify(answer).slice(0, 300));
+  t.not(outcome, 'helpUnavailable', 'a granted answer is not a describe');
   if (outcome === 'staged') {
     t.false(answer[1], JSON.stringify(answer).slice(0, 300));
     t.true(isStaged(answer[0]), 'the cut answer is staged');
