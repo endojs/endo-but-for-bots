@@ -18121,3 +18121,40 @@ was 627 ms. The three burst-of-eight runs took 13.829, 14.325 and
 13.685 s against 30 s. All stops removed three workers, in 1.769,
 1.808 and 1.724 s. Raw output is in
 `/private/tmp/thix-qc-post-allocation-subagents.log`.
+
+### J-12550 2026-11-19 WX.F guarded operator message class and eight-recipient throughput
+
+Each delivered reply created a new four-method guarded class and one
+instance. Commit ecc7171aa2 creates the class on the first operator
+message and uses a fresh instance and private entry for every message.
+Guards, admission, the reply postmark, the list view and the durable
+acknowledgment are identical. Thirty-two post-office/operator unit
+tests and nine real mail and SIGKILL redelivery cases passed. In a
+Node/SES post/list/dismiss microbenchmark, seven warm batches of 200
+cost 0.388 ms per reply before and 0.235 ms after (median batch).
+
+In shared 15 s eight-credit diagnostics, 45 replies before and 47
+after completed in 16.435 s and 16.408 s. Matched native timings for
+every factory reply post went from 147.2 to 97.0 ms host-wall per post,
+18.6 to 14.4 ms worker JS, and 110.4 to 64.8 ms native collection.
+Factory reply posts had the highest total baseline factory wall time.
+Background load differed. On the class candidate, recipient deliverMail
+took 133.7 ms wall and 48.9 ms JS per post. A disposable follow-up
+cached operator list projections and their exact byte sizes. The
+driver received 49 distinct rows without a repeat in 49 dismissals.
+The cache had no hits and was excluded.
+
+Unscaled exclusive ecc7171aa2 finished with exit 1. Four senders
+completed and dismissed 182 posts in 60.786 s, or 2.994131492/s,
+below the 3/s minimum despite the rounded 3.0 display. Prior 17bbccdfed
+completed 164 posts in 61.420 s, or 2.670121129/s. The operator ACK
+median of 205.186 ms (104 samples) missed the strict 200 ms and passed
+the 250 ms wrapper. A research microbenchmark overlapped the early
+ACK window; its effect is unknown. Session-to-session measured 335 ms
+(73 samples, strict 300, wrapper 375). The causal four-delivery gate
+remains unverified. Inbox upper p95 500 ms and median 30 ms across 54
+posts passed the 550 ms p95 limit. Max active recipients and acknowledged
+backlog were both eight. Largest inbox was five. Fresh hub image plus
+log grew 996,081 to 1,096,466 bytes, 1.100780 times fresh against 1.25
+after 353 attachment posts in 121.357 s and 32 idle cranks. Compactions
+went 12 to 48. Raw rows are in `/private/tmp/thix-qc-mail-class-final.log`.
