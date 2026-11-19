@@ -32,6 +32,25 @@ second copy of an `@endo/*` library.
 Paths below are relative to this package unless they start with the repository root
 (`../../`).
 
+## Session features
+
+- The development preset gives each session its own Git workspace and shell when an
+  environments runner is attached. An emergency stop withdraws that session's runner.
+  A child created from the preset gets its own workspace. [Environments contract](designs/m6-interfaces.md)
+- Sessions use the backend's context window to decide when to compact. The `viewImage`
+  tool can read a PNG, JPEG or WebP from a held workspace. The provider receives the
+  image and the transcript stores a receipt. [Context and images contract](designs/m8-interfaces.md)
+- Operators get their mailbox through `getMail()`. Sessions can send messages, answer
+  requests and delegate tasks to child sessions. An emergency-stopped session can receive
+  a package and runs its mail turn after resume. [Mail and subagents contract](designs/m9-interfaces.md)
+- Operators get the voice service through `getVoice()`. Talk uses the pinned voice preset,
+  model and backend. The built-in voice preset requires an attached runner.
+  [Speech and voice contract](designs/m11-interfaces.md)
+
+The corresponding regression lists are `environments`, `context`, `mail` and `voice`.
+For example, run `corepack yarn test:integration --list context` from this package.
+See the [milestone outcomes](designs/milestones.md) for measured results and outstanding gates.
+
 ## Build what the tests run
 
 Integration tests, spikes and perf checks run the release Ironhorse worker and the Ironhorse
