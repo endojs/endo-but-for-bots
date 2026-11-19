@@ -504,6 +504,7 @@ run(
         id: start.opId,
         content: texts.toolOutcomeUnknown,
         failed: true,
+        incomplete: true,
       },
     ];
     const probeTurn = [{ kind: 'message', role: 'user', content: 'probe' }];
