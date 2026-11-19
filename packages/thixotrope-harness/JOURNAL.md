@@ -18736,3 +18736,30 @@ trace does not establish the separate session mail delivery-count
 gate. Records are in `/private/tmp/thix-qc-current-idle-run.log`,
 `/private/tmp/thix-qc-current-idle-methods.jsonl` and
 `/private/tmp/thix-qc-current-idle-engine.jsonl`.
+### J-12902 2026-11-20 Automatic package reply without an answered receipt
+
+Session change f82f3a9097 against 69997bd0c5 uses sendOnly solely for the
+automatic package reply. The guarded Outbox method receives the same draft
+through the same ordered, durable deliver route. Its OCapN frame omits the
+answer and resolver capabilities. Per-recipient refusals still resolve as
+ordinary receipt values. The settle hook previously discarded those values
+and all rejections. A rejected method invocation now reaches the receiving
+OCapN peer's info logger. Tool and operator sends remain answered, as does
+the automatic rejection of an unanswered request.
+
+All 16 inbox unit cases and 10 installed cases passed on the pinned worker:
+eight public mail tests, mailbox replay after SIGKILL, and exactly one error
+reply after interruption of a package turn. The restart-delivery case took
+10,008.6 ms to serve and 475.1 ms for its first post.
+
+Using the J-1460 emitter procedure with unchanged WX.1 6493d955c7 and isolated
+M9 d552fb5675 plus only the inbox.js diff from f82f3a9097 produces 115,502
+and 136,921 bytes respectively. M9 grows by 21,419 bytes, 81 below the cap.
+Combined control and candidate measure 145,957 and 145,946 bytes; candidate
+session SHA-256 is `f55c7602aaa398573c129337bc499259b488dfa65d950e18910f3a5e4db215c6`.
+
+The release lane's full stock-worker run on e4dafe639d measured 196 completed
+posts in 61.059 seconds (3.210019/s) with 160.827 ms median operator ACK.
+Control measured 2.741411/s and 216.441 ms. The candidate's fresh attachment
+growth ratio was 0.968065 after 375 posts. Session-to-session latency measured
+359 ms against its strict 300 ms target.
