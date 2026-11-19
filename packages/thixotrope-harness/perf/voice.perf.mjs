@@ -27,9 +27,8 @@
  * - `stt.*` `[real-moonshine]`, `tts.firstAudio` `[real-piper]`,
  *   `provider.*` `[real-provider]`: owner runs, reported as skipped rows.
  *
- * Cross-process times (the engine's log and this process) are wall times
- * with a sub-millisecond fraction (`performance.timeOrigin +
- * performance.now()` in both processes of one machine).
+ * Cross-process times (the engine's log and this process) use the same machine’s
+ * monotonic clock, expressed in milliseconds.
  *
  * Windows: VOICE_WINDOW_MS (default 60,000) per row, scaled by
  * PERF_WINDOW_SCALE; five rows, about 5.5 minutes.
@@ -87,8 +86,8 @@ const BLOCK_MS = 85;
 const LOAD_UTTERANCES = 16;
 const VOICE = 'en_US-test-medium';
 
-/** Wall time in ms with a sub-millisecond fraction. */
-const wallNow = () => performance.timeOrigin + performance.now();
+/** Machine monotonic time in milliseconds. */
+const monotonicMs = () => Number(process.hrtime.bigint()) / 1e6;
 
 /**
  * Lines of a JSON-lines log (an empty list when it does not exist yet).
@@ -180,7 +179,7 @@ const openPage = async (speech, port, origin) => {
       look();
     });
   socket.ws.addEventListener('message', (/** @type {any} */ message) => {
-    const at = wallNow();
+    const at = monotonicMs();
     const bytes = Buffer.from(/** @type {ArrayBuffer} */ (message.data));
     const kind = bytes[0];
     const stream = bytes.readUInt16BE(2);
@@ -317,7 +316,7 @@ await runPerf('voice', async ({ root }) => {
             const wait = t0 + i * BLOCK_MS + k * step - performance.now();
 
             if (wait > 0) await delay(wait);
-            sent[k].push(wallNow());
+            sent[k].push(monotonicMs());
             u.page.socket.send(frameKinds.audio, u.stream, block);
           }
           const wait = t0 + (i + 1) * BLOCK_MS - performance.now();
@@ -470,7 +469,7 @@ await runPerf('voice', async ({ root }) => {
       const turnId = `t${i}`;
       publish([{ type: 'turn-start', turnId, input: 'hi', at: i }]);
       const { stream } = await E(page.port).speak(session, turnId);
-      const t0 = wallNow();
+      const t0 = monotonicMs();
       channel.publishDelta(
         harden({ type: 'delta', turnId, round: 0, text: 'Hello there. ' }),
       );
@@ -514,7 +513,7 @@ await runPerf('voice', async ({ root }) => {
     const respawned = await runWindow(
       async () => {
         const pid = enginePid();
-        const t0 = wallNow();
+        const t0 = monotonicMs();
         process.kill(pid, 'SIGKILL');
         while (!gone(pid)) {
           await delay(1);
