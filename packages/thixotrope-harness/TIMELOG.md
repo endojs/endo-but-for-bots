@@ -622,3 +622,17 @@ and lint jobs are outside this table. The preceding generated block covers Claud
 | M11 checkout | 10 | 3016 | 1078 | 8 | 0 |
 | M6 checkout | 21 | 12545 | 3991 | 10 | 6 |
 | M9 checkout | 9 | 12950 | 2194 | 2 | 2 |
+
+## QC follow-up to the four-milestone integration
+
+Completed machine-wide acquisitions as of 2026-11-19 12:19 UTC, for follow-up runs
+requested since 11:25 UTC. The two timing columns sum each acquisition independently.
+Overlapping waits and holds can exceed elapsed wall time. A setup failure counts as
+a nonzero exit even when the actual test or benchmark collected no samples.
+
+| Checkout and work | Finished | Waited (s) | Held (s) | Nonzero exits | Releases without an exit code |
+|---|---:|---:|---:|---:|---:|
+| Integration checkout | 5 | 1954 | 1334 | 0 | 0 |
+| Worker retirement and M9 timing | 10 | 1659 | 1333 | 7 | 0 |
+| M9 runtime and milestone regression | 11 | 4616 | 1927 | 2 | 2 |
+| Session, voice and environments | 6 | 1902 | 550 | 3 | 0 |

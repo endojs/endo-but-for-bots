@@ -17921,3 +17921,18 @@ completion conditions and do not isolate the remaining latency. The
 All 51 post-office, operator-mail and subagent-tree unit cases passed.
 They cover the exact in-flight byte bound, fresh admission after release,
 duplicate recipients, staged copies and re-drive. Typecheck passed.
+
+### J-1456 2026-11-19 WX.F full core live and turn regressions
+
+At the four-milestone follow-up the complete `m1b-live.test.js` file passed
+four tests and the complete `m2-turns.test.js` file passed three. The runner
+started both files together. Each waited 619.7 s for a shared slot. The live
+file held its slot 362.7 s and the turns file 337.6 s. The two-file invocation
+finished in 982.5 s. This covers the two files whose previously failing cases
+had only focused reruns (J-1451).
+
+Together with the earlier full files, 24 of the 25 original core files have
+a full-file pass. The dedicated retirement test (J-1473) brings the current
+list to 25 of 26. These counts span multiple invocations. The original mixed
+`m1b-qc` file still lacks a full-file pass on the fold, and the complete
+core list's 20-minute budget still needs its own measurement.

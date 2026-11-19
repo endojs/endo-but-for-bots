@@ -166,7 +166,11 @@ The follow-up added `exec-retirement.test.js` to the core list (now 26 files).
 Its real-daemon run observed a session's previous worker disappear on a finite
 deadline and its next task complete in a new scope on a different worker
 (31.1 s case time, J-1473). The full `m1b-pool` lifecycle file also passed.
-The original mixed `m1b-qc` file retains its separate result above.
+Two subsequent full files passed on the integrated harness. All four cases in
+`m1b-live` and all three in `m2-turns` passed in one two-file invocation
+(J-1456). Across the fold and follow-up, 24 of the original 25 core files have
+passed in full, or 25 of the current 26 including retirement. The original mixed
+`m1b-qc` file retains its separate result above.
 
 Earlier full-list baseline: the step 3 close-out (T3-CLOSE, J-10251), 2026-11-19 00:09-00:37 UTC, at
 `804398c4d9` (lane `endo-thix-clean`, after the review's step 3, documents edited), 6 jobs in

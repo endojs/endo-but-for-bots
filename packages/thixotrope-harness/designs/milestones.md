@@ -1484,7 +1484,9 @@ at `53ce64395a` (J-1453). The full pool lifecycle and the dedicated real-daemon
 exec-retirement test passed. A deadline removed the old worker and the next task in the
 same session saw a fresh scope (J-1473). M8 cold context rebuild met its 359 ms target
 (J-1454). M9 added 21,430 bytes against its 21,500-byte allocation with the same
-emitter on both inputs (J-1460). The individual sections record the other performance
+emitter on both inputs (J-1460). Two further full-file passes bring core regression
+coverage to 25 of the current 26 files across runs (J-1456). The remaining file is
+the original mixed `m1b-qc` suite. The individual sections record the other performance
 results. The four contracts are the reference:
 `m6-interfaces.md`, `m8-interfaces.md`, `m9-interfaces.md`, `m11-interfaces.md`, settled against
 the cross-check WX.0 (journal J-1410..J-1417, issues X-01..X-17) and against cleanup step 3
