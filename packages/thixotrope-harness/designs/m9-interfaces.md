@@ -379,6 +379,11 @@ stated. "Retired break" is what a caller does when the call breaks with the hub'
 | | `stop()` | `stopSubagent` | answered | tiny | factory lost | runs `deleteSession` on the subtree, deepest first, one child at a time (m2 7.1, five answered steps each) |
 | | `describe()` | parent (tests, diagnostics) | answered | < 300 B | factory lost | none |
 
+For the automatic package reply, the sender previously discarded both promise outcomes.
+A per-recipient refusal is an ordinary result in the post receipt and is still discarded.
+If the receiving method rejects the call, its OCapN peer reports that rejection to its
+info logger because the delivery has no resolver. The session receives no result.
+
 The post office's internal API (the contract between W9.4, W9.5 and W9.9; plain functions, not
 exos):
 
