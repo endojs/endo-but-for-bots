@@ -14,6 +14,8 @@
  * Value kinds:
  * - `'string'`: a JSON string, decoded;
  * - `'integer'`: a JSON number that is a safe integer;
+ * - `'strings'`: a JSON string or an array of at most `mailParts` strings,
+ *   each decoded, read as an array (m9-interfaces.md S4);
  * - `'raw'`: any JSON value, checked for syntax and kept as the exact
  *   source span (text): `store`'s `value`, `readSources`' `items`;
  * - a nested spec `{ fields }`: an object read by the same rules.
@@ -23,9 +25,10 @@
  * Pure; runs in vats and in Node.
  */
 import { textOf } from './guards/session.js';
+import { mailLimits } from './mail-limits.js';
 
 /**
- * @typedef {'string' | 'integer' | 'raw' | ArgObjectSpec} ArgKind
+ * @typedef {'string' | 'strings' | 'integer' | 'raw' | ArgObjectSpec} ArgKind
  *
  * @typedef {object} ArgField
  * @property {string} name
@@ -310,6 +313,26 @@ export const parseClosedArgs = (argsText, spec) => {
     if (kind === 'string') {
       if (s[i] !== '"') throw wrongType(field, 'a string');
       return readString(true);
+    }
+    if (kind === 'strings') {
+      if (s[i] === '"') return harden([readString(true)]);
+      const max = mailLimits.mailParts;
+      const wrong = wrongType(field, `a string or at most ${max} strings`);
+      if (s[i] !== '[') throw wrong;
+      i += 1;
+      /** @type {string[]} */
+      const list = [];
+      ws();
+      if (s[i] === ']') i += 1;
+      while (s[i - 1] !== ']') {
+        ws();
+        if (s[i] !== '"' || list.length === max) throw wrong;
+        list.push(readString(true));
+        ws();
+        if (s[i] !== ']') expect(',');
+        else i += 1;
+      }
+      return harden(list);
     }
     if (kind === 'integer') {
       const c = s[i];

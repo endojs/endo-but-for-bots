@@ -217,9 +217,13 @@ test('the context window option is the runtime member, undefined by default (WX.
     contextWindow,
   });
   t.is(runtime.contextWindow, contextWindow);
-  // The parts still to come have no getter yet.
-  for (const name of ['environment', 'compaction', 'inbox', 'subagents']) {
+  // The parts still to come have no getter yet; the mail parts' getters
+  // answer undefined until their parts are registered.
+  for (const name of ['environment', 'compaction']) {
     t.false(name in runtime, name);
+  }
+  for (const name of ['inbox', 'subagents']) {
+    t.is(/** @type {any} */ (runtime)[name], undefined, name);
   }
 });
 

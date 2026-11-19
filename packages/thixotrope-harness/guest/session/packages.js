@@ -8,7 +8,11 @@
  * `number` is a per-session counter from 1 (M9's inbox opens its packages
  * through the same `open`). Labels are Map keys only (rule 12.10).
  *
- * - `open({ labels, values, turnId }) -> number`;
+ * - `open({ number?, labels, values, turnId }) -> number`: `number` when
+ *   given (one `reserve` answered), else the next of the counter;
+ * - `reserve(above = 0) -> number` (m9-interfaces.md D-M9-7, D-M9-21):
+ *   raises the counter, above `above` when given, and opens nothing: an
+ *   inbox message keeps its number from delivery to its turn's claim;
  * - `take(number, edge, turnId?) -> object`: the object, when the package
  *   is open (and belongs to `turnId` when given), else throws
  *   `textOf.noPackage` / `textOf.noEdge`. The package keeps the object (an
@@ -84,12 +88,16 @@ export const makePackages = () => {
   let last = 0;
   return harden({
     /**
-     * @param {{ labels: readonly string[], values: Map<string, any>, turnId: string }} pkg
+     * @param {{ number?: number, labels: readonly string[], values: Map<string, any>, turnId: string }} pkg
      * @returns {number}
      */
-    open: ({ labels, values, turnId }) => {
-      last += 1;
-      open.set(last, { number: last, labels, values, turnId });
+    open: ({ number = (last += 1), labels, values, turnId }) => {
+      open.set(number, { number, labels, values, turnId });
+      return number;
+    },
+    /** @param {number} [above] */
+    reserve: (above = 0) => {
+      last = Math.max(last, above) + 1;
       return last;
     },
     /**

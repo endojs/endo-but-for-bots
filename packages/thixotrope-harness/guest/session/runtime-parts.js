@@ -317,7 +317,13 @@ export const makeRuntime = ({
     // slot: environment
     // slot: compaction
     // slot: inbox
+    get inbox() {
+      return made.get('inbox');
+    },
     // slot: subagents
+    get subagents() {
+      return made.get('subagents');
+    },
     get hooks() {
       return /** @type {RuntimeHooks} */ (hooks);
     },

@@ -32,7 +32,6 @@ import {
 } from '../../guest/session/runtime-parts.js';
 import { inboxPart } from '../../guest/session/inbox.js';
 /* eslint-enable import/no-relative-packages */
-import { makeInboxPackages } from './_inbox-packages.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { Far, M, makeExo, matches } = /** @type {GuestGlobals} */ (globalThis);
@@ -75,26 +74,15 @@ const makeTicket = () => {
 
 /** @param {{ mail?: any }} [services] */
 const makeInboxRuntime = (services = {}) => {
-  const parts = runtimeParts.map(part =>
-    part.name === 'packages' ? makeInboxPackages() : part,
+  const runtime = /** @type {any} */ (
+    makeRuntime({
+      labels: makeLabels(),
+      services: harden(services),
+      config: harden({}),
+      parts: harden([...runtimeParts, inboxPart]),
+    })
   );
-  // The part's value as `make` answers it (the `runtime.inbox` getter is
-  // the session wiring's, seam S1).
-  /** @type {any} */
-  let inbox;
-  const capture = harden({
-    name: inboxPart.name,
-    make: (/** @type {any} */ rt) => {
-      inbox = inboxPart.make(rt);
-      return inbox;
-    },
-  });
-  const runtime = makeRuntime({
-    labels: makeLabels(),
-    services: harden(services),
-    config: harden({}),
-    parts: harden([...parts, capture]),
-  });
+  const { inbox } = runtime;
   // The guard `SessionInternal.deliverMail` crosses (seam S5's caller).
   const internal = makeExo(
     'SessionInternal',
@@ -104,7 +92,7 @@ const makeInboxRuntime = (services = {}) => {
       cancelMail: () => {},
     },
   );
-  return { runtime: /** @type {any} */ (runtime), inbox, internal };
+  return { runtime, inbox, internal };
 };
 
 const alice = address('Alice');
