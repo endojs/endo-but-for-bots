@@ -17392,3 +17392,23 @@ the exec program and pool also passed (159.7 s held). Two earlier clone runs
 resolved the supervisor dependency to the adjacent M11-only checkout, which
 made its native adapter lookup miss the environments implementation. Using
 the combined checkout’s own supervisor resolved the setup failure.
+
+### J-12543 2026-11-19 M9 repeated address delivery
+
+The served operator tests passed seven of eight cases, including real final-text replies,
+request settlement and the gateway. The remaining assertion posted to the same address twice
+in one draft and received distinct postmarks (5 and 6). The pre-fold test only observed two
+identical stub refusals. Commit f574398d1d starts one delivery per distinct address and returns
+its result at every original position. All twenty post-office unit tests passed, including the
+three-position, two-address case. The combined daemon also passed the child workspace/shell
+case while its parent was stopped.
+
+### J-12544 2026-11-19 M9 real-daemon regression results
+
+The corrected operator and gateway file passed all eight cases on Ironhorse. The model-tool
+test passed spawn, ask (the reply was `Hello!`) and stop. The subagent restart file passed
+asking and stopping the existing child by name after a SIGKILL. Both standalone mail restart
+files also passed across the runs. Together those five regression files cover twelve passing
+tests. The first multi-file run had one repeated-recipient failure; its corrected file passed
+on rerun. The child environment daemon check passed on the combined tree. These cases do not
+exercise every intermediate crash point in the M9 design.
