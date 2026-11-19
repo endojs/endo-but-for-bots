@@ -17541,7 +17541,10 @@ exhaustion path completing, one exec vat retiring and the next turn
 completing (`tooBig.keys60k`). The QC assertion now polls for disappearance
 of an original worker ID for up to 30 seconds. Its count and the performance
 limits are unchanged. The changed observation has not been exercised in a
-standalone run of the legacy QC file.
+standalone run of the legacy QC file. In isolation the exact callback and
+wait helper saw zero missing at 2 s, counted one at 2,512 ms after ID
+replacement, and timed out at 113 ms with a 100 ms test bound when the
+original ID remained alongside a new worker.
 
 ### J-12726 2026-11-19 W11.9 — monotonic-clock transport pass
 
