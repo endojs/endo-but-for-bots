@@ -17453,6 +17453,22 @@ The seven original M6 file digests still matched the untouched source tree, its 
 the checkpoint commit. The local landing uses a fast-forward from `9adecb9b94`. Earlier
 performance misses stay open; work in later milestone groups has its own scope.
 
+### J-1470 2026-11-19 WX.F legacy list timing and worker retirement
+
+The broad run at `054eb818d8` measured 568 ms from rename invocation to
+delivery at the slower of two list subscribers against the 500 ms M1b
+limit. The M3 browser-facing list test times delivery from rename
+completion. Those intervals answer different questions. The broad M1b run
+remains a failure under its original limit.
+
+At `b90e7461c6` the broad QC run found no disappearance among the original
+exec workers at its single observation after a two-second sleep. Session
+retirement is sent without awaiting the handle, and the pool separately
+sends retirement to the facade without waiting for its answer. The
+observation leaves eventual daemon retirement unresolved. The targeted
+normal ExecHandle unit test passed (one test, fake worker), checking that
+retiring the matching scope retires its worker and permits a new scope.
+
 ### J-12726 2026-11-19 W11.9 — monotonic-clock transport pass
 
 Node 22.23.4, worker 367e78ad1db3, b1601fb0ac, 60-second exclusive
