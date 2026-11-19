@@ -32,7 +32,7 @@
  * Acceptance items that need the registered parts (1-3, 5-7 in full, 8-10,
  * 12-14, 18's blob release) are listed in milestones.md under M9's outcome.
  *
- *   THIX_AGENT=W9.10 corepack yarn test:integration test/integration/mail.test.js
+ *   THIX_AGENT=<lane> corepack yarn test:integration test/integration/mail.test.js
  */
 import '../unit/_m1a-prelude.js';
 

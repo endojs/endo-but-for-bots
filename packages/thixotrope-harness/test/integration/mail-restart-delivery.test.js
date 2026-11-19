@@ -10,8 +10,8 @@
  * and the factory heap of mail across a restart. One case:
  *
  * - a request settled before the kill and a post sent without waiting
- *   right before it (the kill lands at KM1, KM2 or after the answer,
- *   whichever the timing gives); after the restart the factory serves
+ *   right before it (where the kill lands is not controlled, and no kill
+ *   point is asserted); after the restart the factory serves
  *   (its recovery's tail, which waits for the mail start steps, ended),
  *   the operator's mailbox answers from the replayed heap (the settled
  *   request's handle answers the same outcome, the inbox page and `rev`),
@@ -19,9 +19,10 @@
  *   new post is delivered and answered.
  *
  * The contract's kill points of this file (KM1, KM2, KM3 with a duplicate
- * answer, KM13, KM14 and acceptance 21) need the registered inbox part.
+ * answer, KM13, KM14 and acceptance 21) need the registered inbox part and
+ * are not written yet: this file proves none of them.
  *
- *   THIX_AGENT=W9.10 corepack yarn test:integration test/integration/mail-restart-delivery.test.js
+ *   THIX_AGENT=<lane> corepack yarn test:integration test/integration/mail-restart-delivery.test.js
  */
 import '../unit/_m1a-prelude.js';
 

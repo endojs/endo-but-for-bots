@@ -11,9 +11,10 @@
  *
  * The session's `inbox` part is built but not registered in the session
  * program (D-M9-19), so the recipient's `deliverMail` answers the not-built
- * text: the row measures the whole relay (factory crank, the delivery into
- * the session vat and its answer, the receipt) without the inbox's record
- * and claim. It says so (`recipient: 'not-built'`).
+ * text: the row then measures a post to that refusal (factory crank, the
+ * call into the session vat and its answer, the receipt), not a delivery
+ * into an inbox, and is named so (`mail.post.operator.toRefusal`); it
+ * becomes `mail.post.operator` once the inbox answers.
  *
  * The rows that need a mail turn in the recipient (`mail.sessionToSession`,
  * `mail.throughput`, `mail.inboxCrank`, `mail.hubGrowth`) are printed as
@@ -66,16 +67,20 @@ await runPerf('mail', async ({ provision }) => {
   const w = await runWindow(post, { ms: WINDOW_MS });
   const after = await run.counters();
   const answers = new Set(w.results);
-  await stats('mail.post.operator', w.samples, {
-    budget: { median: 200 },
-    before,
-    after,
-    extra: {
-      ...windowFields(w),
-      recipient: answers.has(texts.notBuiltYet) ? 'not-built' : 'inbox',
-      by: 'W9.10',
+  const notBuilt = answers.has(texts.notBuiltYet);
+  await stats(
+    notBuilt ? 'mail.post.operator.toRefusal' : 'mail.post.operator',
+    w.samples,
+    {
+      budget: { median: 200 },
+      before,
+      after,
+      extra: {
+        ...windowFields(w),
+        recipient: notBuilt ? 'not-built' : 'inbox',
+      },
     },
-  });
+  );
 
   for (const metric of needsInbox) {
     emit({
@@ -83,7 +88,6 @@ await runPerf('mail', async ({ provision }) => {
       measured: false,
       reason:
         'needs the inbox part registered in the session program (m9-interfaces.md D-M9-19: over the limit with it)',
-      by: 'W9.10',
     });
   }
 });
