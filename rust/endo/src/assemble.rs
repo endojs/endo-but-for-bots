@@ -643,7 +643,13 @@ pub fn assemble_entry_with_config<H: HttpClient>(
     // reachable member\'s — feeds the registry resolver.
     let (workspace_packages, roots) =
         resolve_workspace_members(cas, &package_root, &package_name, &root_edges.required)?;
-    let outcome = resolve_transitive_outcome(http, cas, registry_table, config, &DepEdges::required_only(&roots))?;
+    let outcome = resolve_transitive_outcome(
+        http,
+        cas,
+        registry_table,
+        config,
+        &DepEdges::required_only(&roots),
+    )?;
     let mut packages = Vec::with_capacity(outcome.packages.len() + workspace_packages.len());
     for package in outcome.packages {
         let edges = read_dep_edges(cas, &package.name, &package.version, &package.tree_hash)?;

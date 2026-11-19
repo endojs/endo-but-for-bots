@@ -71,9 +71,7 @@ impl Credential {
         if let Some(token) = &self.token {
             return Some(format!("Bearer {token}"));
         }
-        if let (Some(username), Some(password_base64)) =
-            (&self.username, &self.password_base64)
-        {
+        if let (Some(username), Some(password_base64)) = (&self.username, &self.password_base64) {
             if let Ok(bytes) = BASE64.decode(password_base64) {
                 if let Ok(password) = String::from_utf8(bytes) {
                     let pair = format!("{username}:{password}");
@@ -132,11 +130,7 @@ impl NpmConfig {
     /// [`apply_npmrc`](NpmConfig::apply_npmrc) with an explicit
     /// environment, so tests need not mutate the process environment
     /// (which would race the parallel test runner).
-    pub fn apply_npmrc_with_env(
-        &mut self,
-        text: &str,
-        env: &dyn Fn(&str) -> Option<String>,
-    ) {
+    pub fn apply_npmrc_with_env(&mut self, text: &str, env: &dyn Fn(&str) -> Option<String>) {
         for raw_line in text.lines() {
             let line = raw_line.trim();
             if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
@@ -267,8 +261,7 @@ impl NpmConfig {
             .iter()
             .filter(|(prefix, credential)| {
                 !credential.is_empty()
-                    && (target == prefix.as_str()
-                        || target.starts_with(&format!("{prefix}/")))
+                    && (target == prefix.as_str() || target.starts_with(&format!("{prefix}/")))
             })
             .max_by_key(|(prefix, _)| prefix.len())
             .map(|(_, credential)| credential)
@@ -318,8 +311,7 @@ fn strip_scheme(url: &str) -> &str {
 fn url_is_under(url: &str, base: &str) -> bool {
     let url = strip_scheme(url).trim_end_matches('/');
     let base = strip_scheme(base).trim_end_matches('/');
-    !base.is_empty()
-        && (url == base || url.starts_with(&format!("{base}/")))
+    !base.is_empty() && (url == base || url.starts_with(&format!("{base}/")))
 }
 
 /// Expand `${VAR}` references in `value` as npm does, reading each
@@ -327,10 +319,7 @@ fn url_is_under(url: &str, base: &str) -> bool {
 /// variable is unset (the caller skips the line — the resilient
 /// counterpart of npm's hard error). A `$` not followed by `{`, or
 /// an unterminated `${`, passes through literally.
-fn expand_env(
-    value: &str,
-    env: &dyn Fn(&str) -> Option<String>,
-) -> Option<String> {
+fn expand_env(value: &str, env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
     if !value.contains("${") {
         return Some(value.to_string());
     }
@@ -392,11 +381,11 @@ mod tests {
              //npm.acme.example/:_authToken = s3cret\n\
              fund=false\n",
         );
+        assert_eq!(config.default_registry(), "https://mirror.example.com/npm/");
         assert_eq!(
-            config.default_registry(),
+            config.registry_for("lodash"),
             "https://mirror.example.com/npm/"
         );
-        assert_eq!(config.registry_for("lodash"), "https://mirror.example.com/npm/");
         assert_eq!(
             config.registry_for("@acme/widgets"),
             "https://npm.acme.example/"
@@ -656,10 +645,7 @@ mod tests {
 
         // `$` without `{` and an unterminated `${` pass through
         // literally.
-        assert_eq!(
-            expand_env("a$b", &env),
-            Some("a$b".to_string())
-        );
+        assert_eq!(expand_env("a$b", &env), Some("a$b".to_string()));
         assert_eq!(
             expand_env("x${REG_HOST", &env),
             Some("x${REG_HOST".to_string())

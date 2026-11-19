@@ -68,7 +68,10 @@ impl<'a> Cursor<'a> {
 
     fn read_head(&mut self) -> io::Result<(u8, u64)> {
         if self.pos >= self.data.len() {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "CBOR: unexpected end of input"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "CBOR: unexpected end of input",
+            ));
         }
         let initial = self.data[self.pos];
         self.pos += 1;
@@ -82,10 +85,18 @@ impl<'a> Cursor<'a> {
             25 => 2,
             26 => 4,
             27 => 8,
-            _ => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("CBOR: unsupported info {info}"))),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("CBOR: unsupported info {info}"),
+                ))
+            }
         };
         if self.pos + size > self.data.len() {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "CBOR: truncated head"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "CBOR: truncated head",
+            ));
         }
         let mut value: u64 = 0;
         for i in 0..size {
@@ -100,18 +111,27 @@ impl<'a> Cursor<'a> {
         match major {
             0 => Ok(value as i64),
             1 => Ok(-(value as i64) - 1),
-            _ => Err(io::Error::new(io::ErrorKind::InvalidData, format!("CBOR: expected int, got major {major}"))),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("CBOR: expected int, got major {major}"),
+            )),
         }
     }
 
     fn read_bytes(&mut self) -> io::Result<Vec<u8>> {
         let (major, len) = self.read_head()?;
         if major != CBOR_BYTES {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("CBOR: expected bytes, got major {major}")));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("CBOR: expected bytes, got major {major}"),
+            ));
         }
         let len = len as usize;
         if self.pos + len > self.data.len() {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "CBOR: truncated bytes"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "CBOR: truncated bytes",
+            ));
         }
         let result = self.data[self.pos..self.pos + len].to_vec();
         self.pos += len;
@@ -121,11 +141,17 @@ impl<'a> Cursor<'a> {
     fn read_text(&mut self) -> io::Result<String> {
         let (major, len) = self.read_head()?;
         if major != CBOR_TEXT {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("CBOR: expected text, got major {major}")));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("CBOR: expected text, got major {major}"),
+            ));
         }
         let len = len as usize;
         if self.pos + len > self.data.len() {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "CBOR: truncated text"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "CBOR: truncated text",
+            ));
         }
         let s = std::str::from_utf8(&self.data[self.pos..self.pos + len])
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -136,7 +162,10 @@ impl<'a> Cursor<'a> {
     fn read_array_header(&mut self) -> io::Result<u64> {
         let (major, len) = self.read_head()?;
         if major != CBOR_ARRAY {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("CBOR: expected array, got major {major}")));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("CBOR: expected array, got major {major}"),
+            ));
         }
         Ok(len)
     }
@@ -144,7 +173,10 @@ impl<'a> Cursor<'a> {
     fn read_map_header(&mut self) -> io::Result<u64> {
         let (major, len) = self.read_head()?;
         if major != CBOR_MAP {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("CBOR: expected map, got major {major}")));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("CBOR: expected map, got major {major}"),
+            ));
         }
         Ok(len)
     }
@@ -156,7 +188,10 @@ impl<'a> Cursor<'a> {
             2 | 3 => {
                 let len = value as usize;
                 if self.pos + len > self.data.len() {
-                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "CBOR: truncated skip"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "CBOR: truncated skip",
+                    ));
                 }
                 self.pos += len;
                 Ok(())
@@ -174,7 +209,10 @@ impl<'a> Cursor<'a> {
                 }
                 Ok(())
             }
-            _ => Err(io::Error::new(io::ErrorKind::InvalidData, format!("CBOR: unknown major {major}"))),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("CBOR: unknown major {major}"),
+            )),
         }
     }
 }
@@ -193,7 +231,10 @@ pub fn read_frame(r: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
     }
     let major = first[0] >> 5;
     if major != CBOR_BYTES {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("frame: expected bytes major 2, got {major}")));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("frame: expected bytes major 2, got {major}"),
+        ));
     }
     let info = first[0] & 0x1f;
     let len: usize = if info < 24 {
@@ -211,7 +252,10 @@ pub fn read_frame(r: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
         r.read_exact(&mut b)?;
         ((b[0] as usize) << 24) | ((b[1] as usize) << 16) | ((b[2] as usize) << 8) | b[3] as usize
     } else {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("frame: unsupported length info {info}")));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("frame: unsupported length info {info}"),
+        ));
     };
     const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024; // 16 MiB
     if len > MAX_FRAME_SIZE {
@@ -246,7 +290,10 @@ pub async fn async_read_frame(r: &mut (impl AsyncReadExt + Unpin)) -> io::Result
     }
     let major = first[0] >> 5;
     if major != CBOR_BYTES {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("frame: expected bytes major 2, got {major}")));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("frame: expected bytes major 2, got {major}"),
+        ));
     }
     let info = first[0] & 0x1f;
     let len: usize = if info < 24 {
@@ -264,7 +311,10 @@ pub async fn async_read_frame(r: &mut (impl AsyncReadExt + Unpin)) -> io::Result
         r.read_exact(&mut b).await?;
         ((b[0] as usize) << 24) | ((b[1] as usize) << 16) | ((b[2] as usize) << 8) | b[3] as usize
     } else {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("frame: unsupported length info {info}")));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("frame: unsupported length info {info}"),
+        ));
     };
     const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
     if len > MAX_FRAME_SIZE {
@@ -281,7 +331,10 @@ pub async fn async_read_frame(r: &mut (impl AsyncReadExt + Unpin)) -> io::Result
 }
 
 /// Async version of `write_frame` for use with tokio AsyncWrite.
-pub async fn async_write_frame(w: &mut (impl AsyncWriteExt + Unpin), data: &[u8]) -> io::Result<()> {
+pub async fn async_write_frame(
+    w: &mut (impl AsyncWriteExt + Unpin),
+    data: &[u8],
+) -> io::Result<()> {
     let mut header = Vec::new();
     cbor_append_head(&mut header, CBOR_BYTES, data.len() as u64);
     w.write_all(&header).await?;
@@ -307,13 +360,21 @@ pub fn decode_envelope(data: &[u8]) -> io::Result<Envelope> {
     let mut c = Cursor::new(data);
     let n = c.read_array_header()?;
     if n != 3 && n != 4 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("envelope: expected 3 or 4 elements, got {n}")));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("envelope: expected 3 or 4 elements, got {n}"),
+        ));
     }
     let handle = c.read_int()?;
     let verb = c.read_text()?;
     let payload = c.read_bytes()?;
     let nonce = if n == 4 { c.read_int()? } else { 0 };
-    Ok(Envelope { handle, verb, payload, nonce })
+    Ok(Envelope {
+        handle,
+        verb,
+        payload,
+        nonce,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -477,7 +538,10 @@ pub fn encode_worker_list(workers: &[WorkerInfo]) -> Vec<u8> {
         cbor_append_text(&mut buf, "pid");
         cbor_append_int(&mut buf, w.pid as i64);
         cbor_append_text(&mut buf, "started");
-        let elapsed = w.started.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        let elapsed = w
+            .started
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
         let secs = elapsed.as_secs();
         // Format as RFC3339-ish timestamp.
         cbor_append_text(&mut buf, &format_timestamp(secs));
@@ -509,7 +573,20 @@ fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
         y += 1;
     }
     let leap = is_leap(y);
-    let mdays = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mdays = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut mo = 0;
     for (i, &md) in mdays.iter().enumerate() {
         if days < md {

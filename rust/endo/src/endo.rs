@@ -90,10 +90,7 @@ impl Endo {
     /// channel transport — byte-identical on the wire to the legacy
     /// pipe path.
     pub async fn serve(&mut self) -> Result<(), EndoError> {
-        eprintln!(
-            "endor: starting (pid {})",
-            std::process::id()
-        );
+        eprintln!("endor: starting (pid {})", std::process::id());
 
         // Start supervisor routing with control message handler.
         let sup_for_control = Arc::clone(&self.supervisor);
@@ -115,7 +112,14 @@ impl Endo {
                     handle_control_message(&sup_for_control, &spawn_sup, &cas_for_control, msg);
                 }),
                 on_resume: Box::new(move |sup, handle, suspended, pending_msg| {
-                    handle_resume(&resume_sup, sup, handle, suspended, &cas_dir_for_resume, pending_msg);
+                    handle_resume(
+                        &resume_sup,
+                        sup,
+                        handle,
+                        suspended,
+                        &cas_dir_for_resume,
+                        pending_msg,
+                    );
                 }),
             },
         );
@@ -138,10 +142,7 @@ impl Endo {
         // Wait for socket.
         wait_for_socket(&self.paths.sock_path, Duration::from_secs(10)).await?;
 
-        eprintln!(
-            "endor: ready (sock {})",
-            self.paths.sock_path.display()
-        );
+        eprintln!("endor: ready (sock {})", self.paths.sock_path.display());
 
         // Block until signal or manager exit.
         let shutdown = self.shutdown_notify.clone();
@@ -225,7 +226,16 @@ impl Endo {
             sup_for_exit.stop();
         });
 
-        wire_worker_tasks(spawned, daemon_handle, 0, &self.supervisor, inbox, Some(on_exit), "init", Vec::new())?;
+        wire_worker_tasks(
+            spawned,
+            daemon_handle,
+            0,
+            &self.supervisor,
+            inbox,
+            Some(on_exit),
+            "init",
+            Vec::new(),
+        )?;
 
         Ok(())
     }
@@ -246,7 +256,12 @@ fn send_meter_config(sup: &Arc<Supervisor>, target: Handle, hard_limit: u64) {
     });
 }
 
-fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, cas: &Arc<ContentStore>, msg: Message) {
+fn handle_control_message(
+    sup: &Arc<Supervisor>,
+    spawn_sup: &Arc<Supervisor>,
+    cas: &Arc<ContentStore>,
+    msg: Message,
+) {
     let cas_dir = cas.dir();
     match msg.envelope.verb.as_str() {
         "ready" => {
@@ -330,69 +345,66 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
                 }
             }
         }
-        "spawn" => {
-            match codec::decode_spawn_request(&msg.envelope.payload) {
-                Ok((platform, command, args)) => {
-                    let engine = engine::engine_for_spawn_request(&platform, &command, &args, &msg);
-                    let spawn_result = match engine {
-                        Ok(Engine::Separate { platform, command, args }) => {
-                            crate::proc::spawn_process(spawn_sup, &platform, &command, &args, msg.from)
-                        }
-                        Ok(Engine::Shared { .. }) => {
-                            crate::inproc::spawn_shared_worker(spawn_sup, msg.from)
-                        }
-                        Err(e) => {
-                            Err(std::io::Error::new(
-                                std::io::ErrorKind::InvalidInput,
-                                e,
-                            ))
-                        }
-                    };
-                    match spawn_result {
-                        Ok(worker_handle) => {
-                            sup.set_parent(worker_handle, msg.from);
-                            sup.deliver(Message {
-                                from: 0,
-                                to: msg.from,
-                                envelope: Envelope {
-                                    handle: 0,
-                                    verb: "spawned".to_string(),
-                                    payload: codec::encode_handle(worker_handle),
-                                    nonce: msg.envelope.nonce,
-                                },
-                                response_tx: None,
-                            });
-                        }
-                        Err(e) => {
-                            sup.deliver(Message {
-                                from: 0,
-                                to: msg.from,
-                                envelope: Envelope {
-                                    handle: 0,
-                                    verb: "error".to_string(),
-                                    payload: e.to_string().into_bytes(),
-                                    nonce: msg.envelope.nonce,
-                                },
-                                response_tx: None,
-                            });
-                        }
+        "spawn" => match codec::decode_spawn_request(&msg.envelope.payload) {
+            Ok((platform, command, args)) => {
+                let engine = engine::engine_for_spawn_request(&platform, &command, &args, &msg);
+                let spawn_result = match engine {
+                    Ok(Engine::Separate {
+                        platform,
+                        command,
+                        args,
+                    }) => {
+                        crate::proc::spawn_process(spawn_sup, &platform, &command, &args, msg.from)
+                    }
+                    Ok(Engine::Shared { .. }) => {
+                        crate::inproc::spawn_shared_worker(spawn_sup, msg.from)
+                    }
+                    Err(e) => Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)),
+                };
+                match spawn_result {
+                    Ok(worker_handle) => {
+                        sup.set_parent(worker_handle, msg.from);
+                        sup.deliver(Message {
+                            from: 0,
+                            to: msg.from,
+                            envelope: Envelope {
+                                handle: 0,
+                                verb: "spawned".to_string(),
+                                payload: codec::encode_handle(worker_handle),
+                                nonce: msg.envelope.nonce,
+                            },
+                            response_tx: None,
+                        });
+                    }
+                    Err(e) => {
+                        sup.deliver(Message {
+                            from: 0,
+                            to: msg.from,
+                            envelope: Envelope {
+                                handle: 0,
+                                verb: "error".to_string(),
+                                payload: e.to_string().into_bytes(),
+                                nonce: msg.envelope.nonce,
+                            },
+                            response_tx: None,
+                        });
                     }
                 }
-                Err(e) => {
-                    sup.deliver(Message {
-                        from: 0,
-                        to: msg.from,
-                        envelope: Envelope {
-                            handle: 0,
-                            verb: "error".to_string(),
-                            payload: format!("invalid spawn payload: {e}").into_bytes(),
-                            nonce: msg.envelope.nonce,
-                        },
-                        response_tx: None,
-                    });
-                }
             }
-        }
+            Err(e) => {
+                sup.deliver(Message {
+                    from: 0,
+                    to: msg.from,
+                    envelope: Envelope {
+                        handle: 0,
+                        verb: "error".to_string(),
+                        payload: format!("invalid spawn payload: {e}").into_bytes(),
+                        nonce: msg.envelope.nonce,
+                    },
+                    response_tx: None,
+                });
+            }
+        },
         "list" => {
             let workers = sup.workers_snapshot();
             sup.deliver(Message {
@@ -455,8 +467,7 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
         }
         "meter-report" => {
             // Worker reports steps consumed after a crank.
-            if let Ok((handle, steps, outcome)) =
-                codec::decode_meter_report(&msg.envelope.payload)
+            if let Ok((handle, steps, outcome)) = codec::decode_meter_report(&msg.envelope.payload)
             {
                 sup.process_meter_report(handle, steps, &outcome);
             }
@@ -513,9 +524,7 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
             }
         }
         "meter-refill" => {
-            if let Ok((target, amount)) =
-                codec::decode_meter_refill(&msg.envelope.payload)
-            {
+            if let Ok((target, amount)) = codec::decode_meter_refill(&msg.envelope.payload) {
                 let new_budget = sup.meter_refill(target, amount);
                 sup.deliver(Message {
                     from: 0,
@@ -530,80 +539,72 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
                 });
             }
         }
-        "cas-store" => {
-            match codec::decode_cas_store(&msg.envelope.payload) {
-                Ok((data, content_type)) => {
-                    match cas.store(&data, &content_type) {
-                        Ok(hash) => {
-                            sup.deliver(Message {
-                                from: 0,
-                                to: msg.from,
-                                envelope: Envelope {
-                                    handle: 0,
-                                    verb: "cas-stored".to_string(),
-                                    payload: codec::encode_cas_stored(&hash),
-                                    nonce: msg.envelope.nonce,
-                                },
-                                response_tx: None,
-                            });
-                        }
-                        Err(e) => {
-                            sup.deliver(Message {
-                                from: 0,
-                                to: msg.from,
-                                envelope: Envelope {
-                                    handle: 0,
-                                    verb: "error".to_string(),
-                                    payload: format!("cas-store: {e}").into_bytes(),
-                                    nonce: msg.envelope.nonce,
-                                },
-                                response_tx: None,
-                            });
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("endor: cas-store decode error: {e}");
-                }
-            }
-        }
-        "cas-fetch" => {
-            match codec::decode_cas_hash_request(&msg.envelope.payload) {
+        "cas-store" => match codec::decode_cas_store(&msg.envelope.payload) {
+            Ok((data, content_type)) => match cas.store(&data, &content_type) {
                 Ok(hash) => {
-                    match cas.fetch(&hash) {
-                        Ok(data) => {
-                            sup.deliver(Message {
-                                from: 0,
-                                to: msg.from,
-                                envelope: Envelope {
-                                    handle: 0,
-                                    verb: "cas-content".to_string(),
-                                    payload: codec::encode_cas_content(&data),
-                                    nonce: msg.envelope.nonce,
-                                },
-                                response_tx: None,
-                            });
-                        }
-                        Err(e) => {
-                            sup.deliver(Message {
-                                from: 0,
-                                to: msg.from,
-                                envelope: Envelope {
-                                    handle: 0,
-                                    verb: "error".to_string(),
-                                    payload: format!("cas-fetch: {e}").into_bytes(),
-                                    nonce: msg.envelope.nonce,
-                                },
-                                response_tx: None,
-                            });
-                        }
-                    }
+                    sup.deliver(Message {
+                        from: 0,
+                        to: msg.from,
+                        envelope: Envelope {
+                            handle: 0,
+                            verb: "cas-stored".to_string(),
+                            payload: codec::encode_cas_stored(&hash),
+                            nonce: msg.envelope.nonce,
+                        },
+                        response_tx: None,
+                    });
                 }
                 Err(e) => {
-                    eprintln!("endor: cas-fetch decode error: {e}");
+                    sup.deliver(Message {
+                        from: 0,
+                        to: msg.from,
+                        envelope: Envelope {
+                            handle: 0,
+                            verb: "error".to_string(),
+                            payload: format!("cas-store: {e}").into_bytes(),
+                            nonce: msg.envelope.nonce,
+                        },
+                        response_tx: None,
+                    });
                 }
+            },
+            Err(e) => {
+                eprintln!("endor: cas-store decode error: {e}");
             }
-        }
+        },
+        "cas-fetch" => match codec::decode_cas_hash_request(&msg.envelope.payload) {
+            Ok(hash) => match cas.fetch(&hash) {
+                Ok(data) => {
+                    sup.deliver(Message {
+                        from: 0,
+                        to: msg.from,
+                        envelope: Envelope {
+                            handle: 0,
+                            verb: "cas-content".to_string(),
+                            payload: codec::encode_cas_content(&data),
+                            nonce: msg.envelope.nonce,
+                        },
+                        response_tx: None,
+                    });
+                }
+                Err(e) => {
+                    sup.deliver(Message {
+                        from: 0,
+                        to: msg.from,
+                        envelope: Envelope {
+                            handle: 0,
+                            verb: "error".to_string(),
+                            payload: format!("cas-fetch: {e}").into_bytes(),
+                            nonce: msg.envelope.nonce,
+                        },
+                        response_tx: None,
+                    });
+                }
+            },
+            Err(e) => {
+                eprintln!("endor: cas-fetch decode error: {e}");
+            }
+        },
         "cas-has" => {
             if let Ok(hash) = codec::decode_cas_hash_request(&msg.envelope.payload) {
                 let exists = cas.has(&hash);
@@ -645,7 +646,10 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
                         envelope: Envelope {
                             handle: 0,
                             verb: "cas-gc-done".to_string(),
-                            payload: codec::encode_gc_report(report.freed_count, report.freed_bytes),
+                            payload: codec::encode_gc_report(
+                                report.freed_count,
+                                report.freed_bytes,
+                            ),
                             nonce: msg.envelope.nonce,
                         },
                         response_tx: None,
@@ -856,25 +860,23 @@ fn resume_shared(
 
     // Outbound bridge: machine → supervisor.
     let sup_outbound = Arc::clone(sup);
-    tokio::task::spawn_blocking(move || {
-        loop {
-            match machine_to_sup_rx.recv() {
-                Ok(bytes) => match codec::decode_envelope(&bytes) {
-                    Ok(env) => {
-                        let to = env.handle;
-                        sup_outbound.deliver(Message {
-                            from: handle,
-                            to,
-                            envelope: env,
-                            response_tx: None,
-                        });
-                    }
-                    Err(e) => {
-                        eprintln!("endor: resume decode error: {e}");
-                    }
-                },
-                Err(_) => return,
-            }
+    tokio::task::spawn_blocking(move || loop {
+        match machine_to_sup_rx.recv() {
+            Ok(bytes) => match codec::decode_envelope(&bytes) {
+                Ok(env) => {
+                    let to = env.handle;
+                    sup_outbound.deliver(Message {
+                        from: handle,
+                        to,
+                        envelope: env,
+                        response_tx: None,
+                    });
+                }
+                Err(e) => {
+                    eprintln!("endor: resume decode error: {e}");
+                }
+            },
+            Err(_) => return,
         }
     });
 
@@ -884,11 +886,9 @@ fn resume_shared(
         .name(format!("resumed-worker-{handle}"))
         .stack_size(32 * 1024 * 1024);
     let _ = thread_builder.spawn(move || {
-        let transport: Box<dyn xsnap::worker_io::WorkerTransport> =
-            Box::new(xsnap::worker_io::ChannelTransport::new(
-                sup_to_machine_rx,
-                machine_to_sup_tx,
-            ));
+        let transport: Box<dyn xsnap::worker_io::WorkerTransport> = Box::new(
+            xsnap::worker_io::ChannelTransport::new(sup_to_machine_rx, machine_to_sup_tx),
+        );
         let result = xsnap::run_xs_worker_inproc(transport);
         if let Err(e) = result {
             eprintln!("endor: resumed worker {handle} exited with error: {e}");

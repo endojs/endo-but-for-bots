@@ -17,7 +17,11 @@ pub use js_machine::{JsMachine, JsMachineError, JsMachineErrorKind};
 pub enum Engine {
     /// Child-process peer with fds 3/4 framing.
     /// Used for both "separate" (XS worker) and "node" platforms.
-    Separate { platform: String, command: String, args: Vec<String> },
+    Separate {
+        platform: String,
+        command: String,
+        args: Vec<String>,
+    },
     /// In-process XS machine on a dedicated std::thread with a
     /// channel transport.
     Shared {
@@ -86,7 +90,11 @@ mod tests {
         let args = vec!["arg1".to_string()];
         let result = engine_for_spawn_request("separate", "/bin/worker", &args, &msg);
         match result {
-            Ok(Engine::Separate { platform, command, args }) => {
+            Ok(Engine::Separate {
+                platform,
+                command,
+                args,
+            }) => {
                 assert_eq!(platform, "separate");
                 assert_eq!(command, "/bin/worker");
                 assert_eq!(args, vec!["arg1"]);
@@ -121,7 +129,9 @@ mod tests {
         let args = vec!["script.js".to_string()];
         let result = engine_for_spawn_request("node", "/usr/bin/node", &args, &msg);
         match result {
-            Ok(Engine::Separate { platform, command, .. }) => {
+            Ok(Engine::Separate {
+                platform, command, ..
+            }) => {
                 assert_eq!(platform, "node");
                 assert_eq!(command, "/usr/bin/node");
             }

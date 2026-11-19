@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::time::SystemTime;
 
 use endo::codec;
@@ -95,11 +95,9 @@ fn bench_encode_worker_list(c: &mut Criterion) {
                 started: SystemTime::UNIX_EPOCH,
             })
             .collect();
-        group.bench_with_input(
-            BenchmarkId::from_parameter(count),
-            &workers,
-            |b, w| b.iter(|| codec::encode_worker_list(black_box(w))),
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(count), &workers, |b, w| {
+            b.iter(|| codec::encode_worker_list(black_box(w)))
+        });
     }
     group.finish();
 }

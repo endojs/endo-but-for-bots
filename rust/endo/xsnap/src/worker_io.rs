@@ -217,10 +217,7 @@ impl ChannelTransport {
     /// raw CBOR envelope frames from the supervisor; the `outbound`
     /// sender carries raw CBOR envelope frames back to the
     /// supervisor.
-    pub fn new(
-        inbound: std_mpsc::Receiver<Vec<u8>>,
-        outbound: std_mpsc::Sender<Vec<u8>>,
-    ) -> Self {
+    pub fn new(inbound: std_mpsc::Receiver<Vec<u8>>, outbound: std_mpsc::Sender<Vec<u8>>) -> Self {
         ChannelTransport {
             inbound,
             outbound,
@@ -806,7 +803,10 @@ pub unsafe extern "C" fn host_import_archive(the: *mut XsMachine) {
         let cursor = std::io::Cursor::new(buf);
         match crate::archive::load_archive(cursor) {
             Ok(loaded) => {
-                let machine = std::mem::ManuallyDrop::new(crate::Machine { raw: the, registered_callbacks: std::cell::RefCell::new(Vec::new()) });
+                let machine = std::mem::ManuallyDrop::new(crate::Machine {
+                    raw: the,
+                    registered_callbacks: std::cell::RefCell::new(Vec::new()),
+                });
                 let ok = crate::archive::install_archive(&machine, &loaded);
                 if ffi_panicked() {
                     return;
@@ -1097,7 +1097,10 @@ pub unsafe extern "C" fn host_form_urlencoded_encode(the: *mut XsMachine) {
 /// When mxDebug is not compiled in, `run_debugger()` is a no-op.
 pub unsafe extern "C" fn host_debug_poll(the: *mut XsMachine) {
     guard_ffi(|| {
-        let machine = std::mem::ManuallyDrop::new(crate::Machine { raw: the, registered_callbacks: std::cell::RefCell::new(Vec::new()) });
+        let machine = std::mem::ManuallyDrop::new(crate::Machine {
+            raw: the,
+            registered_callbacks: std::cell::RefCell::new(Vec::new()),
+        });
         machine.run_debugger();
         crate::flush_debug_outbound();
     });
@@ -1173,10 +1176,7 @@ mod tests {
 
         let tmp_write = tempfile::tempfile().unwrap();
 
-        PipeTransport::from_streams(
-            BufReader::new(tmp_read),
-            BufWriter::new(tmp_write),
-        )
+        PipeTransport::from_streams(BufReader::new(tmp_read), BufWriter::new(tmp_write))
     }
 
     #[test]
@@ -1269,7 +1269,11 @@ mod tests {
 
     // ChannelTransport tests
 
-    fn make_channel_pair() -> (ChannelTransport, std_mpsc::Sender<Vec<u8>>, std_mpsc::Receiver<Vec<u8>>) {
+    fn make_channel_pair() -> (
+        ChannelTransport,
+        std_mpsc::Sender<Vec<u8>>,
+        std_mpsc::Receiver<Vec<u8>>,
+    ) {
         let (sup_to_machine_tx, sup_to_machine_rx) = std_mpsc::channel();
         let (machine_to_sup_tx, machine_to_sup_rx) = std_mpsc::channel();
         let t = ChannelTransport::new(sup_to_machine_rx, machine_to_sup_tx);
@@ -1384,7 +1388,10 @@ mod tests {
         );
         // The capture hook recovers the panic!'s source position.
         let location = p.location.expect("a location was captured");
-        assert!(location.contains("worker_io.rs"), "location was {location:?}");
+        assert!(
+            location.contains("worker_io.rs"),
+            "location was {location:?}"
+        );
         assert!(!ffi_panicked(), "take clears the marker");
     }
 
@@ -1441,7 +1448,10 @@ mod tests {
             }),
             1,
         );
-        assert!(!ran, "a poisoned worker must not run further guarded bodies");
+        assert!(
+            !ran,
+            "a poisoned worker must not run further guarded bodies"
+        );
         let _ = take_ffi_panic();
     }
 
@@ -1488,7 +1498,10 @@ mod tests {
         let location = p
             .location
             .expect("the outer panic's location must survive nesting");
-        assert!(location.contains("worker_io.rs"), "location was {location:?}");
+        assert!(
+            location.contains("worker_io.rs"),
+            "location was {location:?}"
+        );
         let _ = take_ffi_panic();
     }
 

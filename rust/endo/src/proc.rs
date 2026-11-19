@@ -20,7 +20,11 @@ pub struct SpawnedWorker {
 }
 
 /// Spawn a child process with fd 3 (child writes) and fd 4 (child reads) pipes.
-pub fn spawn_with_pipes(command: &str, args: &[String], cmd: &mut tokio::process::Command) -> io::Result<SpawnedWorker> {
+pub fn spawn_with_pipes(
+    command: &str,
+    args: &[String],
+    cmd: &mut tokio::process::Command,
+) -> io::Result<SpawnedWorker> {
     let (child_write_r, child_write_w) = util::pipe()?;
     let (sup_write_r, sup_write_w) = util::pipe()?;
 
@@ -181,7 +185,9 @@ pub fn wire_worker_tasks(
             },
             response_tx: None,
         });
-        eprintln!("endor: wait task for handle={handle} delivered exited to parent={parent_handle}");
+        eprintln!(
+            "endor: wait task for handle={handle} delivered exited to parent={parent_handle}"
+        );
         sup_wait.unregister(handle);
         if let Some(f) = on_exit {
             f();
@@ -234,7 +240,16 @@ pub fn spawn_process(
     };
     let inbox = sup.register(handle, Some(info));
 
-    wire_worker_tasks(spawned, handle, parent_handle, sup, inbox, None, "init", Vec::new())?;
+    wire_worker_tasks(
+        spawned,
+        handle,
+        parent_handle,
+        sup,
+        inbox,
+        None,
+        "init",
+        Vec::new(),
+    )?;
 
     Ok(handle)
 }
@@ -263,7 +278,11 @@ impl tokio::io::AsyncRead for PipeReader {
             let unfilled = buf.initialize_unfilled();
             match guard.try_io(|_| {
                 let n = unsafe {
-                    libc::read(raw_fd, unfilled.as_mut_ptr() as *mut libc::c_void, unfilled.len())
+                    libc::read(
+                        raw_fd,
+                        unfilled.as_mut_ptr() as *mut libc::c_void,
+                        unfilled.len(),
+                    )
                 };
                 if n < 0 {
                     Err(io::Error::last_os_error())
@@ -300,9 +319,8 @@ impl tokio::io::AsyncWrite for PipeWriter {
 
             let raw_fd = self.0.get_ref().as_raw_fd();
             match guard.try_io(|_| {
-                let n = unsafe {
-                    libc::write(raw_fd, buf.as_ptr() as *const libc::c_void, buf.len())
-                };
+                let n =
+                    unsafe { libc::write(raw_fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
                 if n < 0 {
                     Err(io::Error::last_os_error())
                 } else {

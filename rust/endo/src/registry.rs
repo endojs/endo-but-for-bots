@@ -53,9 +53,8 @@ pub struct MetaEntry {
 impl RegistryTable {
     /// Open (or create) the registry database at the given path.
     pub fn open(db_path: &Path) -> io::Result<Self> {
-        let conn = Connection::open(db_path).map_err(|e| {
-            io::Error::new(io::ErrorKind::Other, format!("sqlite open: {e}"))
-        })?;
+        let conn = Connection::open(db_path)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite open: {e}")))?;
         let table = RegistryTable { conn };
         table.create_tables()?;
         Ok(table)
@@ -63,9 +62,8 @@ impl RegistryTable {
 
     /// Open an in-memory database (for testing).
     pub fn open_in_memory() -> io::Result<Self> {
-        let conn = Connection::open_in_memory().map_err(|e| {
-            io::Error::new(io::ErrorKind::Other, format!("sqlite: {e}"))
-        })?;
+        let conn = Connection::open_in_memory()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite: {e}")))?;
         let table = RegistryTable { conn };
         table.create_tables()?;
         Ok(table)
@@ -199,9 +197,8 @@ impl RegistryTable {
 
         let mut entries = Vec::new();
         for row in rows {
-            entries.push(
-                row.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("row: {e}")))?,
-            );
+            entries
+                .push(row.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("row: {e}")))?);
         }
         Ok(entries)
     }
@@ -291,9 +288,8 @@ impl RegistryTable {
 
         let mut entries = Vec::new();
         for row in rows {
-            entries.push(
-                row.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("row: {e}")))?,
-            );
+            entries
+                .push(row.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("row: {e}")))?);
         }
         Ok(entries)
     }
@@ -318,9 +314,8 @@ impl RegistryTable {
 
         let mut entries = Vec::new();
         for row in rows {
-            entries.push(
-                row.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("row: {e}")))?,
-            );
+            entries
+                .push(row.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("row: {e}")))?);
         }
         Ok(entries)
     }
@@ -484,8 +479,14 @@ mod tests {
         assert!(reg.get_meta(REG_B, "pkg").unwrap().is_none());
 
         reg.set_meta(REG_B, "pkg", r#"{"2.0.0":{}}"#).unwrap();
-        assert_eq!(reg.get_meta(REG, "pkg").unwrap().unwrap(), r#"{"1.0.0":{}}"#);
-        assert_eq!(reg.get_meta(REG_B, "pkg").unwrap().unwrap(), r#"{"2.0.0":{}}"#);
+        assert_eq!(
+            reg.get_meta(REG, "pkg").unwrap().unwrap(),
+            r#"{"1.0.0":{}}"#
+        );
+        assert_eq!(
+            reg.get_meta(REG_B, "pkg").unwrap().unwrap(),
+            r#"{"2.0.0":{}}"#
+        );
 
         let docs = reg.get_meta_all("pkg").unwrap();
         assert_eq!(docs.len(), 2);
@@ -522,9 +523,18 @@ mod tests {
 
         let all = reg.list_packages().unwrap();
         assert_eq!(all.len(), 3);
-        assert_eq!((all[0].name.as_str(), all[0].version.as_str()), ("alpha", "1.0.0"));
-        assert_eq!((all[1].name.as_str(), all[1].version.as_str()), ("alpha", "2.0.0"));
-        assert_eq!((all[2].name.as_str(), all[2].version.as_str()), ("zeta", "1.0.0"));
+        assert_eq!(
+            (all[0].name.as_str(), all[0].version.as_str()),
+            ("alpha", "1.0.0")
+        );
+        assert_eq!(
+            (all[1].name.as_str(), all[1].version.as_str()),
+            ("alpha", "2.0.0")
+        );
+        assert_eq!(
+            (all[2].name.as_str(), all[2].version.as_str()),
+            ("zeta", "1.0.0")
+        );
     }
 
     #[test]

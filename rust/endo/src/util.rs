@@ -2,7 +2,12 @@ use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 /// Create a pipe with `O_CLOEXEC` set, returning `(read_end, write_end)`.
-#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
 pub fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     let mut fds = [0i32; 2];
     if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
@@ -20,7 +25,12 @@ pub fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
 /// There is a small window between `pipe()` and `fcntl()` where a `fork()`
 /// on another thread could inherit the fds; callers that fork concurrently
 /// should serialize against this.
-#[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd")))]
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+)))]
 pub fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     let mut fds = [0i32; 2];
     if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {

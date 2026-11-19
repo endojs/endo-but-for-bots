@@ -2,7 +2,7 @@
 
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use noise_protocol::patterns::noise_ik;
-use noise_protocol::{CipherState, HandshakeState, U8Array, DH};
+use noise_protocol::{CipherState, DH, HandshakeState, U8Array};
 use noise_rust_crypto::{Blake2s, ChaCha20Poly1305, X25519};
 use rand_core::{OsRng, RngCore};
 
@@ -98,9 +98,8 @@ unsafe fn prologue() -> [u8; PROLOGUE_PREFIX.len() + INTENDED_RESPONDER_KEY_LENG
 /// point) corresponding to the Ed25519 seed at SIGNING_KEY_OFFSET.
 unsafe fn derive_local_static_keypair() -> Option<(<X25519 as DH>::Key, <X25519 as DH>::Pubkey)> {
     #[allow(static_mut_refs)]
-    let signing_key = unsafe {
-        SigningKey::try_from(&BUFFER[SIGNING_KEY_OFFSET..][..SIGNING_KEY_LENGTH]).ok()?
-    };
+    let signing_key =
+        unsafe { SigningKey::try_from(&BUFFER[SIGNING_KEY_OFFSET..][..SIGNING_KEY_LENGTH]).ok()? };
     let priv_bytes: [u8; 32] = signing_key.to_scalar_bytes();
     let priv_key = <X25519 as DH>::Key::from_slice(&priv_bytes);
     let pub_key = X25519::pubkey(&priv_key);

@@ -40,10 +40,7 @@ pub fn start_socket_listener(
     let _ = std::fs::remove_file(&sock_path);
 
     let listener = UnixListener::bind(&sock_path)?;
-    eprintln!(
-        "endor: socket listener started on {}",
-        sock_path.display()
-    );
+    eprintln!("endor: socket listener started on {}", sock_path.display());
 
     tokio::spawn(async move {
         loop {
@@ -66,13 +63,7 @@ pub fn start_socket_listener(
                     });
 
                     let sup_for_client = Arc::clone(&sup);
-                    wire_client_tasks(
-                        stream,
-                        conn_handle,
-                        daemon_handle,
-                        sup_for_client,
-                        inbox,
-                    );
+                    wire_client_tasks(stream, conn_handle, daemon_handle, sup_for_client, inbox);
                 }
                 Err(e) => {
                     eprintln!("endor: socket accept error: {e}");
@@ -173,7 +164,9 @@ fn wire_client_tasks(
                     // Drain any queued messages.
                     for msg in inbox.drain() {
                         if msg.envelope.verb == "deliver" {
-                            if let Err(e) = write_netstring(&mut writer, &msg.envelope.payload).await {
+                            if let Err(e) =
+                                write_netstring(&mut writer, &msg.envelope.payload).await
+                            {
                                 eprintln!("endor: client {conn_handle} write error: {e}");
                                 return;
                             }
@@ -227,8 +220,8 @@ async fn read_netstring(
             ));
         }
     }
-    let len_str = std::str::from_utf8(&len_buf)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let len_str =
+        std::str::from_utf8(&len_buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let len: usize = len_str
         .parse()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
