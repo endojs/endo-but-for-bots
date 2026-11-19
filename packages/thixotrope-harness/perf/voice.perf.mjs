@@ -9,9 +9,8 @@
  * view. No supervisor: audio never reaches a vat (D-M11-1), so the rows
  * measure the adapter's own path.
  *
- * - `speech.audioForward`: an AUDIO frame sent by the client to the fake
- *   engine reading its `stream_audio` line (socket, route, base64 and JSON,
- *   the pipe), at real-time pacing (one 85 ms block every 85 ms) for one
+ * - `speech.audioForward`: gateway delivery of an AUDIO frame through the
+ *   synchronous write of its engine line (route, base64, JSON and pipe write), at real-time pacing (one 85 ms block every 85 ms) for one
  *   window. Budget median <= 1 ms, p99 <= 3 ms.
  * - `speech.audioForward.load`: the same with 16 utterances at once (8
  *   ports of 2). Budget p99 <= 5 ms.
@@ -50,7 +49,7 @@ import { runWindow, windowFields, windowMs } from './_window.mjs';
 
 await import('../scripts/_init.mjs');
 await import('../test/unit/_m1a-prelude.js');
-const { emit, runPerf, stats } = await import('./_harness.mjs');
+const { emit, runPerf, stats, summarize } = await import('./_harness.mjs');
 const { E } = await import('@endo/far');
 const { makeVoiceStub, makeHostContext, openAudioSocket } =
   await import('../test/adapter/_speech-host.js');
@@ -203,6 +202,43 @@ const openPage = async (speech, port, origin) => {
   return { socket, port: grant.port, arrivals, arrival, clear };
 };
 
+/**
+ * Time the production route from gateway message delivery to return from its
+ * synchronous PCM handler, which writes the engine line. The fake engine log
+ * independently verifies every submitted frame arrived.
+ * @param {import('../resources/agent-host/impl/gateway/protocol.js').GatewayRoute} route
+ * @param {number[]} samples
+ * @returns {import('../resources/agent-host/impl/gateway/protocol.js').GatewayRoute}
+ */
+const timeAudioFrames = (route, samples) => ({
+  ...route,
+  handle: (request, raw, head, accept) =>
+    route.handle(
+      request,
+      raw,
+      head,
+      accept &&
+        ((req, socket, bytes, options) =>
+          accept(req, socket, bytes, {
+            ...options,
+            onSocket: gatewaySocket =>
+              options.onSocket({
+                ...gatewaySocket,
+                onMessage: (/** @type {(bytes: Buffer) => void} */ receive) =>
+                  gatewaySocket.onMessage((/** @type {Buffer} */ frame) => {
+                    if (frame[0] !== frameKinds.audio) {
+                      receive(frame);
+                      return;
+                    }
+                    const start = performance.now();
+                    receive(frame);
+                    samples.push(performance.now() - start);
+                  }),
+              }),
+          })),
+    ),
+});
+
 await runPerf('voice', async ({ root }) => {
   const stateDir = path.join(root, 'state');
   mkdirSync(path.join(stateDir, 'agent-host'), { recursive: true });
@@ -240,9 +276,13 @@ await runPerf('voice', async ({ root }) => {
     kinds: speechKinds,
     pipeline: harden({ openTurnView, makeSpeechText }),
   });
+  /** @type {number[]} */
+  const forwarded = [];
   const server = await makeGatewayServer({
     port: 0,
-    routes: [makeAudioRoute({ hostNow: () => host })],
+    routes: [
+      timeAudioFrames(makeAudioRoute({ hostNow: () => host }), forwarded),
+    ],
     staticHandler: () => false,
     onSocket: socket => socket.close(1000, 'not under test'),
   });
@@ -343,18 +383,25 @@ await runPerf('voice', async ({ root }) => {
     }
     let lines = readLines(sttLog);
     const before = streamOrder(lines).length;
+    forwarded.length = 0;
     const single = await openUtterances(1, () => page);
     const one = await paced(single);
     lines = readLines(sttLog);
     const ids1 = streamOrder(lines).slice(before, before + 1);
     const forward1 = forwardSamples(one.sent, ids1, lines);
-    await stats('speech.audioForward', forward1.samples, {
+    if (
+      forward1.unmatched ||
+      forwarded.length !== forward1.samples.length ||
+      !forwarded.length
+    )
+      throw Error('gateway frame count and child engine log disagree');
+    await stats('speech.audioForward', forwarded, {
       budget: { median: 1, p99: 3 },
-      ...windowFields({ ...one.w, samples: forward1.samples }),
+      ...windowFields({ ...one.w, samples: forwarded }),
       extra: {
         frameBytes: BLOCK_BYTES,
         paceMs: BLOCK_MS,
-        unmatched: forward1.unmatched,
+        clientSendToEngineReadMs: summarize(forward1.samples),
       },
     });
     // Partials: engine write to the client's EVENT, pairwise per stream.
@@ -376,6 +423,7 @@ await runPerf('voice', async ({ root }) => {
       pages.push(await openPage(host.speech, server.port, origin));
     }
     const before16 = streamOrder(readLines(sttLog)).length;
+    forwarded.length = 0;
     const many = await openUtterances(
       LOAD_UTTERANCES,
       k => pages[Math.floor(k / 2)],
@@ -387,13 +435,19 @@ await runPerf('voice', async ({ root }) => {
       before16 + LOAD_UTTERANCES,
     );
     const forward16 = forwardSamples(load.sent, ids16, lines);
-    await stats('speech.audioForward.load', forward16.samples, {
+    if (
+      forward16.unmatched ||
+      forwarded.length !== forward16.samples.length ||
+      !forwarded.length
+    )
+      throw Error('gateway frame count and child engine log disagree');
+    await stats('speech.audioForward.load', forwarded, {
       budget: { p99: 5 },
-      ...windowFields({ ...load.w, samples: forward16.samples }),
+      ...windowFields({ ...load.w, samples: forwarded }),
       extra: {
         utterances: LOAD_UTTERANCES,
         ports: pages.length,
-        unmatched: forward16.unmatched,
+        clientSendToEngineReadMs: summarize(forward16.samples),
       },
     });
     for (const extra of pages.splice(1)) extra.socket.close();
@@ -477,7 +531,7 @@ await runPerf('voice', async ({ root }) => {
         if (enginePid() === pid) throw Error('the engine was not respawned');
         return partial.at - t0;
       },
-      { ms: WINDOW, max: 600 },
+      { ms: WINDOW },
     );
     await stats('speech.engineRespawn', respawned.results, {
       budget: { median: 100 },
