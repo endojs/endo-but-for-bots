@@ -15550,6 +15550,39 @@ shared slots. The combined-head exclusive measurements are tracked separately.
 The child workspace regression also passed in its lane checkout after capturing the inventory
 before parent creation. The case ran in 63.6 s and held its shared slot for 109.9 s.
 
+### J-12105 2026-11-19 W6.7 combined exclusive performance
+
+On combined revision `f1e9192223`, hot commands took 59 ms median across 39 samples against
+150 ms. There were zero manager deliveries across 117 commands and one additional session
+delivery per two-command round across 39 comparisons. First commands took 159 ms median
+across 10 sessions against 500 ms. Development creation took 2,000.479 ms median across five
+sessions and chat-only creation took 1,487.484 ms across four. The 512.995 ms difference
+exceeded the 175 ms target and the performance wrapper's 25% tolerance.
+
+Cancellation took 144.549 ms median across 92 samples and stop cleanup took 62.524 ms across
+429. All five large-output probes staged valid data and a subsequent turn ran. The slowest
+probe took 1,006 ms against 2,000 ms. The native manager measured 75,511 bytes against
+80,000 and its install took 4,115 ms against 5,000 ms. The session program measured 257,142
+bytes against the combined 270,336-byte cap. The historical M6 growth calculation subtracted
+its 233,126-byte baseline and 1,857 shared bytes and returned 22,159 bytes against 6,400.
+That formula includes the later lanes on the combined tree. J-12120 records the isolated M6
+measurement of 6,300 bytes.
+
+On combined revision `9c1a0cc702`, the Git fixture had 10,000 tracked files, 30 modified
+files, two untracked files and 1,000 additional commits. Its two 60-second windows returned
+32 status entries and 50 log entries.
+Status took 604 ms median across 45 samples against 1,000 ms. Log took 849 ms median across
+38 samples against 500 ms, exceeding both the target and the wrapper's 625 ms threshold.
+
+On the same revision, the 20-session fixture built in 222.46 s. All five restarts passed the
+strict 15 s gate and the wrapper. The measured times to serving were 8.002, 6.705, 6.926,
+6.498 and 5.951 s. Each restart started zero process groups and reported zero wakes across
+22 session vats, including the two spares.
+
+The pinned-image OCI cold-start workload is unimplemented. The benchmark always emits
+`run: false`, including when `THIX_HARNESS_REAL_RUNTIME` is set, so there are zero OCI timing
+samples. The Docker CLI was installed, and the selected local daemon socket was absent.
+
 ### J-12120 2026-11-19 W6.8 shared layout and guarded bundle boundaries
 
 `32fccde460` shares the package and state path resolvers between the two native resources and
