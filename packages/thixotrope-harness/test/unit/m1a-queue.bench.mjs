@@ -163,8 +163,8 @@ for (const [name, unit] of /** @type {const} */ ([
         current = undefined;
       },
       hooks: { onRecover: () => {} },
-      hookTurn: (/** @type {any} */ turn) =>
-        /** @type {any} */ (Object.freeze({ active: turn })),
+      hookTurn: (/** @type {any} */ activeTurn) =>
+        /** @type {any} */ (Object.freeze({ active: activeTurn })),
     });
     const active = current;
     const t0 = performance.now();
