@@ -18555,3 +18555,27 @@ The VM hunks apply to the current sources. The worker integration hunk needs
 adapting to the allocation schedule. The older profile measured a colocated
 self-send with one recipient and a pushed inbox, while this benchmark used
 four clients, eight recipient sessions and confirmed reply dismissal.
+### J-12901 2026-11-19 Account for the delivered mail envelope
+
+Factory correction c776110c58 reserves the UTF-8 bytes of the `seq` and
+`postmark` keys before admitting a delivery. For staged mail the relay can
+return a different preview or a digest. Once its copy arrives, the factory
+measures the complete frozen envelope, checks the per-envelope and aggregate
+in-flight limits, and updates the reservation before assigning the sequence
+and sending. A refused copy is released. Staged mail to the operator also
+checks the copied envelope before handing it to the inbox.
+
+A restart re-drive resends an already prepared envelope with the same sequence
+and reservation. If a restart overlaps a pending copy, the first accepted copy
+supplies the envelope and the spare is released. All 33 post-office and operator
+mail unit tests passed, including both restart paths and an ordinary inline and
+staged pair whose combined reservation equalled the independently counted
+delivered envelopes. The copied body in that test supplied its own preview and
+64-character digest. The package type check and changed-file Prettier check
+passed. Changed-file ESLint reported zero errors and nine warnings.
+
+The correction touches only factory production code. The session program
+remains 145,957 bytes (SHA-256
+`9611cc3ef25d553fa10c0a92479a2619ababcb94a1857fa79431cdbb2925c193`).
+The isolated M9 session increase remains 21,430 bytes against its 21,500-byte
+allocation (J-1460).

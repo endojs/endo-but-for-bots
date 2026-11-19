@@ -88,7 +88,7 @@ const ML = limits;
  * @property {Row} row the recipient
  * @property {Record<string, any>} base the envelope without `seq`, `postmark`
  * @property {boolean} copyBody the staged body is copied for the recipient
- * @property {number} bytes kept bytes (`messageBytes` of `base`)
+ * @property {number} bytes reserved envelope bytes, updated when the relay returns its copy
  * @property {number} start the daemon start it was (re-)sent in
  * @property {any} envelope the envelope as first sent (re-drives resend it)
  * @property {any} copied the relay copy in the envelope, if any
@@ -316,14 +316,32 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
           if (flight.done) return;
         } else {
           const seq = (seqs.get(row) ?? 0) + 1;
-          seqs.set(row, seq);
-          flight.copied = copied;
-          flight.envelope = harden({
+          const envelope = harden({
             ...flight.base,
             body,
             seq,
             postmark: flight.postmark,
           });
+          if (copied !== undefined) {
+            // The relay returns its own staged-text metadata.
+            const bytes = messageBytes(envelope);
+            if (
+              bytes > ML.envelopeBytes ||
+              keptBytes - flight.bytes + bytes > ML.postInFlightBytes
+            ) {
+              release(copied);
+              throw Error(
+                bytes > ML.envelopeBytes
+                  ? postOfficeTextOf.envelopeTooLarge(bytes, ML.envelopeBytes)
+                  : postOfficeTextOf.postOfficeBusy(ML.postInFlight),
+              );
+            }
+            keptBytes += bytes - flight.bytes;
+            flight.bytes = bytes;
+          }
+          seqs.set(row, seq);
+          flight.copied = copied;
+          flight.envelope = envelope;
         }
       }
       const delivery = await E(row.internal).deliverMail(flight.envelope);
@@ -402,10 +420,18 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
     } catch (error) {
       return { refused: reasonOf(error) };
     }
+    const envelope = harden({ ...base, body, seq: operatorSeq + 1, postmark });
+    if (copied !== undefined) {
+      const bytes = messageBytes(envelope);
+      if (bytes > ML.envelopeBytes) {
+        release(copied);
+        return {
+          refused: postOfficeTextOf.envelopeTooLarge(bytes, ML.envelopeBytes),
+        };
+      }
+    }
     operatorSeq += 1;
-    const delivery = operatorInbox(
-      harden({ ...base, body, seq: operatorSeq, postmark }),
-    );
+    const delivery = operatorInbox(envelope);
     if (delivery.refused !== undefined) {
       if (copied !== undefined) release(copied);
       return { refused: delivery.refused };
@@ -524,8 +550,8 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
 
   /** @param {Record<string, any>} base */
   const checkedBytes = base => {
-    // `seq` and `postmark` are counts: no string bytes.
-    const bytes = messageBytes(base);
+    // Delivery adds these keys. Their numeric values carry no string bytes.
+    const bytes = messageBytes(base) + 'seq'.length + 'postmark'.length;
     if (bytes > ML.envelopeBytes) {
       throw Error(postOfficeTextOf.envelopeTooLarge(bytes, ML.envelopeBytes));
     }
