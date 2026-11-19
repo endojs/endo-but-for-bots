@@ -3040,18 +3040,13 @@ impl ChunkArena {
     }
 }
 
-/// ToInt32 (ECMAScript 7.1.5 / XS `fxNumberToInteger`): fold a number
-/// into the signed 32-bit range used by the bitwise opcodes.
+/// ToInt32 (ECMA-262 §7.1.6): fold a number into the signed 32-bit range
+/// used by the bitwise opcodes. Integer-only bit arithmetic; see
+/// `numeric_kernel`, whose proofs check it against the spec model for every
+/// bit pattern.
 #[inline]
 pub fn to_int32(n: f64) -> i32 {
-    if !n.is_finite() {
-        return 0;
-    }
-    // Truncate toward zero, then reduce modulo 2^32 into i32 range.
-    let m = n.trunc();
-    let m = m.rem_euclid(4294967296.0); // 2^32
-    let u = m as u32; // exact: m in [0, 2^32)
-    u as i32
+    crate::numeric_kernel::to_int32(n.to_bits())
 }
 
 /// The ECMAScript Number::toString(10) rendering (spec 6.1.6.1.20,
