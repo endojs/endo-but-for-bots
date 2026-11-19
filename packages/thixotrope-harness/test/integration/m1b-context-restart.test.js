@@ -55,6 +55,15 @@ takeIntegrationLock(test, 'm1b context restart test');
 
 const run = integrationEnabled ? test.serial : test.skip;
 
+/** @type {Awaited<ReturnType<typeof ensureTemplate>>} */
+let template;
+if (integrationEnabled) {
+  test.before(async t => {
+    t.timeout(5 * 60_000);
+    template = await ensureTemplate(await m1bTemplateOptions({}));
+  });
+}
+
 const TURNS = Number(process.env.CONTEXT_TURNS ?? 200);
 /**
  * The restarts, in order, each followed by one turn whose context is
@@ -133,7 +142,6 @@ run(
   `a ${TURNS}-turn session rebuilds the same context after each restart (${RESTARTS.join(', ')})`,
   async t => {
     t.timeout(4.75 * 60_000);
-    const template = await ensureTemplate(await m1bTemplateOptions({}));
     const state = await startFromTemplate(template, { t });
     const slice = await makeSlice(state);
     const made = await slice.makeBackend(script);

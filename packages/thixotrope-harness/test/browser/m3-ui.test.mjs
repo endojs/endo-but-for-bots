@@ -136,6 +136,7 @@ const pageTest = page =>
   page.evaluate(() => /** @type {any} */ (globalThis).thixTest);
 
 run('setup: daemon, scripted backend, page signed in', async t => {
+  t.timeout(5 * 60_000);
   harness = await startBrowserGateway({
     template: 'm2',
     initScript: trackSockets,

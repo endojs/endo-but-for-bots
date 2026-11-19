@@ -144,6 +144,7 @@ const turnInputs = async session => {
 };
 
 run('setup: daemon, scripted backend, gateway on a fixed port', async t => {
+  t.timeout(5 * 60_000);
   harness = await startBrowserGateway({
     template: 'm2',
     initScript: trackSockets,

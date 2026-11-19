@@ -107,6 +107,7 @@ let liveKey = '';
 let longKey = '';
 
 run('setup: m3-300 template, scripted backend for live turns', async t => {
+  t.timeout(5 * 60_000);
   harness = await startBrowserGateway({ template: 'm3-300' });
   const slice = await makeSlice(harness.state);
   const made = await slice.makeBackend(historyScript, { label: 'Live' });

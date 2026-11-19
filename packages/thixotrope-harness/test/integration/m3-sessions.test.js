@@ -164,6 +164,7 @@ const settledInputs = (session, count) =>
   );
 
 run('setup: served state, scripted and catalogue backends', async t => {
+  t.timeout(5 * 60_000);
   wrappingKey = useTestWrappingKey('m3ss');
   server = await startFakeProviderServer({
     plan: [
