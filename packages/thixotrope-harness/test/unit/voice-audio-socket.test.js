@@ -35,7 +35,10 @@ const TOKEN = ['0a1b2c3d', '4e5f6071'].join('').repeat(4);
 /** @param {object} record */
 const json = record => encoder.encode(JSON.stringify(record));
 
-/** @param {number} rate @param {Uint8Array} pcm */
+/**
+ * @param {number} rate
+ * @param {Uint8Array} pcm
+ */
 const pcmPayload = (rate, pcm) => {
   const payload = new Uint8Array(4 + pcm.length);
   new DataView(payload.buffer).setUint32(0, rate);
@@ -46,8 +49,8 @@ const pcmPayload = (rate, pcm) => {
 const ready = {
   speechIn: true,
   speechOut: true,
-  sampleRate: 16000,
-  audioFrameBytes: 65536,
+  sampleRate: 16_000,
+  audioFrameBytes: 65_536,
 };
 
 /** A WebSocket stand-in; `server*` methods play the gateway. */
@@ -79,7 +82,10 @@ const makeFakeSockets = () => {
       this.sent.push(Uint8Array.from(bytes));
     }
 
-    /** @param {number} code @param {string} [reason] */
+    /**
+     * @param {number} code
+     * @param {string} [reason]
+     */
     close(code, reason) {
       this.closedWith = { code, reason };
     }
@@ -109,7 +115,11 @@ const makeFakeSockets = () => {
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
-/** A socket past HELLO and READY. */
+/**
+ * A socket past HELLO and READY.
+ *
+ * @param {(code: number, reason: string) => void} [onClose]
+ */
 const openReady = async (onClose = () => {}) => {
   const { sockets, FakeWebSocket } = makeFakeSockets();
   const socket = openAudioSocket({
@@ -188,7 +198,7 @@ test('ABORT reasons are cut at a character boundary', t => {
   const reason = 'é'.repeat(200);
   const frame = /** @type {any} */ (decodeFrame(abortFrame(3, reason)));
   t.is(frame.kind, frameKinds.abort);
-  t.true(frame.payload.length <= audioLimits.reasonBytes);
+  t.true(Number(frame.payload.length) <= audioLimits.reasonBytes);
   t.is(new TextDecoder().decode(frame.payload), 'é'.repeat(128));
   t.is(decodeFrame(abortFrame(3))?.payload.length, 0);
 });
@@ -263,7 +273,10 @@ test('close codes map to the fixed texts; reconnect delays follow the table', t 
   t.is(closeReasonOf(audioCloseCodes.portClosed), speechTexts.portClosed);
   t.is(closeReasonOf(1006), speechTexts.portClosed);
   t.is(audioReconnectDelay(0), audioReconnectDelaysMs[0]);
-  t.is(audioReconnectDelay(99), audioReconnectDelaysMs.at(-1));
+  t.is(
+    audioReconnectDelay(99),
+    audioReconnectDelaysMs[audioReconnectDelaysMs.length - 1],
+  );
 });
 
 test('the socket sends HELLO on open and resolves READY', async t => {
@@ -280,7 +293,8 @@ test('the socket sends HELLO on open and resolves READY', async t => {
   ws.serverOpen();
   t.deepEqual(ws.sent[0], helloFrame(TOKEN));
   ws.serverSend(encodeFrame(frameKinds.ready, 0, json(ready)));
-  t.deepEqual(await socket.ready, ready);
+  const answered = await socket.ready;
+  t.deepEqual(answered, ready);
   t.false(socket.closed());
 });
 

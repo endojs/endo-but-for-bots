@@ -43,6 +43,7 @@ import { audioReconnectDelaysMs } from './endpointing-defaults.js';
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 const empty = new Uint8Array(0);
+/** @type {Set<number>} */
 const serverKinds = new Set([
   frameKinds.ready,
   frameKinds.event,
@@ -293,6 +294,7 @@ export const openAudioSocket = ({ url, token, WebSocket, onClose }) => {
   ws.binaryType = 'arraybuffer';
   let isClosed = false;
   /** The text streams abort with once the socket closed. */
+  /** @type {string} */
   let closeText = speechTexts.portClosed;
 
   /** @type {(ready: ReadyEvent) => void} */
