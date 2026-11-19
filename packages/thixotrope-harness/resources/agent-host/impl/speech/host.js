@@ -21,7 +21,9 @@
  * `openAudio` retries. A new `revision` drops idle engines at once and busy
  * ones when their last stream ends; the next use makes the new one. When
  * speech in is configured with `warm: true`, its engine is warmed at the
- * read (R5-15, D-M11-23).
+ * read (R5-15, D-M11-23). `configuration()` warms speech out (its spare
+ * process for the catalogue's defaults, D-M11-12) when the engine has
+ * `warm`.
  *
  * Ports and tokens (4, 10): `openAudio` mints 32 random bytes; the host
  * keeps their SHA-256 digest only, compares a HELLO's digest in constant
@@ -825,6 +827,15 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
       if (slots !== undefined && usable(slots.speechOut)) {
         try {
           const catalogue = await catalogueOf(slots.speechOut);
+          // The warm spare (D-M11-12) for the catalogue's defaults, so a
+          // page's first reply finds one; a playback with other options
+          // renews it for those.
+          const engine = /** @type {any} */ (slots.speechOut.engine);
+          if (typeof engine?.warm === 'function') {
+            void Promise.resolve()
+              .then(() => engine.warm())
+              .catch(() => {});
+          }
           voices = catalogue.voices.slice(0, speechGuardLimits.voices);
           defaults = harden({ ...ttsDefaults, ...catalogue.defaults });
           speechOut = voices.some(entry => entry.id === defaults.voice);

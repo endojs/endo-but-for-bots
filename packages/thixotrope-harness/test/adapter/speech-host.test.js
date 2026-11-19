@@ -160,6 +160,14 @@ test('warm: true warms speech in at the settings read', async t => {
   t.is((await E(host.speech).status()).speechIn, 'ready');
 });
 
+test('configuration() warms speech out for its spare (D-M11-12)', async t => {
+  const { host, seen } = await world(t);
+  t.is(seen.ttsWarmed, 0);
+  await E(host.speech).configuration();
+  await settle();
+  t.is(seen.ttsWarmed, 1);
+});
+
 test('a new revision drops the idle engine at once and a busy one when its last stream ends', async t => {
   const { stub, seen, open } = await world(t, { settingsMaxAgeMs: 0 });
   const page = await open();

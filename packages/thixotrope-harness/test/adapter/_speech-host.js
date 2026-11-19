@@ -116,6 +116,7 @@ export const makeInTestKinds = (modes = {}) => {
     sttMade: 0,
     ttsMade: 0,
     warmed: 0,
+    ttsWarmed: 0,
     stopped: 0,
     /** @type {string[]} */
     sentences: [],
@@ -186,6 +187,9 @@ export const makeInTestKinds = (modes = {}) => {
           ],
           defaults: { ...ttsDefaults, voice: TEST_VOICE },
         }),
+      warm: async () => {
+        seen.ttsWarmed += 1;
+      },
       stop: async () => {
         seen.stopped += 1;
       },
