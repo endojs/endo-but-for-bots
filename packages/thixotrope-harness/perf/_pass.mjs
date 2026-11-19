@@ -75,7 +75,7 @@ export const perfLists = Object.freeze({
   // Reserved by WX.1 for the group of four lanes, named by concept; each
   // lane adds its perf checks to its own list (empty until then).
   environments: Object.freeze(/** @type {string[]} */ ([])),
-  context: Object.freeze(/** @type {string[]} */ ([])),
+  context: Object.freeze(['compaction', 'images']),
   mail: Object.freeze(/** @type {string[]} */ ([])),
   voice: Object.freeze(/** @type {string[]} */ ([])),
 });
