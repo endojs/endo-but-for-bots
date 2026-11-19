@@ -17615,3 +17615,18 @@ adapter (2,064 samples) and 9.54 ms on the Responses adapter (2,076) against a 1
 target for each. The separate end-to-end workspace and provider byte checks are in
 J-1446. J-12105 records the combined exclusive environment pass, including five
 restarts with zero new process groups and zero session wakes.
+### J-1472 2026-11-19 WX.F — M2 risky tool recovery after M8
+
+The core run on f068db6f12 recovered the killed tool as outcome-unknown, but
+the expected provider history for its turn omitted M8's `incomplete: true`
+field on tool results from turns that did not complete (R4-32). For
+`t3/r0/c0` the old expectation hashes to `dae00f49c41d999c`; including that
+field gives `a8a767adede6eefc`, exactly the observed scripted-provider digest.
+The failed and probe turn digests already matched.
+
+Commit 8915022206 changes the independent expected record. The focused M2
+daemon case passed on Node 22.23.4 after a real SIGKILL, verifying the stored
+failed result, recovered turn state, probe history digest, record count and
+exclusion of the never-dispatched turn. Recovery took 21.818 s. The test
+held its shared slot 199.8 s and waited 1,006.0 s. All 20 projection/cache
+and 11 provider image-wire tests passed.
