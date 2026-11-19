@@ -54,7 +54,7 @@ const incomingFrames = async (root, before, after) => {
   const to = Number(after.journalLength) - Number(header.base);
   if (from < 0 || to < from || to > frames.length)
     throw Error(
-      `Journal does not cover the image call for ${before.debugLabel}`,
+      `Journal for ${before.debugLabel} starts at ${header.base} with ${frames.length} frames; image call spans ${before.journalLength}–${after.journalLength}`,
     );
   return frames.slice(from, to).map(frame => Buffer.from(frame.b64, 'base64'));
 };
