@@ -256,6 +256,39 @@ test('operator mail reaches a session through the wired post office', async t =>
   });
 });
 
+test("a child is made from its parent's preset snapshot: a later edit of the preset does not reach it", async t => {
+  const { kit, rows, create, madeOf } = setup();
+  const { preset, revision } = await E(kit.catalog.facet).create(
+    harden({
+      label: 'Careful',
+      template: 'general',
+      instructions: 'Check every step twice.',
+      endowments: [{ label: 'calc', value: Far('Calc', {}) }],
+    }),
+    0,
+  );
+  const parentSession = await create({ preset, modelId: 'm2' });
+  const parent = madeOf(parentSession);
+  // The operator edits the preset after the parent was made.
+  await E(preset).save(
+    harden({
+      label: 'Reckless',
+      template: 'general',
+      instructions: 'Skip every check.',
+    }),
+    revision,
+  );
+  await spawn(parent.services.subagents, 'helper');
+  const child = madeOf(rows.all()[1].session);
+  t.is(child.config.preset.label, 'Careful');
+  t.is(child.config.preset.revision, parent.config.preset.revision);
+  t.true(child.config.systemPrompt.includes('Check every step twice.'));
+  t.false(child.config.systemPrompt.includes('Skip every check.'));
+  // Its endowments are the listed attachments only (none), not the
+  // preset's at either revision.
+  t.deepEqual(child.services.endowments, []);
+});
+
 test('a spawn makes a hidden child row that inherits and holds only the listed attachments', async t => {
   const { kit, rows, create, madeOf, backend } = setup();
   const notes = Far('Notes', {});

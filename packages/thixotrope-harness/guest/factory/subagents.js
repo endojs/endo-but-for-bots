@@ -82,6 +82,9 @@ const DEPTH_WALK = 64;
  * @property {any} backend
  * @property {string} modelId
  * @property {any} preset
+ * @property {any} [presetSnapshot] the parent's preset snapshot: a child
+ *   is made from it, never from a new snapshot of the live preset
+ *   (D-M9-10, 4.4), so an operator's edit since cannot widen it
  * @property {string} [reasoningEffort]
  */
 
@@ -116,10 +119,11 @@ const DEPTH_WALK = 64;
 
 /**
  * @param {object} powers
- * @param {(options: Record<string, any>, how: { parent: Row, endowments: readonly any[], link: (row: Row) => void }) => Promise<{ session: any, internal: any }>} powers.create
+ * @param {(options: Record<string, any>, how: { parent: Row, endowments: readonly any[], link: (row: Row) => void, presetSnapshot?: any }) => Promise<{ session: any, internal: any }>} powers.create
  *   the factory's creation (seam F3): stores `parent` on the new row, gives
- *   it `endowments` as its only `SessionServices.endowments`, and calls
- *   `link(row)` once the row exists
+ *   it `endowments` as its only `SessionServices.endowments`, calls
+ *   `link(row)` once the row exists, and makes the session from
+ *   `presetSnapshot` (the parent's) when given
  * @param {(session: any) => Promise<void>} powers.deleteSession
  * @param {RowTable} powers.rows
  * @param {PostOffice} powers.postOffice
@@ -186,6 +190,27 @@ export const makeSubagents = ({
 
   /** @param {Row} row */
   const gone = row => row.dropped;
+
+  /** @type {WeakSet<Row>} rows whose children are being deleted */
+  const closing = new WeakSet();
+  /**
+   * A parent that can no longer hold a child: dropped, deleting, or its
+   * children's delete hook already ran.
+   * @param {Row} row
+   */
+  const closed = row =>
+    gone(row) || row.state === 'deleting' || closing.has(row);
+
+  /**
+   * Delete a child made under a parent that closed meanwhile (a spawn in
+   * flight at the parent's delete, or one linked after a restart): the
+   * child never joins the tree, so nothing else would delete it.
+   * @param {Row} row
+   */
+  const deleteOrphan = row =>
+    row.session === undefined || gone(row)
+      ? Promise.resolve()
+      : deleteSession(row.session);
 
   /**
    * A row's live children; nodes whose rows were dropped (a delete that
@@ -430,7 +455,7 @@ export const makeSubagents = ({
    * @param {any} request `SpawnRequest`
    */
   const spawn = async (parent, { name, attachments, at, systemPrompt }) => {
-    if (gone(parent) || parent.state === 'deleting') {
+    if (closed(parent)) {
       throw Error(postOfficeTexts.notASession);
     }
     if (!NAME.test(name)) throw Error(mailTextOf.nameInvalid(name));
@@ -483,7 +508,17 @@ export const makeSubagents = ({
         link: row => {
           reservation.row = row;
         },
+        ...(from.presetSnapshot === undefined
+          ? {}
+          : { presetSnapshot: from.presetSnapshot }),
       });
+      const row = rows.ofSession(made.session) ?? reservation.row;
+      if (row !== undefined && closed(parent)) {
+        // The parent was deleted while the child was made: the child goes
+        // too, before the reservation is released.
+        await deleteOrphan(row);
+        throw Error(postOfficeTexts.notASession);
+      }
     } finally {
       release(reservation);
     }
@@ -511,6 +546,9 @@ export const makeSubagents = ({
           backend: from.backend,
           modelId: from.modelId,
           preset: from.preset,
+          ...(from.presetSnapshot === undefined
+            ? {}
+            : { presetSnapshot: from.presetSnapshot }),
           ...(from.reasoningEffort === undefined
             ? {}
             : { reasoningEffort: from.reasoningEffort }),
@@ -542,10 +580,14 @@ export const makeSubagents = ({
 
   /**
    * A delete hook (seam F5, the built `{ row, session }` context): the
-   * row's children first, deepest first.
+   * row's children first, deepest first. The row is marked closing first,
+   * so a spawn still in flight deletes its child when its creation answers
+   * (the hook does not wait for it: a creation cut off by a restart may
+   * never answer, and `restart` deletes such a child instead).
    * @param {{ row: Row, session?: any }} context
    */
   const deleteChildren = async ({ row }) => {
+    closing.add(row);
     for (const child of liveChildren(row)) {
       // eslint-disable-next-line no-await-in-loop
       await deleteSubtree(child);
@@ -561,9 +603,14 @@ export const makeSubagents = ({
   const restart = async current => {
     for (const reservation of [...reservations]) {
       if (reservation.start < current) {
-        const { row } = reservation;
+        const { row, parent } = reservation;
         if (row !== undefined && !gone(row) && row.session !== undefined) {
-          linkChild(reservation.parent, row, reservation.name);
+          if (closed(parent)) {
+            // Its parent was deleted meanwhile: never link under it.
+            void deleteOrphan(row).catch(() => undefined);
+          } else {
+            linkChild(parent, row, reservation.name);
+          }
         }
         release(reservation);
       }

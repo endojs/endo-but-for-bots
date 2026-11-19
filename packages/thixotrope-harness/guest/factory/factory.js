@@ -48,6 +48,7 @@ import { makeOperatorMail } from './operator-mail.js';
 import { makeSubagents } from './subagents.js';
 import { buildSessionServices } from './services.js';
 import { resolveCreateOptions } from './session-options.js';
+import { composeSystemPrompt } from '../lib/system-prompt-base.js';
 
 /** @import { StartCount } from './starts.js' */
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -236,15 +237,29 @@ export const makeFactoryKit = ({
    * A creation (contract 9); with `importing` (M2 W2.7, 7.3) its row stays
    * unlisted until the session reports its import's end. With `parent` (a
    * subagent, m9-interfaces.md F3) the row is stored with its parent and
-   * never listed, `link(row)` is told of it at once, and `endowments` are
-   * the session's only endowments.
+   * never listed, `link(row)` is told of it at once, `endowments` are the
+   * session's only endowments, and `presetSnapshot` (the parent's) is the
+   * session's snapshot: its prompt and config come from it, not from a new
+   * snapshot of the live preset (m9-interfaces.md D-M9-10, 4.4).
    * @param {Record<string, any>} options
-   * @param {{ importing?: boolean, parent?: Row, endowments?: readonly { label: string, value: any }[], link?: (row: Row) => void }} how
+   * @param {{ importing?: boolean, parent?: Row, endowments?: readonly { label: string, value: any }[], link?: (row: Row) => void, presetSnapshot?: any }} how
    */
-  const create = async (options, { importing, parent, endowments, link }) => {
+  const create = async (
+    options,
+    { importing, parent, endowments, link, presetSnapshot },
+  ) => {
     // M5 W5.1 (2.3 step 1): the preset (given or default) and its model
     // defaults, refused here before any row or vat (R4-6).
-    const given = catalog.withDefaults(options);
+    const filled = catalog.withDefaults(options);
+    // A subagent's prompt is composed from its parent's snapshot.
+    /** @type {Record<string, any>} */
+    const given =
+      presetSnapshot === undefined || filled.systemPrompt !== undefined
+        ? filled
+        : harden({
+            ...filled,
+            systemPrompt: composeSystemPrompt({ snapshot: presetSnapshot }),
+          });
     // The caller has the clock (J-9150): its `at` is the session's createdAt.
     const { at } = given;
     if (typeof at === 'number' && at > latestAt) latestAt = at;
@@ -262,10 +277,14 @@ export const makeFactoryKit = ({
       if (defaultModelId !== undefined) context.defaultModelId = defaultModelId;
       context.turnDeadlineMs = harnessSettings.turnDeadlineMs();
     }
-    const resolved = await resolveCreateOptions(
+    const fresh = await resolveCreateOptions(
       given,
       /** @type {any} */ (harden(context)),
     );
+    const resolved =
+      presetSnapshot === undefined
+        ? fresh
+        : harden({ ...fresh, presetSnapshot });
     const program = programs.current();
     if (program === undefined) throw Error(NO_PROGRAM_TEXT);
     const row = rows.add({
@@ -304,7 +323,9 @@ export const makeFactoryKit = ({
         admin,
         backend: resolved.backend,
         preset: resolved.preset,
-        presetSnapshot: resolved.presetSnapshot,
+        // A subagent's endowments are its parent's attachments only (R4-70).
+        presetSnapshot:
+          parent === undefined ? resolved.presetSnapshot : undefined,
         key: row.key,
         host: creation.spareHost,
         makeExecVat:

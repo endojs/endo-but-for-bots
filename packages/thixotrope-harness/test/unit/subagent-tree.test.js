@@ -14,12 +14,18 @@ import { makeMailWorld, settle, stagedText } from './_post-office-fakes.js';
 import { mailLimits } from '../../guest/lib/mail-limits.js';
 import { limits } from '../../guest/lib/limits.js';
 import { mailTexts, mailTextOf } from '../../guest/lib/guards/mail.js';
-import { postOfficeTextOf } from '../../guest/lib/guards/post-office.js';
+import {
+  postOfficeTables,
+  postOfficeTextOf,
+} from '../../guest/lib/guards/post-office.js';
+import { interfaces } from '../../guest/lib/interfaces.js';
 import { ANSWER_UNITS, makeSubagents } from '../../guest/factory/subagents.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
-const { E, Far, makePromiseKit } = /** @type {GuestGlobals} */ (globalThis);
+const { E, Far, makeExo, makePromiseKit } = /** @type {GuestGlobals} */ (
+  globalThis
+);
 
 const none = harden([]);
 const AT = 1_700_000_000_000;
@@ -46,12 +52,13 @@ const makeTree = ({ settings } = {}) => {
    * @param {any} options
    * @param {any} how
    */
-  const create = async (options, { parent, endowments, link }) => {
+  const create = async (options, how) => {
+    const { parent, endowments, link } = how;
     const child = world.addSession(options.title);
     /** @type {any} */ (child.row).parent = parent;
     child.row.userInitiated = options.userInitiated;
     sessions.set(child.row, child);
-    created.push({ options, parent, endowments, child });
+    created.push({ options, parent, endowments, child, how });
     link(child.row);
     if (gate !== undefined) await gate.promise;
     return { session: child.session, internal: child.row.internal };
@@ -63,32 +70,38 @@ const makeTree = ({ settings } = {}) => {
     deleted.push(row.title);
     world.rows.drop(row);
   };
-  // An admin whose writers stage text into a counted fake blob.
-  const admin = Far('AgentHostAdmin', {
-    writersFor: () =>
-      Far('RelayWriters', {
-        open: () => {
-          /** @type {string[]} */
-          const pieces = [];
-          return Far('BlobWriter', {
-            /** @param {string} piece */
-            append: piece => {
-              pieces.push(piece);
-            },
-            close: () => {
-              const text = pieces.join('');
-              staged.push(text);
-              return harden({
-                blob: Far('Blob', {}),
-                preview: text.slice(0, 16),
-                bytes: text.length,
-              });
-            },
-            abort: () => undefined,
-          });
-        },
-      }),
-  });
+  // An admin whose relay writers (built from their real guards) stage
+  // text into a counted fake blob.
+  const relayWriters = makeExo(
+    'RelayWriters',
+    postOfficeTables().interfaces.RelayWriters,
+    {
+      open: async () => {
+        /** @type {string[]} */
+        const pieces = [];
+        return makeExo('BlobWriter', interfaces.BlobWriter, {
+          /** @param {string} piece */
+          append: async piece => {
+            pieces.push(piece);
+          },
+          close: async () => {
+            const text = pieces.join('');
+            staged.push(text);
+            return harden({
+              blob: Far('Blob', {}),
+              preview: text.slice(0, 16),
+              bytes: text.length,
+            });
+          },
+          abort: () => undefined,
+        });
+      },
+      copy: async () => {
+        throw Error('not used by the tree tests');
+      },
+    },
+  );
+  const admin = Far('AgentHostAdmin', { writersFor: () => relayWriters });
   tree = makeSubagents({
     create,
     deleteSession,
@@ -454,6 +467,8 @@ test('stop deletes the subtree deepest first; deleting the parent deletes its ch
     ),
     ['b'],
   );
+  // A stopped subtree frees its room.
+  await spawn(parent.delegation, 'c');
   // The parent's own delete runs the hook: children first, deepest first.
   await tree.tree.deleteChildren({ row: parent.row, session: parent.session });
   t.deepEqual(tree.deleted, [
@@ -461,10 +476,11 @@ test('stop deletes the subtree deepest first; deleting the parent deletes its ch
     'Root / a',
     'Root / b / bb',
     'Root / b',
+    'Root / c',
   ]);
   t.deepEqual(await E(parent.delegation).children(), []);
-  // A stopped tree frees its room.
-  await spawn(parent.delegation, 'c');
+  // A parent whose delete began spawns nothing more.
+  await t.throwsAsync(spawn(parent.delegation, 'd'));
 });
 
 test('restart releases a spawn cut off before make and links one the start listener completed (KM9, KM10)', async t => {
@@ -530,32 +546,72 @@ test('restart closes an ask stamped with an earlier start; the late reply is con
   t.is(mailLimits.asksPerSubagent, 1);
 });
 
-// Review finding: a spawn in flight while its parent is deleted.
-// The parent's delete hook sees only live children, so a child whose
-// creation answers after the hook ran is linked under a dropped parent and
-// never deleted: a hidden, unlisted session that nothing can reach. This
-// case states the contract's behaviour (the child is deleted, or the spawn
-// refused); `failing` until the tree handles it.
-test.failing(
-  'a spawn in flight when its parent is deleted leaves no child behind',
-  async t => {
-    const tree = makeTree();
-    const parent = tree.addParent('Root');
-    tree.hold();
-    const pending = spawn(parent.delegation, 'late');
-    await settle();
-    // The parent's delete: its hook first, then the row is dropped.
-    await tree.tree.deleteChildren({
-      row: parent.row,
-      session: parent.session,
-    });
-    tree.world.rows.drop(parent.row);
-    tree.release();
-    const outcome = await Promise.allSettled([pending]);
-    const childRow = tree.created[0].child.row;
-    t.true(
-      outcome[0].status === 'rejected' || childRow.dropped === true,
-      'the late child is deleted or its spawn refused',
-    );
-  },
-);
+// A spawn in flight while its parent is deleted: the parent's delete hook
+// marks it closing, so the creation that answers later deletes its child
+// and refuses the spawn; nothing is linked under the dropped parent.
+test('a spawn in flight when its parent is deleted leaves no child behind', async t => {
+  const tree = makeTree();
+  const parent = tree.addParent('Root');
+  tree.hold();
+  const pending = spawn(parent.delegation, 'late');
+  await settle();
+  // The parent's delete: its hook first, then the row is dropped.
+  await tree.tree.deleteChildren({
+    row: parent.row,
+    session: parent.session,
+  });
+  tree.world.rows.drop(parent.row);
+  tree.release();
+  await t.throwsAsync(pending);
+  const childRow = tree.created[0].child.row;
+  t.true(childRow.dropped, 'the late child is deleted');
+  t.deepEqual(tree.deleted, ['Root / late']);
+  t.is(tree.tree.nodeOf(childRow), undefined);
+  t.is(tree.tree.status().reservations, 0);
+  // A spawn after the hook ran is refused before any creation.
+  await t.throwsAsync(spawn(parent.delegation, 'after'));
+  t.is(tree.created.length, 1);
+});
+
+test('restart deletes a child the start listener completed under a deleted parent (KM10)', async t => {
+  const tree = makeTree();
+  const parent = tree.addParent('Root');
+  tree.hold();
+  const pending = spawn(parent.delegation, 'cut').catch(() => 'refused');
+  await settle();
+  await tree.tree.deleteChildren({
+    row: parent.row,
+    session: parent.session,
+  });
+  tree.world.rows.drop(parent.row);
+  await tree.tree.restart(tree.world.starts.next());
+  await settle();
+  const childRow = tree.created[0].child.row;
+  t.true(childRow.dropped, 'not linked under the dropped parent');
+  t.is(tree.tree.nodeOf(childRow), undefined);
+  t.is(tree.tree.status().reservations, 0);
+  tree.release();
+  t.is(await pending, 'refused');
+  t.deepEqual(tree.deleted, ['Root / cut']);
+});
+
+test("a child is made from its parent's preset snapshot, not a new one", async t => {
+  const tree = makeTree();
+  const snapshot = harden({ label: 'Planner preset', revision: 3 });
+  const parent = tree.addParent('Root', { presetSnapshot: snapshot });
+  const { handle } = await spawn(parent.delegation, 'kid');
+  t.is(tree.created[0].how.presetSnapshot, snapshot);
+  // The grandchild inherits the same snapshot through the child's row.
+  const child = tree.childOf(handle);
+  const childDelegation = tree.tree.delegationFor(
+    child.row,
+    harden({
+      backend: tree.backend,
+      modelId: 'model-a',
+      preset: tree.preset,
+      presetSnapshot: snapshot,
+    }),
+  );
+  await spawn(childDelegation, 'grandkid');
+  t.is(tree.created[1].how.presetSnapshot, snapshot);
+});
