@@ -5,7 +5,10 @@
  *
  * `serviceBuilders` is append-only for later milestones: each entry is
  * `(context) -> Promise<Partial<SessionServices>>`, merged in order, with
- * `context = { admin, backend, preset, key }`. The result is attenuated:
+ * `context = { admin, backend, preset, key, settings, ... }` (the
+ * `ServicesContext` typedef). `serviceBinders` and `serviceReleasers`
+ * (append-only too) use what was built: after `make`, and when a creation
+ * rolls back. The result is attenuated:
  * it never contains an admin facet. M1a builds `{ backend, host }`, where
  * `host` is a `SessionHostFacet` the manager mints unbound
  * (`AgentHostAdmin.forSession()`) and the factory binds after `make`.
@@ -14,8 +17,14 @@
  */
 import { shapes } from '../lib/guards/factory.js';
 import { presetEndowmentsAt } from './presets.js';
+import {
+  environmentBinder,
+  environmentReleaser,
+  environmentServices,
+} from './environments.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
+/** @import { HarnessSettings } from './root.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
 /** @type {GuestGlobals['mustMatch']} */
 const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
@@ -32,6 +41,8 @@ const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
  *   (M1b W1b.5; absent without a pool)
  * @property {any} [presetSnapshot] the preset's snapshot the creation's
  *   resolvers read (M5 W5.1, seam H-3)
+ * @property {HarnessSettings} [settings] the operator
+ *   settings (the attached environments admin, `environments.js`)
  */
 
 /**
@@ -78,7 +89,31 @@ export const serviceBuilders = harden([
   backendAndHost,
   execVat,
   presetEndowments,
+  environmentServices,
 ]);
+
+/**
+ * What a binder or releaser is given: the creation's services, the made
+ * session (binders only) and the operator settings.
+ * @typedef {object} ServiceUseContext
+ * @property {Record<string, any>} services
+ * @property {any} [session]
+ * @property {HarnessSettings} [settings]
+ */
+
+/**
+ * Hook table (append-only): run after `make` answered and was checked,
+ * in the same crank; sendOnly only (nothing awaited on the creation path).
+ * @type {readonly ((context: ServiceUseContext) => void)[]}
+ */
+export const serviceBinders = harden([environmentBinder]);
+
+/**
+ * Hook table (append-only): run when a creation whose services were built
+ * is rolled back; sendOnly only.
+ * @type {readonly ((context: ServiceUseContext) => void)[]}
+ */
+export const serviceReleasers = harden([environmentReleaser]);
 
 /**
  * Merge every builder's part; the result must be a `shapes.SessionServices`.
