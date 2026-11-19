@@ -17541,6 +17541,41 @@ All three eight-child bursts finished in 16.713–21.844 s against 30 s;
 all three stops removed three sessions in 3.280–3.623 s. The subagents
 file held the slot 265.7 s and exited 1 on ask overhead.
 
+### J-12547 2026-11-19 WX.F eight active mail recipients and method timings
+
+At `fa9ebd81a6`, four sending clients each alternated two recipients, with
+one send awaiting acknowledgment per client and at most one unfinished
+turn per recipient. One driver paged replies and released the recipient's
+credit after dismissal. The measurement included the final drain.
+
+- 81 completed and dismissed in 62.340 s (1.299 posts/s; target 3).
+  Eight recipients were active at peak, seven acknowledged posts awaited
+  dismissal and the largest observed inbox had five replies. The earlier
+  four-active run delivered 1.989/s. Additional concurrent recipients did
+  not improve this run. One-minute load was 57 at the throughput reading.
+- The corresponding attachment run completed 215 posts in 123.454 s. Hub
+  image plus log grew from 789,721 to 1,120,398 bytes (1.419×; target 1.25×).
+  In a 6 s subsection the factory journal received 11 sends, four lists,
+  21 row changes, 11 fulfillments, 10 reply posts, nine dismissals and 22
+  GC frames. This is a subsection of the attachment workload.
+- Operator ACK median 388.117 ms (95; strict 200 ms, wrapper 250 ms);
+  inter-session send median 390 ms (58; strict 300 ms, wrapper 375 ms).
+  Both gates missed. Full-inbox delivery histogram p95 upper bound was
+  500 ms (target 550 ms, pass).
+
+A separate shared, label-only diagnostic on `14fdc59e6f` measured normal
+pings with local transport timestamps at enqueue, crank entry and return.
+For seven warm idle sends, median ACK was 458 ms. The factory send took
+41 ms, recipient delivery with claim 89 ms and factory `changed` 266 ms.
+The factory fulfillment was enqueued at +156 ms and waited 275 ms before a
+20 ms crank. For four sends during a bounded recipient turn, median ACK
+was 137.5 ms. Factory send took 37 ms, delivery 40.5 ms, fulfillment waited
+0 ms and took 27 ms. No factory row change fell in those busy ACK intervals.
+These are independently calculated wall-time medians. Crank wall time can
+include concurrent host work; the measurements do not isolate the CPU cost
+of the row report. Four ordinary forwards had a 176.5 ms median sender
+round-final crank, 37.5 ms factory post and 102.5 ms recipient delivery.
+
 ### J-1446 2026-11-19 WX.F workspace image and local landing
 
 The workspace-image case passed on Ironhorse with the manager and session journals retained
