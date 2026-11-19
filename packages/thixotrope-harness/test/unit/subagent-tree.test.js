@@ -529,3 +529,33 @@ test('restart closes an ask stamped with an earlier start; the late reply is con
   t.is((await fresh).text, 'done');
   t.is(mailLimits.asksPerSubagent, 1);
 });
+
+// Review finding: a spawn in flight while its parent is deleted.
+// The parent's delete hook sees only live children, so a child whose
+// creation answers after the hook ran is linked under a dropped parent and
+// never deleted: a hidden, unlisted session that nothing can reach. This
+// case states the contract's behaviour (the child is deleted, or the spawn
+// refused); `failing` until the tree handles it.
+test.failing(
+  'a spawn in flight when its parent is deleted leaves no child behind',
+  async t => {
+    const tree = makeTree();
+    const parent = tree.addParent('Root');
+    tree.hold();
+    const pending = spawn(parent.delegation, 'late');
+    await settle();
+    // The parent's delete: its hook first, then the row is dropped.
+    await tree.tree.deleteChildren({
+      row: parent.row,
+      session: parent.session,
+    });
+    tree.world.rows.drop(parent.row);
+    tree.release();
+    const outcome = await Promise.allSettled([pending]);
+    const childRow = tree.created[0].child.row;
+    t.true(
+      outcome[0].status === 'rejected' || childRow.dropped === true,
+      'the late child is deleted or its spawn refused',
+    );
+  },
+);
