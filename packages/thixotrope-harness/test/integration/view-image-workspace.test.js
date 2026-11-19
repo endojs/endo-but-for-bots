@@ -66,6 +66,8 @@ run(
     const { state, slice, server, anthropic, cleanup } =
       await openCompactionState({
         template: environmentsTemplate,
+        // Keep both worker journals available throughout the provider call.
+        idleSleepMs: 5 * 60_000,
         snapshotEveryDeliveries: 10_000,
       });
     t.teardown(cleanup);
