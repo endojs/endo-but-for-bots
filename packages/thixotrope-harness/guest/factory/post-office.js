@@ -481,7 +481,7 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
         throw Error(postOfficeTexts.mailFraud);
       }
     }
-    const accepted = harden(draft.to.map(() => harden({ postmark })));
+
     if (ask !== undefined) {
       asks.delete(postmark);
       record.closed = true;
@@ -494,9 +494,10 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
           postmark,
         }),
       );
-      return harden({ results: accepted });
     }
-    if (record.closed) return harden({ results: accepted });
+    if (ask !== undefined || record.closed) {
+      return harden({ results: draft.to.map(() => harden({ postmark })) });
+    }
     const target = record.sender;
     /** @type {Record<string, any>} */
     const base = {
@@ -588,6 +589,10 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
         return toSession(sender, party, toSessions, sessionBytes, onReply);
       return toOperator(full, sender, party);
     };
+    if (draft.to.length === 1) {
+      const result = await deliver(draft.to[0]);
+      return harden({ results: [result] });
+    }
     const deliveries = new Map();
     for (const address of draft.to) {
       if (!deliveries.has(address)) deliveries.set(address, deliver(address));
