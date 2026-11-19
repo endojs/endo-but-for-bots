@@ -18059,3 +18059,36 @@ The session-to-session delivery count (budget at most four) remains
 unverified. The existing isolated crank trace supplies worker, method
 and wall timestamps. Overlapping sender settlement and recipient work
 preclude assigning every crank to a single mail from that information.
+### J-1458 2026-11-19 WX.F factory collection during ordinary mail receipts
+
+Two eight-second ordinary-mail diagnostics on the linked M9 source at
+`14fdc59e6f` used the pinned worker's existing native timing reply. The host
+joined send and receipt timestamps to the receiving factory's delivery of
+`RowReporter.changed`, then to that same worker request and reply. Both
+variants used the public operator send, an idle session, the default allocation
+schedule and the shared test lock; one-minute loads at the operator row were
+52.83 and 52.84. Warm samples exclude the separate initial setup send.
+
+| Variant | Warm receipts | Operator median | Session-to-session median | Row deliveries that collected |
+|---|---:|---:|---:|---:|
+| Original factory | 14 | 441.6 ms | 400 ms (9 sends) | 13 of 14 |
+| Only omit the byte count used to split a single-row batch | 14 | 405.7 ms | 435 ms (8 sends) | 13 of 14 |
+| Diagnostic omitting the factory's second traversal of the published row shape | 11 | 216.0 ms | 339 ms (9 sends) | 0 of 11 |
+
+The original critical row crank took a median 251 ms of host wall time.
+The worker measured 220.3 ms in collection and 14.2 ms running guest code
+(medians over the same 14 row cranks). The diagnostic row crank took 36 ms
+wall and 8.6 ms running guest code. Some other cranks still collected. Both
+runs kept the full public ListPublisher guard at the receiving adapter and the
+original durable delivery and receipt sequence. The changed factory and timing
+hooks existed only in a disposable checkout. These short diagnostics narrow
+the cause; J-12547 remains the full operator and session latency observation.
+
+Keeping the sender's full shape walk and omitting only the byte count used
+to split a single-row batch still measured 213 ms median collection in the
+critical row crank. That change was set aside. The follow-up candidate
+retains the factory's exact byte and event-count limits and leaves the full
+shape check at the public adapter. The 28 list-channel and pool/factory
+tests passed, including batched rows, removals, order, refresh after restart
+and refusal of unknown keys and oversized batches at the receiver. Its full
+performance results are pending.

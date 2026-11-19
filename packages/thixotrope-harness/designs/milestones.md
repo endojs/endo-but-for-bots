@@ -1960,7 +1960,11 @@ and child-environment cases. On the linked build, all eight mail daemon tests pa
 acknowledgment (target 200 ms), 390 ms for session delivery (target 300 ms) and
 1.30 completed and dismissed posts/s (target 3). Inbox p95 met its 550 ms limit at
 500 ms. Persisted hub bytes grew 1.419× against 1.25× after 215 completed posts
-(J-12547). J-1448 records the earlier workload, which met the growth limit.
+(J-12547). That growth ratio used the post-throughput state as its baseline;
+the contract's fresh-state comparison is still open. J-1448 records the earlier
+workload. Native timing located a median 220 ms of collection on the critical
+factory row update in an ordinary mail diagnostic (J-1458). The separate four-deliveries
+per forwarded mail limit still needs a causally attributed count.
 All three eight-child bursts and subtree stops passed. On the linked build, ask
 overhead was 393 ms against 300 ms, measured from parent tool call to result
 less the child's full turn on one observer clock (J-1474).
