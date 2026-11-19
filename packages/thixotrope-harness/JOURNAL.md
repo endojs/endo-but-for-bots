@@ -14963,3 +14963,52 @@ Reading: over 60 s: the request build measurement 71 s. Adapter tests run direct
 provider, manager, fake server: 129 passed). No supervisor started; nothing pushed; no change to
 `packages/thixotrope` or `rust/**`.
 Fit: neutral.
+
+### J-1050 2026-11-19 W8.2 the compaction plan, summary request and hook - built
+Evidence: `4c3738b997`; `resources/agent-host/impl/providers/compaction.js`; tests
+`test/adapter/compaction-plan.test.js` (10), `compaction-summary.test.js` (7),
+`compaction-hook.test.js` (4), helper `test/adapter/_compaction-records.js` (records from the
+real record log, so every record passes its guard).
+Reading: `planCompaction`, `summaryRequest`, `checkSummary`, `compactionHook`, `wireBytes` as
+contract 16 signs them. Refusals answer `{ refuse }` with `compactionSkipTexts`; `summaryRequest`
+passes a plan's refusal through, so the round can chain plan and request. The plan answers two
+fields more than 16 lists, `system` and `tools` (as given), because `checkSummary({ plan,
+summary, toolCalls })` must size the next context with them. Image results are sized as their
+receipt plus `imageSizingBytes` through W8.6's `imageReceiptText` (imported, not copied); only
+results starting with `IMAGE_ENVELOPE_PREFIX` are asked, so a history without images pays one
+`startsWith` per tool result. The previous summary's directive leads the prefix with its summary
+(the plan takes the highest-epoch marker of the whole transcript, sealed part included, since the
+marker may lie after the new boundary). No guest file: the session program is unchanged.
+Fit: good (pure functions over hardened projections).
+
+### J-1051 2026-11-19 W8.2 compaction.plan - measured (under load)
+Evidence: `4c3738b997`; scratch window script over `perf/_window.mjs` `runWindow`/`windowMs`,
+PERF_WINDOW_SCALE 0.25 (15 s windows), load average 8-10 (three other lanes running).
+Reading: `planCompaction` + `summaryRequest`, 400 completed turns (2,803 kept records, 725 KB
+original, request 391 KB): median 9.8 ms, p95 14.7, max 53, n 1,313 (budget 50 ms median).
+1,600 turns (11,203 records, 2.9 MB): median 36.7 ms, p95 41.1, n 393: linear in the kept
+records (three projections and one sizing pass, the group walk stops at the budget).
+Fit: good. The row itself is W8.7's (`perf/compaction.perf.mjs`).
+
+### J-1052 2026-11-19 W8.2 findings for the wiring and the perf file - finding
+Evidence: `4c3738b997`; `projection.js` at `6493d955c7`; `perf/_window.mjs` `runWindow`.
+Reading: (1) The base projection leaves out a settled turn that has no `dispatched` record
+(R4-32's never-dispatched rule); a turn cut by a boundary at a `round-settled` of round > 0 has
+none in the kept records, so after such a compaction its remaining rounds would vanish from the
+context once the turn settles. The plan works around it in its own slices (a `dispatched` marker
+for each turn whose `turn-started` lies before the slice; test "a settled turn cut at a later
+round keeps its remainder in the tail"); the cache's projection needs the same rule (seam S-10,
+W8.3). (2) `projection-hooks.js` importing `compactionHook` closes a cycle
+(`compaction.js` -> `projection.js` -> `projection-hooks.js` -> `compaction.js`); the hook is a
+function declaration so it is bound whichever module loads first; a `const` would throw a TDZ
+error when `compaction.js` is imported first. (3) `runWindow` keeps every operation's result:
+an op that answers a plan (about 1 MB) held 1 GB after 950 samples and gave 10-13 s pauses; the
+perf file must answer nothing from the op.
+Fit: neutral (two harness facts, one projection gap for W8.3).
+
+### J-1053 2026-11-19 W8.2 time record - process
+Evidence: first command 2026-11-19T02:23:30Z.
+Reading: no command over 60 s (the longest, a 25 s measurement window). Commits `4c3738b997`
+and this journal commit; nothing pushed; no change to `packages/thixotrope`, `rust/**` or a
+shared file.
+Fit: neutral.
