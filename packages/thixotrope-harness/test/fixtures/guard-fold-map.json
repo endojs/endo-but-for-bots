@@ -278,8 +278,15 @@
   "m2MethodNames"
  ],
  "exportsAdded": [
+  "IMAGE_ENVELOPE_PREFIX",
   "builtInPresetLabels",
   "grantStates",
+  "imageInterfaceBuilders",
+  "imageMediaTypes",
+  "imageMethodNames",
+  "imageShapeBuilders",
+  "imageTextOf",
+  "imageTexts",
   "inspectOps",
   "m1bMethodLists",
   "objectToolNames",

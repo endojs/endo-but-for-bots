@@ -11,8 +11,8 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { shapes } from '../../guest/lib/interfaces.js';
-import { archiveKindLetters } from '../../guest/lib/guards/session.js';
 import {
+  archiveKindLetters,
   compactionKindLetters,
   compactionKinds,
   compactionTexts,

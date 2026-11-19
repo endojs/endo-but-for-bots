@@ -8,8 +8,11 @@
 import './_m1a-prelude.js';
 
 /* eslint-disable import/no-relative-packages */
-import { interfaces as relayInterfaces } from '../../guest/lib/interfaces.js';
-import { interfaces, methodNames } from '../../guest/lib/interfaces.js';
+import {
+  interfaces as relayInterfaces,
+  interfaces,
+  methodNames,
+} from '../../guest/lib/interfaces.js';
 import { shapes as mailShapes } from '../../guest/lib/guards/session.js';
 import { makeRowTable } from '../../guest/factory/rows.js';
 import { makeStartCount } from '../../guest/factory/starts.js';

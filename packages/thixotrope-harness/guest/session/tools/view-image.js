@@ -29,12 +29,12 @@
  * Guest rules.
  */
 
-import { textOf } from '../../lib/guards/session.js';
-import { imageLimits } from '../../lib/limits.js';
 import {
+  textOf,
   viewImageDescription,
   viewImageTexts,
 } from '../../lib/guards/session.js';
+import { imageLimits } from '../../lib/limits.js';
 import { labelsOf, readArgs } from './objects.js';
 
 /** @import { ToolTableEntry } from '../tool-table.js' */

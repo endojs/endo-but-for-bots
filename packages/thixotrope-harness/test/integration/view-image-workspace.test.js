@@ -1,8 +1,9 @@
 // @ts-check
 // M6 + M8: a real workspace supplies an image to the session's registered tool.
+import '../unit/_m1a-prelude.js';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import test from '@endo/ses-ava/test.js';
+import test from 'ava';
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
@@ -39,7 +40,7 @@ run(
     t.timeout(5 * 60_000);
     const state = await startFromTemplate(await environmentsTemplate(), {
       t,
-      snapshotEveryDeliveries: 10000,
+      snapshotEveryDeliveries: 10_000,
     });
     const slice = await makeSlice(state);
     const tool = toolCall('viewImage', {

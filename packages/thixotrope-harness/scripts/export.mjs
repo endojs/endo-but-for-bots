@@ -596,8 +596,8 @@ export const importState = async ({
         ];
         for (const preset of candidates) {
           const view = await E(preset).describe();
-          if (!view.builtIn && !importedPresets.includes(preset)) continue;
           if (
+            (view.builtIn || importedPresets.includes(preset)) &&
             view.label === saved?.label &&
             view.template === saved.template &&
             view.networkPolicy === saved.networkPolicy &&

@@ -369,7 +369,11 @@ test('K3: the summary staged, the round released before compacted: nothing sent,
   ]);
   r.start();
   await until(() => fired);
-  await timers.delay(200);
+  await until(() =>
+    readdirSync(join(r.blobs.dir, 'agent-host', 'blobs')).every(
+      name => !name.endsWith('.part'),
+    ),
+  );
   t.is(r.fake.compactions.length, 0);
   t.deepEqual(r.fake.finals, []);
   t.deepEqual(r.fake.failures, []);

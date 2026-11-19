@@ -16,8 +16,6 @@ import {
   checkSummary,
   summaryRequest,
   wireBytes,
-} from '../../resources/agent-host/impl/providers/compaction.js';
-import {
   compactionSkipTexts,
   excerptOmitted,
 } from '../../resources/agent-host/impl/providers/compaction.js';

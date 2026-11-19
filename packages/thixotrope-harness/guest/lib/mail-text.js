@@ -9,8 +9,7 @@
  * Guest rules: plain functions, no record key from data (a row's keys are
  * fixed; JSON is built here and leaves as text).
  */
-import { textOf as mailTextOf } from './guards/session.js';
-import { textOf } from './guards/session.js';
+import { textOf as mailTextOf, textOf } from './guards/session.js';
 import { limits } from './limits.js';
 import { boundToolOutput, previewText } from './bounded.js';
 

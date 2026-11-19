@@ -59,11 +59,10 @@ import {
   done,
   lazyTable,
 } from './guards/base.js';
-import { view } from './guards/session.js';
+import { view, contextMethodNames, mailMethodNames } from './guards/session.js';
 import * as below from './guards/factory.js';
 // The cross-lane seam unit (WX.1): method names the context window
 // (m8-interfaces.md G-2) and mail (m9-interfaces.md S9) add.
-import { contextMethodNames, mailMethodNames } from './guards/session.js';
 
 export { execArgumentNames, inspectOps } from './guards/base.js';
 export {

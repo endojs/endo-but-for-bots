@@ -32,8 +32,8 @@
  * synchronous (the reply and the rejection are sends whose answers are
  * not waited for).
  */
-import { textOf } from '../lib/guards/session.js';
 import {
+  textOf,
   inboxStates,
   textOf as mailTextOf,
   texts as mailTexts,

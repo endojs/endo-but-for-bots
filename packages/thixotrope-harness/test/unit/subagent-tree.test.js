@@ -11,14 +11,16 @@ import test from '@endo/ses-ava/test.js';
 import { makeMailWorld, settle, stagedText } from './_post-office-fakes.js';
 
 /* eslint-disable import/no-relative-packages */
-import { interfaces as relayInterfaces } from '../../guest/lib/interfaces.js';
+import {
+  interfaces as relayInterfaces,
+  interfaces,
+} from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import {
   texts as mailTexts,
   textOf as mailTextOf,
 } from '../../guest/lib/guards/session.js';
 import { textOf as postOfficeTextOf } from '../../guest/lib/guards/factory.js';
-import { interfaces } from '../../guest/lib/interfaces.js';
 import { ANSWER_UNITS, makeSubagents } from '../../guest/factory/subagents.js';
 /* eslint-enable import/no-relative-packages */
 

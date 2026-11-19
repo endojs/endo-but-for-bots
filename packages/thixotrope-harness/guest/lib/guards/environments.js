@@ -33,7 +33,7 @@
  * `contract(thixotrope-harness): ...`, `m6-interfaces.md` in the same
  * commit).
  */
-import { limits } from '../limits.js';
+import { limits, imageLimits } from '../limits.js';
 import {
   text,
   list,
@@ -49,7 +49,6 @@ import {
 import { shapes as sessionShapes } from './session.js';
 // M8's image bounds (seam X-1): `openImage` takes the path M8's image tool
 // checked, by the same rule (imported, not copied: review rule 3).
-import { imageLimits } from '../limits.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 

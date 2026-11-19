@@ -15,8 +15,8 @@ import { imageTextOf } from '../../guest/lib/interfaces.js';
 import {
   planCompaction,
   wireBytes,
+  compactionSkipTexts,
 } from '../../resources/agent-host/impl/providers/compaction.js';
-import { compactionSkipTexts } from '../../resources/agent-host/impl/providers/compaction.js';
 import { askOf, imageEnvelope, makeTurnLog } from './_compaction-records.js';
 
 /** @import { CompactionPlan as Plan } from '../../resources/agent-host/impl/providers/compaction.js' */

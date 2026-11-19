@@ -50,8 +50,10 @@ import {
   texts as postOfficeTexts,
   textOf as postOfficeTextOf,
 } from '../lib/guards/factory.js';
-import { turnStartingTypes } from '../lib/guards/session.js';
-import { texts as sessionTexts } from '../lib/guards/session.js';
+import {
+  turnStartingTypes,
+  texts as sessionTexts,
+} from '../lib/guards/session.js';
 import { cutText, messageBytes, messageOf, utf8Bytes } from '../lib/bounded.js';
 import { isRetiredBreak } from '../lib/retired.js';
 

@@ -16,8 +16,7 @@ import { join } from 'node:path';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { limits } from '../../guest/lib/limits.js';
-import { imageLimits } from '../../guest/lib/limits.js';
+import { limits, imageLimits } from '../../guest/lib/limits.js';
 import {
   IMAGE_ENVELOPE_PREFIX,
   imageTextOf,

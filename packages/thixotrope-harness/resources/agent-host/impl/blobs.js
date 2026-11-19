@@ -53,7 +53,12 @@
  * results through it).
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
-import { interfaces as relayInterfaces } from '../../../guest/lib/interfaces.js';
+import {
+  interfaces as relayInterfaces,
+  interfaces,
+  textOf,
+  texts,
+} from '../../../guest/lib/interfaces.js';
 import { E } from '@endo/far';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
@@ -71,7 +76,6 @@ import { dirname, basename, join } from 'node:path';
 import { argv as processArgv, pid } from 'node:process';
 import { StringDecoder } from 'node:string_decoder';
 
-import { interfaces, textOf, texts } from '../../../guest/lib/interfaces.js';
 import { limits } from '../../../guest/lib/limits.js';
 import { chunkText, previewText } from '../../../guest/lib/bounded.js';
 import { blobLimits } from '../../../config/defaults.js';

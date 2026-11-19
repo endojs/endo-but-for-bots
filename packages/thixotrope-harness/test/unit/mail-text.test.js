@@ -9,8 +9,10 @@ import './_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { textOf as mailTextOf } from '../../guest/lib/guards/session.js';
-import { textOf } from '../../guest/lib/guards/session.js';
+import {
+  textOf as mailTextOf,
+  textOf,
+} from '../../guest/lib/guards/session.js';
 import { limits } from '../../guest/lib/limits.js';
 import {
   bodyText,

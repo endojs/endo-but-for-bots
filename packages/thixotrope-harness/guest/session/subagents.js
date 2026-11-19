@@ -36,8 +36,8 @@
 import {
   texts as mailTexts,
   textOf as mailTextOf,
+  texts,
 } from '../lib/guards/session.js';
-import { texts } from '../lib/guards/session.js';
 import { makeCallTable } from './tools/call-table.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */

@@ -186,7 +186,7 @@ test('CLI takers on two slots: never more than two commands at once', async t =>
   t.is(most, 2);
   const rows = await runLog(home);
   t.is(rows.length, 5);
-  t.deepEqual(new Set(rows.map(r => r.slot)), new Set([0, 1]));
+  t.deepEqual([...new Set(rows.map(r => r.slot))].sort(), [0, 1]);
 });
 
 test('an exclusive taker waits for every slot and holds them all under one id', async t => {

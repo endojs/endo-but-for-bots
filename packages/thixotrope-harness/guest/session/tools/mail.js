@@ -36,8 +36,8 @@
  *
  * Guest rules: model JSON never becomes a record; no `JSON.parse`.
  */
-import { textOf } from '../../lib/guards/session.js';
 import {
+  textOf,
   textOf as mailTextOf,
   texts as mailTexts,
   mailToolArgumentNames,

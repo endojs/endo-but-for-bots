@@ -13,8 +13,12 @@ import test from '@endo/ses-ava/test.js';
 import { createHash } from 'node:crypto';
 
 /* eslint-disable import/no-relative-packages */
-import { interfaces as relayInterfaces } from '../../guest/lib/interfaces.js';
-import { interfaces, methodNames, shapes } from '../../guest/lib/interfaces.js';
+import {
+  interfaces as relayInterfaces,
+  interfaces,
+  methodNames,
+  shapes,
+} from '../../guest/lib/interfaces.js';
 import { shapes as mailShapes } from '../../guest/lib/guards/session.js';
 import { textOf as postOfficeTextOf } from '../../guest/lib/guards/factory.js';
 import { limits } from '../../guest/lib/limits.js';

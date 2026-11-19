@@ -42,8 +42,8 @@ import {
   textOf as mailTextOf,
   subagentLabelPrefix,
   subagentNameSource,
+  textOf,
 } from '../../lib/guards/session.js';
-import { textOf } from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
 import { parseClosedArgs } from '../../lib/tool-args.js';
 import { messageOf } from '../../lib/bounded.js';
