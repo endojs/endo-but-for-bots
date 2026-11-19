@@ -46,6 +46,15 @@
  * description names another tool, is not offered. These entries follow the
  * static table, so a static entry is never shadowed; their names are in the
  * round's built-in set, so no granted tool shadows them either.
+ *
+ * The static order after the package entries is fixed for the entries to
+ * come (WX.1; m8-interfaces.md D-M8-18, m9-interfaces.md D-M9-24): shell
+ * (`runCommand`, `inspectShell`), `viewImage`, mail (`listMessages`,
+ * `send`, `reply`, `dismiss`), requests (`resolveRequest`,
+ * `rejectRequest`, `submitForm`), subagents (`spawnSubagent`,
+ * `askSubagent`, `stopSubagent`). A lane adds its import and its spread
+ * each directly below its own `// slot: <name>` comment here, so two
+ * lanes' lines never touch; it deletes nothing.
  */
 import { echoDescription, textOf } from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
@@ -53,6 +62,11 @@ import { execEntry } from './tools/exec.js';
 import { objectToolEntries } from './tools/objects.js';
 import { inspectionToolEntries } from './tools/inspection.js';
 import { packageToolEntries } from './tools/mentions.js';
+// slot: shell
+// slot: viewImage
+// slot: mail
+// slot: requests
+// slot: subagents
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
@@ -146,6 +160,11 @@ export const toolTable = harden([
   ...objectToolEntries,
   ...inspectionToolEntries,
   ...packageToolEntries,
+  // slot: shell
+  // slot: viewImage
+  // slot: mail
+  // slot: requests
+  // slot: subagents
 ]);
 
 /**

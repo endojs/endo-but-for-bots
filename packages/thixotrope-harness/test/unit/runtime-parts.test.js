@@ -17,6 +17,7 @@ import {
   requiredParts,
   runtimeParts,
 } from '../../guest/session/runtime-parts.js';
+import { toolTable } from '../../guest/session/tool-table.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @param {readonly any[]} parts */
@@ -220,4 +221,27 @@ test('the context window option is the runtime member, undefined by default (WX.
   for (const name of ['environment', 'compaction', 'inbox', 'subagents']) {
     t.false(name in runtime, name);
   }
+});
+
+test('the static tool table follows the fixed tool order after the package entries (WX.1)', t => {
+  const names = toolTable.map(entry => entry.name);
+  const after = names.slice(names.indexOf('adoptTool') + 1);
+  t.true(
+    inOrder(after, [
+      'runCommand',
+      'inspectShell',
+      'viewImage',
+      'listMessages',
+      'send',
+      'reply',
+      'dismiss',
+      'resolveRequest',
+      'rejectRequest',
+      'submitForm',
+      'spawnSubagent',
+      'askSubagent',
+      'stopSubagent',
+    ]),
+    after.join(', '),
+  );
 });
