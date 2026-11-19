@@ -132,7 +132,7 @@ export const compactionSkipTexts = harden({
  * @property {readonly any[]} sealed the sealed part as projected transcript
  *   records, compaction markers included, before any hook
  *
- * @typedef {object} CompactionAsk `RoundRequest.compaction` (guards/context.js)
+ * @typedef {object} CompactionAsk `RoundRequest.compaction` (guards/session.js)
  * @property {number} epoch
  * @property {number} boundary
  * @property {number} askedAt

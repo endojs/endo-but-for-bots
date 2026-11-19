@@ -72,8 +72,7 @@ export const perfLists = Object.freeze({
     'accounts',
   ]),
   M5: Object.freeze(['presets', 'creation-m5', 'exec-m5', 'tools', 'mentions']),
-  // Reserved by WX.1 for the group of four lanes, named by concept; each
-  // lane adds its perf checks to its own list (empty until then).
+  // The four milestone lanes share the cross-check and own these measurements.
   environments: Object.freeze([
     'environments',
     'environments-git',
@@ -199,7 +198,9 @@ const main = async argv => {
   }
   const milestone = argv.find(arg => !arg.startsWith('-'));
   if (milestone === undefined)
-    throw Error('Usage: perf/_pass.mjs <M2|M3|M4|M5|all> [--no-templates]');
+    throw Error(
+      'Usage: perf/_pass.mjs <M2|M3|M4|M5|environments|context|mail|voice|all> [--no-templates]',
+    );
   const files = passFiles(milestone);
   const t0 = Date.now();
   if (!argv.includes('--no-templates')) {

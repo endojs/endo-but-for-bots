@@ -47,7 +47,7 @@ export const compactionKindLetters = harden([
 /**
  * The fixed texts the session vat writes itself. The skip reasons the
  * adapter produces (the plan and the summary checks) are Node-only, in
- * `AH/providers/compaction-texts.js` `compactionSkipTexts`; the vat records
+ * `AH/providers/compaction.js` `compactionSkipTexts`; the vat records
  * whichever reason it is given (`CompactionSkipped.reason`). No reason
  * quotes a provider body (R4-79).
  */

@@ -26,7 +26,7 @@
  *   failure of the summary call after its retries, or a staging failure).
  *
  * A plan or summary that cannot help is reported `skipped` with its fixed
- * reason (`compaction-texts.js` `compactionSkipTexts`); the round then runs
+ * reason (`compaction.js` `compactionSkipTexts`); the round then runs
  * uncompacted (D-M8-6). Nothing logged quotes a provider body or the
  * summary (R4-79).
  *

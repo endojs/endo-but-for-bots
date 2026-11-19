@@ -34,8 +34,27 @@ import {
 takeIntegrationLock(test, 'view image in a workspace');
 const run = integrationEnabled ? test.serial : test.skip;
 
+/** @param {string} root @param {any} before @param {any} after */
+const incomingFrames = async (root, before, after) => {
+  const journal = await readFile(
+    path.join(root, 'workers', before.workerId, 'journal.jsonl'),
+    'utf8',
+  );
+  const [header, ...frames] = journal
+    .trimEnd()
+    .split('\n')
+    .map(line => JSON.parse(line));
+  const from = Number(before.journalLength) - Number(header.base);
+  const to = Number(after.journalLength) - Number(header.base);
+  if (from < 0 || to < from || to > frames.length)
+    throw Error(
+      `Journal does not cover the image call for ${before.debugLabel}`,
+    );
+  return frames.slice(from, to).map(frame => Buffer.from(frame.b64, 'base64'));
+};
+
 run(
-  'viewImage reads a workspace file without carrying its data through the manager vat',
+  'viewImage reads a workspace file with bounded frames in the manager and session vats',
   async t => {
     t.timeout(5 * 60_000);
     const state = await startFromTemplate(await environmentsTemplate(), {
@@ -75,22 +94,10 @@ run(
       ),
       image,
     );
-    const manager = async () => {
-      const worker = (await slice.workers()).find(
-        w => w.debugLabel === `native:${environmentsAdminName}`,
-      );
-      if (!worker) throw Error('missing environments manager');
-      return worker;
-    };
-    const before = await manager();
-    const viewed = await runTurn(
-      slice,
-      session,
-      live,
-      'view workspace image',
-      90_000,
-    );
-    const after = await manager();
+    const before = await slice.workers();
+    const input = 'view workspace image';
+    const viewed = await runTurn(slice, session, live, input, 90_000);
+    const after = await slice.workers();
     t.is(viewed.end.status, 'completed');
     const [answer] = toolResultsOf(await turnRecords(viewed.turn));
     t.false(answer.failed);
@@ -101,26 +108,41 @@ run(
     t.is(envelope.mimeType, 'image/png');
     t.true(Buffer.from(envelope.data, 'base64').equals(image));
 
-    const journal = await readFile(
-      path.join(state.root, 'workers', before.workerId, 'journal.jsonl'),
-      'utf8',
+    const managerLabel = `native:${environmentsAdminName}`;
+    const relevant = before.filter(
+      w =>
+        w.debugLabel === managerLabel ||
+        /^(spare session \d+|session s\d+)$/.test(w.debugLabel),
     );
-    const [header, ...frames] = journal
-      .trimEnd()
-      .split('\n')
-      .map(line => JSON.parse(line));
-    const from = Number(before.journalLength) - Number(header.base);
-    const to = Number(after.journalLength) - Number(header.base);
-    t.true(
-      from >= 0 && to > from && to <= frames.length,
-      'journal covers the image call',
+    const traffic = await Promise.all(
+      relevant.map(async worker => ({
+        label: worker.debugLabel,
+        frames: await incomingFrames(
+          state.root,
+          worker,
+          after.find(w => w.workerId === worker.workerId),
+        ),
+      })),
     );
-    const maxBytes = Math.max(
-      ...frames
-        .slice(from, to)
-        .map(frame => Buffer.from(frame.b64, 'base64').length),
+    const manager = traffic.find(w => w.label === managerLabel);
+    // Pooled sessions retain the spare's label. The submitted input identifies
+    // the session handling this turn, even if another spare is refilling.
+    const sessionTraffic = traffic.filter(
+      w => w.label !== managerLabel && w.frames.some(f => f.includes(input)),
     );
-    t.true(maxBytes < 4096, `largest manager frame: ${maxBytes} bytes`);
-    t.log({ imageBytes: image.length, frames: to - from, maxBytes });
+    t.is(sessionTraffic.length, 1);
+    if (!manager || !sessionTraffic[0])
+      throw Error('missing image-call worker');
+    for (const { label, frames } of [manager, sessionTraffic[0]]) {
+      t.true(frames.length > 0, `no frames for ${label}`);
+      const maxBytes = Math.max(...frames.map(frame => frame.length));
+      t.true(maxBytes < 4096, `largest ${label} frame: ${maxBytes} bytes`);
+      t.log({
+        label,
+        imageBytes: image.length,
+        frames: frames.length,
+        maxBytes,
+      });
+    }
   },
 );

@@ -541,7 +541,7 @@ const shapeBuilders = {
     }),
   /**
    * `openImage(path)` argument (seam X-1): the segments M8's image tool
-   * checked (`image-guards.js` `ImagePath`); the adapter applies the
+   * checked (`interfaces.js` `ImagePath`); the adapter applies the
    * workspace path rules again (worktree only, never `.git`).
    */
   ImagePath: () =>
@@ -575,7 +575,7 @@ const gitReadGuards = () => ({
     baseShapes.SourceReadResult,
   ),
   // Seam X-1 (M8 `viewImage`): an adapter-side `ImageSource` (M8's guard,
-  // `image-guards.js`) over one worktree file; its pages go adapter to
+  // `interfaces.js`) over one worktree file; its pages go adapter to
   // adapter and never through this manager vat.
   openImage: M.callWhen(S.ImagePath).returns(R('ImageSource')),
   help: M.call()

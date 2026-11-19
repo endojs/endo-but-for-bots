@@ -3,7 +3,7 @@
  * Workspace images (contract `designs/m6-interfaces.md` 3.3, 3.4 "openImage",
  * 5.2; seam X-1 with M8's `viewImage`, spec R3-30): an adapter-side
  * `ImageSource` over one worktree file, built with M8's guard
- * (`guest/lib/image-guards.js`), so its pages go adapter to adapter and no
+ * (`guest/lib/interfaces.js`), so its pages go adapter to adapter and no
  * image byte enters a vat on the tool path.
  *
  * `openImage` is what `EnvironmentsOps.openImage(key, path)` answers: the

@@ -129,7 +129,7 @@ The owner's rule: we do not test anything that takes hours.
 What a regression run contains, with each file's held time from `runs.jsonl` and the wall time.
 Commands from the package, one batch each (S2, HR-SYN-18): `corepack yarn test:regression:core`
 (the unit and adapter lanes, then the core files) and `corepack yarn test:regression:milestones`
-(the M3, M4 and M5 files with their browser files); each prints every file's held and waited time
+(M3, M4, M5, environments, context, mail and voice, including their browser files); each prints every file's held and waited time
 and the batch's wall time. The lists live in `scripts/test-integration.mjs` `regressionLists`, and
 a unit test keeps every integration, template and browser file in exactly one list.
 

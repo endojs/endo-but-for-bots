@@ -17237,3 +17237,18 @@ is 6,300 bytes against the 6,400-byte cap. The manager measures 101,880 bytes ag
 Its measured native install took 4.73 s. The duplicate check found 550 of 30,919 normalized
 lines in duplicate blocks, 1.78% against 2.05%. The provisional guest seam, preset provider
 build method and environment not-built marker searches were empty.
+
+### J-1443 2026-11-19 WX.F queue, export and frame checks
+
+Evidence: `239c9000e8` restored the stopped session's execution head and preset on import;
+the real-worker export/import case passed (J-12101). `6db677482b` let resumed inbox work
+run while ordinary queued submissions retained their holds. Empty inboxes preserve the
+existing export cursor and the turn-runner golden trace. `78c7066f5b` validates a full
+inbox page before applying it and preserves package numbers on retry. The 19 isolated
+inbox/import tests passed.
+
+Reading: the combined unit and adapter sweep at `c10fb64aa2` passed 1,995 tests, skipped
+167 and reported three TODOs. It preceded the inbox page fix. The combined context suite
+passed compaction and its three restart points (206 s and 219 s held). The workspace-image
+case now measures inbound frames at both the session and the environments manager, on the
+same turn whose staged response is compared byte for byte with the workspace file.

@@ -282,8 +282,9 @@ export const stateHasPath = async root => {
   let files = 0;
   let bytes = 0;
   for (const dir of ['heaps', 'workers']) {
-    // eslint-disable-next-line no-await-in-loop
     const found = /** @type {any} */ (
+      // Scan one tree at a time to bound the heap used by the binary searches.
+      // eslint-disable-next-line no-await-in-loop
       await grepState(path.join(root, dir), path.join(root, 'environments'))
     );
     hits.push(...found);

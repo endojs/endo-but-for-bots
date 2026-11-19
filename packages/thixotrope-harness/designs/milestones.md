@@ -2298,32 +2298,33 @@ Whylip or irrelevant slash commands). They are scheduled after M13 by default on
   `guest/exec/powers.js`, `ui/src/{presets,mentions}`. Hook points: M4 and M5 add entries to
   `session-options.js` (backend/model resolution; preset snapshot), `services.js`, `tool-table.js`
   (`accountStatus`; object tools), `features.js`. Disjoint otherwise.
-- **{M6, M8, M9, M11}** (from the settled contracts; WX.F rewrites this row from what was
-  built). Own files: M6 `EV/` (`durable.js`, `ephemeral.js`, `impl/`), `resources/native-attach.js`,
-  `guest/lib/guards/environments.js`, `guest/session/{environment,tools/shell}.js`,
+- **{M6, M8, M9, M11}**. The combined implementation has the following owners. M6 `EV/` (`durable.js`, `ephemeral.js`, `impl/`), `resources/native-attach.js`,
+  `resources/native-layout.js`, `guest/lib/guards/environments.js`, `guest/session/environment.js` (including the shell pair),
   `guest/factory/environments.js`, `guest/lib/environment-prompt.js`, `ui/src/environment/`,
   `scripts/provision-steps/60-environments.js`; M8 `guest/session/{compaction,tools/view-image}.js`,
-  `AH/providers/{compaction,compaction-round,images,compaction-texts}.js`, `AH/tools/view-image.js`,
-  `guest/lib/guards/{context,images}.js`, `guest/lib/image-guards.js`; M9
+  `AH/providers/{compaction,compaction-round,images}.js` and `AH/tools/view-image.js`. The session
+  guard table holds the compaction and viewImage contracts; the shared image-source guard is in
+  `guest/lib/interfaces.js`. M9
   `guest/session/{inbox,subagents}.js`, `guest/session/tools/{mail,requests,subagents}.js`,
-  `guest/factory/{post-office,operator-mail,subagents}.js`, `guest/lib/{mail-text,mail-prompt,mail-limits}.js`,
-  `guest/lib/guards/{mail,post-office}.js`, `guest/exec/split-args.js`; M11 `AH/speech/`,
+  `guest/factory/{post-office,operator-mail,subagents}.js`, `guest/lib/{mail-text,mail-prompt}.js`
+  and `guest/exec/split-args.js`. The session and factory guard tables own their mail contracts;
+  the Node interfaces own the relay contract. `guest/lib/limits.js` holds the mail and image
+  limits. M11 `AH/speech/`,
   `GW/extensions/speech.js`, `guest/factory/voice.js`, `guest/lib/{voice-preferences,speech-guards}.js`,
   `UI/src/voice/`, `scripts/provision-steps/70-voice.js`. Each lane also owns its test, fixture and
-  perf files, named by subject. **WX.1 alone** edits `guest/lib/guards/{session,factory,base}.js`,
+  perf files, named by subject. **WX.1** established `guest/lib/guards/{session,factory,base}.js`,
   `guest/lib/interfaces.js`, `guest/session/records.js`, `turn-types.js`, the typedefs and
   `combineHooks` of `runtime-parts.js`, `turn.js` `claimNext` (M9 S2), `tools/objects.js` and
   `tools/exec.js` (exports), `guest/lib/vocabulary-tables.js`, `test/unit/guards-split.test.js`,
   `test/fixtures/guard-fold-map.json`, `test/adapter/gateway-vocabulary-tables.test.js`. Shared
-  files the lanes edit, with the editors in merge order (each one statement or line at a position
-  WX.1 fixed; the PM merges them by hand):
+  files below record how the PM combined the lane contributions, in merge order.
 
   | file | M11 | M6 | M8 | M9 |
   |---|---|---|---|---|
   | `guest/session/runtime-parts.js` (five places: import, `PartName`, `requiredParts`, `runtimeParts`, getter) | - | R-1 `environment` | S-7 `compaction` | S1 `inbox`, `subagents` |
   | `guest/session/turn.js` | - | R-2: one `admit` line in `claimNext` | S-5: `claim`, `roundRequest`, `invoke`, `makeSink`, `hookTurn` | (S2 is WX.1's) |
   | `guest/session/session.js` | - | R-3: `refuseIfStopped`, three `Session` methods, `makeQueue` option, export power | S-6: record log above `makeRuntime`, the window | S5: `deliverMail`, `cancelMail`, export `inbox` |
-  | `guest/session/export.js` | - | X-E: head page `execution` | - | S7: inbox page, `extras` |
+  | `guest/session/export.js` | - | X-E: head page `execution` | - | S7: inbox pages after the queue, omitted when empty |
   | `guest/session/tool-table.js` | - | T-1 shell entries | S-10b `viewImage` | S6 mail, requests, subagents |
   | `guest/session/label-seeds.js` | - | L-1 `workspace`, `shell` | - | S8 `user` (last) |
   | `guest/lib/tool-args.js` | - | - | S-10d `viewImage` | S4 checked string-list spans |
@@ -2333,15 +2334,14 @@ Whylip or irrelevant slash commands). They are scheduled after M13 by default on
   | `guest/lib/prompt-sections.js` | - | P-1 part 6 | - | F7 parts 2 and 4 (M12 part 5 later) |
   | `AH/index.js` | H7: speech `extensionPowers` | - | S-14 `prepare` options, S-18 `adapterTools` | - |
   | `AH/blobs.js` | - | - | (image bytes if read through the blob store) | A1 `RelayWriters.copy` |
-  | `H/package.json` (PM-merged) | - | K-1 `@endo/git`, `@endo/exo-git` | - | - |
+  | `H/package.json` (PM-merged) | - | K-1 `@endo/git` | - | - |
   | `scripts/test-integration.mjs` (one list each) | H8 | K-2 `environments` | its W8.7 list | `mail` |
   | `perf/_pass.mjs` (PM-merged) | H9 | its perf files | its perf files | its perf files |
 
-  Files no lane of the group edits: `channels.js`, `AH/channel-taps.js` (M8's S-11 is the only
-  edit of `AH/projection-hooks.js`), the agent-host manager part (`resources/agent-host/*.js` outside
-  `impl/`), `guest/factory/delete.js` and `starts.js`, `config/defaults.js` until M8's fold,
-  `limits.js` until the folds. M11's H8 and H9 name their lists `M11`; review rule 1 asks a
-  concept name (`voice`), which M11's fold applies.
+  The PM reconciled `scripts/export.mjs` for execution and inbox pages. The factory deletes
+  children before releasing their parent's environment. A child inherits its parent's preset
+  and receives its own workspace. The four regression lists are `voice`, `environments`,
+  `context` and `mail`. Each owns one cross-lane file.
 - **{M7, M10, M12}:** M7 `EVI/egress/` (moved from `resources/containers/egress/` by the M6
   contract), `guest/session/{network-policy}.js`, `tools/network.js`, `ui/src/network/`; M10
   `EVI/publishing/` (moved from `resources/workspace/{assets,routes,mime}.js` by the M6 contract),

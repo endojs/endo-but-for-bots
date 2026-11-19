@@ -24,7 +24,7 @@
  * The argument spec lives here, not in `tool-args.js` `argSpecs`: that
  * table is pinned field for field to `toolArgumentNames` of the shared
  * guards, which hold no `viewImage` entry (the names are
- * `viewImageArgumentNames` in `guards/images.js` until the fold).
+ * `viewImageArgumentNames` in `guards/session.js`).
  *
  * Guest rules.
  */
