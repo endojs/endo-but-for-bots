@@ -14900,3 +14900,53 @@ Reading: over 60 s: unit and adapter lanes 67 s, `session.perf` in a shared slot
 m1a-slice 155 s. Commits `b95cf790a0` and this journal commit; nothing pushed; no change to
 `packages/thixotrope` or `rust/**`.
 Fit: neutral.
+
+### J-12060 2026-11-19 W6.5 factory wiring and prompt - built
+Evidence: `6fe72ae125`, `6eb43b9ced`; `test/unit/factory-environments.test.js` (9),
+`test/unit/environment-prompt.test.js` (6).
+Reading: `guest/factory/environments.js` holds the five entries of contract 3.9:
+`environmentProviders` (both kinds answer `runnerRequired` until `HarnessSettings.environments()`
+is set; F-1, `ObjectProvider.build` gone from the typedef), `environmentServices` (one answered
+`provide({ workspace, shell })` when the snapshot selects either kind, appended to
+`serviceBuilders`), `environmentBinder` / `environmentReleaser` (sendOnly, the new append-only
+tables `serviceBinders` / `serviceReleasers`, F-2) and `releaseEnvironment` (the delete hook,
+handed to `makeDeletions` by the factory kit, F-4). `factory.js` (F-3): the catalogue's
+`defaultsContext` is `{ settings }`, the services context carries `settings`, binders run in the
+crank `make` answered (after `mustMatch`), releasers in `rollBack` when services were built and
+also when the creation was rolled back while its services were being built (the start listener's
+rollback during `provide`: otherwise that record would leak). `root.js` (F-5) keeps, answers and
+reports `environments`. Part 6 (P-1) is `guest/lib/environment-prompt.js`: Fae's workspace section
+without `worktree()` and publishing; the shell variant names `/workspace`, `runCommand`,
+`inspectShell` and the `shell` petname; a workspace alone gets a read-only variant.
+Fit: good.
+
+### J-12061 2026-11-19 W6.5 bundles - measured
+Evidence: `node scripts/bundle-guest.mjs session factory` at `6eb43b9ced` (working tree with other
+units' uncommitted session edits).
+Reading: the session program does not bundle `factory/environments.js` or
+`lib/environment-prompt.js` (the prompt is composed in the factory vat, `session/prompt.js` is a
+factory module): W6.5 adds 0 bytes of M6's 6,400 (base 233,126). Factory program 192,892 ->
+202,712 (+9,820, comments included; no factory program cap exists). No new message or crank on a
+creation without an environment object: `environmentServices` answers `{}` before any send, the
+binder and releaser return before any send without `services.environment`; one answered manager
+call per delete while an admin is attached (`releaseSession`, also for sessions without an
+environment).
+Fit: neutral.
+
+### J-12062 2026-11-19 W6.5 fit - finding
+Reading: the factory keeps no per-environment state: availability, provide, bind and release all
+read one heap object (the settings record) at call time, so attaching the admin needs no factory
+reinstall and a restart re-binds nothing (orthogonal persistence keeps the settings and the
+creation records; a creation rolled back by the start listener releases from the record's
+`services`). What does not suit: the delete hook cannot tell a session with an environment from
+one without (rows keep no services), so every delete pays one manager round trip once an admin is
+attached; and a `new-project` session (workspace, no shell) cannot write files, because the `Git`
+facet has no `worktree()` (O-7) - the prompt says so rather than promising Fae's mount.
+Fit: awkward.
+
+### J-12063 2026-11-19 W6.5 time record - process
+Evidence: first command 2026-11-19T02:23:30Z.
+Reading: no command over 60 s (the longest, the related unit tests, 4 s; tsc 7 s). Commits
+`6fe72ae125`, `6eb43b9ced` and this journal commit; nothing pushed; no change to
+`packages/thixotrope` or `rust/**`.
+Fit: neutral.
