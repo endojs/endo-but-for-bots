@@ -147,9 +147,7 @@ export const boundCommandResult = (
    * @param {string} marker
    */
   const cutField = (field, escaped, share, marker) =>
-    escaped <= share
-      ? field
-      : `${prefixByEscaped(field, share)}${marker}`;
+    escaped <= share ? field : `${prefixByEscaped(field, share)}${marker}`;
   const text = JSON.stringify({
     stdout: cutField(stdout, outEscaped, outShare, outMarker),
     stderr: cutField(stderr, errEscaped, errShare, errMarker),
@@ -160,7 +158,13 @@ export const boundCommandResult = (
   if (text.length <= maxUnits) return text;
   // Only a `maxUnits` too small for the markers reaches here: answer the
   // fields empty rather than an invalid or oversized text.
-  return JSON.stringify({ stdout: '', stderr: '', exitCode, signal, truncated: true });
+  return JSON.stringify({
+    stdout: '',
+    stderr: '',
+    exitCode,
+    signal,
+    truncated: true,
+  });
 };
 harden(boundCommandResult);
 
@@ -185,7 +189,10 @@ export const boundCommandRecord = (
     exitCode: raw.exitCode,
     signal: signalOf(raw.signal),
     truncated:
-      raw.stdoutCut || raw.stderrCut || keptOut !== stdout || keptErr !== stderr,
+      raw.stdoutCut ||
+      raw.stderrCut ||
+      keptOut !== stdout ||
+      keptErr !== stderr,
   });
 };
 harden(boundCommandRecord);

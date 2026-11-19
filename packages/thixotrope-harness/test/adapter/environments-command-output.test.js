@@ -23,9 +23,11 @@ import {
   decodeStream,
   stderrShareUnits,
 } from '../../resources/environments/impl/command-output.js';
+import { makeRandom } from './_m1b-context.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
-const { mustMatch } = /** @type {GuestGlobals} */ (globalThis);
+/** @type {GuestGlobals['mustMatch']} */
+const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
 
 const encoder = new TextEncoder();
 const streamBytes = environmentLimits.streamBytes;
@@ -59,17 +61,20 @@ const rawOf = (stdout, stderr = '', rest = {}) => {
   };
 };
 
-/** A small deterministic PRNG (mulberry32), so a failure is reproducible. */
-const makeRandom = (/** @type {number} */ seed) => {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-};
+/**
+ * A seeded random source, so a failure is reproducible.
+ * @param {number} seed
+ */
+const randomOf = seed => makeRandom(seed).next;
+
+/**
+ * @typedef {{ stdout: string, stderr: string, exitCode: number | null, signal: string | null, truncated: boolean }} ResultJson
+ */
+/**
+ * @param {string} text
+ * @returns {ResultJson}
+ */
+const parseResult = text => JSON.parse(text);
 
 // Characters of every UTF-8 width and every JSON escape class: ASCII,
 // a quote and a backslash (2 units escaped), a control character (6
@@ -125,17 +130,19 @@ test('a small result is the A.3 JSON unchanged', t => {
 
 test('a stream cut by the runtime is truncated even when its JSON fits', t => {
   const raw = rawOf('x'.repeat(10));
-  const parsed = JSON.parse(boundCommandResult({ ...raw, stdoutCut: true }));
+  const parsed = parseResult(boundCommandResult({ ...raw, stdoutCut: true }));
   t.is(parsed.stdout, 'x'.repeat(10));
   t.true(parsed.truncated);
 });
 
 test('property: any output is valid JSON within toolOutputUnits, markers inside cut fields', t => {
-  const random = makeRandom(0x5eed);
+  const random = randomOf(0x5eed);
   for (let i = 0; i < 120; i += 1) {
     const stdout = randomText(random, Math.floor(random() * 80 * 1024));
     const stderr =
-      random() < 0.3 ? '' : randomText(random, Math.floor(random() * 80 * 1024));
+      random() < 0.3
+        ? ''
+        : randomText(random, Math.floor(random() * 80 * 1024));
     const raw = rawOf(stdout, stderr, {
       exitCode: random() < 0.5 ? 0 : null,
       signal: random() < 0.2 ? 'SIGKILL' : null,
@@ -144,7 +151,7 @@ test('property: any output is valid JSON within toolOutputUnits, markers inside 
     const decodedErr = decodeStream(raw.stderr, raw.stderrCut);
     const text = boundCommandResult(raw);
     t.true(text.length <= limits.toolOutputUnits, `case ${i}: ${text.length}`);
-    const parsed = JSON.parse(text);
+    const parsed = parseResult(text);
     t.deepEqual(Object.keys(parsed), [
       'stdout',
       'stderr',
@@ -171,8 +178,10 @@ test('property: any output is valid JSON within toolOutputUnits, markers inside 
 });
 
 test('stderr keeps at least its share when both streams are long', t => {
-  const text = boundCommandResult(rawOf('o'.repeat(70_000), 'e'.repeat(70_000)));
-  const parsed = JSON.parse(text);
+  const text = boundCommandResult(
+    rawOf('o'.repeat(70_000), 'e'.repeat(70_000)),
+  );
+  const parsed = parseResult(text);
   t.true(parsed.truncated);
   const marker = textOf.truncationMarker(streamBytes);
   t.true(parsed.stderr.length - marker.length >= stderrShareUnits);
@@ -184,7 +193,7 @@ test('stderr keeps at least its share when both streams are long', t => {
 test('a field is cut by its escaped length: control characters take six units', t => {
   const text = boundCommandResult(rawOf('\u0001'.repeat(20_000)));
   t.true(text.length <= limits.toolOutputUnits);
-  const parsed = JSON.parse(text);
+  const parsed = parseResult(text);
   t.true(isMarkedCut(parsed.stdout, '\u0001'.repeat(20_000)));
   // 32,768 units of JSON hold about 5,400 escaped control characters.
   const kept = parsed.stdout.length - textOf.truncationMarker(20_000).length;
@@ -193,7 +202,7 @@ test('a field is cut by its escaped length: control characters take six units', 
 
 test('invalid UTF-8 and a NUL become U+FFFD and an escape; the JSON is valid', t => {
   const bytes = new Uint8Array([0x61, 0xff, 0x00, 0xc3, 0x28, 0x62]);
-  const parsed = JSON.parse(boundCommandResult(rawOf(bytes)));
+  const parsed = parseResult(boundCommandResult(rawOf(bytes)));
   t.is(parsed.stdout, 'a�\u0000�(b');
 });
 
@@ -211,7 +220,7 @@ test('one 1 MiB line without a newline is cut inside the field', t => {
   t.true(raw.stdoutCut);
   const text = boundCommandResult(raw);
   t.true(text.length <= limits.toolOutputUnits);
-  const parsed = JSON.parse(text);
+  const parsed = parseResult(text);
   t.true(isMarkedCut(parsed.stdout, 'z'.repeat(streamBytes)));
   t.true(parsed.truncated);
 });
@@ -222,12 +231,12 @@ test('a smaller maxUnits is honoured', t => {
       maxUnits,
     });
     t.true(text.length <= maxUnits, `${maxUnits}: ${text.length}`);
-    t.true(JSON.parse(text).truncated);
+    t.true(parseResult(text).truncated);
   }
 });
 
 test('the exec-path record fits CommandResult and answerBytes', t => {
-  const random = makeRandom(0xc0ffee);
+  const random = randomOf(12_648_430);
   for (let i = 0; i < 40; i += 1) {
     const raw = rawOf(
       randomText(random, Math.floor(random() * 80 * 1024)),
