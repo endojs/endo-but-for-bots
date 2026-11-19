@@ -141,6 +141,36 @@ test('a session from a user preset gets its endowments and a config snapshot wit
   t.true(matches(services, shapes.SessionServices));
 });
 
+test('a child retains the parent preset revision and receives only delegated objects', async t => {
+  const { kit, made } = setup();
+  const { preset, revision } = await E(kit.catalog.facet).create(
+    custom({
+      instructions: 'Use the original directions.',
+      endowments: [{ label: 'notes', value: notes }],
+    }),
+    0,
+  );
+  await E(kit.factory).createSession(harden({ preset, backend }));
+  const delegation = made[0].services.subagents;
+  const saved = await E(preset).save(
+    custom({ instructions: 'Use the updated directions.' }),
+    revision,
+  );
+  const attachments = harden([{ label: 'calculator', value: calc }]);
+  await E(delegation).spawn(harden({ name: 'helper', at: 1, attachments }));
+  t.deepEqual(made[1].config.preset, made[0].config.preset);
+  t.regex(made[1].config.systemPrompt, /original directions/);
+  t.notRegex(made[1].config.systemPrompt, /updated directions/);
+  t.deepEqual(made[1].services.endowments, attachments);
+
+  await E(preset).delete(saved);
+  await t.throwsAsync(
+    E(delegation).spawn(harden({ name: 'later', at: 2, attachments })),
+    { message: texts.presetDeleted },
+  );
+  t.is(made.length, 2);
+});
+
 test('chat-only gives no endowments field; the default preset is chat-only', async t => {
   const { kit, made } = setup();
   await E(kit.factory).createSession(harden({ backend }));

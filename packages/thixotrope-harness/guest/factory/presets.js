@@ -340,6 +340,11 @@ export const makePresetCatalog = ({
   /** @param {any} preset */
   const recordOf = preset => liveStateOf(preset).record;
 
+  /** The same snapshot as the public facet, for a creation in this vat.
+   * @param {any} preset
+   */
+  const snapshotFor = preset => snapshotOf(liveStateOf(preset));
+
   /**
    * @param {any} preset
    * @param {number} at the preset's own revision a snapshot named
@@ -381,6 +386,7 @@ export const makePresetCatalog = ({
     withDefaults,
     configSnapshot,
     recordOf,
+    snapshotFor,
     endowmentsAt,
     exportRecords,
     importRecord,

@@ -52,6 +52,7 @@ const NOT_YET = harden(['networkPolicy']);
 
 /**
  * @typedef {object} OptionsContext
+ * @property {any} [presetSnapshot] the local catalogue or parent snapshot
  * @property {any} defaultPreset the built-in `chat-only` preset
  * @property {any} [defaultBackend] M2 (W2.2, R4-21):
  *   `HarnessSettings.defaultBackend`, the backend of a creation that names
@@ -96,10 +97,10 @@ const basics = async (options, resolved, { defaultPreset, defaultBackend }) => {
 };
 
 /** @type {OptionResolver} */
-const describeObjects = async (_options, resolved) => {
+const describeObjects = async (_options, resolved, { presetSnapshot }) => {
   const [info, snapshot] = await Promise.all([
     E(resolved.backend).describe(),
-    E(resolved.preset).snapshot(),
+    presetSnapshot ?? E(resolved.preset).snapshot(),
   ]);
   mustMatch(info, shapes.BackendInfo);
   mustMatch(snapshot, shapes.PresetSnapshot);

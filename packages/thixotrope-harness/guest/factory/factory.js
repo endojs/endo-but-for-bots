@@ -289,7 +289,11 @@ export const makeFactoryKit = ({
     /** @type {Record<string, any>} */
     // The admin stages a given system prompt over inlineBytes (W2.6's
     // resolver; W2.9 wiring).
-    const context = { defaultPreset: catalog.defaultPreset(), admin };
+    const context = {
+      defaultPreset: catalog.defaultPreset(),
+      presetSnapshot: presetSnapshot ?? catalog.snapshotFor(filled.preset),
+      admin,
+    };
     if (harnessSettings !== undefined) {
       const defaultBackend = harnessSettings.defaultBackend();
       const defaultModelId = harnessSettings.defaultModelId();
@@ -297,14 +301,10 @@ export const makeFactoryKit = ({
       if (defaultModelId !== undefined) context.defaultModelId = defaultModelId;
       context.turnDeadlineMs = harnessSettings.turnDeadlineMs();
     }
-    const fresh = await resolveCreateOptions(
+    const resolved = await resolveCreateOptions(
       given,
       /** @type {any} */ (harden(context)),
     );
-    const resolved =
-      presetSnapshot === undefined
-        ? fresh
-        : harden({ ...fresh, presetSnapshot });
     const program = programs.current();
     if (program === undefined) throw Error(NO_PROGRAM_TEXT);
     const row = rows.add({
