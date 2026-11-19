@@ -136,7 +136,14 @@ export const makeInbox = messages => {
       log.push(['settleRequest', number]);
       if (message?.settled !== false) return undefined;
       message.settled = true;
-      return message.ticket;
+      return harden({
+        ticket: message.ticket,
+        /** @param {boolean} sent */
+        settled: sent => {
+          log.push(['settled', number, sent]);
+          if (!sent) message.settled = false;
+        },
+      });
     },
   });
   return { inbox, log, byNumber };

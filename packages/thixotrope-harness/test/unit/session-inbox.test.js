@@ -275,7 +275,7 @@ test('claim: a package with attachments opens under its number with the R4-58 no
   const withObjects = claimMail(runtime, 't2');
   t.is(
     withObjects?.turn.active.systemNote,
-    mailTextOf.packageNote(2, ['doc', 'img']),
+    textOf.mentionLine(2, ['doc', 'img']),
   );
   t.is(table.take(2, 'doc', 't2').toString(), '[object Alleged: doc]');
   // M5's packages hook closes it at settle (the stand-in's hook here).
@@ -358,8 +358,16 @@ test('settle of a request: completed and unanswered, rejected and removed; faile
   settleMail(runtime, 't2', { state: 'failed', error: 'boom' });
   t.is(inbox.get(2).state, 'kept');
   t.is(runtime.hooks.nextTurn(), undefined);
-  // A later turn answers it: the ticket for the tool, the message removed.
-  t.is(inbox.settleRequest(2), second.ticket);
+  // A later turn answers it: the ticket for the tool; a refused answer
+  // leaves it open to retry, a sent one removes it.
+  const refusedClaim = inbox.settleRequest(2);
+  t.is(refusedClaim.ticket, second.ticket);
+  t.is(inbox.settleRequest(2), undefined, 'one answer at a time');
+  refusedClaim.settled(false);
+  t.is(inbox.get(2).state, 'kept');
+  const claim = inbox.settleRequest(2);
+  t.is(claim.ticket, second.ticket);
+  claim.settled(true);
   t.is(inbox.get(2), undefined);
   t.is(inbox.settleRequest(2), undefined);
   await drain();
@@ -373,7 +381,7 @@ test('settle of a request answered in its own turn: removed, no rejection; a for
     envelope(1, { type: 'request', body: 'Q', ticket: request.ticket }),
   );
   claimMail(runtime, 't1');
-  t.is(inbox.settleRequest(1), request.ticket);
+  inbox.settleRequest(1).settled(true);
   t.is(inbox.get(1).state, 'handling');
   settleMail(runtime, 't1', { state: 'completed', final: 'answered' });
   t.is(inbox.get(1), undefined);
@@ -390,7 +398,7 @@ test('settle of a request answered in its own turn: removed, no rejection; a for
     envelope(3, { type: 'form', body: 'G', ticket: form.ticket, fields }),
   );
   claimMail(runtime, 't3');
-  t.is(inbox.settleRequest(3), form.ticket);
+  t.is(inbox.settleRequest(3).ticket, form.ticket);
   settleMail(runtime, 't3', { state: 'completed', final: 'sent' });
   t.is(inbox.get(3), undefined);
   await drain();
@@ -556,8 +564,18 @@ test('export pages round-trip into a new inbox: kept, read-only, nothing starts,
   t.is(target.inbox.settleRequest(3), undefined);
   t.is(target.inbox.cancel(target.inbox.get(3).postmark), 'none');
   t.deepEqual(target.inbox.dismiss(3), { ok: true });
-  // The packages counter resumes above the highest imported number.
-  t.deepEqual(target.internal.deliverMail(envelope(1)), { number: 6 });
+  // The packages counter resumes above the highest imported number at
+  // the import, so a package opened before the next delivery (an imported
+  // queue entry's) cannot reuse one.
+  const opened = /** @type {any} */ (target.runtime).packages.table.open({
+    labels: harden([]),
+    values: new Map(),
+    turnId: 'queued',
+  });
+  t.true(opened > 5);
+  t.deepEqual(target.internal.deliverMail(envelope(1)), {
+    number: opened + 1,
+  });
   t.is(target.runtime.hooks.nextTurn().text, 'message 1');
   // ... and the session is not new any more.
   t.throws(() => target.inbox.importPage(pages[0]), {

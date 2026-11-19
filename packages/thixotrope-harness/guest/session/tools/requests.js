@@ -6,9 +6,10 @@
  * `Outbox`. Each answers the message's `RequestTicket` (a factory exo,
  * `site: 'guest'`): `answer({ json })`, `answer({ rejected })` or
  * `submit(values)`. The inbox part marks the request settled first
- * (`settleRequest`), so its settle hook does not reject it; a request
- * already settled is forwarded to its ticket, whose refusal
- * (`requestClosed`, the factory's text) is the tool's result.
+ * (`settleRequest`), so its settle hook does not reject it, and is told
+ * the ticket's answer: a refusal opens the request again, so it can be
+ * retried. A request already settled is forwarded to its ticket, whose
+ * refusal (`requestClosed`, the factory's text) is the tool's result.
  *
  * `messageNumber` is a decimal string (Fae) or an integer. A form's values
  * are read with a closed spec built from its fields (an unknown name is
@@ -107,15 +108,17 @@ const requestEntry = (name, type, text, parameter, answer, done) => {
       }
       const made = answer(read.values, message);
       if (made.outcome) return made.outcome;
-      const ticket =
-        context.runtime.inbox.settleRequest(number) ?? message.ticket;
+      const claim = context.runtime.inbox.settleRequest(number);
+      const ticket = claim?.ticket ?? message.ticket;
       await null;
       try {
         await (type === 'form'
           ? E(ticket).submit(made.json)
           : E(ticket).answer(made.json));
+        claim?.settled(true);
         return ok(done);
       } catch (error) {
+        claim?.settled(false);
         return failed(messageOf(error));
       }
     },

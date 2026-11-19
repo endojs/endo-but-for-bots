@@ -11,6 +11,7 @@
  */
 import { mailLimits } from './mail-limits.js';
 import { mailTextOf } from './guards/mail.js';
+import { textOf } from './guards/session.js';
 import { limits } from './limits.js';
 import { boundToolOutput, previewText } from './bounded.js';
 
@@ -83,10 +84,13 @@ harden(mailTurnInput);
 
 /**
  * A mail turn's system note (R4-58, D-M9-7): the attachments' edge names
- * and the adopt hint, or undefined when the message attaches nothing.
+ * and the adopt hint, or undefined when the message attaches nothing. The
+ * names are the sender's free text, so this is M5's line for a package
+ * (`textOf.mentionLine`): the names JSON-quoted and called labels, not
+ * instructions (R7-42).
  * @param {{ number: number, edges: readonly string[] }} message
  * @returns {string | undefined}
  */
 export const mailTurnNote = ({ number, edges }) =>
-  edges.length > 0 ? mailTextOf.packageNote(number, edges) : undefined;
+  edges.length > 0 ? textOf.mentionLine(number, edges) : undefined;
 harden(mailTurnNote);

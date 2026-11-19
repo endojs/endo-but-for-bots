@@ -109,7 +109,10 @@ test('resolveRequest answers the ticket with the JSON text; the inbox settles fi
   );
   t.deepEqual(outcome, { status: 'ok', text: mailTexts.requestAnswered });
   t.deepEqual(request.calls, [['answer', { json: '{"ok":[1,2]}' }]]);
-  t.deepEqual(fakeInbox.log, [['settleRequest', 1]]);
+  t.deepEqual(fakeInbox.log, [
+    ['settleRequest', 1],
+    ['settled', 1, true],
+  ]);
   // Settled already: the ticket is called again and its refusal forwarded.
   request.state.closed = true;
   const again = await run(context, 'resolveRequest', {
@@ -117,6 +120,30 @@ test('resolveRequest answers the ticket with the JSON text; the inbox settles fi
     value: 2,
   });
   t.deepEqual(again, { status: 'failed', text: 'closed ticket' });
+});
+
+test('a ticket that refuses the answer leaves the request open to retry', async t => {
+  const { context, request, fakeInbox } = setup();
+  request.state.closed = true;
+  const refused = await run(context, 'resolveRequest', {
+    messageNumber: 1,
+    value: 1,
+  });
+  t.deepEqual(refused, { status: 'failed', text: 'closed ticket' });
+  t.deepEqual(fakeInbox.log, [
+    ['settleRequest', 1],
+    ['settled', 1, false],
+  ]);
+  request.state.closed = false;
+  const retried = await run(context, 'resolveRequest', {
+    messageNumber: 1,
+    value: 2,
+  });
+  t.deepEqual(retried, { status: 'ok', text: mailTexts.requestAnswered });
+  t.deepEqual(fakeInbox.log.slice(2), [
+    ['settleRequest', 1],
+    ['settled', 1, true],
+  ]);
 });
 
 test('resolveRequest and rejectRequest refusals before any ticket call', async t => {

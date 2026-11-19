@@ -228,10 +228,13 @@ const makeInbox = runtime => {
   };
 
   /**
-   * Marks an open request or form answered and answers its ticket for the
-   * tool to call; undefined when there is none to answer (imported, not a
-   * request, already answered). A kept one is removed at once; a handling
-   * one at its turn's settle.
+   * Marks an open request or form answered (so a second tool call or its
+   * turn's settle does not answer it again) and answers its ticket for the
+   * tool to call, with `settled(sent)` for the tool to report the ticket's
+   * answer: sent, a kept message is removed (a handling one goes at its
+   * turn's settle); refused, the message is open again and can be retried.
+   * Undefined when there is none to answer (imported, not a request,
+   * already answered).
    * @param {number} number
    */
   const settleRequest = number => {
@@ -245,8 +248,14 @@ const makeInbox = runtime => {
       return undefined;
     }
     message.answered = true;
-    if (message.state === 'kept') remove(message);
-    return message.ticket;
+    return harden({
+      ticket: message.ticket,
+      /** @param {boolean} sent */
+      settled: sent => {
+        if (!sent) message.answered = false;
+        else if (message.state === 'kept') remove(message);
+      },
+    });
   };
 
   /** Staged bodies the inbox holds (the session's blob pages list them). */
@@ -335,6 +344,10 @@ const makeInbox = runtime => {
         if (number > floor) floor = number;
       }
     }
+    // The packages counter resumes above every imported number (D-M9-21),
+    // so a package opened before the next delivery cannot reuse one
+    // (`reserve(floor - 1)` sets a new session's counter to `floor`).
+    if (floor > 0) packages().reserve(floor - 1);
   };
 
   // ---------------------------------------------------------------- hooks
