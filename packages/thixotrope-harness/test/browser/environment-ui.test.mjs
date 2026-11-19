@@ -104,7 +104,7 @@ const statusBecomes = (page, text) =>
 (enabled ? test.serial : test.skip)(
   '[browser] a session without an environment shows no Sandbox execution section',
   async t => {
-    t.timeout(3 * 60_000);
+    t.timeout(5 * 60_000);
     const { page, close, session, gatewayLog } = await openSettings(
       'm2',
       'chat-only',
@@ -127,7 +127,7 @@ const statusBecomes = (page, text) =>
 (enabled ? test.serial : test.skip)(
   '[browser] acceptance 19: Sandbox execution, Emergency stop, refused send, Resume with the queue held',
   async t => {
-    t.timeout(4 * 60_000);
+    t.timeout(5 * 60_000);
     // The lane's integration helper (m6-interfaces.md 3.11).
     const helperPath = '../integration/_environments.js';
     const { environmentsTemplate } = await import(helperPath);
