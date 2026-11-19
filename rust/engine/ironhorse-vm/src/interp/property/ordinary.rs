@@ -182,10 +182,10 @@ impl Interp {
 
     /// ECMAScript SameValue, including NaN equality and distinct signed zeros.
     pub(in crate::interp) fn same_value(&self, left: Slot, right: Slot) -> bool {
-        match (numeric_of(&left), numeric_of(&right)) {
-            (Some(a), Some(b)) => (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits(),
-            _ => self.strict_equal(&left, &right),
+        if needs_arena_equality(&left, &right) {
+            return self.strict_equal(&left, &right);
         }
+        same_value_immediate(&left, &right)
     }
 
     /// Give a function's synthesized exotic `length`/`name` a real backing slot

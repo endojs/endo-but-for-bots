@@ -40,6 +40,15 @@ ironhorse-compile = { path = "../ironhorse-compile" }
 # stack-lanes probe run. A development edge back to this crate: integration
 # tests link the one `ironhorse_vm` that `ironhorse-runtime` links.
 ironhorse-runtime = { path = "../ironhorse-runtime" }
+# The integer reference models of the ECMA-262 numeric operations, so the
+# ordinary differential tests check the same models the Kani proofs do.
+ironhorse-spec = { path = "../ironhorse-spec" }
+
+# The Kani proof harnesses (`#[cfg(kani)] mod proofs`, VERIFICATION.md)
+# compare the numeric kernels with the same models. `cfg(kani)` is set only
+# by `cargo kani`, so the models never enter a shipped build.
+[target.'cfg(kani)'.dependencies]
+ironhorse-spec = { path = "../ironhorse-spec" }
 
 [features]
 # Off by default; only the isolated test-ironhorse-calibration CI job and local

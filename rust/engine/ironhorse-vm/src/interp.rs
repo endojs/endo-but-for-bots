@@ -132,9 +132,10 @@ use text::{
 mod numeric;
 pub use numeric::slot_to_ecma_string;
 use numeric::{
-    apply_arith, canonical_numeric_index_string, fx_pow, loose_equals, math_to_integer,
-    number_to_exponential, number_to_fixed, number_to_precision, number_to_radix_string,
-    number_to_u64_wrapping, numeric_of, parse_int, strict_equals, string_to_array_like_index,
+    apply_arith, canonical_numeric_index_string, fx_pow, int32_bitop, loose_equals, math_clz32,
+    math_imul, math_to_integer, needs_arena_equality, number_to_exponential, number_to_fixed,
+    number_to_precision, number_to_radix_string, number_to_u64_wrapping, numeric_of, parse_int,
+    same_value_immediate, same_value_zero_immediate, strict_equals, string_to_array_like_index,
     string_to_index, string_to_number, to_number, unary_minus, ArithOp,
 };
 
@@ -168,6 +169,7 @@ use ironhorse_meter::{string_chunk_cost, PROXY_INTERNAL_METHOD_METERING};
 
 use crate::bulk::{ArrayData, CollKey, CollKind, CollectionData, SideRefCounts};
 use crate::meter::{Meter, MeterCheck};
+use crate::numeric_kernel;
 use crate::opcode::Opcode;
 use crate::snapshot_dirty::{SnapshotDirt, SnapshotSection, Tracked};
 use crate::symbols::{SymbolIds, SymbolName};
@@ -3340,19 +3342,12 @@ fn decode_element_le(kind: u8, b: &[u8]) -> Option<Slot> {
 /// BigInt element (kind 0/1).
 fn encode_element_le(kind: u8, n: f64) -> Option<Vec<u8>> {
     // `ToInt8`/`ToUint8`/`ToInt16`/… : `NaN` and `±∞` map to `+0`; a finite
-    // value truncates toward zero (`ToIntegerOrInfinity`) then reduces modulo
-    // `2^bits` (two's-complement wrap). A Rust `f64 as iN` cast SATURATES
+    // value truncates toward zero then reduces modulo `2^bits`
+    // (two's-complement wrap). A Rust `f64 as iN` cast SATURATES
     // (`Infinity as i64` → `i64::MAX`), which is NOT the spec's modular
-    // reduction — hence the explicit `rem_euclid`.
-    let to_wrapped = |x: f64, bits: u32| -> u64 {
-        if !x.is_finite() {
-            return 0;
-        }
-        let m = 2f64.powi(bits as i32);
-        // `rem_euclid` lands in `[0, 2^bits)`; the caller's `as uN` truncation
-        // then keeps the low `bits`, so `-255 mod 256 == 1`, `2^53 mod 256 == 0`.
-        x.trunc().rem_euclid(m) as u64
-    };
+    // reduction: `-255 mod 256 == 1`, `2^53 mod 256 == 0`. The
+    // `numeric_kernel` conversions compute it with integer bit arithmetic.
+    let bits = n.to_bits();
     Some(match kind {
         0 | 1 => return None,
         // Float32
@@ -3366,44 +3361,21 @@ fn encode_element_le(kind: u8, n: f64) -> Option<Vec<u8>> {
         }
         // Float64
         3 => canonicalize_nan(n).to_le_bytes().to_vec(),
-        // Int8 / Uint8
-        4 | 7 => vec![to_wrapped(n, 8) as u8],
-        // Int16 / Uint16
-        5 | 8 => (to_wrapped(n, 16) as u16).to_le_bytes().to_vec(),
-        // Int32 / Uint32
-        6 | 9 => (to_wrapped(n, 32) as u32).to_le_bytes().to_vec(),
-        // Uint8Clamped (ToNumber, clamp to [0,255], round half-to-even).
-        10 => {
-            let v = if n.is_nan() || n <= 0.0 {
-                0.0
-            } else if n >= 255.0 {
-                255.0
-            } else {
-                round_half_even(n)
-            };
-            vec![v as u8]
-        }
+        // Int8 (ToInt8), Uint8 (ToUint8)
+        4 => numeric_kernel::to_int8(bits).to_le_bytes().to_vec(),
+        7 => vec![numeric_kernel::to_uint8(bits)],
+        // Int16 (ToInt16), Uint16 (ToUint16)
+        5 => numeric_kernel::to_int16(bits).to_le_bytes().to_vec(),
+        8 => numeric_kernel::to_uint16(bits).to_le_bytes().to_vec(),
+        // Int32 (ToInt32), Uint32 (ToUint32)
+        6 => numeric_kernel::to_int32(bits).to_le_bytes().to_vec(),
+        9 => numeric_kernel::to_uint32(bits).to_le_bytes().to_vec(),
+        // Uint8Clamped (ToUint8Clamp: clamp to [0,255], round half-to-even).
+        10 => vec![numeric_kernel::to_uint8_clamp(bits)],
         // Float16
         11 => f64_to_f16_bits(n).to_le_bytes().to_vec(),
         _ => return None,
     })
-}
-
-/// Round to the nearest integer, ties to even (C's `c_nearbyint` under the
-/// default rounding mode) — the `Uint8ClampedArray` setter's rounding.
-fn round_half_even(x: f64) -> f64 {
-    let r = x.round(); // ties away from zero
-    if (x - x.trunc()).abs() == 0.5 {
-        // A halfway value: pick the even neighbor.
-        let lower = x.floor();
-        if (lower as i64) % 2 == 0 {
-            lower
-        } else {
-            x.ceil()
-        }
-    } else {
-        r
-    }
 }
 
 fn temporal_set_time_args(
@@ -3664,6 +3636,13 @@ fn to_boolean(s: &Slot) -> bool {
 
 // The child carries its test-only cfg for both rustc and the source locks.
 mod tests;
+
+// Kani proofs of the binary16 conversion and the typed-array element codec
+// (NUM-7, NUM-8; rust/engine/VERIFICATION.md).
+#[cfg(kani)]
+mod element_proofs;
+#[cfg(test)]
+mod element_tests;
 
 /// Render a sign/magnitude BigInt in radix 2 through 36.
 fn bi_to_radix(

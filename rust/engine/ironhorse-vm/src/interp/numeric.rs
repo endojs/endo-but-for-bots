@@ -364,17 +364,34 @@ pub(super) fn to_number(s: &Slot) -> f64 {
     }
 }
 
+/// Number::divide (ECMA-262 §6.1.6.1.5): IEEE 754 division. The integer
+/// fast path and the Number path both call it, so they agree by
+/// construction.
+#[inline]
+fn number_divide(x: f64, y: f64) -> f64 {
+    x / y
+}
+
 // XS_CODE_ADD/SUBTRACT/MULTIPLY/DIVIDE/MODULO integer fast paths.
+//
+// An overflowing int32 sum, difference or product is computed exactly in
+// i64 and converted once: `(x as i64 + y as i64) as f64` is the
+// round-to-nearest-even Number value of the exact result, which is what IEEE
+// `x as f64 + y as f64` computes from the exact operands (a sum or
+// difference of two int32s is below 2^33 and exact either way; a product
+// below 2^62 is rounded once either way). The Kani proofs check the integer
+// forms against the ECMA-262 models and the float forms against the integer
+// path (NUM-3, VERIFICATION.md).
 pub(super) fn apply_arith(op: ArithOp, a: &Slot, b: &Slot) -> Slot {
     if let (Payload::Integer(x), Payload::Integer(y)) = (a.value, b.value) {
         match op {
             ArithOp::Add => match x.checked_add(y) {
                 Some(v) => return Slot::integer(v),
-                None => return Slot::number(x as f64 + y as f64),
+                None => return Slot::number((i64::from(x) + i64::from(y)) as f64),
             },
             ArithOp::Sub => match x.checked_sub(y) {
                 Some(v) => return Slot::integer(v),
-                None => return Slot::number(x as f64 - y as f64),
+                None => return Slot::number((i64::from(x) - i64::from(y)) as f64),
             },
             ArithOp::Mul => {
                 // XS mxMinusZero: 0 * negative and negative * 0 -> -0.
@@ -392,12 +409,12 @@ pub(super) fn apply_arith(op: ArithOp, a: &Slot, b: &Slot) -> Slot {
                 }
                 match x.checked_mul(y) {
                     Some(v) => return Slot::integer(v),
-                    None => return Slot::number(x as f64 * y as f64),
+                    None => return Slot::number((i64::from(x) * i64::from(y)) as f64),
                 }
             }
             ArithOp::Div => {
                 // JS `/` is always floating; XS produces a number.
-                return Slot::number(x as f64 / y as f64);
+                return Slot::number(number_divide(x as f64, y as f64));
             }
             ArithOp::Mod => {
                 if y == 0 {
@@ -421,10 +438,49 @@ pub(super) fn apply_arith(op: ArithOp, a: &Slot, b: &Slot) -> Slot {
         ArithOp::Add => x + y,
         ArithOp::Sub => x - y,
         ArithOp::Mul => x * y,
-        ArithOp::Div => x / y,
+        ArithOp::Div => number_divide(x, y),
         ArithOp::Mod => x % y, // Rust f64 % is C fmod semantics
     };
     Slot::number(r)
+}
+
+/// The Int32 operators on their operands' ToInt32 results `a` and `b`
+/// (ECMA-262 §6.1.6.1.9–§6.1.6.1.11 and §6.1.6.1.16–§6.1.6.1.19): `& | ^`
+/// on the two's complement bits, and the shifts by `ToUint32(b) mod 32`,
+/// which is `b & 0x1f`. Every result is an int32, so an `Integer`, except an
+/// unsigned shift above `i32::MAX`, which stays a `Number` (XS keeps it a
+/// number when the high bit is set).
+pub(super) fn int32_bitop(op: super::BitOp, a: i32, b: i32) -> Slot {
+    use super::BitOp;
+    let r = match op {
+        BitOp::And => a & b,
+        BitOp::Or => a | b,
+        BitOp::Xor => a ^ b,
+        BitOp::Shl => ((a as u32) << (b & 0x1f)) as i32,
+        BitOp::Sar => a >> (b & 0x1f),
+        BitOp::Shr => ((a as u32) >> (b & 0x1f)) as i32,
+    };
+    if let BitOp::Shr = op {
+        let u = (a as u32) >> (b & 0x1f);
+        if u > i32::MAX as u32 {
+            return Slot::number(u as f64);
+        }
+    }
+    Slot::integer(r)
+}
+
+/// `Math.imul` on its operands' ToInt32 results (ECMA-262 §21.3.2.19): the
+/// product modulo 2^32, read as an int32.
+#[inline]
+pub(super) fn math_imul(a: i32, b: i32) -> i32 {
+    a.wrapping_mul(b)
+}
+
+/// `Math.clz32` on its operand's ToUint32 result (ECMA-262 §21.3.2.11): the
+/// number of leading zero bits, 32 for 0.
+#[inline]
+pub(super) fn math_clz32(n: u32) -> i32 {
+    n.leading_zeros() as i32
 }
 
 // XS_CODE_MINUS: negate, with -0 and INT_MIN promotion to number.
@@ -459,6 +515,39 @@ pub(super) fn strict_equals(a: &Slot, b: &Slot) -> bool {
         (Payload::Reference(x), Payload::Reference(y)) => x == y,
         _ => false,
     }
+}
+
+/// Whether comparing `a` and `b` needs arena contents: two strings or two
+/// BigInts, which `Interp::strict_equal` compares by content. Every other
+/// pair is decided by its immediate payloads.
+#[inline]
+pub(super) fn needs_arena_equality(a: &Slot, b: &Slot) -> bool {
+    matches!(
+        (a.value, b.value),
+        (Payload::String(_), Payload::String(_)) | (Payload::BigInt(_), Payload::BigInt(_))
+    )
+}
+
+/// SameValue (ECMA-262 §7.2.10) on a pair that does not
+/// [`needs_arena_equality`]: Number::sameValue on two numerics, so NaN is
+/// the same value as NaN and `+0` is not `-0`, else [`strict_equals`].
+pub(super) fn same_value_immediate(a: &Slot, b: &Slot) -> bool {
+    match (numeric_of(a), numeric_of(b)) {
+        (Some(x), Some(y)) => (x.is_nan() && y.is_nan()) || x.to_bits() == y.to_bits(),
+        _ => strict_equals(a, b),
+    }
+}
+
+/// SameValueZero (ECMA-262 §7.2.11) on a pair that does not
+/// [`needs_arena_equality`]: strict equality except that NaN equals NaN
+/// (`+0` and `-0` are equal, which strict equality already gives).
+pub(super) fn same_value_zero_immediate(a: &Slot, b: &Slot) -> bool {
+    if let (Some(x), Some(y)) = (numeric_of(a), numeric_of(b)) {
+        if x.is_nan() && y.is_nan() {
+            return true;
+        }
+    }
+    strict_equals(a, b)
 }
 
 /// `fx_pow` (xsMath.c:552): the `**` / `Math.pow` core. ECMAScript's
@@ -509,18 +598,10 @@ pub(super) fn loose_equals(a: &Slot, b: &Slot) -> bool {
 /// A Number's integer part modulo 2^64 (NaN and the infinities are 0): the
 /// bits every integer element conversion (`ToInt8` ... `ToUint32`) keeps the
 /// low bytes of, since each element width divides 64. A Rust `f64 as u64`
-/// cast saturates instead.
+/// cast saturates instead. See [`crate::numeric_kernel::number_to_u64_wrapping`].
+#[inline]
 pub(super) fn number_to_u64_wrapping(n: f64) -> u64 {
-    if !n.is_finite() {
-        return 0;
-    }
-    let n = n.trunc();
-    if n.abs() < 9_223_372_036_854_775_808.0 {
-        return n as i64 as u64;
-    }
-    // At or above 2^63 a Number is a multiple of 2^11, so the remainder and
-    // its complement are exact.
-    n.rem_euclid(18_446_744_073_709_551_616.0) as u64
+    crate::numeric_kernel::number_to_u64_wrapping(n.to_bits())
 }
 
 /// Render a value without access to its arenas.
@@ -544,6 +625,22 @@ pub fn slot_to_ecma_string(s: &Slot) -> String {
     }
 }
 
+/// The value of a string of at most 16 ASCII decimal digits, or `None` if
+/// any byte is not a digit. (At most 16 digits, so below 10^16 < 2^64; this
+/// is what `str::parse::<u64>` returns on such a string, without its sign
+/// and overflow handling.)
+fn ascii_digits_value(bytes: &[u8]) -> Option<u64> {
+    debug_assert!(bytes.len() <= 16);
+    let mut n = 0u64;
+    for &b in bytes {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        n = n * 10 + u64::from(b - b'0');
+    }
+    Some(n)
+}
+
 /// Parse a string that is a canonical array-index (a "CanonicalNumericIndex"
 /// in `[0, 2^32-1)` with no leading zeros or sign), returning the index.
 /// `"0"`, `"1"`, `"10"` are indices; `"01"`, `"-1"`, `"1.5"`, `"4294967295"`
@@ -556,10 +653,7 @@ pub(super) fn string_to_index(s: &str) -> Option<u32> {
     if bytes[0] == b'0' && s.len() > 1 {
         return None; // no leading zeros
     }
-    if !bytes.iter().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let n: u64 = s.parse().ok()?;
+    let n = ascii_digits_value(bytes)?;
     if n < 4294967295 {
         Some(n as u32)
     } else {
@@ -579,10 +673,7 @@ pub(super) fn string_to_array_like_index(s: &str) -> Option<u64> {
     if bytes[0] == b'0' && s.len() > 1 {
         return None;
     }
-    if !bytes.iter().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let n: u64 = s.parse().ok()?;
+    let n = ascii_digits_value(bytes)?;
     (n <= 9_007_199_254_740_991).then_some(n)
 }
 
@@ -802,5 +893,550 @@ mod number_format_tests {
         assert_eq!(number_to_precision(0.0, 3), "0.00");
         assert_eq!(number_to_precision(99.95, 3), "100");
         assert_eq!(number_to_precision(1.5, 1), "2");
+    }
+}
+
+#[cfg(test)]
+mod spec_tests {
+    //! The integer fast paths and the Int32 operators against the
+    //! `ironhorse-spec` models, and the replaced float forms of the overflow
+    //! branches, without Kani (NUM-2, NUM-3, NUM-4, NUM-5).
+    use super::super::{BitOp, Interp};
+    use super::*;
+    use crate::value::SlotIndex;
+
+    fn operands() -> Vec<i32> {
+        let mut out: Vec<i32> = (-70..70).collect();
+        out.extend([
+            i32::MIN,
+            i32::MIN + 1,
+            i32::MAX,
+            i32::MAX - 1,
+            46340,
+            46341,
+            -46341,
+            65535,
+            65536,
+            1 << 30,
+            -(1 << 30),
+            0x5555_5555,
+            -0x5555_5556,
+        ]);
+        let mut z = 0x2545_F491_4F6C_DD1Du64;
+        for _ in 0..300 {
+            z ^= z << 13;
+            z ^= z >> 7;
+            z ^= z << 17;
+            out.push(z as i32 >> (z >> 59));
+        }
+        out
+    }
+
+    fn bits(slot: &Slot) -> u64 {
+        to_number(slot).to_bits()
+    }
+
+    /// `Integer` exactly when the value is an int32 other than -0.
+    fn canonical(slot: &Slot) -> bool {
+        matches!(slot.value, Payload::Integer(_))
+            == ironhorse_spec::arith::exact_int32(bits(slot)).is_some()
+    }
+
+    #[test]
+    fn integer_arithmetic_matches_the_spec_and_the_number_path() {
+        use ironhorse_spec::arith;
+        let xs = operands();
+        for &x in &xs {
+            for &y in &xs {
+                let (ix, iy) = (Slot::integer(x), Slot::integer(y));
+                let (nx, ny) = (Slot::number(f64::from(x)), Slot::number(f64::from(y)));
+                for (op, want) in [
+                    (ArithOp::Add, arith::add_int32(x, y)),
+                    (ArithOp::Sub, arith::subtract_int32(x, y)),
+                    (ArithOp::Mul, arith::multiply_int32(x, y)),
+                    (ArithOp::Mod, arith::remainder_int32(x, y)),
+                ] {
+                    let fast = apply_arith(op, &ix, &iy);
+                    let slow = apply_arith(op, &nx, &ny);
+                    if f64::from_bits(want).is_nan() {
+                        assert!(to_number(&fast).is_nan() && to_number(&slow).is_nan());
+                    } else {
+                        assert_eq!(bits(&fast), want, "{x} {y}");
+                        assert_eq!(bits(&slow), want, "{x} {y}");
+                    }
+                    assert!(canonical(&fast), "{x} {y}");
+                }
+                let div = apply_arith(ArithOp::Div, &ix, &iy);
+                assert_eq!(
+                    bits(&div),
+                    bits(&apply_arith(ArithOp::Div, &nx, &ny)),
+                    "{x} / {y}"
+                );
+                // The integer forms of the overflow branches equal the float
+                // forms they replaced (a product only overflows when neither
+                // operand is zero, so it is never a signed zero).
+                let (fx, fy) = (f64::from(x), f64::from(y));
+                if x.checked_mul(y).is_none() {
+                    assert_eq!(
+                        ((i64::from(x) * i64::from(y)) as f64).to_bits(),
+                        (fx * fy).to_bits()
+                    );
+                }
+                assert_eq!(
+                    ((i64::from(x) + i64::from(y)) as f64).to_bits(),
+                    (fx + fy).to_bits()
+                );
+                assert_eq!(
+                    ((i64::from(x) - i64::from(y)) as f64).to_bits(),
+                    (fx - fy).to_bits()
+                );
+            }
+            let minus = unary_minus(&Slot::integer(x));
+            assert_eq!(bits(&minus), arith::unary_minus_int32(x));
+            assert!(canonical(&minus));
+        }
+    }
+
+    #[test]
+    fn int32_operators_match_the_spec() {
+        use ironhorse_spec::int32;
+        let xs = operands();
+        for &a in &xs {
+            for &b in &xs {
+                for (op, want) in [
+                    (BitOp::And, int32::bitwise(int32::BitwiseOp::And, a, b)),
+                    (BitOp::Or, int32::bitwise(int32::BitwiseOp::Or, a, b)),
+                    (BitOp::Xor, int32::bitwise(int32::BitwiseOp::Xor, a, b)),
+                    (BitOp::Shl, int32::left_shift(a, b)),
+                    (BitOp::Sar, int32::signed_right_shift(a, b)),
+                    (BitOp::Shr, int32::unsigned_right_shift(a, b)),
+                ] {
+                    let got = int32_bitop(op, a, b);
+                    assert_eq!(to_number(&got), want as f64);
+                    assert!(canonical(&got));
+                }
+                assert_eq!(i64::from(math_imul(a, b)), int32::imul(a, b));
+            }
+            assert_eq!(i64::from(math_clz32(a as u32)), int32::clz32(a as u32));
+        }
+    }
+
+    #[test]
+    fn number_slots_are_canonical_and_keep_their_bits() {
+        let mut z = 0x9E37_79B9_7F4A_7C15u64;
+        let samples = (0..100_000).map(|i| {
+            z ^= z << 13;
+            z ^= z >> 7;
+            z ^= z << 17;
+            match i % 3 {
+                0 => z,
+                1 => f64::from(z as i32).to_bits(),
+                _ => ((z as i64 >> (z % 40)) as f64).to_bits() ^ (z & (1 << 63)),
+            }
+        });
+        for b in samples.chain([0, 1 << 63, 0x7FF8_0000_0000_0001, 0x41E0_0000_0000_0000]) {
+            let n = f64::from_bits(b);
+            for slot in [Interp::slot_from_number(n), math_to_integer(n)] {
+                match ironhorse_spec::arith::exact_int32(b) {
+                    Some(i) => assert_eq!(slot, Slot::integer(i)),
+                    None => assert_eq!(slot, Slot::number(n)),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn index_strings_match_the_spec() {
+        use ironhorse_spec::index_string::{array_index, integer_key};
+        let mut keys: Vec<String> = ["", "0", "00", "01", "-0", "+1", "1.0", "1e3", " 1", "a"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        for n in (0..1100u64).chain(4_294_967_290..4_294_967_300).chain([
+            9_007_199_254_740_990,
+            9_007_199_254_740_991,
+            9_007_199_254_740_992,
+            9_999_999_999_999_999,
+            10_000_000_000_000_000,
+        ]) {
+            keys.push(n.to_string());
+            keys.push(format!("0{n}"));
+            keys.push(format!("{n}x"));
+        }
+        for key in &keys {
+            assert_eq!(string_to_index(key), array_index(key.as_bytes()), "{key:?}");
+            assert_eq!(
+                string_to_array_like_index(key),
+                integer_key(key.as_bytes(), (1 << 53) - 1),
+                "{key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn immediate_equalities_match_the_spec() {
+        use ironhorse_spec::arith;
+        let numbers = [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            1.5,
+            f64::NAN,
+            f64::INFINITY,
+            2147483648.0,
+        ];
+        let mut slots = vec![
+            Slot::undefined(),
+            Slot::null(),
+            Slot::boolean(true),
+            Slot::boolean(false),
+            Slot::of(Kind::Reference, Payload::Reference(SlotIndex(7))),
+            Slot::of(Kind::Reference, Payload::Reference(SlotIndex(8))),
+            Slot::integer(0),
+            Slot::integer(1),
+            Slot::integer(-1),
+            Slot::integer(i32::MIN),
+        ];
+        slots.extend(numbers.map(Slot::number));
+        let number = |s: &Slot| match s.value {
+            Payload::Integer(i) => Some(f64::from(i).to_bits()),
+            Payload::Number(n) => Some(n.to_bits()),
+            _ => None,
+        };
+        for a in &slots {
+            for b in &slots {
+                let (want_sv, want_svz, want_eq) = match (number(a), number(b)) {
+                    (Some(x), Some(y)) => (
+                        arith::number_same_value(x, y),
+                        arith::number_same_value_zero(x, y),
+                        arith::number_equal(x, y),
+                    ),
+                    _ => {
+                        let same = a.kind == b.kind && a.value == b.value;
+                        (same, same, same)
+                    }
+                };
+                assert_eq!(same_value_immediate(a, b), want_sv, "{a:?} {b:?}");
+                assert_eq!(same_value_zero_immediate(a, b), want_svz, "{a:?} {b:?}");
+                assert_eq!(strict_equals(a, b), want_eq, "{a:?} {b:?}");
+            }
+        }
+    }
+}
+
+#[cfg(kani)]
+mod proofs {
+    //! Kani proofs of the Int32 operators (NUM-2), the integer fast paths
+    //! (NUM-3), the canonical Integer representation (NUM-4) and the
+    //! immediate equalities (NUM-5), against the `ironhorse-spec` models.
+    use super::super::{BitOp, Interp};
+    use super::*;
+    use crate::value::SlotIndex;
+    use ironhorse_spec::{arith, int32};
+
+    fn bits(slot: &Slot) -> u64 {
+        to_number(slot).to_bits()
+    }
+
+    /// The Number value of `slot` equals the model's bits, and the slot is
+    /// `Integer` exactly when that value is an int32 other than `-0`.
+    fn assert_represents(slot: &Slot, want: u64) {
+        assert_eq!(bits(slot), want);
+        assert_eq!(
+            matches!(slot.value, Payload::Integer(_)),
+            arith::exact_int32(want).is_some()
+        );
+    }
+
+    fn assert_int32_result(slot: &Slot, want: i64) {
+        assert_represents(slot, arith::number_value_of_integer(i128::from(want)));
+    }
+
+    // NUM-2 ------------------------------------------------------------------
+
+    #[kani::proof]
+    #[kani::unwind(33)]
+    fn num2_bitwise_and() {
+        let (a, b): (i32, i32) = (kani::any(), kani::any());
+        let got = int32_bitop(BitOp::And, a, b);
+        assert_int32_result(&got, int32::bitwise(int32::BitwiseOp::And, a, b));
+        kani::cover!(a < 0 && b < 0, "two negative operands");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(33)]
+    fn num2_bitwise_or() {
+        let (a, b): (i32, i32) = (kani::any(), kani::any());
+        let got = int32_bitop(BitOp::Or, a, b);
+        assert_int32_result(&got, int32::bitwise(int32::BitwiseOp::Or, a, b));
+        kani::cover!(
+            a > 0 && b < 0 && bits(&got) >> 63 == 1,
+            "a positive OR a negative"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(33)]
+    fn num2_bitwise_xor() {
+        let (a, b): (i32, i32) = (kani::any(), kani::any());
+        let got = int32_bitop(BitOp::Xor, a, b);
+        assert_int32_result(&got, int32::bitwise(int32::BitwiseOp::Xor, a, b));
+        kani::cover!(a < 0 && b > 0, "mixed signs");
+    }
+
+    #[kani::proof]
+    fn num2_left_shift() {
+        let (a, b): (i32, i32) = (kani::any(), kani::any());
+        let got = int32_bitop(BitOp::Shl, a, b);
+        assert_int32_result(&got, int32::left_shift(a, b));
+        kani::cover!(
+            b >= 32 && a != 0 && bits(&got) != 0,
+            "a count of 32 or more, taken mod 32"
+        );
+    }
+
+    #[kani::proof]
+    fn num2_signed_right_shift() {
+        let (a, b): (i32, i32) = (kani::any(), kani::any());
+        let got = int32_bitop(BitOp::Sar, a, b);
+        assert_int32_result(&got, int32::signed_right_shift(a, b));
+        kani::cover!(a < 0 && b & 31 == 31, "a negative value shifted by 31");
+    }
+
+    #[kani::proof]
+    fn num2_unsigned_right_shift() {
+        let (a, b): (i32, i32) = (kani::any(), kani::any());
+        let got = int32_bitop(BitOp::Shr, a, b);
+        let want = int32::unsigned_right_shift(a, b);
+        assert_int32_result(&got, want);
+        kani::cover!(
+            want > i64::from(i32::MAX),
+            "a result above i32::MAX, kept a Number"
+        );
+        kani::cover!(
+            a < 0 && want <= i64::from(i32::MAX),
+            "a negative operand yielding an Integer"
+        );
+    }
+
+    #[kani::proof]
+    fn num2_imul() {
+        let (a, b): (i32, i32) = (kani::any(), kani::any());
+        let got = math_imul(a, b);
+        assert_eq!(i64::from(got), int32::imul(a, b));
+        kani::cover!(
+            a > 0 && b > 0 && got < 0,
+            "a positive product wrapping negative"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn num2_clz32() {
+        let n: u32 = kani::any();
+        let got = math_clz32(n);
+        assert_eq!(i64::from(got), int32::clz32(n));
+        kani::cover!(got == 32, "zero");
+        kani::cover!(got == 17, "a value in [2^14, 2^15)");
+    }
+
+    // NUM-3 ------------------------------------------------------------------
+
+    #[kani::proof]
+    fn num3_add_integer_path() {
+        let (x, y): (i32, i32) = (kani::any(), kani::any());
+        let got = apply_arith(ArithOp::Add, &Slot::integer(x), &Slot::integer(y));
+        assert_represents(&got, arith::add_int32(x, y));
+        kani::cover!(x.checked_add(y).is_none(), "an overflowing sum");
+    }
+
+    #[kani::proof]
+    fn num3_sub_integer_path() {
+        let (x, y): (i32, i32) = (kani::any(), kani::any());
+        let got = apply_arith(ArithOp::Sub, &Slot::integer(x), &Slot::integer(y));
+        assert_represents(&got, arith::subtract_int32(x, y));
+        kani::cover!(x.checked_sub(y).is_none(), "an overflowing difference");
+    }
+
+    #[kani::proof]
+    fn num3_mul_integer_path() {
+        let (x, y): (i32, i32) = (kani::any(), kani::any());
+        let got = apply_arith(ArithOp::Mul, &Slot::integer(x), &Slot::integer(y));
+        assert_represents(&got, arith::multiply_int32(x, y));
+        kani::cover!(x == 0 && y < 0, "+0 times a negative: -0");
+        kani::cover!(
+            (i64::from(x) * i64::from(y)).unsigned_abs() > 1 << 53,
+            "a product above 2^53, rounded"
+        );
+    }
+
+    #[kani::proof]
+    fn num3_unary_minus() {
+        let x: i32 = kani::any();
+        let got = unary_minus(&Slot::integer(x));
+        assert_represents(&got, arith::unary_minus_int32(x));
+        kani::cover!(x == 0, "0 negates to -0");
+        kani::cover!(x == i32::MIN, "i32::MIN negates to 2^31");
+    }
+
+    /// The integer path and the Number path give bit-identical results for
+    /// int32 operands. Float addition: `--no-overflow-checks`, nightly.
+    #[kani::proof]
+    fn num3_add_paths_agree() {
+        let (x, y): (i32, i32) = (kani::any(), kani::any());
+        let fast = apply_arith(ArithOp::Add, &Slot::integer(x), &Slot::integer(y));
+        let slow = apply_arith(
+            ArithOp::Add,
+            &Slot::number(f64::from(x)),
+            &Slot::number(f64::from(y)),
+        );
+        assert_eq!(bits(&fast), bits(&slow));
+        kani::cover!(x.checked_add(y).is_none(), "an overflowing sum");
+    }
+
+    #[kani::proof]
+    fn num3_sub_paths_agree() {
+        let (x, y): (i32, i32) = (kani::any(), kani::any());
+        let fast = apply_arith(ArithOp::Sub, &Slot::integer(x), &Slot::integer(y));
+        let slow = apply_arith(
+            ArithOp::Sub,
+            &Slot::number(f64::from(x)),
+            &Slot::number(f64::from(y)),
+        );
+        assert_eq!(bits(&fast), bits(&slow));
+        kani::cover!(x.checked_sub(y).is_none(), "an overflowing difference");
+    }
+
+    // NUM-4 ------------------------------------------------------------------
+
+    fn assert_canonical_slot(slot: Slot, number: u64) {
+        match arith::exact_int32(number) {
+            Some(i) => assert_eq!(slot, Slot::integer(i)),
+            // Slot equality compares a Number's bits, NaN payload included.
+            None => assert_eq!(slot, Slot::number(f64::from_bits(number))),
+        }
+    }
+
+    #[kani::proof]
+    fn num4_slot_from_number() {
+        let b: u64 = kani::any();
+        let slot = Interp::slot_from_number(f64::from_bits(b));
+        assert_canonical_slot(slot, b);
+        kani::cover!(b == arith::NEGATIVE_ZERO, "-0 stays a Number");
+        kani::cover!(
+            matches!(slot.value, Payload::Integer(i) if i < 0),
+            "a negative Integer"
+        );
+    }
+
+    #[kani::proof]
+    fn num4_math_to_integer() {
+        let b: u64 = kani::any();
+        let slot = math_to_integer(f64::from_bits(b));
+        assert_canonical_slot(slot, b);
+        kani::cover!(b == 0x41E0_0000_0000_0000, "2^31 stays a Number");
+    }
+
+    // NUM-5 ------------------------------------------------------------------
+
+    /// A language value an immediate slot denotes; an `Integer(i)` denotes
+    /// the Number 𝔽(i).
+    #[derive(Copy, Clone, PartialEq)]
+    enum Value {
+        Undefined,
+        Null,
+        Boolean(bool),
+        Number(u64),
+        Object(SlotIndex),
+    }
+
+    /// A well-formed slot with an immediate payload, of any kind.
+    fn any_immediate() -> (Slot, Value) {
+        match kani::any::<u8>() % 6 {
+            0 => (Slot::undefined(), Value::Undefined),
+            1 => (Slot::null(), Value::Null),
+            2 => {
+                let b = kani::any();
+                (Slot::boolean(b), Value::Boolean(b))
+            }
+            3 => {
+                let i = kani::any();
+                (
+                    Slot::integer(i),
+                    Value::Number(arith::number_value_of_integer(i128::from(i))),
+                )
+            }
+            4 => {
+                let b: u64 = kani::any();
+                (Slot::number(f64::from_bits(b)), Value::Number(b))
+            }
+            _ => {
+                let r = SlotIndex(kani::any());
+                (
+                    Slot::of(Kind::Reference, Payload::Reference(r)),
+                    Value::Object(r),
+                )
+            }
+        }
+    }
+
+    #[kani::proof]
+    fn num5_same_value() {
+        let ((a, va), (b, vb)) = (any_immediate(), any_immediate());
+        let want = match (va, vb) {
+            (Value::Number(x), Value::Number(y)) => arith::number_same_value(x, y),
+            _ => va == vb,
+        };
+        assert!(!needs_arena_equality(&a, &b));
+        assert_eq!(same_value_immediate(&a, &b), want);
+        kani::cover!(
+            matches!(a.value, Payload::Integer(1))
+                && matches!(b.value, Payload::Number(n) if n == 1.0),
+            "Integer(1) and Number(1.0): the same value, different representations"
+        );
+        kani::cover!(
+            want && a.value != b.value,
+            "a pair Payload::eq (representation equality) tells apart"
+        );
+        kani::cover!(
+            matches!(a.value, Payload::Number(x) if x.is_nan()) && want,
+            "NaN is the same value as NaN"
+        );
+    }
+
+    #[kani::proof]
+    fn num5_same_value_zero() {
+        let ((a, va), (b, vb)) = (any_immediate(), any_immediate());
+        let want = match (va, vb) {
+            (Value::Number(x), Value::Number(y)) => arith::number_same_value_zero(x, y),
+            _ => va == vb,
+        };
+        assert_eq!(same_value_zero_immediate(&a, &b), want);
+        kani::cover!(
+            matches!(a.value, Payload::Integer(0))
+                && matches!(b.value, Payload::Number(n) if n.to_bits() == arith::NEGATIVE_ZERO),
+            "Integer(0) and -0"
+        );
+    }
+
+    #[kani::proof]
+    fn num5_strict_equals() {
+        let ((a, va), (b, vb)) = (any_immediate(), any_immediate());
+        let want = match (va, vb) {
+            (Value::Number(x), Value::Number(y)) => arith::number_equal(x, y),
+            _ => va == vb,
+        };
+        assert_eq!(strict_equals(&a, &b), want);
+        kani::cover!(
+            matches!(a.value, Payload::Integer(0))
+                && matches!(b.value, Payload::Number(n) if n.to_bits() == arith::NEGATIVE_ZERO)
+                && want,
+            "Integer(0) === -0"
+        );
+        kani::cover!(
+            matches!((a.value, b.value), (Payload::Number(x), Payload::Number(y)) if x.is_nan() && x.to_bits() == y.to_bits()),
+            "NaN !== NaN with the same bits"
+        );
     }
 }

@@ -1,5 +1,6 @@
 //! Array construction, async drivers, iteration, and native array algorithms.
 use super::super::*;
+use crate::numeric_kernel::relative_index as clamp_relative_index;
 
 /// One source array of the generic `FlattenIntoArray` walk: where its read
 /// stands, its remaining depth, and the value it was read as (the receiver of
@@ -2749,13 +2750,7 @@ impl Interp {
         } else {
             self.array_to_integer_or_infinity(code, arguments[0])?
         };
-        let actual_start = if start_integer == f64::NEG_INFINITY {
-            0
-        } else if start_integer < 0.0 {
-            (length as f64 + start_integer).max(0.0) as u64
-        } else {
-            start_integer.min(length as f64) as u64
-        };
+        let actual_start = clamp_relative_index(start_integer, length);
         let insert_count = argc.saturating_sub(2) as u64;
         let actual_delete_count = if argc == 0 {
             0
@@ -2896,15 +2891,7 @@ impl Interp {
             })
             .collect();
         let length = self.array_generic_length(code, inst)?;
-        let relative_index = |integer: f64| -> u64 {
-            if integer == f64::NEG_INFINITY {
-                0
-            } else if integer < 0.0 {
-                (length as f64 + integer).max(0.0) as u64
-            } else {
-                integer.min(length as f64) as u64
-            }
-        };
+        let relative_index = |integer: f64| clamp_relative_index(integer, length);
         let target = arguments.first().copied().unwrap_or_else(Slot::undefined);
         let to = relative_index(self.array_to_integer_or_infinity(code, target)?);
         let start = arguments.get(1).copied().unwrap_or_else(Slot::undefined);
@@ -2983,15 +2970,7 @@ impl Interp {
             unreachable!("ToObject result")
         };
         let length = self.array_generic_length(code, inst)?;
-        let relative_index = |integer: f64| -> u64 {
-            if integer == f64::NEG_INFINITY {
-                0
-            } else if integer < 0.0 {
-                (length as f64 + integer).max(0.0) as u64
-            } else {
-                integer.min(length as f64) as u64
-            }
-        };
+        let relative_index = |integer: f64| clamp_relative_index(integer, length);
         let start = if argc < 2 || start_arg.kind == Kind::Undefined {
             0
         } else {
@@ -3620,15 +3599,7 @@ impl Interp {
             unreachable!("ToObject result")
         };
         let length = self.array_generic_length(code, original)?;
-        let clamp = |integer: f64| -> u64 {
-            if integer == f64::NEG_INFINITY {
-                0
-            } else if integer < 0.0 {
-                (length as f64 + integer).max(0.0) as u64
-            } else {
-                integer.min(length as f64) as u64
-            }
-        };
+        let clamp = |integer: f64| clamp_relative_index(integer, length);
         let start_arg = self
             .stack
             .get(base + 4)
@@ -4358,17 +4329,8 @@ impl Interp {
         let length = self.array_generic_length(code, inst)?;
 
         // Clamp a relative integer to the inclusive `[0, length]` range used
-        // for `start`/`skipCount` calculations. `length` is at most 2^53-1,
-        // so its f64 representation is exact.
-        let relative_index = |integer: f64| -> u64 {
-            if integer == f64::NEG_INFINITY {
-                0
-            } else if integer < 0.0 {
-                (length as f64 + integer).max(0.0) as u64
-            } else {
-                integer.min(length as f64) as u64
-            }
-        };
+        // for `start`/`skipCount` calculations. `length` is at most 2^53-1.
+        let relative_index = |integer: f64| clamp_relative_index(integer, length);
 
         let (result_length, with_index, splice_start, splice_skip, insertions) = match method {
             NativeMethod::ArrayWith => {

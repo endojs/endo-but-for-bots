@@ -308,11 +308,7 @@ impl Interp {
                 return Err(self.catchable_type_error_msg("cannot coerce to unsigned".into()));
             }
             let uint32_number = self.to_number_f64(code, primitive)?;
-            let new_len = if !uint32_number.is_finite() || uint32_number == 0.0 {
-                0
-            } else {
-                uint32_number.trunc().rem_euclid(4_294_967_296.0) as u32
-            };
+            let new_len = crate::numeric_kernel::to_uint32(uint32_number.to_bits());
             let number = self.to_number_f64(code, value)?;
             if !number.is_finite()
                 || number < 0.0

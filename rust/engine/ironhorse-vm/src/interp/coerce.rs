@@ -248,12 +248,10 @@ impl Interp {
     /// SameValueZero (`includes`): strict equality except `NaN` equals `NaN`
     /// (and `+0`/`-0` are equal, which strict equality already gives).
     pub(super) fn same_value_zero(&self, a: &Slot, b: &Slot) -> bool {
-        if let (Some(x), Some(y)) = (numeric_of(a), numeric_of(b)) {
-            if x.is_nan() && y.is_nan() {
-                return true;
-            }
+        if needs_arena_equality(a, b) {
+            return self.strict_equal(a, b);
         }
-        self.strict_equal(a, b)
+        same_value_zero_immediate(a, b)
     }
 
     /// XS's `fxArgToByteLength(argi, length)`: coerce call argument `argi`
@@ -355,22 +353,10 @@ impl Interp {
                 None => return default,
             },
         };
-        if n.is_nan() {
-            return 0;
-        }
-        let t = n.trunc();
-        if t < 0.0 {
-            let from_end = length as f64 + t;
-            if from_end < 0.0 {
-                0
-            } else {
-                from_end as u32
-            }
-        } else if t > length as f64 {
-            length
-        } else {
-            t as u32
-        }
+        // ToIntegerOrInfinity, then the clamp (in `0..=length`, so the
+        // narrowing is exact).
+        let t = if n.is_nan() { 0.0 } else { n.trunc() };
+        crate::numeric_kernel::relative_index(t, u64::from(length)) as u32
     }
 
     /// Whether a dense search (`indexOf`, `lastIndexOf`, `includes`) can read
@@ -510,24 +496,7 @@ impl Interp {
         }
         let ai = to_int32(to_number(&a));
         let bi = to_int32(to_number(&b));
-        let r = match op {
-            BitOp::And => ai & bi,
-            BitOp::Or => ai | bi,
-            BitOp::Xor => ai ^ bi,
-            BitOp::Shl => ((ai as u32) << (bi & 0x1f)) as i32,
-            BitOp::Sar => ai >> (bi & 0x1f),
-            BitOp::Shr => ((ai as u32) >> (bi & 0x1f)) as i32,
-        };
-        // Unsigned shift can exceed i32 range; XS keeps it a number
-        // when the high bit is set.
-        if let BitOp::Shr = op {
-            let u = (ai as u32) >> (bi & 0x1f);
-            if u > i32::MAX as u32 {
-                self.push(Slot::number(u as f64));
-                return Ok(());
-            }
-        }
-        self.push(Slot::integer(r));
+        self.push(int32_bitop(op, ai, bi));
         Ok(())
     }
 

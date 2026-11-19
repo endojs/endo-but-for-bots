@@ -655,16 +655,8 @@ impl Interp {
     }
 
     fn typed_array_relative_index(n: f64, length: u32) -> u32 {
-        if n == f64::NEG_INFINITY {
-            return 0;
-        }
-        if n < 0.0 {
-            return (length as f64 + n).max(0.0) as u32;
-        }
-        if n == f64::INFINITY {
-            return length;
-        }
-        n.min(length as f64) as u32
+        // In `0..=length`, so the narrowing is exact.
+        crate::numeric_kernel::relative_index(n, u64::from(length)) as u32
     }
 
     /// Coerce a TypedArray method's relative-index argument in spec order.

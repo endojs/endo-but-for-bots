@@ -1492,3 +1492,85 @@ pub(super) fn resolve_time_zone(raw: &str) -> Option<(String, i32)> {
     }
     None
 }
+
+#[cfg(test)]
+mod civil_spec_tests {
+    //! The civil-date kernels against the `ironhorse-spec` Date model
+    //! (NUM-9), without Kani.
+    use super::{civil_from_days, days_from_civil};
+    use ironhorse_spec::date::day_from_civil;
+
+    #[test]
+    fn days_from_civil_matches_the_spec() {
+        let years = (-2000i64..3000)
+            .chain((-300_000..300_000).step_by(997))
+            .chain([
+                i64::MIN,
+                i64::MIN + 1,
+                i64::MAX,
+                i64::MAX - 1,
+                -271_821,
+                275_760,
+            ]);
+        for y in years {
+            for m in 0..=13 {
+                for d in [0, 1, 2, 28, 29, 30, 31, 32] {
+                    assert_eq!(
+                        days_from_civil(y, m, d),
+                        day_from_civil(y, m, d),
+                        "{y}-{m}-{d}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn civil_from_days_inverts_days_from_civil_on_the_time_clip_range() {
+        let mut days: Vec<i128> = (-1_000_000..1_000_000).step_by(37).collect();
+        days.extend(-100_000_010..-99_999_990);
+        days.extend(99_999_990..100_000_010);
+        for day in days {
+            let (y, m, d) = civil_from_days(day);
+            assert_eq!(days_from_civil(y, m, d), Some(day), "{day}");
+        }
+    }
+}
+
+#[cfg(kani)]
+mod proofs {
+    //! NUM-9: the civil-date kernels against the `ironhorse-spec` Date model.
+    use super::{civil_from_days, days_from_civil};
+
+    /// days_from_civil equals the spec's day number (DayFromYear plus the
+    /// MonthFromTime offsets) for every year of the TimeClip range and
+    /// every month and day, and refuses exactly the dates that do not
+    /// exist. (Over all of i64 the i128 divisions time out.)
+    #[kani::proof]
+    fn num9_days_from_civil_matches_spec() {
+        let (y, m, d): (i64, u32, u32) = (kani::any(), kani::any(), kani::any());
+        kani::assume((-271_822..=275_761).contains(&y));
+        let got = days_from_civil(y, m, d);
+        assert_eq!(got, ironhorse_spec::date::day_from_civil(y, m, d));
+        kani::cover!(
+            m == 2 && d == 29 && got.is_some() && y % 100 == 0,
+            "Feb 29 of a year divisible by 400"
+        );
+        kani::cover!(
+            y < -1_000_000 && got.is_some(),
+            "a date far before the epoch"
+        );
+    }
+
+    /// civil_from_days is a left inverse of days_from_civil on the TimeClip
+    /// day range.
+    #[kani::proof]
+    fn num9_civil_round_trip() {
+        let day: i128 = kani::any();
+        kani::assume((-100_000_000..=100_000_000).contains(&day));
+        let (y, m, d) = civil_from_days(day);
+        assert_eq!(days_from_civil(y, m, d), Some(day));
+        kani::cover!(day == -100_000_000, "the earliest TimeClip day");
+        kani::cover!(m == 2 && d == 29, "a leap day");
+    }
+}

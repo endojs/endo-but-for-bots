@@ -141,7 +141,8 @@ pub fn bitwise_not(x: i32) -> i64 {
 /// > 4. If product ≥ 2^31, return 𝔽(product - 2^32); otherwise return
 /// >    𝔽(product).
 pub fn imul(x: i32, y: i32) -> i64 {
-    let product = (i128::from(uint32_of(x)) * i128::from(uint32_of(y))) % (1 << 32);
+    // Both factors are below 2^32, so the product is exact in u64.
+    let product = (uint32_of(x) as u64 * uint32_of(y) as u64) % (1 << 32);
     signed_of(product as i64)
 }
 
