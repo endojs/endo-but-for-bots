@@ -11860,9 +11860,11 @@ mod container_grammar_refusals {
         for byte in [1, 255] {
             let mut payload = heap.payload.to_vec();
             payload[reserved] = byte;
+            // The slot codec itself refuses the dirty reserved byte (it no
+            // longer decodes to the clean record and relies on this gate).
             assert_eq!(
-                decode_heap(&payload).unwrap(),
-                decode_heap(heap.payload).unwrap()
+                decode_heap(&payload),
+                Err(SnapshotError::Corrupt("HEAP slot record"))
             );
             let mut writer = AtomWriter::new();
             for atom in reader.atoms() {
@@ -11879,7 +11881,7 @@ mod container_grammar_refusals {
             }
             assert_eq!(
                 read_machine(&writer.finish().unwrap(), &image.signature),
-                Err(SnapshotError::Corrupt("non-canonical machine encoding"))
+                Err(SnapshotError::Corrupt("HEAP slot record"))
             );
         }
     }

@@ -21,10 +21,18 @@
 //!
 //! Encoding always zero-fills the record first, so a round-trip
 //! (write → read → write) is byte-identical: unused payload bytes are
-//! deterministically zero both times. Number NaNs are written in XS's
+//! deterministically zero both times. Decoding is the exact inverse on
+//! everything but NaN payloads: it refuses a non-zero reserved byte 9
+//! ([`SlotCodecError::ReservedByte`]), a non-zero byte past the payload
+//! arm's width ([`SlotCodecError::UnusedPayloadBytes`]) and a Boolean byte
+//! other than 0 or 1 ([`SlotCodecError::BadBoolean`]), so an accepted record
+//! re-encodes to the same 20 bytes (Kani guarantee SNAP-2(c),
+//! `verification/proofs.d/framing.toml`). Number NaNs are written in XS's
 //! canonical form, including payloads constructed without `Slot::number`.
-//! Decoding preserves legacy NaN bits; re-encoding normalizes them. Raw
-//! chunk/ArrayBuffer bytes are outside this codec and remain unchanged.
+//! Decoding preserves legacy NaN bits; re-encoding normalizes them (the one
+//! carve-out from canonicality: format-16 images refuse such a NaN at the
+//! whole-image byte comparison in `read_machine`). Raw chunk/ArrayBuffer
+//! bytes are outside this codec and remain unchanged.
 
 use crate::sink::Sink;
 use ironhorse_vm::value::canonicalize_nan;
@@ -55,6 +63,14 @@ pub enum SlotCodecError {
     /// A record (or record array) whose byte length is not exactly
     /// [`SLOT_RECORD_BYTES`] (or a whole multiple of it): the length found.
     BadLength(usize),
+    /// A non-zero reserved byte 9 (the byte found). The encoder writes 0,
+    /// so accepting another value would give one slot many encodings.
+    ReservedByte(u8),
+    /// A non-zero payload data byte beyond the width the payload arm uses
+    /// (the encoder zero-fills them).
+    UnusedPayloadBytes,
+    /// A Boolean payload byte other than 0 or 1 (the byte found).
+    BadBoolean(u8),
 }
 
 /// Serialize one slot into `out` (appends exactly [`SLOT_RECORD_BYTES`]).
@@ -124,12 +140,22 @@ pub fn decode_slot(rec: &[u8]) -> Result<Slot, SlotCodecError> {
 }
 
 /// [`decode_slot`] on a record whose width the type already proves.
+///
+/// The kind and payload tag are checked first, so a record that failed
+/// before canonicality was enforced fails with the same error.
 fn decode_record(rec: &[u8; SLOT_RECORD_BYTES]) -> Result<Slot, SlotCodecError> {
-    let [kind, flag, id0, id1, n0, n1, n2, n3, tag, _reserved, data @ ..] = *rec;
+    // Every byte named (no `data @ ..` sub-array binding, which Kani 0.68
+    // cannot model), so the SNAP-2 proofs run on this exact code.
+    let [kind, flag, id0, id1, n0, n1, n2, n3, tag, reserved, d0, d1, d2, d3, d4, d5, d6, d7, d8, d9] =
+        *rec;
+    let data = [d0, d1, d2, d3, d4, d5, d6, d7, d8, d9];
     let kind = Kind::from_u8(kind).ok_or(SlotCodecError::BadKind(kind))?;
     let id = u16::from_be_bytes([id0, id1]);
     let next = SlotIndex(u32::from_be_bytes([n0, n1, n2, n3]));
     let value = decode_payload(tag, data)?;
+    if reserved != 0 {
+        return Err(SlotCodecError::ReservedByte(reserved));
+    }
     Ok(Slot {
         next,
         id,
@@ -140,24 +166,44 @@ fn decode_record(rec: &[u8; SLOT_RECORD_BYTES]) -> Result<Slot, SlotCodecError> 
 }
 
 fn decode_payload(tag: u8, d: [u8; 10]) -> Result<Payload, SlotCodecError> {
-    let [d0, d1, d2, d3, d4, d5, d6, d7, _, _] = d;
+    let [d0, d1, d2, d3, d4, d5, d6, d7, d8, d9] = d;
     let word = u32::from_be_bytes([d0, d1, d2, d3]);
-    Ok(match tag {
-        P_NONE => Payload::None,
-        P_BOOL => Payload::Boolean(d0 != 0),
-        P_INT => Payload::Integer(i32::from_be_bytes([d0, d1, d2, d3])),
-        P_NUM => Payload::Number(f64::from_bits(u64::from_be_bytes([
-            d0, d1, d2, d3, d4, d5, d6, d7,
-        ]))),
-        P_STR => Payload::String(ChunkOffset(word)),
-        P_REF => Payload::Reference(SlotIndex(word)),
-        P_AT => Payload::At(
-            u16::from_be_bytes([d0, d1]),
-            u32::from_be_bytes([d2, d3, d4, d5]),
+    // Each arm with the number of leading data bytes it reads; the rest
+    // must be the zeros the encoder writes.
+    let (value, used): (Payload, u32) = match tag {
+        P_NONE => (Payload::None, 0),
+        P_BOOL => match d0 {
+            0 | 1 => (Payload::Boolean(d0 != 0), 1),
+            other => return Err(SlotCodecError::BadBoolean(other)),
+        },
+        P_INT => (Payload::Integer(i32::from_be_bytes([d0, d1, d2, d3])), 4),
+        P_NUM => (
+            Payload::Number(f64::from_bits(u64::from_be_bytes([
+                d0, d1, d2, d3, d4, d5, d6, d7,
+            ]))),
+            8,
         ),
-        P_BIGINT => Payload::BigInt(ChunkOffset(word)),
+        P_STR => (Payload::String(ChunkOffset(word)), 4),
+        P_REF => (Payload::Reference(SlotIndex(word)), 4),
+        P_AT => (
+            Payload::At(
+                u16::from_be_bytes([d0, d1]),
+                u32::from_be_bytes([d2, d3, d4, d5]),
+            ),
+            6,
+        ),
+        P_BIGINT => (Payload::BigInt(ChunkOffset(word)), 4),
         other => return Err(SlotCodecError::BadPayloadTag(other)),
-    })
+    };
+    // The ten data bytes as one big-endian 80-bit field: the unused ones
+    // are its low `(10 - used) * 8` bits. Loop-free, so the SNAP-2 proofs
+    // need no unwinding bound.
+    let field = u128::from_be_bytes([0, 0, 0, 0, 0, 0, d0, d1, d2, d3, d4, d5, d6, d7, d8, d9]);
+    let unused_bits = (10 - used) * 8;
+    if field & ((1u128 << unused_bits) - 1) != 0 {
+        return Err(SlotCodecError::UnusedPayloadBytes);
+    }
+    Ok(value)
 }
 
 /// Encode a slice of slots into a flat record array.
@@ -315,6 +361,132 @@ mod tests {
             Err(SlotCodecError::BadLength(SLOT_RECORD_BYTES + 1))
         );
         assert_eq!(decode_slots(&[]), Ok(Vec::new()));
+    }
+
+    /// Regression (SNAP-2(c), Kani counterexample "all zeros except
+    /// `rec[9] = 0xAA`"): the decoder ignored the reserved byte, the unused
+    /// payload bytes and all but zero/non-zero of a Boolean byte, so one
+    /// slot had many accepted encodings. Each is now refused by name.
+    #[test]
+    fn non_canonical_records_are_refused() {
+        let mut rec = [0u8; SLOT_RECORD_BYTES];
+        rec[9] = 0xAA;
+        assert_eq!(decode_slot(&rec), Err(SlotCodecError::ReservedByte(0xAA)));
+
+        let mut boolean = encode_slots(&[Slot::boolean(true)]);
+        boolean[10] = 2;
+        assert_eq!(decode_slot(&boolean), Err(SlotCodecError::BadBoolean(2)));
+
+        let mut unused = encode_slots(&[Slot::integer(7)]);
+        unused[19] = 1;
+        assert_eq!(
+            decode_slot(&unused),
+            Err(SlotCodecError::UnusedPayloadBytes)
+        );
+        // Errors that preceded the canonicality checks are unchanged.
+        let mut both = [0u8; SLOT_RECORD_BYTES];
+        both[0] = 200;
+        both[9] = 1;
+        assert_eq!(decode_slot(&both), Err(SlotCodecError::BadKind(200)));
+        both[0] = 0;
+        both[8] = 99;
+        assert_eq!(decode_slot(&both), Err(SlotCodecError::BadPayloadTag(99)));
+    }
+
+    /// Whether the record carries a Number payload whose bits are a NaN
+    /// other than the canonical one: the documented carve-out, which
+    /// decodes and re-encodes canonically.
+    fn non_canonical_nan(rec: &[u8; SLOT_RECORD_BYTES]) -> bool {
+        let bits = u64::from_be_bytes(rec[10..18].try_into().unwrap());
+        rec[8] == P_NUM && f64::from_bits(bits).is_nan() && bits != 0x7ff8_0000_0000_0000
+    }
+
+    /// The canonicality property `decode(r) == Ok(s)` implies
+    /// `encode(s) == r` outside the NaN carve-out, and the round trip
+    /// `decode(encode(s)) == s` on what was accepted.
+    fn check_canonical(rec: &[u8; SLOT_RECORD_BYTES]) -> bool {
+        let Ok(slot) = decode_slot(rec) else {
+            return false;
+        };
+        let again = encode_slots(&[slot]);
+        if non_canonical_nan(rec) {
+            assert_eq!(&again[10..18], &0x7ff8_0000_0000_0000u64.to_be_bytes());
+        } else {
+            assert_eq!(
+                &again[..],
+                &rec[..],
+                "accepted {rec:?} re-encodes differently"
+            );
+            assert_eq!(decode_slot(&again), Ok(slot));
+        }
+        true
+    }
+
+    /// Exhaustive over every (kind byte, tag byte, reserved byte) with zero
+    /// data, then over every value of every data byte under every valid
+    /// tag and kind, with the other bytes zero: complements Kani's
+    /// all-records proof with the concrete images it ranges over.
+    #[test]
+    fn accepted_records_are_canonical_exhaustive_by_byte() {
+        let mut accepted = 0u32;
+        for kind in 0..=255u8 {
+            for tag in 0..=255u8 {
+                for reserved in [0u8, 1, 0x80, 0xFF] {
+                    let mut rec = [0u8; SLOT_RECORD_BYTES];
+                    rec[0] = kind;
+                    rec[8] = tag;
+                    rec[9] = reserved;
+                    accepted += u32::from(check_canonical(&rec));
+                }
+            }
+        }
+        for kind in (0..=255u8).filter(|&k| Kind::from_u8(k).is_some()) {
+            for tag in P_NONE..=P_BIGINT {
+                for at in 1..SLOT_RECORD_BYTES {
+                    for value in 0..=255u8 {
+                        let mut rec = [0u8; SLOT_RECORD_BYTES];
+                        rec[0] = kind;
+                        rec[8] = tag;
+                        rec[at] = value;
+                        accepted += u32::from(check_canonical(&rec));
+                    }
+                }
+            }
+        }
+        assert!(accepted > 10_000, "only {accepted} accepted records");
+    }
+
+    /// Random records, biased towards valid kinds and tags and towards
+    /// zero bytes so that many are accepted.
+    #[test]
+    fn accepted_records_are_canonical_random() {
+        let mut rng = crate::wire::SplitMix(0x5EED_51A7);
+        let kinds: Vec<u8> = (0..=255u8)
+            .filter(|&k| Kind::from_u8(k).is_some())
+            .collect();
+        let mut accepted = 0u32;
+        for _ in 0..200_000 {
+            let mut rec = [0u8; SLOT_RECORD_BYTES];
+            for byte in rec.iter_mut() {
+                let r = rng.next();
+                *byte = if r.is_multiple_of(3) {
+                    (r >> 8) as u8
+                } else {
+                    0
+                };
+            }
+            let r = rng.next();
+            rec[0] = kinds[(r as usize) % kinds.len()];
+            rec[8] = ((r >> 32) % 9) as u8;
+            if (r >> 40).is_multiple_of(2) {
+                rec[9] = 0;
+            }
+            if rec[8] == P_BOOL && (r >> 48).is_multiple_of(2) {
+                rec[10] &= 1;
+            }
+            accepted += u32::from(check_canonical(&rec));
+        }
+        assert!(accepted > 1_000, "only {accepted} accepted records");
     }
 
     #[test]
