@@ -102,6 +102,8 @@ await runPerf('subagents', async ({ provision }) => {
     extra: windowFields(spawnWindow),
   });
   await measure('spawn');
+  // Finish replacing the claimed spare before timing an ask.
+  await E(slice.harness).whenSettled();
   const { key } = await E(parent).getInfo();
   const { sessions } = await E(slice.harness).exportState(key);
   if (sessions.length !== 1 || sessions[0].title !== 'Delegator / one')
