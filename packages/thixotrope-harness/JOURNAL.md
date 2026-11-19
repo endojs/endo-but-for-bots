@@ -17876,3 +17876,32 @@ ea857fc639 uses the 50,000,000 crank budget from `config/defaults.js`
 when resolving this fixture. A job using the
 normal template API and shared run lock was queued beside the
 functional batch. Each fixture key has its own build lock.
+
+### J-1464 2026-11-19 Fixture costs and normal cases in mixed milestone files
+
+The combined checkout ea857fc639 built the UI normally, used the pinned
+worker and ran the milestone files through the machine-wide shared slots.
+The normal gateway cases for setup, shell/CSP/upgrade, extension dispatch
+and sign-in rotation/restart passed (four tests). The 300-turn Chromium
+history case read all 41 pages. Its first setup took 125.9 seconds. A
+subsequent call to `node perf/_m3-client.mjs template` returned the same
+50,000,000-crank-budget state, f93377c806, with `built: false` in 3.078 s.
+
+The first three M3 setups that copied the same slice while its fixture
+was cold took 90.2, 94.6 and 92.0 seconds. A later normally signed-in
+browser setup using the warm slice took 39.9 seconds. Its distinct work
+also differs, so these are observations, not an estimate of browser
+startup in isolation. The clean state records of the new fixture builds
+show intervals of 68.8, 69.7, 109.4, 103.9, 63.0 and 72.1 seconds from
+daemon start to clean stop. Warm the same fixtures with the existing
+`perf/_pass.mjs templates` helper before an isolated timing attempt;
+measure this preparation separately from the run and retain its cost.
+
+The normal shell/exec scenario completed its actual commands and
+cancellation on both attempts. Its timing assertion failed initially:
+three concurrent calls took 2,741.5 ms against 1,605.5 ms for one,
+ratio 1.71. On the unchanged warm-fixture repeat the corresponding
+measurements were 2,379.1 and 1,876.4 ms, ratio 1.27. The first
+scenario reported 151.6 s wall including the fresh 104.1 s environment
+fixture build. The second reported 44.0 s. These two samples keep both
+outcomes; the files were running beside other host work.
