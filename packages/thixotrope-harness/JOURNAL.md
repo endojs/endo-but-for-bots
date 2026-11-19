@@ -15149,3 +15149,58 @@ shared tree measured 241,270, all other units' uncommitted session edits). `lint
 W6.7's, `[real-runtime]`). No command over 60 s. Nothing pushed; no change to
 `packages/thixotrope` or `rust/**`; no container runtime started or installed.
 Fit: neutral.
+
+### J-12020 2026-11-19 W6.3c shell port, command args, output budget, blob access - built
+Evidence: `c0829ad19e`, `2f59b3b8a8`, `fff3920736`; `test/adapter/environments-shell-port.test.js`
+(20 tests), `test/adapter/environments-command-output.test.js` (10 tests), both under 2 s.
+Reading: `EVI/command-output.js` `boundCommandResult` (5.5: streams decoded with replacement, a
+runtime-cut stream drops its partial character by a streaming decode, each field cut by its
+escaped length with a binary search at code point boundaries, the R4-46 marker inside the field,
+stderr at least 2,048 units) and `boundCommandRecord` (exec path, `boundToolOutput` per stream to
+2,560 units). `EVI/command-args.js` `parseCommandArgs` / `parseInspectArgs`: `JSON.parse` in the
+adapter, closed keys by name (`unexpectedArgument`), allowlist by name (`notAllowed`), argv count,
+total bytes (`argsTooLarge`), per-entry units and NUL, `timeoutInvalid`. `EVI/blob-access.js`
+`stageText` (pieces of `blobPieceBytes`, abort on failure) and `readStaged` (pages of
+`blobPageBytes`, size bound before and during the read). `EVI/shell-port.js` `makeShellPort({ key,
+runner, settings, blobs?, isWithdrawn?, redact?, log? })`: refusals are `failed` outcomes, a
+withdrawn key is asked before and after the command, results over `inlineBytes` are staged,
+failures over it staged as `Error: ...`, the runner's own environment texts passed on unwrapped.
+The property test runs 120 random cases (0-80 KiB per stream, ten character classes including
+6-unit control escapes and surrogate pairs): every text parses, is at most 32,768 units, each
+field whole or a marked prefix, no lone surrogate. Staging and staged arguments run against the
+agent host's real blob store, `BlobWriters` and `Content`; one case runs the port over W6.3b's
+real runner and fake runtime (1 MiB per stream kept to 64 KiB, cut, staged; a 200 ms timeout).
+Fit: good.
+
+### J-12021 2026-11-19 W6.3c costs of the output budget and the port - measured
+Evidence: `2f59b3b8a8`; a scratch script (not committed) over `perf/_window.mjs` `runWindow`,
+5 s windows each, in process, load 8.8 / 6.5 / 4.8 (other lanes running).
+Reading: `boundCommandResult` worst case (stdout 65,536 control characters, 393 K units escaped;
+stderr 16,384 surrogate pairs): median 4.28 ms, p95 4.98 ms (n 1,152). The port end to end on that
+result, staged into a local blob store (no hub hop): median 20.6 ms, p95 38.2 ms (n 212). A
+staged 260 KB argument list (13 pages) read, parsed and run, result staged: median 21.5 ms, p95
+32.7 ms (n 218). So the adapter's own work is small beside the hops the contract budgets
+(vat -> adapter -> vat 70-76 ms, adapter pieces 20-25 ms each, J-9043); the perf rows of section
+10 are W6.7's. Session program: 233,126 bytes before; W6.3c adds 0 (its files are under
+`resources/`, which no guest bundle can import; the bundle's module list names none of them).
+Fit: good.
+
+### J-12022 2026-11-19 W6.3c fit - finding
+Evidence: the three commits above; `lint:duplicates` 1.84 % (ceiling 2.05 %).
+Reading: suits Thixotrope: parsing model JSON in the adapter keeps a 20,000-key record out of
+every vat (it is refused by name in Node, rule 12.10), and the closed `ShellPortRequest` guard
+refuses an extra key before the port runs. Staging through the session's `BlobWriters` makes the
+result an agent-host blob with no vat on the byte path. Does not suit as well: every staged piece
+and page is an adapter-to-adapter frame the hub persists (CC-100; at most 8 pieces of 12,288 bytes
+for a 98 KB result, 26 pages for the largest staged argument read, `argsReadBytes` 524,288). One
+8-line block of `stageText` equals `guest/session/prompt.js` `stagePrompt`'s writer loop (under the
+15-line rule): a shared `stageThroughWriters(text, writers)` in `guest/lib` would serve prompt,
+exec `finish` and this module (a fold item, not done here: `prompt.js` is not this unit's).
+Fit: neutral.
+
+### J-12023 2026-11-19 W6.3c time record - process
+Evidence: first command 2026-11-19T02:23:29Z.
+Reading: no command over 60 s (the longest: the scratch measurement, 15 s; `tsc` 2.3 s). No
+integration test, supervisor or browser started. Commits `c0829ad19e`, `2f59b3b8a8`, `fff3920736`
+and this journal commit; nothing pushed; no change to `packages/thixotrope` or `rust/**`.
+Fit: neutral.
