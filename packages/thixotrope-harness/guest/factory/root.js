@@ -21,6 +21,7 @@
 import { interfaces, shapes } from '../lib/guards/factory.js';
 import { limits } from '../lib/limits.js';
 import { utf8Bytes } from '../lib/bounded.js';
+import { voiceTexts } from '../lib/voice-preferences.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { RowTable } from './rows.js' */
@@ -261,6 +262,12 @@ export const makeHarnessRoot = ({
     exportState: cursor => needExports().exportPage(cursor),
     /** @param {any} options M2 W2.7: a creation listed once imported */
     importSession: options => needExports().importSession(options),
+    // WX.1: the guard's speech method (m11-interfaces.md appendix A); the
+    // voice lane wires it (seam H2b) and keeps this refusal for a root
+    // made without it.
+    configureSpeech: () => {
+      throw Error(voiceTexts.speechNotWired);
+    },
   });
 };
 harden(makeHarnessRoot);

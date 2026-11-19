@@ -61,6 +61,10 @@ import {
 } from './guards/base.js';
 import { view } from './guards/session.js';
 import * as below from './guards/factory.js';
+// The cross-lane seam unit (WX.1): method names the context window
+// (m8-interfaces.md G-2) and mail (m9-interfaces.md S9) add.
+import { contextMethodNames } from './guards/context.js';
+import { mailMethodNames } from './guards/mail.js';
 
 export { execArgumentNames, inspectOps } from './guards/base.js';
 export {
@@ -343,7 +347,11 @@ const m1aShapeBuilders = {
         // M2: `archive` once the session has sealed segments (D-M2-1;
         // m2-interfaces.md 4.8): records before `archive.sealedTo` are
         // in the archive, not in the vat.
-        base: record({ count, epoch: count }, { archive: S.ArchiveState }),
+        // M8 (seam G-2; WX.1): `boundary` once a compaction was accepted.
+        base: record(
+          { count, epoch: count },
+          { archive: S.ArchiveState, boundary: count },
+        ),
         append: list(S.TurnRecord, limits.maxAppendRecords),
         tools: list(S.ToolDescription, limits.maxToolsPerRound),
         options: record(
@@ -357,6 +365,8 @@ const m1aShapeBuilders = {
       {
         context: M.remotable('ContextSource'),
         system: M.or(staged(S.Text), list(staged(S.Text), 2)),
+        // M8 (seam G-2; WX.1): plan and summarize before this round.
+        compaction: S.CompactionAsk,
       },
     ),
   /** What `Backend.open(host)` returns: one adapter incarnation's turn ports. */
@@ -468,6 +478,12 @@ const m1aShapeBuilders = {
       record({ type: 'end', turnId: S.Id, status: S.SettledStatus }),
       record({ type: 'abort', turnId: S.Id, reason: S.Reason }),
       record({ type: 'pending', pending: S.PendingView }),
+      // Environments (m6-interfaces.md 15.2, seam S-3; WX.1).
+      record({
+        type: 'execution',
+        state: M.or('running', 'stopping', 'stopped'),
+        supported: M.boolean(),
+      }),
     ),
   /** `LivePublisher.publish` argument: one batch per crank. */
   PublishBatch: () =>
@@ -690,7 +706,13 @@ const m1aMethodNames = harden({
   SessionInternal: ['rowSnapshot'],
   Turn: ['getStatus', 'cancel', 'whenFinished', 'resolve'],
   QueueEntry: ['describe', 'cancel'],
-  TurnSink: ['dispatching', 'roundFinal', 'roundFailed', 'deadline'],
+  TurnSink: [
+    'dispatching',
+    'roundFinal',
+    'roundFailed',
+    'deadline',
+    ...contextMethodNames.TurnSink,
+  ],
   ContextSource: ['page'],
   SpareMaker: ['make'],
   Endpoint: [
@@ -1151,6 +1173,7 @@ const m2VersionMethodNames = harden({
     'deleteSelf',
     'exportState',
     'importState',
+    ...mailMethodNames.SessionInternal,
   ],
   QueueEntry: [...m1aMethodNames.QueueEntry, 'edit', 'sendNow'],
   ContextSource: [...m1bMethodLists.ContextSource, 'segments'],
@@ -1160,7 +1183,12 @@ const m2VersionMethodNames = harden({
     'listBackends',
     'listModels',
   ],
-  HarnessRoot: [...m1bMethodLists.HarnessRoot, 'exportState', 'importSession'],
+  HarnessRoot: [
+    ...m1bMethodLists.HarnessRoot,
+    'exportState',
+    'importSession',
+    'configureSpeech',
+  ],
   AgentHostAdmin: [
     ...m1bMethodLists.AgentHostAdmin,
     'getSecrets',

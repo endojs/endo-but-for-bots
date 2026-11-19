@@ -284,6 +284,18 @@ export const makeSession = (
     grants() {
       return runtime.grants.facet;
     },
+    // WX.1: the guard's environment methods (m6-interfaces.md 15.1) answer
+    // as for a session without a shell environment until the `environment`
+    // part replaces these three bodies (seam R-3 (b)).
+    emergencyStop() {
+      throw Error(texts.noEnvironmentToStop);
+    },
+    resume() {
+      throw Error(texts.noEnvironmentToStop);
+    },
+    getExecutionState() {
+      return harden({ state: 'running', supported: false });
+    },
   });
 
   const internal = makeExo('SessionInternal', interfaces.SessionInternal, {
@@ -310,6 +322,13 @@ export const makeSession = (
     importState(chunk) {
       return inCrank(() => lifecycle.importState(chunk));
     },
+    // WX.1: the guard's mail methods (m9-interfaces.md S9): no inbox yet,
+    // so a delivery is refused and nothing can be cancelled, until the
+    // `inbox` part replaces these two bodies (seam S5).
+    deliverMail() {
+      return harden({ refused: texts.notBuiltYet });
+    },
+    cancelMail() {},
   });
 
   return harden({ session, internal });

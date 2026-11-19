@@ -138,6 +138,8 @@ const makeSink = () => {
       calls.progress += 1;
       return true;
     },
+    // WX.1: the context window's method; nothing here asks to compact.
+    compacted: () => harden({ go: false }),
   });
   return { turn, sink, calls, settled };
 };

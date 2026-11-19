@@ -106,6 +106,10 @@ const makeSession = ({ config, rowReporter }) => {
       throw Error(NOT_HERE);
     },
     grants: refuse('grants'),
+    // The environment and mail methods (WX.1).
+    emergencyStop: refuse('emergencyStop'),
+    resume: refuse('resume'),
+    getExecutionState: refuse('getExecutionState'),
   });
   const internal = makeExo('SessionInternal', interfaces.SessionInternal, {
     rowSnapshot: () =>
@@ -114,6 +118,8 @@ const makeSession = ({ config, rowReporter }) => {
     deleteSelf: refuse('deleteSelf'),
     exportState: refuse('exportState'),
     importState: refuse('importState'),
+    deliverMail: refuse('deliverMail'),
+    cancelMail: refuse('cancelMail'),
   });
   return harden({ session, internal });
 };

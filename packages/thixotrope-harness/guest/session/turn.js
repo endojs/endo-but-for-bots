@@ -900,6 +900,15 @@ export const makeTurnRunner = ({
         active.checkpoint = { round, partial };
         return true;
       },
+      /**
+       * WX.1: the guard's context-window method (m8-interfaces.md G-1). No
+       * round asks to compact until the `compaction` part does, so the
+       * answer is the one for an ask no longer pending; the part replaces
+       * this body (seam S-5d).
+       */
+      compacted() {
+        return harden({ go: false });
+      },
     },
   );
 

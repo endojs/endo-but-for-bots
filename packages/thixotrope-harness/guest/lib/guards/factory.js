@@ -10,6 +10,11 @@
 import { limits } from '../limits.js';
 import { text, list, record, count, R, done, lazyTable } from './base.js';
 import * as below from './session.js';
+// The cross-lane seam unit (WX.1): mail's operator method and settings
+// (m9-interfaces.md 6.2 F6) and voice (m11-interfaces.md appendix A, H1).
+import { postOfficeTables, postOfficeMethodNames } from './post-office.js';
+import { mailLimits } from '../mail-limits.js';
+import { voiceLimits } from '../voice-preferences.js';
 
 export { reservedLabels } from './session.js';
 
@@ -111,6 +116,14 @@ export const texts = harden({
   inventoryFull: 'The inventory is full',
   /** An inventory entry after `remove()`. */
   entryRemoved: 'This inventory entry was removed',
+
+  // ---- environments (m6-interfaces.md 15.2; WX.1) ----
+  /**
+   * R3-21: the same words as `guards/environments.js`
+   * `environmentTexts.runnerRequired` (a unit test keeps them equal).
+   */
+  runnerRequired:
+    'A preset that provisions a shell needs a configured environment runner',
 });
 
 /**
@@ -317,6 +330,17 @@ const m1bShapeBuilders = {
         defaultBackend: M.remotable('Backend'),
         defaultModelId: S.ModelId,
         turnDeadlineMs: M.and(count, M.lte(limits.maxTurnDeadlineMs)),
+        // Environments (m6-interfaces.md 15.2, seam S-2; WX.1).
+        environments: M.remotable('EnvironmentsAdmin'),
+        // Subagents (m9-interfaces.md 6.2 F6; WX.1): the defaults in
+        // `mailLimits` are the ceilings.
+        maxDescendants: M.and(count, M.lte(mailLimits.maxDescendants)),
+        maxDepth: M.and(count, M.lte(mailLimits.maxDepth)),
+        askTimeoutSeconds: M.and(
+          count,
+          M.gte(mailLimits.minAskTimeoutSeconds),
+          M.lte(mailLimits.askTimeoutSeconds),
+        ),
       },
     ),
   ProgramInfo: () => record({ digest: text(64), bytes: count }),
@@ -548,6 +572,123 @@ const presetShapeBuilders = {
     ),
 };
 
+/**
+ * Voice (m11-interfaces.md appendix A, seam H1; WX.1): the factory vat's
+ * `Voice` facet and the speech settings `HarnessRoot.configureSpeech`
+ * writes (D-M11-21).
+ */
+const voiceShapeBuilders = {
+  /** R5-54: the shared record; every field optional. */
+  VoicePreferences: () =>
+    record(
+      {},
+      {
+        voice: text(voiceLimits.voiceUnits),
+        speed: M.number(),
+        noiseScale: M.number(),
+        noiseW: M.number(),
+        sentenceSilence: M.number(),
+      },
+    ),
+  /** A write: the same fields (ranges checked in the method, D-M11-19). */
+  VoicePreferencesPatch: () => S.VoicePreferences,
+  VoiceSessionRequest: () =>
+    record(
+      {},
+      {
+        invocationId: text(voiceLimits.invocationIdUnits),
+        title: text(limits.titleUnits),
+        at: count,
+      },
+    ),
+  VoiceSessionAnswer: () =>
+    record(
+      { session: R('Session'), key: S.Id, duplicate: M.boolean() },
+      { warning: text(limits.labelUnits * 2) },
+    ),
+  SpeechInSettings: () =>
+    M.or(
+      record({ kind: 'off' }),
+      record(
+        {
+          kind: 'process',
+          command: list(
+            text(voiceLimits.commandArgUnits),
+            voiceLimits.commandArgs,
+          ),
+          language: text(32),
+        },
+        { warm: M.boolean() },
+      ),
+      record(
+        {
+          kind: 'openai-audio',
+          baseUrl: text(voiceLimits.settingUnits),
+          model: text(256),
+          language: text(32),
+        },
+        { key: R('ReadGrant'), partialIntervalMs: count },
+      ),
+    ),
+  SpeechOutSettings: () =>
+    M.or(
+      record({ kind: 'off' }),
+      record(
+        {
+          kind: 'process',
+          command: list(
+            text(voiceLimits.commandArgUnits),
+            voiceLimits.commandArgs,
+          ),
+          voicesDir: text(voiceLimits.commandArgUnits),
+        },
+        {
+          defaultVoice: text(voiceLimits.voiceUnits),
+          defaultSpeed: M.number(),
+          spareSynth: M.boolean(),
+        },
+      ),
+      record(
+        {
+          kind: 'openai-audio',
+          baseUrl: text(voiceLimits.settingUnits),
+          model: text(256),
+          voices: list(
+            text(voiceLimits.voiceUnits),
+            voiceLimits.providerVoices,
+          ),
+        },
+        {
+          key: R('ReadGrant'),
+          defaultVoice: text(voiceLimits.voiceUnits),
+          defaultSpeed: M.number(),
+        },
+      ),
+    ),
+  SpeechSettings: () =>
+    record(
+      { speechIn: S.SpeechInSettings, speechOut: S.SpeechOutSettings },
+      { revision: count },
+    ),
+};
+
+/** Voice's interfaces (m11-interfaces.md appendix A; WX.1). */
+const voiceInterfaceBuilders = {
+  Voice: () =>
+    M.interface('Voice', {
+      getPreferences: M.call().returns(S.VoicePreferences),
+      setPreferences: M.call(S.VoicePreferencesPatch).returns(
+        S.VoicePreferences,
+      ),
+      getVoicePreset: M.call().returns(R('Preset')),
+      setVoicePreset: M.call(R('Preset'), count).returns(R('Preset')),
+      startVoiceSession: M.callWhen()
+        .optional(S.VoiceSessionRequest)
+        .returns(S.VoiceSessionAnswer),
+      speechSettings: M.call().returns(S.SpeechSettings),
+    }),
+};
+
 /** Interfaces of presets and the operator inventory (M5). */
 const presetInterfaceBuilders = {
   /** The preset catalogue (A.4 `listPresets`, `getPresetConfiguration`). */
@@ -608,6 +749,9 @@ const m2Versions = {
       ...foldedMethodsOf.HarnessRoot(),
       exportState: M.call().optional(S.Id).returns(S.FactoryExportPage),
       importSession: M.callWhen(S.CreateOptions).returns(S.MadeSession),
+      // Voice (m11-interfaces.md appendix A, D-M11-21; WX.1): the
+      // provisioning path, never a page.
+      configureSpeech: M.call(S.SpeechSettings).returns(S.SpeechSettings),
     }),
   /** + `getSecrets` (W2.7 forwards to the agent host's). */
   Operator: () =>
@@ -617,6 +761,10 @@ const m2Versions = {
       // M5 (W5.1): the preset catalogue and the operator inventory.
       getPresets: M.call().returns(R('PresetCatalog')),
       getInventory: M.call().returns(R('Inventory')),
+      // Mail (m9-interfaces.md 6.2 F6; WX.1).
+      ...postOfficeTables().operatorMethods(),
+      // Voice (m11-interfaces.md appendix A, H1; WX.1).
+      getVoice: M.call().returns(R('Voice')),
     }),
 };
 
@@ -627,6 +775,15 @@ export const m2NewMethodNames = harden({
   Preset: ['describe', 'snapshot', 'save', 'delete', 'reset'],
   Inventory: ['list', 'add', 'addAll', 'rev'],
   InventoryEntry: ['describe', 'value', 'relabel', 'remove'],
+  // Voice (m11-interfaces.md appendix A; WX.1).
+  Voice: [
+    'getPreferences',
+    'setPreferences',
+    'getVoicePreset',
+    'setVoicePreset',
+    'startVoiceSession',
+    'speechSettings',
+  ],
 });
 
 /** Method names of `m2Interfaces`: the folded ones first, then M2's. */
@@ -637,6 +794,9 @@ export const m2VersionMethodNames = harden({
     'getSecrets',
     'getPresets',
     'getInventory',
+    // WX.1: mail (m9-interfaces.md F6), voice (m11-interfaces.md H1).
+    ...postOfficeMethodNames.Operator,
+    'getVoice',
   ],
 });
 
@@ -652,6 +812,7 @@ export const shapes = lazyTable(
     ...m1bShapeBuilders,
     ...m2ShapeBuilders,
     ...presetShapeBuilders,
+    ...voiceShapeBuilders,
   },
   below.shapes,
 );
@@ -670,6 +831,7 @@ export const interfaces = lazyTable(
     ...m1bInterfaceBuilders,
     ...m2Versions,
     ...presetInterfaceBuilders,
+    ...voiceInterfaceBuilders,
   },
   below.interfaces,
 );

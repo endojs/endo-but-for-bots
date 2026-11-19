@@ -19,6 +19,17 @@ import {
   lazyTable,
 } from './base.js';
 import * as below from './base.js';
+// The cross-lane seam unit (WX.1): the shared entries of the context
+// window (`./context.js`, seam G-1) and of mail (`./mail.js`, seams S9,
+// S9b) join these tables here; each slice module is folded in and deleted
+// by its lane's fold.
+import {
+  contextShapeBuilders,
+  compactionKindLetters,
+  contextSinkMethods,
+} from './context.js';
+import { mailTables } from './mail.js';
+import { mailLimits } from '../mail-limits.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 
@@ -198,6 +209,28 @@ export const texts = harden({
    */
   attachmentsLost:
     'Attachments were lost when the page reloaded; attach them again',
+
+  // ---- environments (designs/m6-interfaces.md 15.1; WX.1) ----
+  /** Fae `assertSessionAdmission`: a stopped or stopping session refuses work. */
+  sessionStopped:
+    'Session is stopped or stopping; explicitly resume it in Settings',
+  /** `Session.emergencyStop` of a session without a shell environment. */
+  noEnvironmentToStop: 'This session has no shell environment to stop',
+  /** Fae `resumeSession`. */
+  finishStopFirst: 'Finish emergency stop before resuming',
+  /** Fae `emergencyStop`. */
+  stopIncomplete: 'Session stop incomplete; retry in Settings',
+  commandOutcomeUnknown:
+    "The command's outcome is unknown: the environment runner restarted while it ran. Inspect the workspace before retrying.",
+  commandStopped:
+    'The turn was cancelled; the environment was stopped while this command ran. Its effects may have happened.',
+  /**
+   * Harness (WX.1): a method whose guard the cross-lane seam unit added
+   * before the lane that builds it merged (`SessionInternal.deliverMail`,
+   * `Operator.getMail`, `Operator.getVoice`). Unused once those lanes
+   * merged; the group fold deletes it.
+   */
+  notBuiltYet: 'This harness does not provide this yet',
 });
 
 /**
@@ -213,6 +246,8 @@ export const archiveKindLetters = harden([
   ['tool-result', 't'],
   ['turn-settled', 'e'],
   ['turn-resolved', 'v'],
+  // The context window's kinds (seam G-1).
+  ...compactionKindLetters,
 ]);
 
 /**
@@ -573,6 +608,10 @@ const m1aShapeBuilders = {
       S.ToolResult,
       S.TurnSettled,
       S.TurnResolved,
+      // The context window's records (seam G-1).
+      S.CompactionStarted,
+      S.Compaction,
+      S.CompactionSkipped,
     ),
   /** `TurnSink.roundFinal` argument. */
   RoundResult: () =>
@@ -731,8 +770,26 @@ const m1aShapeBuilders = {
           }),
           limits.maxEndowments,
         ),
+        // Environments (m6-interfaces.md 15.1, seam S-1; WX.1).
+        workspace: M.remotable('Git'),
+        shell: M.remotable('Shell'),
+        environment: M.remotable('EnvironmentControl'),
+        // Mail and subagents (m9-interfaces.md 6.2 S9; WX.1).
+        mail: R('Outbox'),
+        operatorAddress: R('MailAddress'),
+        subagents: R('Delegation'),
       },
     ),
+  /**
+   * A session's sandbox execution state (m6-interfaces.md 15.1; WX.1):
+   * `Session.getExecutionState`, `emergencyStop`, `resume`, the export's
+   * head page.
+   */
+  ExecutionState: () =>
+    record({
+      state: M.or('running', 'stopping', 'stopped'),
+      supported: M.boolean(),
+    }),
   MakeArgs: () =>
     record({
       config: S.SessionConfig,
@@ -830,6 +887,8 @@ export const methodsOf = harden({
     roundFinal: M.call(S.RoundResult).returns(done),
     roundFailed: M.call(S.RoundFailure).returns(done),
     deadline: M.call(record({ opId: S.Id })).returns(done),
+    // The context window (seam G-1; WX.1).
+    ...contextSinkMethods(() => shapes),
   }),
   Session: () => ({
     getInfo: M.call().returns(S.SessionInfo),
@@ -913,6 +972,65 @@ export const execDescription = harden({
     required: ['code'],
     additionalProperties: false,
   }),
+});
+
+/**
+ * The shell tools as offered to the model (m6-interfaces.md 15.1; WX.1):
+ * agent-tools `json-tools/shell.js` at `1315bef86`, word for word, with
+ * `exec` named `runCommand` and `inspect` named `inspectShell` (A.3).
+ */
+export const shellToolDescriptions = harden({
+  runCommand: harden({
+    name: 'runCommand',
+    description:
+      'Run an allowlisted command with a structured argv (no shell string, no interpolation). Returns { stdout, stderr, exitCode, signal, truncated }; a non-zero exitCode is data, not an error. Inspect stderr as well: pipelines may mask a failed command. Output is a bounded preview; save full logs to a file and return a short excerpt. Background processes have no persistence guarantee. Run a local test server and its browser check in the same invocation and clean up on exit. A timeout or rejection does not prove the command had no effects: inspect state before retrying.',
+    parameters: JSON.stringify({
+      type: 'object',
+      properties: {
+        command: {
+          type: 'string',
+          description:
+            'The program to run (argv[0]); must be in the shell allowlist.',
+        },
+        args: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Arguments passed to the program, one array element each.',
+        },
+        options: {
+          type: 'object',
+          properties: {
+            timeoutMs: {
+              type: 'number',
+              description:
+                'Override the default invocation timeout in ms, longer or shorter. Use a positive integer up to 2147483647; omit to use inspect().timeoutMs.',
+            },
+          },
+          description: 'Optional per-call execution options.',
+        },
+      },
+      required: ['command', 'args'],
+      additionalProperties: false,
+    }),
+  }),
+  inspectShell: harden({
+    name: 'inspectShell',
+    description:
+      'Report the command allowlist, default invocation timeout, and output cap. Reveals no host path.',
+    parameters: JSON.stringify({
+      type: 'object',
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    }),
+  }),
+});
+/** Closed argument names of the shell tools (m6-interfaces.md 15.1). */
+export const shellToolArgumentNames = harden({
+  runCommand: harden(['command', 'args', 'options']),
+  options: harden(['timeoutMs']),
+  inspectShell: harden([]),
 });
 
 /** M1b's shapes (W1b.0); in `shapes` since M2 W2.0. */
@@ -1051,7 +1169,7 @@ const m2ShapeBuilders = {
    */
   SessionExportPage: () =>
     record(
-      { part: M.or('head', 'archive', 'records', 'queue', 'end') },
+      { part: M.or('head', 'archive', 'records', 'queue', 'inbox', 'end') },
       {
         info: S.SessionInfo,
         config: S.SessionConfig,
@@ -1063,6 +1181,13 @@ const m2ShapeBuilders = {
         entries: list(S.ExportEntry, limits.maxWaiting),
         hold: S.Hold,
         next: S.Cursor,
+        // The head page's execution state (m6-interfaces.md X-E; WX.1).
+        execution: S.ExecutionState,
+        // An `inbox` page's messages (m9-interfaces.md S9b; WX.1).
+        messages: list(
+          mailTables().shapes.InboxExportMessage,
+          mailLimits.inboxMessages,
+        ),
       },
     ),
   /** `SessionInternal.importState` answer. */
@@ -1082,7 +1207,7 @@ let importChunk;
 
 const importChunkView = () => {
   importChunk ??= record(
-    { part: M.or('head', 'archive', 'records', 'queue', 'end') },
+    { part: M.or('head', 'archive', 'records', 'queue', 'inbox', 'end') },
     {
       info: S.SessionInfo,
       config: S.SessionConfig,
@@ -1094,6 +1219,12 @@ const importChunkView = () => {
       entries: list(S.ExportEntry, limits.maxWaiting),
       hold: S.Hold,
       next: S.Cursor,
+      // As `SessionExportPage` (WX.1: M6 X-E, M9 S9b).
+      execution: S.ExecutionState,
+      messages: list(
+        mailTables().shapes.InboxExportMessage,
+        mailLimits.inboxMessages,
+      ),
     },
   );
   return importChunk;
@@ -1104,12 +1235,8 @@ const importChunkView = () => {
  * `m5-interfaces.md` sections 2-5).
  */
 const objectShapeBuilders = {
-  /** An endowment, inventory or attachment label (R3-22: 80 characters). */
-  EdgeLabel: () => text(limits.endowmentLabelUnits),
-  /** One attachment of a message (R3-8): its label and the object. */
-  Attachment: () => record({ label: S.EdgeLabel, value: M.remotable() }),
-  /** A message's attachments (R4-99: 32 slots). */
-  Attachments: () => list(S.Attachment, limits.maxAttachments),
+  // `EdgeLabel`, `Attachment`, `Attachments`: in `./base.js` since WX.1
+  // (`./mail.js` reads them and `./session.js` imports `./mail.js`).
   /** `Composer.submit`'s optional fourth argument (M5). */
   SubmitOptions: () => record({}, { attachments: S.Attachments }),
   /** A stored JSON value as `ExecPowersSource` carries it: the model's text. */
@@ -1216,6 +1343,10 @@ const m2Versions = {
       ).returns(S.Receipt),
       // R3-6: the session's granted tools.
       grants: M.call().returns(R('SessionGrants')),
+      // Environments (m6-interfaces.md 15.1, seam S-1; WX.1).
+      emergencyStop: M.callWhen().returns(S.ExecutionState),
+      resume: M.callWhen().returns(S.ExecutionState),
+      getExecutionState: M.call().returns(S.ExecutionState),
     }),
   /** + delete, blob paging, data-only export and importing (W2.7). */
   SessionInternal: () =>
@@ -1225,6 +1356,8 @@ const m2Versions = {
       deleteSelf: M.call().returns(done),
       exportState: M.call().optional(S.Cursor).returns(S.SessionExportPage),
       importState: M.call(importChunkView()).returns(S.ImportProgress),
+      // Mail (m9-interfaces.md 6.2 S9; WX.1): held by the factory only.
+      ...mailTables().sessionInternalMethods(),
     }),
   /** + `edit`, `sendNow` (W2.4; A.4 editPending, sendPending). */
   QueueEntry: () =>
@@ -1267,6 +1400,9 @@ export const m2VersionMethodNames = harden({
     'findTurn',
     'enqueueMessageOnce',
     'grants',
+    'emergencyStop',
+    'resume',
+    'getExecutionState',
   ],
 });
 
@@ -1282,6 +1418,8 @@ export const shapes = lazyTable(
     ...m1bShapeBuilders,
     ...m2ShapeBuilders,
     ...objectShapeBuilders,
+    // The context window's shapes (seam G-1; WX.1).
+    ...contextShapeBuilders(() => shapes),
   },
   below.shapes,
 );

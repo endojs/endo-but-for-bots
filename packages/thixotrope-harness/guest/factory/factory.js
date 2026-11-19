@@ -423,6 +423,15 @@ export const makeFactoryKit = ({
     getSecrets: () => E(admin).getSecrets(),
     getPresets: () => catalog.facet,
     getInventory: () => inventory.facet,
+    // WX.1: the guard's mail and voice methods (m9-interfaces.md F6,
+    // m11-interfaces.md H1) refuse until their lanes replace these bodies
+    // (seams F1, H2).
+    getMail: () => {
+      throw Error(texts.notBuiltYet);
+    },
+    getVoice: () => {
+      throw Error(texts.notBuiltYet);
+    },
   });
 
   const exports = makeFactoryExport({

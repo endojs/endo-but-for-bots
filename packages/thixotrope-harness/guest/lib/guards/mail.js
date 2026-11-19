@@ -37,13 +37,14 @@ import {
   R,
   done,
   lazyTable,
+  // `./session.js` imports this module (WX.1, seams S9 and S9b), so the
+  // shapes read here come from `./base.js` (no import cycle).
+  shapes as baseShapes,
 } from './base.js';
-import { shapes as sessionShapes } from './session.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 
 const { M } = /** @type {GuestGlobals} */ (globalThis);
-const S = sessionShapes;
 const ML = mailLimits;
 
 // ---------------------------------------------------------------- names
@@ -155,7 +156,7 @@ const mailShapeBuilders = {
         from: R('MailAddress'),
         fromTitle: text(limits.titleUnits),
         body: X.MailBody,
-        attachments: S.Attachments,
+        attachments: baseShapes.Attachments,
         at: count,
       },
       {
@@ -180,7 +181,7 @@ const mailShapeBuilders = {
         type: X.MailType,
         fromTitle: text(limits.titleUnits),
         body: X.MailBody,
-        edges: list(S.EdgeLabel, limits.maxAttachments),
+        edges: list(baseShapes.EdgeLabel, limits.maxAttachments),
         at: count,
         state: M.or(...inboxStates),
       },
@@ -193,17 +194,16 @@ const mailShapeBuilders = {
     ),
   /** `deliverMail`'s answer: the message number, or a refusal (no throw). */
   Delivery: () =>
-    record({}, { number: count, duplicate: M.boolean(), refused: S.Reason }),
+    record(
+      {},
+      { number: count, duplicate: M.boolean(), refused: baseShapes.Reason },
+    ),
   /**
-   * The exec vat's `splitArgs` answer: the arguments' JSON with every long
-   * string replaced by a placeholder (`"\u0000s<k>"`), and the staged
-   * strings in placeholder order (owned by the session).
+   * The exec vat's `splitArgs` answer. The exec program checks it
+   * (`InspectOutcome`, seam S10), so WX.1 moved the shape to `./base.js`;
+   * this name answers the same object.
    */
-  SplitArgs: () =>
-    record({
-      json: text(limits.inlineBytes),
-      staged: list(S.StagedText, ML.splitStagedStrings),
-    }),
+  SplitArgs: () => baseShapes.SplitArgs,
 };
 
 const X = lazyTable(mailShapeBuilders);
