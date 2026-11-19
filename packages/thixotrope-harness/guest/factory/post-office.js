@@ -52,6 +52,7 @@ import {
   postOfficeTextOf,
 } from '../lib/guards/post-office.js';
 import { turnStartingTypes } from '../lib/guards/mail.js';
+import { texts as sessionTexts } from '../lib/guards/session.js';
 import { cutText, messageBytes, messageOf, utf8Bytes } from '../lib/bounded.js';
 import { isRetiredBreak } from '../lib/retired.js';
 
@@ -319,6 +320,18 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
         }
       }
       const delivery = await E(row.internal).deliverMail(flight.envelope);
+      if (
+        delivery.duplicate === true &&
+        delivery.number === undefined &&
+        delivery.refused === undefined
+      ) {
+        // A re-drive older than the recipient's outcome ring: the first
+        // send's outcome is unknown, so it is reported so, and its copy is
+        // kept (the recipient may hold it).
+        flight.copied = undefined;
+        settle(flight, { refused: sessionTexts.toolOutcomeUnknown });
+        return;
+      }
       settle(
         flight,
         delivery.refused === undefined

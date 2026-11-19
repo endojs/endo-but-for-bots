@@ -1,6 +1,6 @@
 // @ts-check
 // Fakes for the post office and the operator's mail (designs/m9-interfaces.md
-// 3.1, W9.4 tests): a real row table and start count, an AgentHostAdmin and
+// 3.1): a real row table and start count, an AgentHostAdmin and
 // RelayWriters from their real guards, and session rows whose
 // SessionInternal is an exo of the real `deliverMail`/`cancelMail` guards
 // with a minimal inbox (seq duplicates answered from a ring, a bound). AVA
@@ -131,6 +131,7 @@ export const makeMailWorld = ({ inboxLimit = 256 } = {}) => {
       lastSeq: 0,
       calls: 0,
       retired: false,
+      loseAnswers: false,
       /** @type {ReturnType<typeof makePromiseKit> | undefined} */
       gate: undefined,
     };
@@ -160,7 +161,10 @@ export const makeMailWorld = ({ inboxLimit = 256 } = {}) => {
         state.calls += 1;
         if (state.retired) throw Error(HUB_RETIRED_MESSAGE);
         if (state.gate !== undefined) await state.gate.promise;
-        return E(exo).deliverMail(envelope);
+        const delivery = E(exo).deliverMail(envelope);
+        // The answer is lost (a kill after the recipient's crank).
+        if (state.loseAnswers) return makePromiseKit().promise;
+        return delivery;
       },
       /** @param {number} postmark */
       cancelMail: postmark => E(exo).cancelMail(postmark),
@@ -178,6 +182,8 @@ export const makeMailWorld = ({ inboxLimit = 256 } = {}) => {
       stall: () => {
         state.gate = makePromiseKit();
       },
+      /** The inbox forgets its delivery outcomes (an outcome ring miss). */
+      forgetOutcomes: () => outcomes.clear(),
       release: () => {
         const { gate } = state;
         state.gate = undefined;

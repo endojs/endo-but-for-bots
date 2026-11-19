@@ -20,6 +20,7 @@ import {
   postOfficeTextOf,
 } from '../../guest/lib/guards/post-office.js';
 import { REDRIVE_WINDOW } from '../../guest/factory/post-office.js';
+import { texts } from '../../guest/lib/guards/session.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -480,6 +481,28 @@ test('a restart re-drives deliveries stamped with an earlier start, with the sam
   gate?.resolve(undefined);
   await settle();
   t.is(b.envelopes.length, 1);
+  t.is(world.postOffice.status().inFlight, 0);
+});
+
+test('a re-drive older than the outcome ring is reported as an unknown outcome, not delivered', async t => {
+  const world = makeMailWorld();
+  const a = world.addSession('Alpha');
+  const b = world.addSession('Beta');
+  world.starts.next();
+  // The first send reaches Beta's inbox, but its answer is lost.
+  b.state.loseAnswers = true;
+  const pending = E(a.outbox).post(
+    harden({ to: [b.address], body: 'lost answer', attachments: none }),
+  );
+  await settle();
+  t.is(b.envelopes.length, 1);
+  // Beta's ring no longer holds that seq when the restart re-drives it.
+  b.forgetOutcomes();
+  b.state.loseAnswers = false;
+  await world.postOffice.restart(world.starts.next());
+  const receipt = await pending;
+  t.deepEqual(receipt.results, [{ refused: texts.toolOutcomeUnknown }]);
+  t.is(b.envelopes.length, 1, 'not delivered twice');
   t.is(world.postOffice.status().inFlight, 0);
 });
 
