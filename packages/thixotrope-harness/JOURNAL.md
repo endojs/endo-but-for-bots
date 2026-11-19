@@ -17337,3 +17337,20 @@ entries respectively, in the original order with the original values. The ordina
 installer's bundler now produces 75,511 bytes. The production session program is 257,142 bytes
 against 270,336. All 24 guard snapshot, guest interface, execution export and bundle tests passed
 on the combined checkout. The worker, native installer and budgets are unchanged.
+
+### J-1444 2026-11-19 WX.F combined size and child environment
+
+Evidence: the manager guard imports in `bfc6b51f89` shared the scalar bounds without importing
+the full mail and image vocabulary. The unchanged native installer produced a 75,511-byte
+manager against an 80,000-byte ceiling (J-12121). On `b04ca0c0cf` the staged programs measured
+257,142 bytes for the session, 247,862 for the factory and 75,093 for exec. The session has
+13,194 bytes of headroom. J-12541 records the separate M9 allocation miss using identical
+emission on both sides of the comparison.
+
+The combined daemon ran the child-workspace test in 64.6 s inside the worker. The child used
+its own shell and committed its own file with the parent stopped. An earlier cold run hit AVA's
+two-minute default while provisioning. The reusable template is now prepared in suite setup.
+
+Reading: the manager and staged session meet their respective whole-program limits. The duplicate
+check measured 584 of 38,406 source lines (1.52 %), with the ceiling lowered to 1.77 %. ESLint
+and the duplicate finder now skip the generated gateway UI bundle after a browser build.
