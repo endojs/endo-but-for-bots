@@ -1,0 +1,12 @@
+Mutant TXT-1-d: decode_unit drops the top bit of a three-byte unit.
+--- a/ironhorse-text/src/lib.rs
++++ b/ironhorse-text/src/lib.rs
+@@ -107,7 +107,7 @@
+                 return None;
+             }
+             Some((
+-                (u16::from(b & 15) << 12) | (u16::from(b1 & 63) << 6) | u16::from(b2 & 63),
++                (u16::from(b & 7) << 12) | (u16::from(b1 & 63) << 6) | u16::from(b2 & 63),
+                 3,
+             ))
+         }

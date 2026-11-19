@@ -124,3 +124,66 @@ mod tests {
         }
     }
 }
+
+/// Kani harnesses for guarantee SNAP-3 (`verification/proofs.d/framing.toml`).
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    /// SNAP-3(b): the pre-reservation is `min(count, payload_len / width)`,
+    /// so never more entries than the payload could hold, for every `count`
+    /// and `payload_len: usize` and each width the decoders pass (0, 1, 4,
+    /// 8, 20, 28; zero reserves nothing). Concrete widths: division by a
+    /// symbolic 64-bit divisor did not finish in 400 s.
+    #[kani::proof]
+    #[kani::unwind(7)]
+    fn snap3_reserve_hint_bounded_by_input() {
+        let count: usize = kani::any();
+        let payload_len: usize = kani::any();
+        for width in [0usize, 1, 4, 8, 20, 28] {
+            let hint = reserve_hint(count, payload_len, width);
+            assert!(hint <= count);
+            if width == 0 {
+                assert!(hint == 0);
+            } else {
+                assert!(hint == count.min(payload_len / width));
+                assert!(hint * width <= payload_len);
+            }
+        }
+        kani::cover!(count > payload_len / 4, "a count the payload cannot hold");
+        kani::cover!(count > 0 && count <= payload_len / 20, "a count that fits");
+    }
+
+    /// SNAP-3(a): the field readers return exactly the big-endian value of
+    /// the bytes at `at` when they fit, and `None` otherwise, on every
+    /// buffer of up to 12 bytes and every `at`.
+    #[kani::proof]
+    #[kani::unwind(13)]
+    fn snap3_field_readers() {
+        let bytes: [u8; 12] = kani::any();
+        let len: usize = kani::any_where(|&l| l <= 12);
+        let p = &bytes[..len];
+        let at: usize = kani::any();
+        let fits4 = at.checked_add(4).is_some_and(|end| end <= len);
+        let fits8 = at.checked_add(8).is_some_and(|end| end <= len);
+        match be_u32_at(p, at) {
+            Some(v) => {
+                assert!(fits4);
+                assert!(v == u32::from_be_bytes([p[at], p[at + 1], p[at + 2], p[at + 3]]));
+            }
+            None => assert!(!fits4),
+        }
+        match be_u64_at(p, at) {
+            Some(v) => {
+                assert!(fits8);
+                assert!(v >> 32 == u64::from(be_u32_at(p, at).unwrap_or(0)));
+                assert!(v & 0xFFFF_FFFF == u64::from(be_u32_at(p, at + 4).unwrap_or(0)));
+            }
+            None => assert!(!fits8),
+        }
+        kani::cover!(
+            fits8 && at + 8 == len,
+            "an eight-byte field ending at the buffer's end"
+        );
+    }
+}

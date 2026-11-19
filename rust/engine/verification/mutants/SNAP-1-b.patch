@@ -1,0 +1,12 @@
+Mutant SNAP-1-b: the pairwise duplicate scan misses a tag repeated by the very next atom.
+--- a/ironhorse-snapshot/src/atom.rs
++++ b/ironhorse-snapshot/src/atom.rs
+@@ -206,7 +206,7 @@
+ /// The allocation-free `O(n^2)` shape.
+ fn first_duplicate_pairwise(atoms: &[Atom<'_>]) -> Option<FourCc> {
+     atoms.iter().enumerate().find_map(|(i, a)| {
+-        let earlier = atoms.get(..i)?;
++        let earlier = atoms.get(..i.saturating_sub(1))?;
+         earlier.iter().any(|b| b.tag == a.tag).then_some(a.tag)
+     })
+ }

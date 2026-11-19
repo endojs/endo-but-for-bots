@@ -1,0 +1,12 @@
+Mutant STR-3-c: charset_contains treats a range's exclusive end as a member.
+--- a/ironhorse-regexp/src/compile.rs
++++ b/ironhorse-regexp/src/compile.rs
+@@ -3393,7 +3393,7 @@
+         let end = chars[2 + middle * 2];
+         if character < begin {
+             high = middle;
+-        } else if character >= end {
++        } else if character > end {
+             low = middle + 1;
+         } else {
+             return true;

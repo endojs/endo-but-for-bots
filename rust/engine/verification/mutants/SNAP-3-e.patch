@@ -1,0 +1,12 @@
+Mutant SNAP-3-e: Version::decode accepts any non-zero magic.
+--- a/ironhorse-snapshot/src/format.rs
++++ b/ironhorse-snapshot/src/format.rs
+@@ -322,7 +322,7 @@
+             return Err(VersionError::Truncated);
+         };
+         let magic = [m0, m1, m2, m3];
+-        if magic != IRONHORSE_MAGIC {
++        if magic == [0; 4] {
+             return Err(VersionError::NotIronhorse(magic));
+         }
+         let format_version = u32::from_be_bytes([v0, v1, v2, v3]);

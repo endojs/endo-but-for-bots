@@ -3571,3 +3571,98 @@ mod structure_properties {
         assert!(progressed > 10_000, "only {progressed} blocks");
     }
 }
+
+/// Kani harnesses for guarantees STR-1 and STR-2
+/// (`verification/proofs.d/framing.toml`).
+#[cfg(kani)]
+mod structure_proofs {
+    use super::*;
+
+    /// STR-1(a) at one concrete `slot_count`: `image_free_marks` accepts
+    /// iff the free entries are distinct and below the count and
+    /// `free.len() + live == count`, and then marks exactly the free slots.
+    fn free_marks_iff_coherent<const COUNT: usize>() -> (bool, usize) {
+        let values: [u32; 5] = kani::any();
+        let n: usize = kani::any_where(|&n| n <= 5);
+        let free = &values[..n];
+        let live: u32 = kani::any();
+        let result = SlotArena::image_free_marks(COUNT, free, live);
+        let mut coherent = free.len() as u64 + u64::from(live) == COUNT as u64;
+        for i in 0..n {
+            coherent &= (free[i] as usize) < COUNT;
+            for j in 0..i {
+                coherent &= free[j] != free[i];
+            }
+        }
+        assert!(result.is_ok() == coherent);
+        if let Ok(marks) = &result {
+            assert!(marks.len() == COUNT);
+            for slot in 0..COUNT {
+                assert!(marks[slot] == free.contains(&(slot as u32)));
+            }
+        }
+        (result.is_ok(), n)
+    }
+
+    #[kani::proof]
+    #[kani::unwind(6)]
+    fn str1_image_free_marks_count_0_to_2() {
+        let a = free_marks_iff_coherent::<0>();
+        let b = free_marks_iff_coherent::<1>();
+        let c = free_marks_iff_coherent::<2>();
+        kani::cover!(a == (true, 0), "the empty image accepted");
+        kani::cover!(b == (true, 1), "a one-slot image with its slot free");
+        kani::cover!(c == (true, 2), "a two-slot image with both slots free");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(6)]
+    fn str1_image_free_marks_count_3_to_4() {
+        let a = free_marks_iff_coherent::<3>();
+        let b = free_marks_iff_coherent::<4>();
+        kani::cover!(a == (true, 3), "a three-slot image, all free");
+        kani::cover!(b.0 && b.1 >= 2, "a four-slot image with two free slots");
+    }
+
+    /// STR-2: on a plain byte space of 24 symbolic bytes, for every
+    /// `total <= 24` (the chain's end; bytes past it are never read) and
+    /// every `header: usize`, `checked_block_at` does not panic, and
+    /// `Ok((end, _))` implies `header < end <= total`.
+    ///
+    /// Termination of `free_chunk_for`'s `while header < len` walk follows:
+    /// each step sets `header = end`, strictly larger and never past `len`.
+    #[kani::proof]
+    #[kani::unwind(6)]
+    fn str2_checked_block_at_progresses() {
+        let bytes: [u8; 24] = kani::any();
+        let plain = ChunkBytes::Plain(bytes.to_vec());
+        let mut reader = ChunkReader {
+            bytes: &plain,
+            cached: None,
+        };
+        let total: usize = kani::any_where(|&t| t <= 24);
+        let header: usize = kani::any();
+        let result = reader.checked_block_at(header, total);
+        if let Ok((end, free)) = result {
+            assert!(header < end && end <= total);
+            kani::cover!(free, "a free block");
+            kani::cover!(
+                !free && end - header > CHUNK_HEADER,
+                "a live block with payload"
+            );
+        }
+        kani::cover!(result.is_err() && header < total, "a corrupt block refused");
+    }
+
+    /// STR-2: `chunk_allocation_fits` is exactly its arithmetic model,
+    /// computed without overflow in `u128`.
+    #[kani::proof]
+    fn str2_chunk_allocation_fits_model() {
+        let header: usize = kani::any();
+        let payload: usize = kani::any();
+        let ceiling: usize = kani::any();
+        let end = header as u128 + CHUNK_HEADER as u128 + payload as u128;
+        assert!(chunk_allocation_fits(header, payload, ceiling) == (end < ceiling as u128));
+        kani::cover!(end + 1 == ceiling as u128, "the last block that fits");
+    }
+}

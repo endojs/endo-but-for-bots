@@ -1,0 +1,12 @@
+Mutant SNAP-1-c: atom_size truncates an oversized atom to u32 instead of refusing it.
+--- a/ironhorse-snapshot/src/atom.rs
++++ b/ironhorse-snapshot/src/atom.rs
+@@ -61,7 +61,7 @@
+ pub(crate) fn atom_size(payload_len: usize) -> Result<u32, SnapshotError> {
+     payload_len
+         .checked_add(ATOM_HEADER)
+-        .and_then(|total| u32::try_from(total).ok())
++        .map(|total| total as u32)
+         .ok_or(SnapshotError::Atom(AtomError::TooLarge))
+ }
+ 

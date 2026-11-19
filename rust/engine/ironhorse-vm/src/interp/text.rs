@@ -448,3 +448,36 @@ mod transcoder_properties {
         }
     }
 }
+
+/// Kani harnesses for guarantee TXT-1 (`verification/proofs.d/framing.toml`).
+#[cfg(kani)]
+mod transcoder_proofs {
+    use super::units_to_be16;
+
+    /// TXT-1(d), the per-unit lemma: big-endian bytes compare as the units
+    /// do, for every pair of code units.
+    #[kani::proof]
+    fn txt1_be16_unit_order() {
+        let a: u16 = kani::any();
+        let b: u16 = kani::any();
+        assert!(a.to_be_bytes().cmp(&b.to_be_bytes()) == a.cmp(&b));
+        kani::cover!(
+            a >> 8 == b >> 8 && a < b,
+            "units differing only in the low byte"
+        );
+    }
+
+    /// TXT-1(d): `units_to_be16` preserves order between every pair of
+    /// strings of lengths 1 and 2 and every pair of length-2 strings, so a
+    /// proper prefix sorts first and the first differing unit decides.
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn txt1_be16_order_short_strings() {
+        let a: [u16; 2] = kani::any();
+        let b: [u16; 2] = kani::any();
+        let short = &a[..1];
+        assert!(units_to_be16(&a).cmp(&units_to_be16(&b)) == a.cmp(&b));
+        assert!(units_to_be16(short).cmp(&units_to_be16(&b)) == short.cmp(&b[..]));
+        kani::cover!(a[0] == b[0] && a[1] > b[1], "the second unit decides");
+    }
+}

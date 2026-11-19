@@ -5,11 +5,179 @@
 # at least 5 s; memory budgets are the measured peak rounded up.
 
 [[guarantee]]
+id = "SNAP-1"
+title = "Atom container: total, tiling, round-tripping and canonical (bounded)"
+claim = "On every input of up to 48 bytes AtomReader::parse does not panic, and when it accepts, the envelope is [len BE][XS_M] and the atoms tile buf[8..] exactly: each header is [8 + payload.len() BE][tag] and each payload is the sub-slice right after it, the last ending at buf.len(); the writer emits exactly that layout for one to three atoms with symbolic tags and contents and concrete payload lengths, and parse of its output returns the same (tag, payload) list or DuplicateAtom(first repeated tag), so an accepted container is the writer's encoding of its atoms (parse -> write canonicality); atom_size and appended_atom_size refuse exactly the sizes whose atom or envelope exceeds u32::MAX, for every usize; the pairwise duplicate scan names the first repeated tag (up to 4 tags). The BTreeSet duplicate shape (above 64 atoms) is tested, not proved."
+spec = "ironhorse-snapshot/src/atom.rs AtomError::TrailingBytes: accepting a trailing tail \"would give one logical machine unboundedly many container encodings, and so unboundedly many CAS keys\"; DuplicateAtom: \"both non-canonical and a way to hide a payload behind one the reader prefers\"."
+trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
+
+[[guarantee]]
 id = "SNAP-2"
 title = "Slot record codec: total, round-tripping and canonical"
 claim = "decode_slot is total on every 20-byte record and returns BadLength(len) on every other width up to 41 bytes; decode_slot(encode_slot(s)) is s with a NaN Number payload replaced by the canonical NaN, for every Slot, and re-encoding reproduces the bytes; an accepted record re-encodes to exactly its own 20 bytes unless its Number payload is a non-canonical NaN (the documented carve-out, refused for format >= 16 at the image gate)."
 spec = "ironhorse-snapshot/src/slot_codec.rs layout table: \"9 | reserved (0)\", \"10..20 | payload data (tag-specific; unused bytes 0)\"; \"Encoding always zero-fills the record first, so a round-trip (write -> read -> write) is byte-identical\"; \"Decoding preserves legacy NaN bits; re-encoding normalizes them.\""
 trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
+
+[[guarantee]]
+id = "SNAP-3"
+title = "Fixed-format section decoders: total, exact, bounded reservation (bounded)"
+claim = "The Cursor reads (u8, u16, u32, bytes(n) for any usize n) on buffers of up to 8 bytes succeed iff their bytes fit, return exactly them big-endian, advance by exactly their width and never past the end; be_u32_at/be_u64_at are exact on buffers of up to 12 bytes and any offset; decode_u32s (up to 16 bytes), Version::decode (up to 12), Signature::decode (up to 38) and the METR framing MeterImage::decode_fields (up to 64) do not panic and accept only payloads that re-encode to themselves (exact consumption); encode/decode round-trips for u32 lists of up to 3, every Version (iff readable), boot signatures with hosts of up to 2 ASCII bytes and meter images with version strings of up to 2 ASCII bytes; the list pre-reservation reserve_hint(count, len, width) is min(count, len / width) for every usize triple, so never more entries than the payload can hold."
+spec = "ironhorse-fuzz snapshot_decoder.rs: from_snapshot_bytes \"must NEVER panic, hang, or allocate unboundedly\"; image.rs MeterImage::decode: \"Exact consumption\"; decode_u32s: \"a malformed `count` must not reserve gigabytes\"."
+trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
+
+[[guarantee]]
+id = "SNAP-4"
+title = "Bytecode instruction framing (bounded)"
+claim = "instruction_len does not panic for any code of up to 6 bytes and any pc: usize; Some(l) implies l >= 1 and pc + l <= code.len(), with l the fixed size, 1 + ID_SIZE, or header width plus declared little-endian payload for the -1/-2/-4 sentinels; the width kernel prefixed_len is exact and panic-free in u32 (the usize of wasm32) and u64 for every header and u32 payload, fixing the 32-bit overflow; Opcode::from_u8 is total and round-trips; remap_ids on every 6-byte stream preserves length and changes only the two ID bytes after each ID-sentinel opcode of the walk, to the map's answer for the ID read there."
+spec = "ironhorse-vm/src/opcode.rs instruction_len: \"This function never panics on malformed input; the bytecode-decoder fuzz target relies on it\"; WASM-BLOCKERS.md: overflow-checks panics on wasm32."
+trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
+
+[[guarantee]]
+id = "TXT-1"
+title = "CESU-8, WTF-8 and UTF-16 transcoder kernels (bounded; sequences tested)"
+claim = "Per-unit and per-code-point kernels, proved on their whole domains: ironhorse-text encode_unit/decode_unit invert on every u16 (no zero byte) and decode_unit is total within its input on up to 3 bytes; json.rs code_point_units is UTF16EncodeCodePoint for every code point <= 0x10FFFF, wtf8_code_point is total on up to 4 bytes, decodes exactly the lead/continuation payload and never yields a value above 0x10FFFF, and inverts the WTF-8 encoding of every code point 0x80..=0x10FFFF; regexp cesu8_decode is CodePointAt on a high surrogate followed by any unit and utf8_decode/cesu8_decode invert every other non-NUL unit; big-endian units compare as the units do, and units_to_be16 preserves order on strings of lengths (1,2) and (2,2). The Vec-building wrappers (from_units/from_cesu8/to_units, cesu8_to_units, wtf8_to_units, units_to_be16 on longer strings) are tested, not proved: exhaustive single units, surrogate pairs, all code points, PRNG sequences up to 8 units."
+spec = "ironhorse-text: \"Lossless JavaScript symbol spellings\"; interp/text.rs units_to_be16: \"a byte-lexicographic compare of two payloads equals their code-unit ordering\"; ECMA-262 11.1.1 UTF16EncodeCodePoint, 11.1.3 UTF16SurrogatePairToCodePoint, 11.1.4 CodePointAt, 7.2.13 IsLessThan."
+trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
+
+[[guarantee]]
+id = "STR-1"
+title = "Slot-arena free-list image acceptance (bounded)"
+claim = "For every slot_count in 0..=4, every free list of up to 5 u32 entries and every live: u32, SlotArena::image_free_marks accepts iff the entries are distinct and below slot_count and free.len() + live == slot_count, and then marks exactly the free slots. try_from_image (which builds on it) and the counts beyond the bound are tested exhaustively, not proved; the FreeList extraction for alloc/free/mark/sweep preservation was not attempted."
+spec = "ironhorse-vm/src/value.rs SlotArena::free_marks: \"kept in exact sync by every free-list writer\"; try_from_image: \"Rejects out-of-range and duplicate free entries and inconsistent counts.\""
+trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
+
+[[guarantee]]
+id = "STR-2"
+title = "Chunk-chain parser progress (bounded)"
+claim = "On a plain chunk byte space of 24 symbolic bytes, for every total <= 24 and every header: usize, ChunkReader::checked_block_at does not panic and Ok((end, _)) implies header < end <= total, so free_chunk_for's chain walk terminates; chunk_allocation_fits equals header + 4 + payload < ceiling computed without overflow, for every usize triple."
+spec = "ironhorse-vm/src/value.rs checked_block_at: \"Validate a whole chain block before using either its end or free tag\"; chunk_allocation_fits: \"The exclusive end must remain below the reserved NULL offset\"."
+trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
+
+[[guarantee]]
+id = "STR-3"
+title = "Regexp CharSet algebra (bounded)"
+claim = "For well-formed endpoint lists of at most two ranges per side with boundaries in [-2^20, 2^20], the boundary-merge sweep extracted from charset_combine yields a well-formed list (even, strictly ascending) whose membership is the union, difference or intersection of the inputs' at every i32 x, and charset_contains (binary search) equals a linear scan on every well-formed set of up to two ranges. Metering is unchanged: the extraction leaves the work charge and node allocation in charset_combine."
+spec = "ECMA-262 22.2.2 CharSet union, intersection and difference (CharacterClass evaluation); xsre.c fxCharSetCombine."
+trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
+
+[[harness]]
+guarantee = "SNAP-1"
+crate = "ironhorse-snapshot"
+name = "atom::proofs::snap1_parse_tiles_16"
+tier = "nightly"
+statement = "AtomReader::parse does not panic; on acceptance the envelope is [len BE][XS_M] and the atoms tile buf[8..] exactly (headers [8 + payload.len() BE][tag], payloads the sub-slices after them, the last ending at buf.len())."
+domain = "every buf[..len] of every [u8; 16], len <= 16"
+unwind = 5
+flags = []
+time_budget_s = 146
+memory_budget_gb = 7
+unreachable = 6
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["SNAP-1-a", "SNAP-1-d"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-1"
+crate = "ironhorse-snapshot"
+name = "atom::proofs::snap1_parse_tiles_32"
+tier = "nightly"
+statement = "As snap1_parse_tiles_16, on longer inputs (up to three atoms, duplicate tags)."
+domain = "every buf[..len] of every [u8; 32], len <= 32"
+unwind = 6
+flags = []
+time_budget_s = 471
+memory_budget_gb = 7
+unreachable = 6
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["SNAP-1-a", "SNAP-1-d"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-1"
+crate = "ironhorse-snapshot"
+name = "atom::proofs::snap1_parse_tiles_48"
+tier = "nightly"
+statement = "As snap1_parse_tiles_16, on inputs holding up to five atoms."
+domain = "every buf[..len] of every [u8; 48], len <= 48"
+unwind = 7
+flags = []
+time_budget_s = 838
+memory_budget_gb = 7
+unreachable = 6
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["SNAP-1-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-1"
+crate = "ironhorse-snapshot"
+name = "atom::proofs::snap1_write_parse_two"
+tier = "nightly"
+statement = "The writer emits exactly [total BE][XS_M] then [8 + len BE][tag][payload] per atom; parse of the result returns the same (tag, payload) list for distinct tags and DuplicateAtom(first repeated tag) otherwise."
+domain = "two atoms, payload lengths [1, 3]; every tag ([u8; 4] each) and every payload byte"
+unwind = 5
+flags = []
+time_budget_s = 102
+memory_budget_gb = 7
+unreachable = 11
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["SNAP-1-b", "SNAP-1-d"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-1"
+crate = "ironhorse-snapshot"
+name = "atom::proofs::snap1_write_parse_three"
+tier = "nightly"
+statement = "As snap1_write_parse_two, for three atoms including an empty payload."
+domain = "three atoms, payload lengths [0, 2, 3]; every tag and every payload byte"
+unwind = 5
+flags = []
+time_budget_s = 139
+memory_budget_gb = 7
+unreachable = 11
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["SNAP-1-b", "SNAP-1-d"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-1"
+crate = "ironhorse-snapshot"
+name = "atom::proofs::snap1_sizes_refuse_above_u32"
+tier = "pr"
+statement = "atom_size(n) is Ok(n + 8) iff n + 8 <= u32::MAX, else TooLarge; appended_atom_size(body, n) is Ok(n + 8) iff body + (n + 8) + 8 <= u32::MAX, else TooLarge (sums in u128)."
+domain = "every body: usize and payload: usize (64-bit)"
+unwind = 0
+flags = []
+time_budget_s = 32
+memory_budget_gb = 7
+unreachable = 2
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["SNAP-1-c"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-1"
+crate = "ironhorse-snapshot"
+name = "atom::proofs::snap1_duplicate_scan_first_repeat"
+tier = "nightly"
+statement = "The pairwise duplicate scan returns the tag of the first atom (file order) whose tag an earlier atom used, or None."
+domain = "every list of up to 4 tags ([u8; 4] each)"
+unwind = 5
+flags = []
+time_budget_s = 54
+memory_budget_gb = 7
+unreachable = 10
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["SNAP-1-b"]
+expect = "pass"
+canary = false
 
 [[harness]]
 guarantee = "SNAP-2"
@@ -74,5 +242,474 @@ memory_budget_gb = 1
 unreachable = 7
 unreachable_reason = "Vec growth and core::fmt overflow checks in alloc/core that the fixed 20-byte encode never reaches"
 mutants = ["SNAP-2-a", "SNAP-2-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-3"
+crate = "ironhorse-snapshot"
+name = "wire::proofs::snap3_reserve_hint_bounded_by_input"
+tier = "nightly"
+statement = "reserve_hint(count, len, w) == min(count, len / w) (0 for w = 0), so it is at most count and at most len / w, and hint * w <= len."
+domain = "every count: usize and payload_len: usize; width in {0, 1, 4, 8, 20, 28}"
+unwind = 7
+flags = []
+time_budget_s = 185
+memory_budget_gb = 2
+unreachable = 1
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["SNAP-3-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-3"
+crate = "ironhorse-snapshot"
+name = "wire::proofs::snap3_field_readers"
+tier = "pr"
+statement = "be_u32_at / be_u64_at return the big-endian value at `at` iff its bytes fit, else None."
+domain = "every buf[..len] of every [u8; 12], len <= 12; every at: usize"
+unwind = 13
+flags = []
+time_budget_s = 6
+memory_budget_gb = 2
+unreachable = 0
+mutants = []
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-3"
+crate = "ironhorse-snapshot"
+name = "image::proofs::snap3_cursor_reads_exactly"
+tier = "nightly"
+statement = "Three Cursor reads, each u8, u16, u32 or bytes(n): each succeeds iff its bytes fit, returns exactly them, advances by exactly its width (not at all on failure) and never past the end; done() iff all bytes were consumed."
+domain = "every buf[..len] of every [u8; 8], len <= 8; every op sequence of length 3; every n: usize"
+unwind = 5
+flags = []
+time_budget_s = 211
+memory_budget_gb = 2
+unreachable = 2
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["SNAP-3-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-3"
+crate = "ironhorse-snapshot"
+name = "image::proofs::snap3_decode_u32s_exact_8"
+tier = "nightly"
+statement = "decode_u32s does not panic and accepts only [count BE][count u32s BE] with nothing after, returning those values."
+domain = "every [u8; 8]"
+unwind = 4
+flags = []
+time_budget_s = 70
+memory_budget_gb = 2
+unreachable = 6
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["SNAP-3-c"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-3"
+crate = "ironhorse-snapshot"
+name = "image::proofs::snap3_u32s_round_trip"
+tier = "pr"
+statement = "decode_u32s(encode_u32s(l)) == Ok(l)."
+domain = "every [u32; 2]"
+unwind = 13
+flags = []
+time_budget_s = 13
+memory_budget_gb = 2
+unreachable = 6
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = []
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-3"
+crate = "ironhorse-snapshot"
+name = "format::proofs::snap3_version_decode_exact"
+tier = "pr"
+statement = "Version::decode does not panic; an accepted payload re-encodes to itself and the version is readable."
+domain = "every buf[..len] of every [u8; 12], len <= 12"
+unwind = 13
+flags = []
+time_budget_s = 5
+memory_budget_gb = 2
+unreachable = 7
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["SNAP-3-e"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-3"
+crate = "ironhorse-snapshot"
+name = "format::proofs::snap3_version_round_trip"
+tier = "pr"
+statement = "Version::decode(v.encode()) is Ok(v) iff v.is_readable(), for every Version."
+domain = "every format_version: u32, slot_width: u8, endian: u8"
+unwind = 11
+flags = []
+time_budget_s = 5
+memory_budget_gb = 2
+unreachable = 7
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["SNAP-3-e"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-4"
+crate = "ironhorse-vm"
+name = "opcode::proofs::snap4_instruction_len_bounded"
+tier = "pr"
+statement = "instruction_len does not panic; Some(l) implies l >= 1, pc + l <= code.len(), and l equals the fixed size, 1 + ID_SIZE, or header width plus declared LE payload for -1/-2/-4."
+domain = "every code[..len] of every [u8; 6], len <= 6; every pc: usize"
+unwind = 7
+flags = []
+time_budget_s = 26
+memory_budget_gb = 5
+unreachable = 1
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["SNAP-4-a", "SNAP-4-b", "SNAP-4-c"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-4"
+crate = "ironhorse-vm"
+name = "opcode::proofs::snap4_prefixed_len_any_width"
+tier = "pr"
+statement = "prefixed_len::<u32> is Some(header + payload) iff that fits u32 (the usize of wasm32), else None; prefixed_len::<u64> and ::<usize> are always the exact sum; no instantiation panics."
+domain = "every header: u8 and payload: u32"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 5
+unreachable = 0
+mutants = ["SNAP-4-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-4"
+crate = "ironhorse-vm"
+name = "opcode::proofs::snap4_from_u8_round_trips"
+tier = "pr"
+statement = "Opcode::from_u8 is total; Some(op) implies op as u8 == byte and op.size() is positive, 0, -1, -2 or -4."
+domain = "every byte: u8"
+unwind = 0
+flags = []
+time_budget_s = 13
+memory_budget_gb = 5
+unreachable = 0
+mutants = ["SNAP-4-e"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-4"
+crate = "ironhorse-vm"
+name = "opcode::proofs::snap4_remap_ids_only_ids_6"
+tier = "nightly"
+statement = "A successful remap_ids returns the input's length; at each ID-sentinel opcode of the walk the two operand bytes hold the map's answer for the LE ID read there; every other byte is unchanged."
+domain = "every [u8; 6]; every map answer sequence (3 symbolic Option<u16>)"
+unwind = 7
+flags = []
+time_budget_s = 687
+memory_budget_gb = 5
+unreachable = 9
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["SNAP-4-d"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "TXT-1"
+crate = "ironhorse-text"
+name = "proofs::txt1_unit_round_trip"
+tier = "pr"
+statement = "encode_unit(u) has width 1/2/3 by range, contains no zero byte, and decode_unit inverts it."
+domain = "every u: u16"
+unwind = 4
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 1
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["TXT-1-c", "TXT-1-d"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "TXT-1"
+crate = "ironhorse-text"
+name = "proofs::txt1_decode_unit_bounded"
+tier = "pr"
+statement = "decode_unit does not panic; Some((u, n)) implies 1 <= n <= len."
+domain = "every buf[..len] of every [u8; 3], len <= 3"
+unwind = 4
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = []
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "TXT-1"
+crate = "ironhorse-regexp"
+name = "encoding::transcoder_proofs::txt1_cesu8_decode_combines_pairs"
+tier = "pr"
+statement = "On a high surrogate's CESU-8 followed by any non-NUL unit's, cesu8_decode returns UTF16SurrogatePairToCodePoint and consumes both for a low surrogate, else the lone high surrogate consuming 3 bytes."
+domain = "every high surrogate 0xD800..=0xDBFF and every next unit 1..=0xFFFF"
+unwind = 7
+flags = []
+time_budget_s = 10
+memory_budget_gb = 1
+unreachable = 4
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["TXT-1-e"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "TXT-1"
+crate = "ironhorse-regexp"
+name = "encoding::transcoder_proofs::txt1_utf8_decode_single_unit"
+tier = "pr"
+statement = "utf8_decode and cesu8_decode return (u, width) on the CESU-8 of every non-NUL unit that is not a high surrogate."
+domain = "every u: u16 outside {0} and 0xD800..=0xDBFF"
+unwind = 7
+flags = []
+time_budget_s = 7
+memory_budget_gb = 1
+unreachable = 7
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = []
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-3"
+crate = "ironhorse-regexp"
+name = "compile::charset_proofs::str3_contains_is_scan"
+tier = "pr"
+statement = "charset_contains(set, x) equals the linear scan of set's ranges."
+domain = "every well-formed set of up to two ranges (any i32 boundaries); every x: i32"
+unwind = 6
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 1
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["STR-3-c"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-3"
+crate = "ironhorse-regexp"
+name = "compile::charset_proofs::str3_union"
+tier = "nightly"
+statement = "The union sweep's output is well-formed and contains x iff a or b does; charset_contains agrees on output and input."
+domain = "every pair of well-formed sets of up to two ranges with boundaries in [-2^20, 2^20]; every x: i32"
+unwind = 10
+flags = []
+time_budget_s = 258
+memory_budget_gb = 1
+unreachable = 1
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["STR-3-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-3"
+crate = "ironhorse-regexp"
+name = "compile::charset_proofs::str3_subtract"
+tier = "nightly"
+statement = "As str3_union, for subtraction: x in out iff x in a and not in b."
+domain = "as str3_union"
+unwind = 10
+flags = []
+time_budget_s = 241
+memory_budget_gb = 1
+unreachable = 3
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["STR-3-a", "STR-3-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-3"
+crate = "ironhorse-regexp"
+name = "compile::charset_proofs::str3_intersection"
+tier = "nightly"
+statement = "As str3_union, for intersection: x in out iff x in a and in b."
+domain = "as str3_union"
+unwind = 10
+flags = []
+time_budget_s = 133
+memory_budget_gb = 1
+unreachable = 5
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["STR-3-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "TXT-1"
+crate = "ironhorse-vm"
+name = "interp::natives::json::wtf8_proofs::txt1_code_point_units_is_utf16_encode"
+tier = "pr"
+statement = "code_point_units(p) equals UTF16EncodeCodePoint(p) (ECMA-262 11.1.1, written from the spec text with integer / and %)."
+domain = "every code point p <= 0x10FFFF"
+unwind = 5
+flags = []
+time_budget_s = 5
+memory_budget_gb = 2
+unreachable = 0
+mutants = ["TXT-1-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "TXT-1"
+crate = "ironhorse-vm"
+name = "interp::natives::json::wtf8_proofs::txt1_wtf8_code_point_in_range"
+tier = "pr"
+statement = "wtf8_code_point does not panic; Some((p, w)) implies 2 <= w <= 4, w <= len, a lead of width w and continuation bytes, p their combined payload bits, and p <= 0x10FFFF."
+domain = "every buf[..len] of every [u8; 4], len <= 4"
+unwind = 5
+flags = []
+time_budget_s = 6
+memory_budget_gb = 2
+unreachable = 1
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["TXT-1-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "TXT-1"
+crate = "ironhorse-vm"
+name = "interp::natives::json::wtf8_proofs::txt1_wtf8_code_point_inverts_encoding"
+tier = "pr"
+statement = "The WTF-8 encoding of p (two, three or four bytes; a surrogate in the generalised three-byte form) decodes to (p, width)."
+domain = "every code point 0x80..=0x10FFFF"
+unwind = 5
+flags = []
+time_budget_s = 5
+memory_budget_gb = 2
+unreachable = 1
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = []
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "TXT-1"
+crate = "ironhorse-vm"
+name = "interp::text::transcoder_proofs::txt1_be16_unit_order"
+tier = "pr"
+statement = "a.to_be_bytes().cmp(&b.to_be_bytes()) == a.cmp(&b)."
+domain = "every a: u16 and b: u16"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 2
+unreachable = 0
+mutants = ["TXT-1-f"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "TXT-1"
+crate = "ironhorse-vm"
+name = "interp::text::transcoder_proofs::txt1_be16_order_short_strings"
+tier = "pr"
+statement = "units_to_be16 preserves the order of code-unit strings (byte-lexicographic == unit-lexicographic)."
+domain = "every pair of [u16; 2] strings, and every [u16; 1] against every [u16; 2]"
+unwind = 5
+flags = []
+time_budget_s = 19
+memory_budget_gb = 2
+unreachable = 182
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["TXT-1-f"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-1"
+crate = "ironhorse-vm"
+name = "value::structure_proofs::str1_image_free_marks_count_0_to_2"
+tier = "nightly"
+statement = "image_free_marks(count, free, live) is Ok iff free's entries are distinct and < count and free.len() + live == count; Ok(marks) has marks[i] iff i is in free."
+domain = "slot_count in {0, 1, 2}; every free list of up to 5 u32 entries; every live: u32"
+unwind = 6
+flags = []
+time_budget_s = 84
+memory_budget_gb = 2
+unreachable = 14
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["STR-1-a", "STR-1-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-1"
+crate = "ironhorse-vm"
+name = "value::structure_proofs::str1_image_free_marks_count_3_to_4"
+tier = "nightly"
+statement = "As str1_image_free_marks_count_0_to_2."
+domain = "slot_count in {3, 4}; every free list of up to 5 u32 entries; every live: u32"
+unwind = 6
+flags = []
+time_budget_s = 98
+memory_budget_gb = 2
+unreachable = 13
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["STR-1-a", "STR-1-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-2"
+crate = "ironhorse-vm"
+name = "value::structure_proofs::str2_checked_block_at_progresses"
+tier = "pr"
+statement = "checked_block_at does not panic; Ok((end, _)) implies header < end <= total."
+domain = "a plain byte space of 24 symbolic bytes; every total <= 24; every header: usize"
+unwind = 6
+flags = []
+time_budget_s = 6
+memory_budget_gb = 2
+unreachable = 18
+unreachable_reason = "panic, overflow and allocation branches in core/alloc (slice indexing, Vec growth, fmt) that the harness's bounded inputs never reach"
+mutants = ["STR-2-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-2"
+crate = "ironhorse-vm"
+name = "value::structure_proofs::str2_chunk_allocation_fits_model"
+tier = "pr"
+statement = "chunk_allocation_fits(h, p, c) == (h + 4 + p < c), computed in u128."
+domain = "every header, payload, ceiling: usize"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 2
+unreachable = 0
+mutants = ["STR-2-b"]
 expect = "pass"
 canary = false

@@ -1,0 +1,12 @@
+Mutant SNAP-1-d: split_atom starts the payload one byte early, inside the tag.
+--- a/ironhorse-snapshot/src/atom.rs
++++ b/ironhorse-snapshot/src/atom.rs
+@@ -147,7 +147,7 @@
+     let (atom, rest) = buf.split_at_checked(size).ok_or(AtomError::Truncated)?;
+     // `size >= ATOM_HEADER` was checked above, so the header split succeeds.
+     let (_, payload) = atom
+-        .split_at_checked(ATOM_HEADER)
++        .split_at_checked(ATOM_HEADER - 1)
+         .ok_or(AtomError::BadLength)?;
+     Ok((size, FourCc(*tag), payload, rest))
+ }

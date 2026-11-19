@@ -2366,3 +2366,105 @@ mod wtf8_properties {
         }
     }
 }
+
+/// Kani harnesses for guarantee TXT-1(e) (`verification/proofs.d/framing.toml`).
+#[cfg(kani)]
+mod wtf8_proofs {
+    use super::{code_point_units, wtf8_code_point};
+
+    /// UTF16EncodeCodePoint (ECMA-262 §11.1.1), written from the spec text.
+    fn utf16_encode_code_point(cp: u32) -> ([u16; 2], usize) {
+        if cp <= 0xFFFF {
+            return ([cp as u16, 0], 1);
+        }
+        let cu1 = ((cp - 0x1_0000) / 0x400 + 0xD800) as u16;
+        let cu2 = ((cp - 0x1_0000) % 0x400 + 0xDC00) as u16;
+        ([cu1, cu2], 2)
+    }
+
+    /// TXT-1(e): `code_point_units` is UTF16EncodeCodePoint for every code
+    /// point `<= 0x10FFFF`.
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn txt1_code_point_units_is_utf16_encode() {
+        let point: u32 = kani::any_where(|&p| p <= 0x10_FFFF);
+        let mut buffer = [0u16; 2];
+        let got = code_point_units(point, &mut buffer);
+        let (want, n) = utf16_encode_code_point(point);
+        assert!(got.len() == n && got == &want[..n]);
+        kani::cover!(point == 0x10_FFFF, "the last code point");
+    }
+
+    /// TXT-1(c, e): `wtf8_code_point` does not panic on any input of up to
+    /// 4 bytes; `Some((p, w))` implies `2 <= w <= 4`, `w <= len`, a lead of
+    /// that width followed by continuation bytes, `p` equal to their
+    /// combined payload bits, and `p <= 0x10FFFF`.
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn txt1_wtf8_code_point_in_range() {
+        let bytes: [u8; 4] = kani::any();
+        let len: usize = kani::any_where(|&l| l <= 4);
+        let input = &bytes[..len];
+        let result = wtf8_code_point(input);
+        if let Some((point, width)) = result {
+            assert!((2..=4).contains(&width) && width <= len);
+            assert!(point <= 0x10_FFFF);
+            let lead = u32::from(bytes[0]);
+            let mut want = match width {
+                2 => lead & 0x1F,
+                3 => lead & 0x0F,
+                _ => lead & 0x07,
+            };
+            for &b in &bytes[1..width] {
+                assert!(b & 0xC0 == 0x80);
+                want = (want << 6) | u32::from(b & 0x3F);
+            }
+            assert!(point == want);
+            kani::cover!(point == 0x10_FFFF, "U+10FFFF decoded");
+        }
+        kani::cover!(
+            result.is_none() && len == 4 && (0xF5..=0xF7).contains(&bytes[0]),
+            "a lead byte above F4 refused"
+        );
+    }
+
+    /// TXT-1(a, e): the WTF-8 encoding of every code point `<= 0x10FFFF`
+    /// (the generalised three-byte form for a surrogate) decodes back to it
+    /// with its exact width.
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn txt1_wtf8_code_point_inverts_encoding() {
+        let point: u32 = kani::any_where(|&p| (0x80..=0x10_FFFF).contains(&p));
+        let (bytes, width): ([u8; 4], usize) = if point < 0x800 {
+            (
+                [0xC0 | (point >> 6) as u8, 0x80 | (point & 0x3F) as u8, 0, 0],
+                2,
+            )
+        } else if point < 0x1_0000 {
+            (
+                [
+                    0xE0 | (point >> 12) as u8,
+                    0x80 | ((point >> 6) & 0x3F) as u8,
+                    0x80 | (point & 0x3F) as u8,
+                    0,
+                ],
+                3,
+            )
+        } else {
+            (
+                [
+                    0xF0 | (point >> 18) as u8,
+                    0x80 | ((point >> 12) & 0x3F) as u8,
+                    0x80 | ((point >> 6) & 0x3F) as u8,
+                    0x80 | (point & 0x3F) as u8,
+                ],
+                4,
+            )
+        };
+        assert!(wtf8_code_point(&bytes[..width]) == Some((point, width)));
+        kani::cover!(
+            (0xD800..=0xDFFF).contains(&point),
+            "a lone surrogate's form"
+        );
+    }
+}

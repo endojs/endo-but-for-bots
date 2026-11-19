@@ -1,0 +1,12 @@
+Mutant STR-2-b: chunk_allocation_fits admits a block ending at the ceiling.
+--- a/ironhorse-vm/src/value.rs
++++ b/ironhorse-vm/src/value.rs
+@@ -2064,7 +2064,7 @@
+     header
+         .checked_add(CHUNK_HEADER)
+         .and_then(|off| off.checked_add(payload))
+-        .is_some_and(|end| end < ceiling)
++        .is_some_and(|end| end <= ceiling)
+ }
+ 
+ pub struct ChunkArena {

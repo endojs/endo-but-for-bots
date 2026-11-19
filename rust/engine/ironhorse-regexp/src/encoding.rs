@@ -299,3 +299,54 @@ mod transcoder_properties {
         }
     }
 }
+
+/// Kani harnesses for guarantee TXT-1 (`verification/proofs.d/framing.toml`).
+#[cfg(kani)]
+mod transcoder_proofs {
+    use super::*;
+
+    /// TXT-1(c): on the CESU-8 of a high surrogate followed by any unit,
+    /// `cesu8_decode` is CodePointAt (ECMA-262 §11.1.4): a following low
+    /// surrogate combines by UTF16SurrogatePairToCodePoint (§11.1.3) and
+    /// consumes both sequences; anything else leaves the lone surrogate as
+    /// its own code point, consuming only its three bytes.
+    #[kani::proof]
+    #[kani::unwind(7)]
+    fn txt1_cesu8_decode_combines_pairs() {
+        let hi: u16 = kani::any_where(|&u| (0xD800..=0xDBFF).contains(&u));
+        let next: u16 = kani::any_where(|&u| u != 0);
+        let mut bytes = [0u8; 7];
+        let mut first = [0; 3];
+        let mut second = [0; 3];
+        let n1 = cesu8_unit(hi, &mut first);
+        let n2 = cesu8_unit(next, &mut second);
+        bytes[..n1].copy_from_slice(&first[..n1]);
+        bytes[n1..n1 + n2].copy_from_slice(&second[..n2]);
+        let (c, after) = cesu8_decode(&bytes, 0);
+        if (0xDC00..=0xDFFF).contains(&next) {
+            let cp = (i64::from(hi) - 0xD800) * 0x400 + (i64::from(next) - 0xDC00) + 0x10000;
+            assert!(c == cp && after == n1 + n2);
+        } else {
+            assert!(c == i64::from(hi) && after == n1);
+        }
+        kani::cover!(
+            (0xDC00..=0xDFFF).contains(&next),
+            "a surrogate pair combined"
+        );
+    }
+
+    /// TXT-1(c): every non-NUL code unit's CESU-8 form decodes to that unit
+    /// with its exact width, unless it is a high surrogate (combined above).
+    #[kani::proof]
+    #[kani::unwind(7)]
+    fn txt1_utf8_decode_single_unit() {
+        let u: u16 = kani::any_where(|&u| u != 0 && !(0xD800..=0xDBFF).contains(&u));
+        let mut bytes = [0u8; 4];
+        let mut unit = [0; 3];
+        let n = cesu8_unit(u, &mut unit);
+        bytes[..n].copy_from_slice(&unit[..n]);
+        assert!(utf8_decode(&bytes, 0) == (i64::from(u), n));
+        assert!(cesu8_decode(&bytes, 0) == (i64::from(u), n));
+        kani::cover!(n == 3, "a three-byte unit");
+    }
+}

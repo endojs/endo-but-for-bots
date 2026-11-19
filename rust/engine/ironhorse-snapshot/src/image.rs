@@ -12074,3 +12074,108 @@ mod framing_properties {
         );
     }
 }
+
+/// Kani harnesses for guarantee SNAP-3 (`verification/proofs.d/framing.toml`).
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    /// SNAP-3(a): a sequence of three `Cursor` reads, each a symbolic choice
+    /// of `u8`, `u16`, `u32` or `bytes(n)` for any `n: usize`, over every
+    /// buffer of up to 8 bytes: a read succeeds iff its bytes fit, returns
+    /// exactly them (big-endian), advances by exactly its width, leaves the
+    /// position alone when it fails, and the position never passes the end;
+    /// `done` succeeds iff every byte was consumed.
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn snap3_cursor_reads_exactly() {
+        let bytes: [u8; 8] = kani::any();
+        let len: usize = kani::any_where(|&l| l <= 8);
+        let p = &bytes[..len];
+        // An existing refusal name, so the refusal registry's source scan
+        // (tests/refusal_registry.rs) sees no new one.
+        let mut cursor = Cursor::new(p, "arrays side table");
+        for _ in 0..3 {
+            let at = cursor.i;
+            let op: u8 = kani::any_where(|&op| op < 4);
+            let (ok, width) = match op {
+                0 => {
+                    let r = cursor.u8();
+                    if let Ok(v) = r {
+                        assert!(v == p[at]);
+                    }
+                    (r.is_ok(), 1)
+                }
+                1 => {
+                    let r = cursor.u16();
+                    if let Ok(v) = r {
+                        assert!(v == u16::from_be_bytes([p[at], p[at + 1]]));
+                    }
+                    (r.is_ok(), 2)
+                }
+                2 => {
+                    let r = cursor.u32();
+                    if let Ok(v) = r {
+                        assert!(v == u32::from_be_bytes([p[at], p[at + 1], p[at + 2], p[at + 3]]));
+                    }
+                    (r.is_ok(), 4)
+                }
+                _ => {
+                    let n: usize = kani::any();
+                    let r = cursor.bytes(n);
+                    if let Ok(b) = r {
+                        assert!(std::ptr::eq(b.as_ptr(), p[at..].as_ptr()) && b.len() == n);
+                    }
+                    (r.is_ok(), n)
+                }
+            };
+            let fits = at.checked_add(width).is_some_and(|end| end <= len);
+            assert!(ok == fits);
+            assert!(cursor.i == if ok { at + width } else { at });
+            assert!(cursor.i <= len);
+        }
+        assert!(cursor.done().is_ok() == (cursor.i == len));
+        kani::cover!(
+            len == 8 && cursor.done().is_ok(),
+            "three reads consume eight bytes exactly"
+        );
+    }
+
+    /// SNAP-3(a, d): `decode_u32s` does not panic on any payload of
+    /// exactly `L` bytes, and accepts exactly `[count BE][count u32s BE]`
+    /// with nothing after them, returning those values. Concrete lengths:
+    /// a symbolic one (up to 16) exhausted 8 GB of solver memory.
+    fn decode_u32s_exact<const L: usize>() -> Option<usize> {
+        let p: [u8; L] = kani::any();
+        let result = decode_u32s(&p);
+        if let Ok(list) = &result {
+            assert!(L == 4 + 4 * list.len());
+            assert!(be_u32_at(&p, 0) == Some(wire_len(list.len())));
+            for (k, &v) in list.iter().enumerate() {
+                assert!(be_u32_at(&p, 4 + 4 * k) == Some(v));
+            }
+        }
+        result.ok().map(|list| list.len())
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn snap3_decode_u32s_exact_8() {
+        let n = decode_u32s_exact::<8>();
+        kani::cover!(n == Some(1), "a one-entry list");
+        kani::cover!(n.is_none(), "a miscounted list refused");
+    }
+
+    /// SNAP-3(c): `decode_u32s(encode_u32s(l)) == l` for every list of two
+    /// `u32`s.
+    #[kani::proof]
+    #[kani::unwind(13)]
+    fn snap3_u32s_round_trip() {
+        let list: [u32; 2] = kani::any();
+        let bytes = encode_u32s(&list);
+        assert!(bytes.len() == 12);
+        let back = decode_u32s(&bytes);
+        assert!(back.as_deref() == Ok(&list[..]));
+        kani::cover!(list[0] != list[1], "two different entries round-trip");
+    }
+}

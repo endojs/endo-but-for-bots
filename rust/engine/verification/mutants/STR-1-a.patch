@@ -1,0 +1,12 @@
+Mutant STR-1-a: image_free_marks admits a duplicated free entry 0 or 1.
+--- a/ironhorse-vm/src/value.rs
++++ b/ironhorse-vm/src/value.rs
+@@ -937,7 +937,7 @@
+             let mark = marks
+                 .get_mut(index as usize)
+                 .ok_or(SlotArenaImageError::FreeIndexOutOfRange)?;
+-            if *mark {
++            if *mark && index > 1 {
+                 return Err(SlotArenaImageError::DuplicateFreeIndex);
+             }
+             *mark = true;

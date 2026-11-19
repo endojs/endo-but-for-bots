@@ -1,0 +1,12 @@
+Mutant TXT-1-c: encode_unit writes NUL as C0 81.
+--- a/ironhorse-text/src/lib.rs
++++ b/ironhorse-text/src/lib.rs
+@@ -70,7 +70,7 @@
+ fn encode_unit(u: u16) -> ([u8; 3], usize) {
+     // Each `as u8` keeps exactly the bits the mask or shift selected.
+     match u {
+-        0 => ([0xc0, 0x80, 0], 2),
++        0 => ([0xc0, 0x81, 0], 2),
+         1..=0x7f => ([u as u8, 0, 0], 1),
+         0x80..=0x7ff => ([0xc0 | (u >> 6) as u8, 0x80 | (u & 63) as u8, 0], 2),
+         _ => (

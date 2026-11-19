@@ -774,3 +774,51 @@ mod framing_properties {
         );
     }
 }
+
+/// Kani harnesses for guarantee SNAP-3 (`verification/proofs.d/framing.toml`).
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    /// SNAP-3(a, d): `Version::decode` does not panic on any payload of up
+    /// to 12 bytes; it accepts exactly ten bytes and then re-encoding gives
+    /// back the payload, and every accepted version is readable.
+    #[kani::proof]
+    #[kani::unwind(13)]
+    fn snap3_version_decode_exact() {
+        let bytes: [u8; 12] = kani::any();
+        let len: usize = kani::any_where(|&l| l <= 12);
+        let p = &bytes[..len];
+        let result = Version::decode(p);
+        if let Ok(version) = &result {
+            assert!(version.encode()[..] == p[..]);
+            assert!(version.is_readable());
+            kani::cover!(version.format_version == 1, "the oldest readable format");
+        }
+        kani::cover!(
+            matches!(result, Err(VersionError::UnsupportedVersion(_))),
+            "a framed but unreadable version"
+        );
+    }
+
+    /// SNAP-3(c): `Version::decode(v.encode())` is `Ok(v)` exactly when `v`
+    /// is readable, for every `Version`.
+    #[kani::proof]
+    #[kani::unwind(11)]
+    fn snap3_version_round_trip() {
+        let version = Version {
+            format_version: kani::any(),
+            slot_width: kani::any(),
+            endian: kani::any(),
+        };
+        let back = Version::decode(&version.encode());
+        assert!(back.is_ok() == version.is_readable());
+        if let Ok(back) = back {
+            assert!(back == version);
+        }
+        kani::cover!(
+            version == Version::current(),
+            "the current stamp round-trips"
+        );
+    }
+}

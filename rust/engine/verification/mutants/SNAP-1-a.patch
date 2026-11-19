@@ -1,0 +1,12 @@
+Mutant SNAP-1-a: parse accepts bytes after the declared XS_M envelope.
+--- a/ironhorse-snapshot/src/atom.rs
++++ b/ironhorse-snapshot/src/atom.rs
+@@ -234,7 +234,7 @@
+             return Err(AtomError::NotContainer(tag));
+         }
+         // EXACT consumption: the envelope is the whole container.
+-        if size != buf.len() {
++        if size > buf.len() {
+             return Err(AtomError::TrailingBytes);
+         }
+         let atoms = parse_atoms(payload)?;

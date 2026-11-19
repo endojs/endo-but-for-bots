@@ -321,3 +321,51 @@ mod tests {
         }
     }
 }
+
+/// Kani harnesses for guarantee TXT-1 (`verification/proofs.d/framing.toml`):
+/// the allocation-free per-unit kernels. The `Vec`-building wrappers are
+/// covered by the exhaustive and PRNG tests above (a one-unit `SymbolName`
+/// round trip took 4.3 GB of solver memory and two units exhausted it).
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    /// TXT-1(a): every code unit's CESU-8 form decodes back to it with its
+    /// exact width (1 for 1..=0x7F, 2 for NUL and 0x80..=0x7FF, else 3),
+    /// and contains no zero byte.
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn txt1_unit_round_trip() {
+        let u: u16 = kani::any();
+        let (bytes, n) = encode_unit(u);
+        let want = match u {
+            1..=0x7f => 1,
+            0 | 0x80..=0x7ff => 2,
+            _ => 3,
+        };
+        assert!(n == want);
+        assert!(bytes[..n].iter().all(|&b| b != 0));
+        assert!(decode_unit(&bytes[..n]) == Some((u, n)));
+        kani::cover!((0xd800..=0xdfff).contains(&u), "a lone surrogate's form");
+    }
+
+    /// TXT-1(b, c): `decode_unit` does not panic on any input of up to 3
+    /// bytes; `Some((u, n))` implies `1 <= n <= len`; and it accepts the
+    /// first `n` bytes in their canonical form exactly when they are
+    /// `encode_unit(u)`, which is what `from_cesu8`'s final comparison
+    /// relies on to refuse overlong forms.
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn txt1_decode_unit_bounded() {
+        let bytes: [u8; 3] = kani::any();
+        let len: usize = kani::any_where(|&l| l <= 3);
+        let input = &bytes[..len];
+        if let Some((u, n)) = decode_unit(input) {
+            assert!((1..=len).contains(&n));
+            let (canonical, m) = encode_unit(u);
+            let same = m == n && canonical[..m] == input[..n];
+            kani::cover!(!same, "an overlong form, refused later by from_cesu8");
+            kani::cover!(same && n == 3, "a canonical three-byte form");
+        }
+    }
+}

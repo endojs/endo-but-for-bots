@@ -3628,3 +3628,120 @@ mod charset_properties {
         }
     }
 }
+
+/// Kani harnesses for guarantee STR-3 (`verification/proofs.d/framing.toml`).
+#[cfg(kani)]
+mod charset_proofs {
+    use super::*;
+
+    /// A well-formed endpoint list of at most two ranges: `[count, b0, e0,
+    /// b1, e1]` with `count` in {0, 2, 4} and the first `count` boundaries
+    /// strictly ascending (the unused slots are zero, never read).
+    fn any_set() -> [i32; 5] {
+        let mut set: [i32; 5] = kani::any();
+        let count = set[0];
+        kani::assume(count == 0 || count == 2 || count == 4);
+        for k in 1..5 {
+            if k as i32 > count {
+                set[k] = 0;
+            }
+        }
+        for k in 2..5 {
+            if k as i32 <= count {
+                kani::assume(set[k - 1] < set[k]);
+            }
+        }
+        set
+    }
+
+    fn scan(chars: &[i32], c: i32) -> bool {
+        let count = chars[0] as usize;
+        let mut k = 1;
+        let mut inside = false;
+        while k < 1 + count {
+            inside |= chars[k] <= c && c < chars[k + 1];
+            k += 2;
+        }
+        inside
+    }
+
+    /// STR-3: for well-formed sets of at most two ranges each and every
+    /// `i32` code point `x`, the merge sweep (`charset_merge_into`, which
+    /// `charset_merge` wraps with its header) under union, subtraction and
+    /// intersection yields a well-formed list (header = boundary count,
+    /// even, strictly ascending) with `contains(out, x) == contains(a, x)
+    /// op contains(b, x)`, and `charset_contains` agrees with a linear scan
+    /// on the inputs and the output. The boundaries are bounded to
+    /// `[-2^20, 2^20]` so the sweep's `c1[i1] - c2[i2]` cannot overflow
+    /// (real CharSets hold code points `0..=0x7FFFFFFF`, where it cannot
+    /// either; complements end at `0x7FFFFFFF`).
+    fn merge_semantics(op: i32) -> usize {
+        let a = any_set();
+        let b = any_set();
+        for k in 1..5 {
+            kani::assume(a[k].unsigned_abs() <= 1 << 20 && b[k].unsigned_abs() <= 1 << 20);
+        }
+        // The boundaries `charset_merge` would push after its header.
+        let mut out = [0i32; 9];
+        let mut n = 0;
+        charset_merge_into(&a, &b, op, &mut |c| {
+            n += 1;
+            assert!(n <= 8);
+            out[n.min(8)] = c;
+        });
+        out[0] = n as i32;
+        let out = &out[..=n];
+        assert!(n % 2 == 0);
+        for k in 2..out.len() {
+            assert!(out[k - 1] < out[k]);
+        }
+        let x: i32 = kani::any();
+        let (in_a, in_b) = (scan(&a, x), scan(&b, x));
+        let want = match op {
+            MX_CHARSET_UNION_OP => in_a || in_b,
+            MX_CHARSET_SUBTRACT_OP => in_a && !in_b,
+            _ => in_a && in_b,
+        };
+        assert!(scan(&out, x) == want);
+        assert!(charset_contains(&out, x) == want);
+        assert!(charset_contains(&a, x) == in_a);
+        n
+    }
+
+    /// STR-3: `charset_contains` (a binary search) equals the linear scan
+    /// on every well-formed set of up to two ranges and every `i32`.
+    #[kani::proof]
+    #[kani::unwind(6)]
+    fn str3_contains_is_scan() {
+        let set = any_set();
+        let x: i32 = kani::any();
+        let inside = charset_contains(&set, x);
+        assert!(inside == scan(&set, x));
+        kani::cover!(
+            inside && set[0] == 4 && x >= set[3],
+            "a member of the second range"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(10)]
+    fn str3_union() {
+        let n = merge_semantics(MX_CHARSET_UNION_OP);
+        kani::cover!(n == 8, "a union of four disjoint ranges");
+        kani::cover!(n == 2, "a union that merges ranges");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(10)]
+    fn str3_subtract() {
+        let n = merge_semantics(MX_CHARSET_SUBTRACT_OP);
+        kani::cover!(n == 6, "a subtraction that splits a range");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(10)]
+    fn str3_intersection() {
+        let n = merge_semantics(MX_CHARSET_INTERSECTION_OP);
+        kani::cover!(n == 4, "an intersection with two pieces");
+    }
+}
