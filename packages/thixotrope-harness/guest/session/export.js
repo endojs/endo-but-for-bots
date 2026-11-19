@@ -20,14 +20,17 @@
  * - `exportState(cursor?)`: pages in the order head (info, config, usage,
  *   archive state, hold), archive (the segment index, 64 entries a page),
  *   records (from `sealedTo`, at most `pageRecords` and `frameBytes`), queue
- *   (waiting entries within `frameBytes`), end. Archived turns are read by
- *   the exporter through `History` (4.11), not here.
+ *   (waiting entries within `frameBytes`), inbox (M9 D-M9-21: the `inbox`
+ *   part's `exportPage`, cursor `m<n>` from message number `n`), end.
+ *   Archived turns are read by the exporter through `History` (4.11), not
+ *   here.
  * - `importState(chunk)`: a new session (no record yet) takes `head` (its
  *   usage totals), then `records` chunks in log order (`from` must be the
  *   next index; a chunk already applied is answered again without effect,
  *   so an importer may resend after a lost answer), the waiting entries
  *   (then held `restart` unless the export carried another hold: nothing
- *   starts by itself in an imported session) and `end`, which reports
+ *   starts by itself in an imported session), the `inbox` pages (its
+ *   `importPage`: every message kept, read-only) and `end`, which reports
  *   `imported` on the row so the factory lists it (7.2). The records go to
  *   `runner.importTurns` (W2.5), which rebuilds the turn infos and seals as
  *   4.3 allows.
@@ -75,6 +78,8 @@ const cursorNumbers = (cursor, pattern) => {
  *   the `environment` part (m6-interfaces.md X-E): the head page carries a
  *   session's execution state when it is not running; an import feeds it
  *   back and holds the queue `stopped`
+ * @param {any} [powers.inbox] the `inbox` part (m9-interfaces.md 3.2, S7):
+ *   its staged bodies join the blob pages, its messages the export
  */
 export const makeSessionExport = ({
   records,
@@ -86,6 +91,7 @@ export const makeSessionExport = ({
   info,
   rowReporter,
   execution = undefined,
+  inbox = undefined,
 }) => {
   /** 0: never imported; 1: an import is open; 2: the import ended. */
   let importing = 0;
@@ -106,6 +112,7 @@ export const makeSessionExport = ({
     /** @type {any[]} */
     const list = [runner.current()?.checkpoint, config.systemPrompt];
     for (const item of queue.items()) list.push(item.submission);
+    if (inbox !== undefined) list.push(...inbox.blobs());
     return list;
   };
 
@@ -219,7 +226,7 @@ export const makeSessionExport = ({
     const page = {
       part: 'queue',
       entries,
-      next: i < items.length ? `q${i}` : 'e',
+      next: i < items.length ? `q${i}` : inbox ? 'm0' : 'e',
     };
     const hold = queue.currentHold();
     if (hold !== undefined) page.hold = hold;
@@ -234,6 +241,7 @@ export const makeSessionExport = ({
     if (cursor[0] === 'a') return archivePage(n);
     if (cursor[0] === 'r') return recordsPage(n);
     if (cursor[0] === 'q') return queuePage(n);
+    if (cursor[0] === 'm' && inbox) return inbox.exportPage(n);
     throw Error(`not an export cursor: ${cursor}`);
   };
 
@@ -280,6 +288,8 @@ export const makeSessionExport = ({
       const hold = chunk.hold ?? { reason: 'restart', message: '' };
       if (queue.size() > 0)
         queue.hold(hold.reason, hold.message || holdText(hold.reason));
+    } else if (part === 'inbox') {
+      (inbox ?? Fail`this session has no inbox`).importPage(chunk);
     } else {
       runner.importEnd();
       importing = 2;

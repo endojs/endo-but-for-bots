@@ -36,6 +36,7 @@
  * Guest rules: prelude globals only; texts are built once at module load.
  */
 import { environmentPromptSections } from './environment-prompt.js';
+import { mailPromptSections } from './mail-prompt.js';
 
 /** U+2014 EM DASH, as Fae writes it. */
 const DASH = '\u2014';
@@ -224,4 +225,7 @@ export const promptSections = harden([
   instructions,
   // Part 6: the git workspace and shell (`environment-prompt.js`).
   ...environmentPromptSections,
+  // Part 2 after the guest section, and part 4: mail and delegation
+  // (`mail-prompt.js`).
+  ...mailPromptSections,
 ]);

@@ -156,7 +156,11 @@ export const regressionLists = Object.freeze({
       name => `test/integration/${name}.test.js`,
     ),
   ),
-  mail: Object.freeze(/** @type {string[]} */ ([])),
+  mail: Object.freeze(
+    ['mail', 'mail-restart-delivery'].map(
+      name => `test/integration/${name}.test.js`,
+    ),
+  ),
   voice: Object.freeze([
     'test/integration/voice-session.test.js',
     'test/integration/voice-restart.test.js',

@@ -16487,3 +16487,621 @@ recorded pass 2,008 s with templates (1,218 s of it the templates, most waiting 
 lane's exclusive run). Commits `544da7f5e0`, `c0e2b185d6`, `1881601aab`, `b894394568` and this
 journal commit; nothing pushed.
 Fit: neutral.
+### J-12460 2026-11-19 W9.7 the splitArgs inspector operation - built
+Evidence: `03c8c9598a`; `guest/exec/split-args.js`, seam X1 in `guest/exec/inspect.js` (one
+dispatch entry, the import, the op in the request typedef and the header list).
+Reading: D-M9-14 as written, with four precisions the contract left open. (1) The residual is
+the model's own text with string-value literals cut out (a literal scan after a validating
+`JSON.parse`), not a parse-and-stringify round trip, which would turn `1.0` into `1` and round an
+unsafe integer inside a `raw` value. Keys are never replaced. (2) A value is staged when it is over
+`splitStringUnits` or when it begins with the placeholder prefix `"\u0000s"` (however escaped), so
+every residual string with that prefix is a placeholder. (3) When the residual is still over
+`inlineBytes`, more values are staged, longest first, up to `splitStagedStrings`; past that, or
+with more than 16 long values, or one value over `mailBodyUnits`, the call fails before anything
+is staged (harness texts `splitTooManyText`, `splitResidualText`, `splitStringTooLongText`). (4) The
+source bound is its own `SPLIT_SOURCE_BYTES` = 6 x `mailBodyUnits` + 8 x `inlineBytes` (6,356,992):
+`argumentText`'s `execSourceBytes` (262,144) would refuse acceptance 14's 1 MiB task. Exhaustion
+from a page read, the parse or a staging call propagates to the inspector's catch (`exhausted`).
+Fit: good; the vat boundary makes the split cheap to state (data in, handles out).
+
+### J-12461 2026-11-19 W9.7 sizes and timings - measured
+Evidence: `03c8c9598a`; `node scripts/bundle-guest.mjs session exec`; Node probe over
+`perf/_window.mjs` `runWindow`, PERF_WINDOW_SCALE 0.5 (5 s windows), fake in-process Content.
+Reading: session program 233,126 before and after (the unit adds nothing to it); exec program
+64,500 -> 72,745 (limit 120,000). `exec.splitArgs.1MiB.node` median 3.11 ms, p95 5.77 (1,356
+samples, 271/s); `exec.splitArgs.4KiB.node` median 0.07 ms (41,160 samples). Unit test file 8
+tests in about 1 s; the four existing exec suites 64 passed unchanged.
+Fit: the compute is negligible; in a vat the cost is the deliveries: a 1 MiB task is 52 page
+reads plus 86 appends of `blobPieceBytes`, about 138 answered calls, so 4.5-10 s at 33-70 ms each
+(J-10192, J-0161), not measured here. A `BlobWriters.stage(text)` taking a whole page per call, or
+a Content read larger than `blobPageBytes`, would cut it; recorded, no core request (the frame
+ceiling bounds the piece size).
+
+### J-12462 2026-11-19 W9.7 time record - process
+Evidence: first command 2026-11-19T02:23:29Z.
+Reading: no command over 60 s; no supervisor, browser or run lock used; nothing pushed; no
+change to `packages/thixotrope` or `rust/**`.
+Fit: neutral.
+
+### J-12440 2026-11-19 W9.6 relay copy - built
+Evidence: `270e573ae8`; `resources/agent-host/impl/blobs.js` (seam A1); tests
+`test/adapter/blob-copy.test.js` (8 tests, about 2 s), kill child
+`test/adapter/_blob-copy-kill-child.mjs`, timing row `test/adapter/blob-copy.bench.mjs`.
+Reading: `BlobStore.copy(blob, { maxUnits?, suffix? })` beside `stage` and `discard`, and the one
+`RelayWriters` exo (`open`, `copy`, guard `postOfficeTables().interfaces.RelayWriters`) answered
+by `writersFor(undefined)`; `writersFor(session)` and `store.writers` stay `BlobWriters` without
+`copy`. Plain: the source's file is read once for its SHA-256 and preview (the copy carries the
+source's digest, so the same-submission rule still holds), then `link(2)` to `<key>.part`, rename,
+`syncDirectory` from `files.js`, bind; trace steps `link`, `rename`, `fsync-dir`, `bind`. Cut
+(`maxUnits` or a non-empty `suffix`): the source decoded as it is read in `blobPieceBytes`
+pieces; with `maxUnits` at most that many units are kept and bounded as `boundToolOutput` bounds
+a text (marker of the source's full length), without it every piece goes straight to the writer;
+the suffix after; written through an ownerless writer (piece quotas, fsync, rename, directory
+fsync). The source is located without an owner, so it is neither claimed nor checked and keeps
+its owner; the copy has no owner until the first session presents it; it counts against the
+daemon quota only. Unknown, discarded and uncommitted handles are refused with
+`texts.blobUnknown`. KM12 (SIGKILL before `link`, at `rename`, at `fsync-dir`, at `bind`, after
+the answer, both modes): the source reads whole, the next sweep removes the one `.part`, at most
+one named file nothing refers to is left. Fixed on the way: a writer whose directory fsync failed
+after its rename left the named file on disk while `abort` refunded its bytes (the file now goes
+with the failure); a failed cut copy awaits the writer's drop so the refund precedes the
+rejection.
+Fit: good; the adapter owns the files, so a cross-session copy is a link and never a byte
+through a vat.
+
+### J-12441 2026-11-19 W9.6 mail.copy - measured
+Evidence: `270e573ae8`; `node test/adapter/blob-copy.bench.mjs` (perf/_window.mjs `runWindow`,
+`perf/_harness.mjs` `stats`), 1 MiB ASCII source, each copy released outside its sample; machine
+shared with three other lanes.
+Reading: 10 s windows, load 8.8: plain median 8.89 ms, p95 16.4 (981 samples): **miss** of the
+5 ms budget; cut to `toolOutputUnits - 1280` with a suffix median 9.94 ms, p95 21.9 (779
+samples): pass (20 ms). 5 s windows (PERF_WINDOW_SCALE 0.5), load 7.7: plain 4.97 ms (913), cut
+9.81 ms (457). Probe on the same disk: hash of 1 MiB 0.73 ms, link plus rename 0.58 ms, directory
+fsync alone 4.33 ms. Likely cause of the miss: the directory fsync D-15 requires before the
+handle leaves is most of the copy and grows with the shared load; the budget's basis took it as
+cheap. Not loosened. A post to n recipients pays n fsyncs; a `copyMany` naming n links under one
+directory fsync (as `commit` does) would pay one, if `mail.throughput` shows it. Session program
+233,126 before and after (adapter code only).
+Fit: neutral: fsync cost is the disk's, not Thixotrope's.
+
+### J-12442 2026-11-19 W9.6 time record - process
+Evidence: first command 2026-11-19T02:23:30Z.
+Reading: no command over 60 s (the regression set of 16 blob and agent-host files took 63 s
+wall in one `yarn test` call); no supervisor, browser or run lock used; nothing pushed; no
+change to `packages/thixotrope` or `rust/**`.
+Fit: neutral.
+
+### J-1130 2026-11-19 W9.1 the inbox part and its mail texts - built
+Evidence: `e9fc06289b`; `guest/session/inbox.js` (`inboxPart`), `guest/lib/mail-text.js`
+(`listingText`, `mailTurnInput`, `mailTurnNote`, `bodyText`); tests
+`test/unit/session-inbox.test.js` (16), `test/unit/mail-text.test.js` (4), helper
+`test/unit/_inbox-packages.js` (a `packages` part with seam S3's table, until the session wiring
+adds it to `packages.js`).
+Reading: contract 3.2 as written: one `Map<number, InboxMessage>` in number order, bound
+`inboxMessages` (the 257th delivery refused with `inboxFull`, the refusal remembered), the
+64-outcome ring by `seq` for re-drives, `waiting` for package/request/form and `kept` for
+reply/value, `nextTurn` offering the oldest waiting message whose `take` marks it `handling`,
+`onClaim` opening the package under the message's own number with `mailTextOf.packageNote` as the
+turn's `systemNote`, `onSettle` posting the reply (`inReplyTo` the postmark; the final text, an
+inline one cut to `inlineBytes`, or `textOf.errorResult(error or status)`), rejecting an unanswered
+request of a completed turn with `unansweredRequest`, keeping a failed request or an unsubmitted
+form. Precisions the contract left open: (1) at most one message is `handling` (one turn is
+current), kept as the part's `handling` variable, so `onClaim` and `onSettle` find it without a
+scan; a settle of another turn leaves the inbox alone. (2) `cancel(postmark)` marks a handling
+message `cancelled` so its settle removes it rather than keeping a cancelled request; a waiting or
+kept message is removed (`dismissed`); imported messages never match. (3) `settleRequest` removes
+a kept message at once and a handling one at its settle. (4) `exportPage(from)` takes `from` as a
+message number (`m<number>`), so a dismissal between two pages does not shift the cursor; its last
+page's `next` is `e`. (5) `importPage` refuses a session that has had a delivery, a page over
+`frameBytes`, an unknown type or state, more than 256 messages; a page sent again is applied
+without effect. (6) The counter resumes above the highest imported number through
+`packages.table.reserve(floor)` (S3 with an optional `above` argument).
+Fit: good. A part closing over plain records suits orthogonal persistence: the inbox needs no
+record kind, its state replays with the vat, and the export is a data copy of the same records.
+
+### J-1131 2026-11-19 W9.1 the settle's final text - finding
+Evidence: `guest/session/turn.js` `settle` and `hookTurn` (`6493d955c7`):
+`hookTurn(active)` is `{ active, round, append, emit }`; `TurnSettled.final` is built from the
+`settle(active, { status, error, final })` argument and not kept on `ActiveTurn` or `TurnInfo`
+(`info.error` and `active.state` are).
+Reading: contract 3.2's settle rule ("body `TurnSettled.final`") cannot be met by a part as the
+runner is built: no hook can read the final text. The inbox reads `HookTurn.final` (undefined
+today, so a completed mail turn would reply with an empty body). Needed (PM, a part-API line WX.1
+owns): `hooks.onSettle(hookTurn(active))` passes the settle's `final` on the HookTurn (or
+`ActiveTurn` gains `final`, set by `settle` before the hooks run), with the typedef line in
+`runtime-parts.js`. Tested at the unit level with a HookTurn carrying `final`.
+Fit: poor for this seam, cheap to fix: one field on a frozen record, no new delivery.
+
+### J-1132 2026-11-19 W9.1 sizes and timings - measured
+Evidence: `e9fc06289b`; `node scripts/bundle-guest.mjs session`, and the same over a scratch
+copy of `guest/` with the four `runtime-parts.js` slot lines for `inbox` added (S1, not
+committed: the wiring's); Node probe over `perf/_window.mjs` `runWindow`, PERF_WINDOW_SCALE 0.5
+(5 s windows), the real parts plus the inbox, fakes for the packages table.
+Reading: session program 233,126 (base, unchanged by this commit: the part is not registered) ->
+244,587 with the part registered: +11,461 bytes of M9's 21,500 (inbox.js 7,199 and mail-text.js
+1,098 comment-stripped, the rest the bundle's per-module wrapping and the getter). Above the
+contract's estimate (6,000 + 1,500); the remaining 10,039 must hold the tools, the subagents part
+and the wiring. `mail.inboxCrank.node` (deliver a 32-attachment package into 255 kept messages,
+claim, settle): median 0.013 ms, p95 0.016 ms (314,649 samples, 62,930/s); `mail.listing.node`
+(32 rows): median 0.006 ms. Unit files: 20 tests in about 2 s.
+Fit: the inbox's own compute is negligible; the crank's cost in a vat is the 32 handles crossing
+(7-15 ms each, ARCH 6) and the claim's sends, not measured here (W9.10's `mail.inboxCrank`).
+
+### J-1133 2026-11-19 W9.1 time record - process
+Evidence: first command 2026-11-19T02:23:32Z; last 2026-11-19T02:35Z.
+Reading: no command over 60 s; no supervisor, browser or run lock used; nothing pushed; no
+change to `packages/thixotrope` or `rust/**`; no shared file edited.
+Fit: neutral.
+
+### J-1170 2026-11-19 W9.3 the subagents part and the three subagent tools - built
+Evidence: `e9a7cd8232`; `guest/session/subagents.js` (`subagentsPart`), `guest/session/tools/
+subagents.js` (`subagentToolEntries`, `readStagedArgs`, `heldObject`), `test/unit/subagent-tools.
+test.js` (13 tests: fakes `Delegation`, `SubagentHandle` from `postOfficeTables().interfaces`,
+`Endpoint`, `ExecScope`, `ExecHandle` from `interfaces`).
+Reading: (1) The part holds the name -> handle map, the names whose spawn is out (uniqueness
+within a round), the open asks in WX.1's `makeCallTable` (D-M9-22) and the claim time read in
+`onClaim` (the only clock a tool can use, for the requests' `at`). (2) `spawnSubagent`: name rule
+(`nameInvalid`), `subagentExists` among live children and spawns in flight, inline `systemPrompt`
+(`systemPromptTooLong` over 8,192 bytes, staged refused), attachments by label; the factory's
+refusals (tree limit) arrive as the rejection's message and the name is freed. (3)
+`askSubagent`: `noSubagent`, `askInFlight` (one per child), `timeoutInvalid` (1..604,800),
+`taskInvalid`; deadline armed at `timeoutSeconds x 1000` on the turn's endpoint, disarmed at
+any ending but the deadline; the `deadline` entry sends `cancelAsk` and ends with `askTimeout`;
+a late answer is ignored. (4) `stopSubagent`: `stop()` then unbind. (5) `onCancel`: the turn's
+asks end with `askAbandoned` and each child gets `cancelAsk`; `onRecover`: `cancelAsk`, the asks
+end quietly with the outcome-unknown text, the turn's spawns in flight are dropped, and
+`Delegation.children()` replaces the map only when the part held or was making a child (a
+session that never delegated sends nothing). (6) Staged arguments go to the exec vat as
+`splitArgs`; placeholders `"\u0000s<k>"` are replaced by the staged texts.
+Fit: good. The part's closure state replays with the vat, so asks and the map need no record;
+the call table's generation rule is what makes a pending ask across a restart safe.
+
+### J-1171 2026-11-19 W9.3 session program and Node timings - measured
+Evidence: `e9a7cd8232`; `bundleGuest` over a scratch copy of `guest/` with an entry re-exporting
+`session/main.js` and the two modules (nothing registered: S1 and S6 are W9.8's); Node probe over
+`perf/_window.mjs` `runWindow`, PERF_WINDOW_SCALE 0.5 (5 s windows), load average 6.0.
+Reading: in the bundle `session/subagents.js` 3,477 bytes, `session/tools/subagents.js` 10,005,
+and `session/tools/call-table.js` 1,570 (WX.1's, first imported here; M6's shell part imports
+it too, so the group pays it once): +16,944 over the base entry with the re-export wrapping,
+about +15,000 once registered. The contract estimated 6,500 for the two modules (D-M9-19); with
+W9.1's +11,461 (J-1132) the lane is past its 21,500 before W9.2 and W9.8. Of the tool module,
+about 1,590 bytes are the bundle's import wrapping of 13 imports, about 1,000 the three
+descriptions, about 1,700 the attachment-list reader. `subagent.askTool.node` (an ask with 32
+attachments, the fake child answering at once): median 0.744 ms, p95 1.794 ms (5,536 samples,
+1,107/s); `subagent.spawnTool.node` (spawn with 32 attachments): median 0.658 ms, p95 1.919 ms
+(6,252 samples, 1,250/s). Unit file: 13 tests in about 2 s.
+Fit: the session-side compute is negligible beside the handle crossings (7-15 ms each, ARCH 6);
+the cost that matters here is program bytes, which the vat pays at every spare (about 10 us a
+byte, D-4).
+
+### J-1172 2026-11-19 W9.3 what the tools needed that the shared readers lack - finding
+Evidence: `guest/lib/tool-args.js` (kinds `string`, `integer`, `raw`, nested object; S4 adds
+`strings`); `guards/mail.js` `mailToolArgumentNames.attachment` (`[{ name, petName }]`, Fae's
+A.3 schema); `guards/base.js` `InspectRequest` (`target` required); the W9.2 module
+`tools/mail.js` in the same worktree (uncommitted when read).
+Reading: (1) The closed reader has no list of objects, so `attachments` is read as a raw span,
+split at top-level commas (the span is already checked JSON) and each element read by
+`parseClosedArgs`: a `'records'` kind in `tool-args.js` would serve this and any later list of
+objects. (2) `InspectRequest.target` is required although `splitArgs` calls no target; the
+writers stand in for it (W9.2 does the same). (3) W9.2 and W9.3 each built a `splitArgs` reader
+and a label lookup with `subagents/<name>` (`readStagedArgs`/`heldObject` here,
+`mailObjectOf` and its staged reader there): about 40 lines in two copies, built in parallel.
+One should import the other (fold item; about 1-2 KB of session program back).
+Fit: neutral; the costs are program bytes and one more scanner, not runtime.
+
+### J-1173 2026-11-19 W9.3 time and defaults a tool cannot reach - finding
+Evidence: `guest/session/turn.js` `issue` (`ToolContext` = `{ turn, turnId, generation, round,
+services, endpoint, runtime }`); `runtime-parts.js` `HookTurn.active.claimAt`; `guards/
+factory.js` `HarnessSettings.askTimeoutSeconds` (WX.1, F6).
+Reading: a tool has no clock (architecture 12.1) and the context carries none, so the
+`SpawnRequest.at` and `AskRequest.at` are the current turn's claim time, read by the part's
+`onClaim` (a number; no send, no record). The settings' `askTimeoutSeconds` has no path into a
+session (neither `SessionServices` nor `SessionConfig` carries it): the default is
+`mailLimits.askTimeoutSeconds` until W9.9's services or config pass it.
+Fit: fair: the claim time is a monotone and replayed reading, but an ask late in a long turn
+carries a time up to the turn's length old.
+
+### J-1174 2026-11-19 W9.3 time record - process
+Evidence: first command 2026-11-19T02:23:30Z; last 2026-11-19T02:36Z.
+Reading: no command over 60 s; no supervisor, browser or run lock used; nothing pushed; no
+change to `packages/thixotrope` or `rust/**`; no shared file edited (the part and the entries are
+not registered: S1 and S6 are W9.8's).
+Fit: neutral.
+
+### J-12400 2026-11-19 W9.4 post office and operator mail - built
+Evidence: `8d71039794` (`guest/factory/post-office.js`, `test/unit/_post-office-fakes.js`,
+`test/unit/post-office.test.js`, 19 tests), `228c303fd4` (`guest/factory/operator-mail.js`,
+`test/unit/operator-mail.test.js`, 12 tests); both files about 1.4 s together.
+Reading: `makePostOffice({ admin, rows, starts, lastKnownTime? })` mints one `MailAddress` and one
+`Outbox` per row and one operator address (title `user`), recognises a recipient only by a
+factory `WeakMap` (never calls it: acceptance 6's counting fake), and posts: draft-level refusals
+(`mailFraud`, `envelopeTooLarge`) reject the post; per recipient `notAnAddress`, `recipientLost`
+(a dropped or lost row; a retired break from `deliverMail` marks the row lost), `postOfficeBusy`
+(rows or kept bytes) and the recipient's own refusal are the receipt's results. A staged body to
+a turn-starting recipient is copied per recipient through the relay writers (fetched once,
+re-fetched once on a retired break); a `reply`/`value` to a session is kept inline (a staged
+body becomes its preview plus `bodyCut`, no copy); a staged reply to the operator is copied and
+released by `OperatorMessage.dismiss`. `seq` is assigned when the envelope is first sent (after
+its copy), so a slow copy cannot reorder a recipient's sequence; a re-drive resends the same
+envelope. Replies are checked against the 4,096 ring (replier = the postmark's recipient,
+`to` = its sender); an open ask's listener gets the reply instead of an inbox, a closed postmark
+consumes it. `restart(current)` re-drives every flight stamped earlier, 32 at a time, and
+answers without waiting for a guest call. `makeOperatorMail({ postOffice, admin, rows })`
+registers its inbox with the post office; the mailbox sends, requests and forms; tickets answer
+once; forms are checked again by pattern (no JSON parsed in the vat), defaults applied, and post a
+`value` message; `responseKey` reuses open or settled requests (a failed or cancelled one is
+replaced); at most 1,024 requests, the oldest settled evicted first.
+Fit: good; amplification by `WeakMap` is the natural Thixotrope shape for an unforgeable sender,
+and all delivery state is plain heap records that persist with the factory vat.
+
+### J-12401 2026-11-19 W9.4 sizes and bounds - measured
+Evidence: `228c303fd4`; `post-office.test.js` acceptance-22 case (Node, no supervisor);
+`node scripts/bundle-guest.mjs session factory` at `6493d955c7`.
+Reading: with a stalled recipient and 8,192-byte inline bodies, 509 envelopes were admitted
+(4,193,142 kept bytes of the 4,194,304 bound) and the 510th refused with `postOfficeBusy`; with
+one-byte bodies the 1,025th; after the deliveries answered, kept bytes returned to 0 and posts
+were accepted again. A re-drive of 40 stalled flights sent 32, then the rest as answers came.
+Session program unchanged by this unit (233,126 bytes before and after; neither module is in the
+session bundle). The factory bundle (192,892 bytes) gains the two modules (23,946 + 17,291 source
+bytes before comment stripping) only when W9.9 imports them. No rate measured: the unit's rows
+(`mail.post.operator`, `mail.throughput`) need the supervisor and are W9.10's.
+Fit: neutral.
+
+### J-12402 2026-11-19 W9.4 what the contract's internal API lacked - finding
+Evidence: m9-interfaces.md 3.1 (`PostOffice`), `guards/post-office.js` `MailDraft`,
+`OperatorDraft` (no `at`), `OperatorMessageView.values`, `RequestInfo`.
+Reading: (1) A draft carries no time and a vat has no clock: `makePostOffice` takes an optional
+`lastKnownTime` (W9.9 should pass the kit's `knownTime`), and `post` an optional `at` (asks and
+spawns carry one); otherwise the latest `at` seen. (2) Added to `PostOffice`: `bindAddress(handle,
+row)` (the subagent tree's `SubagentHandle` is "also a mail address", but only the tree mints
+it), `cancelDelivery(postmark)` (close and `cancelMail` sendOnly, for `cancelAsk` and
+`RequestHandle.cancel`), `copy(blob, options)` (the relay with its re-fetch, for the ask answer's
+cut copy), `recipientOfPostmark`, `now()`, `attachOperatorInbox` (the operator mail module's
+registration), `status()`; `post` also takes `onReply` so an ask is registered before its delivery
+is sent. `onReply` answers false for an unknown or closed postmark. (3) Not built as texts exist
+for: a stray staged body's `cutFrom` and `bodyCut` count are its bytes (the factory cannot know
+its units without reading the blob); a full request table reuses `postOfficeBusy(1024)`, whose
+words say "deliveries in flight"; an unknown or repeated form field uses
+`textOf.unexpectedArgument(name, 'submitForm', fieldNames)`; a form's value message is dropped
+(the handle keeps the values) when the operator inbox is full; `OperatorMessage.reply` on a
+`value` message is `mailFraud` (it was never delivered by post). A `value` message's submission
+is bounded by `envelopeBytes` so its view fits a page.
+Fit: fair: each gap is a fixed shape the guards could carry at the fold (W9.F).
+
+### J-12403 2026-11-19 W9.4 time record - process
+Evidence: first command 2026-11-19T02:23:31Z; last 2026-11-19T02:36:36Z (before this entry).
+Reading: no command over 60 s; no supervisor, browser or run lock used; nothing pushed; no
+change to `packages/thixotrope`, `rust/**` or any shared file; `corepack yarn lint:duplicates`
+1.74 % (ceiling 2.05 %); eslint 0 errors on the unit's files, `tsc` clean for the package.
+Fit: neutral.
+
+### J-1150 2026-11-19 W9.2 the mail and request tools - built
+Evidence: `05759d7e79`; `guest/session/tools/mail.js`, `guest/session/tools/requests.js`;
+`test/unit/mail-tools.test.js` (12 tests), `test/unit/request-tools.test.js` (6 tests), fakes in
+`test/unit/_mail-tool-fakes.js` (Outbox, MailAddress, SubagentHandle, RequestTicket from
+`postOfficeTables().interfaces`; ExecScope, ExecHandle, Blob from `interfaces.js`).
+Reading: seven static entries in D-M9-24 order, exported as `mailToolEntries` and
+`requestToolEntries` for W9.8's S6 lines (not registered here). `listMessages` and `dismiss` are
+`site: 'session'`; `send`, `reply` and the three request tools `site: 'guest'` (one answered call
+to a factory exo each). `available` is `services.mail` present (D-M9-17). `send` takes `recipient`
+as a string or a list (at most 8): `user` is `services.operatorAddress`, `subagents/<name>` and
+labels resolve through W9.3's exported `heldObject` (D-M9-23; no copy of the lookup). Edge and pet
+names pair by position (a missing one is the other); the body is the strings with `@edge` after
+each (R4-58). Every refusal precedes the post: argument shape (closed parser), recipient count and
+lookup, attachment count, duplicate, unknown or stored-value label, body over `inlineBytes`. The
+post office's per-recipient refusals are forwarded line by line; the result fails only when every
+recipient refused. Staged arguments: refused over `mailBodyUnits` bytes before any split (probe
+"1,048,577-character body"); otherwise one `splitArgs` inspector call (no deadline; `target` is the
+round's writers, the guard asks for one), the residual read by the same closed spec, placeholders
+`"\u0000s<k>"` answered by the staged strings. Request tools: `messageNumber` a decimal string or
+an integer (`expectedDecimal`); `resolveRequest` sends the value's JSON source span
+(`answerTooLarge` over 8,192 bytes), `rejectRequest` the reason cut to `reasonUnits`;
+`submitForm` reads `values` with a closed spec built from the form's fields (an unknown name is
+`unexpectedArgument` listing the fields), applies defaults, checks each kind from the source span
+and sends `{ name, json }` pairs, a decimal as a digit string. The inbox marks a request settled
+(`settleRequest`) before the ticket call; an already settled one goes to its ticket, whose refusal
+is forwarded. `listMessages` renders W9.1's `views` with `mail-text.js` `listingText`.
+Fit: good: the closed parser plus raw spans let the session read lists of strings and form values
+without `JSON.parse` or a data-derived key.
+
+### J-1151 2026-11-19 W9.2 session program - measured
+Evidence: `05759d7e79`; `bundleGuest` over a scratch copy of `guest/` with W9.8's S6 lines added to
+the copy's `tool-table.js` (mail, requests) and, for the lane figure, W9.1's `inboxPart`, W9.3's
+`subagentsPart` and `subagentToolEntries` imported there too; `node scripts/bundle-guest.mjs
+session` on the tree itself: 233,126 before and after (nothing registered yet).
+Reading: bundle spans `session/tools/mail.js` 10,602 bytes, `session/tools/requests.js` 5,029
+(stripped sources 9,493 and 4,063; the import wrapping of 14 + 8 imports is about 1,900 of it).
+Marginal cost of this unit with the rest of the lane present: 278,810 - 261,150 = 17,660 bytes
+(the modules, their registry cells and export setters). The whole group A of M9 registered:
+278,810 bytes, 45,684 over the 233,126 base: twice the lane's 21,500 and 8,474 over the
+270,336-byte limit, before W9.8's seams. The contract estimated 8,500 stripped for this unit
+(D-M9-19); a first draft was 22,438 bundle bytes, cut to 17,660 by literal parameter schemas, one
+shared reader for the three list arguments, fewer exports and reuse of `heldObject`. Unit files: 18
+tests in 0.8 s wall time.
+Fit: poor on this axis: an ESM bundle pays about 85 bytes per import binding and a cell per
+export in every vat program, so small concept modules that import a dozen helpers each cost
+20-25 % over their stripped text; the budget arithmetic of D-M9-19 counted stripped sources only.
+
+### J-1152 2026-11-19 W9.2 where the contract and the built code disagree - finding
+Evidence: `guest/session/labels.js` `makeLabels` (seeds go through `bindObject`, which refuses
+`reservedLabels`, `user` among them); m9-interfaces.md 6.1 S4, S8, 3.3; W9.3's
+`tools/subagents.js` `readStagedArgs`.
+Reading: (1) S8's `user` seed cannot be bound: `makeLabels` throws `reservedLabel('user')` for it,
+so the session would fail to start. The tools resolve `user` to `services.operatorAddress`
+directly; W9.8 should drop the S8 seed or teach `labels.js` to accept preset seeds of reserved
+labels (acceptance 7's "holds exactly `user`" then needs restating). (2) S4 (a `strings` kind in
+`tool-args.js`) is not needed by this unit: `readStrings` in `mail.js` reads a raw span that the
+closed parser already checked, decoding each literal through `parseClosedArgs` (no copy of the
+decoder). (3) `InspectRequest.target` is required, but `splitArgs` calls nothing: the tools pass
+the round's `writers` (W9.3 does the same); W9.7 must ignore it. (4) A staged string can be a
+message body only alone (empty strings and edges beside it): composing it with other text would
+copy its bytes through the session vat; mixed composition is refused with `bodyTooLong` over
+`inlineBytes`. (5) W9.3's `readStagedArgs` does not answer the `staged` list, so the mail tools,
+whose placeholders sit inside arrays, keep their own split call (12 lines): answering `staged`
+there would let both share one reader and save about 700 bytes. (6) An edge label over 80 units is
+refused by the Outbox's guard (a failed result, no post) rather than by the tool.
+Fit: fair: each is a small seam fix; (1) is a real defect in the contract's S8.
+
+### J-1153 2026-11-19 W9.2 time record - process
+Evidence: first command 2026-11-19T02:23:29Z; last 2026-11-19T02:42Z (this entry's commit).
+Reading: no command over 60 s; no supervisor, browser or run lock; nothing pushed; no change to a
+shared file, `packages/thixotrope` or `rust/**`; eslint 0 problems on the unit's five files,
+`tsc` clean for the package, `corepack yarn lint:duplicates` 1.75 % (ceiling 2.05 %).
+Fit: neutral.
+
+### J-12420 2026-11-19 W9.5 subagent tree - built
+Evidence: `91b12e6bfe` (`guest/factory/subagents.js`, `test/unit/subagent-tree.test.js`, 15
+tests, 0.88 s wall time for the file).
+Reading: `makeSubagents({ create, deleteSession, rows, postOffice, starts, admin?, settings? })`
+answers `{ delegationFor(row, from), deleteChildren({ row, session }), restart(current),
+nodeOf(row), status() }`. `delegationFor` mints one `Delegation` per row below `maxDepth` (depth
+from the parent chain: the tree's node, else `row.parent` set by seam F3, so a child's builder
+call during its own creation already sees its depth) and keeps `from` (the row's resolved
+`backend`, `modelId`, `preset`, `reasoningEffort`) as what its children inherit. `spawn` admits in
+the crank that receives it: the name pattern, uniqueness among live children and the parent's
+spawns in flight, and the root tree's live descendants plus its reservations against
+`maxDescendants` (`treeLimit`); the reservation is stamped with `starts.current()`. The child is
+made by the injected `create(options, { parent, endowments, link })` with `title` =
+`childTitle(parent title cut to fit, name)`, the inherited fields, `userInitiated: false`, the
+spawn's `at` and inline `systemPrompt`; `endowments` are the listed attachments. Each child's
+`SubagentHandle` is bound in the post office as the child's address. `ask` posts the task with
+`onReply` (one open ask per child), keeps the postmark when the receipt arrives (a cancel that
+came first cancels the delivery then), and builds the answer: a staged reply copied with
+`maxUnits = toolOutputUnits - 1,280` and the attachment note as `suffix`; an inline one inline, or
+staged through `stagePrompt` when the note takes it past `inlineBytes`. A refused delivery to a
+lost child answers `subagentLost`. `cancelAsk`, `stop` and a restart end the open ask with
+`askAbandoned` and `cancelDelivery` (the child gets `cancelMail`, a late reply is consumed).
+`stop` and `deleteChildren` delete deepest first, one session at a time, and a node leaves the
+tree when its delete completed (or, after a restart, when its row is found dropped).
+`restart(current)` links a reservation whose row the start listener completed (KM10) and
+releases the rest (KM9), and closes asks stamped earlier (KM7, KM8), without awaiting anything.
+Fit: good; rights amplification (the post office's `WeakMap`) makes a handle double as an
+address with no lookup, and heap-resident nodes and reservations stamped with the start count
+need no persistence code of their own.
+
+### J-12421 2026-11-19 W9.5 contract differences - finding
+Evidence: m9-interfaces.md 3.1 (`makeSubagents({ create, deleteSession, rows, postOffice,
+settings, starts })`, `delegationFor(row)`, `create(options, { parent })`), 4.3 step 5, 4.4;
+`guest/factory/session-options.js` `ResolvedOptions`; `guards/factory.js` `CreateOptions`.
+Reading: (1) `delegationFor(row, from)` takes the row's resolved options as a second argument:
+the row holds only `backendTitle` and `modelId` strings, and the tree must pass the Backend
+object (the pool) on; W9.9's `subagentServices` builder has `resolved` in its context (F2).
+(2) `create`'s second argument carries `endowments` (the `CreateOptions` guard admits none, so
+F4's builder must take them from here) and `link(row)`, which W9.9's `create` should call right
+after `rows.add`: without it a creation the start listener completed after a restart (KM10) is
+released, not linked, since the spawn's own `create` promise never answers then. (3) `admin` is
+added: an inline answer plus its attachment note can pass `inlineBytes` and is staged with the
+existing `session/prompt.js` `stagePrompt` (no copy). (4) The preset object is passed on, not
+its snapshot: `CreateOptions` takes a `Preset`, so a child re-snapshots it at spawn time, equal
+to the parent's unless the preset was saved since. (5) A second ask while one is open is refused
+in the factory too (`askInFlight`), as is an ask during `stop` (`askAbandoned`).
+Fit: fair: each difference keeps the other units' interfaces; (1) and (2) are W9.9's wiring.
+
+### J-12422 2026-11-19 W9.5 sizes and time record - process
+Evidence: `node scripts/bundle-guest.mjs` at `91b12e6bfe`; first command 2026-11-19T02:37:42Z.
+Reading: the module is factory-only: session program contribution 0 bytes (the session bundle
+reads 278,805 bytes in this worktree with group A and W9.8's uncommitted seams present, not
+this unit's); factory bundle 192,892 bytes unchanged until W9.9 imports `subagents.js` (18,932
+source bytes before stripping). No rate measured: the perf rows (`subagent.spawn`, `.ask`,
+`.burst8`, `.stop`) need a supervisor and are W9.10's. No command over 60 s; no supervisor or run
+lock; `tsc` clean, eslint 0 errors (4 `safe-await-separator` warnings, as in `post-office.js`),
+`lint:duplicates` 1.73 % (ceiling 2.05 %).
+Fit: neutral.
+
+### J-12480 2026-11-19 W9.8 session wiring - built (registration withheld)
+Evidence: `f9265ef456`; `test/unit/session-mail-wiring.test.js` (8), `session-mail-export.test.js`
+(3), `tool-args-strings.test.js` (2); `session-inbox.test.js` now runs on the real packages part
+and the `runtime.inbox` getter (`_inbox-packages.js` deleted).
+Reading: built S3 (`reserve(above = 0)`, `open({ number? })`), S4 (`strings` kind), S5
+(`deliverMail` claims in the delivery crank, `cancelMail`), S7 (inbox blobs in `blobPage`, the
+last queue page's `next` is `m0`, `m<n>` pages, `importState` of `inbox`), and of S1 only the
+two getters. A runtime without the `inbox` part keeps WX.1's answers (`notBuiltYet` refusal, no
+`m0` page, an `inbox` chunk refused), so the tree stays correct while the parts are not
+registered. Not built: the S1 import, `requiredParts` and `runtimeParts` lines and the S6
+spreads (J-12481), and S8: `makeLabels` refuses the reserved label `user`
+(`labels.js` `isValidLabel`), so the seed as written would fail every session holding an
+`operatorAddress`; the tools already resolve `user` from `services.operatorAddress`.
+Fit: good: the claim-in-delivery-crank rule needed no runner change (WX.1's `take` and the
+`restart` hold suffice); one crank does record, claim and first sends.
+
+### J-12481 2026-11-19 W9.8 session program over the limit - finding
+Evidence: `node scripts/bundle-guest.mjs session` on `f9265ef456`: 234,624 bytes (+1,498 over
+the 233,126 base: tool-args +558, session.js +466, export.js +246, packages.js +90,
+runtime-parts.js +94). With the S1 and S6 lines added in a scratch copy of `guest/`: 280,001
+bytes, +46,875 over the base, over M9's 21,500 cap by 25,375 and over the 270,336 limit by
+9,665. Per module in that bundle (stripped functor text): `tools/mail.js` 10,602,
+`tools/subagents.js` 9,996, `inbox.js` 8,118, `tools/requests.js` 5,021, `subagents.js` 3,477,
+`mail-text.js` 1,687, `tools/call-table.js` 1,559 (not in the base bundle: `exec.js` does not
+use it), the rest bundle linkage and the two seam files.
+Reading: the modules are about 1.6 to 2.5 times D-M9-19's estimates (inbox 6,000, mail tools
+5,000, requests 3,500, subagent tools 4,000, subagents 2,500). Registering would make the
+factory refuse the session program, so W9.8 stops there. Trims within the lane: the two list
+readers (`tools/mail.js` `readStrings`, `tools/subagents.js` `elementsOf`) onto S4's kind; one
+`ok`/`failed` and one staged-argument reader (`readMailArgs` and `readStagedArgs` are the same
+flow); shorter tool descriptions; draft checks left to the factory (D-M9-19). Those reach a few
+KB, not 25 KB: the cap needs an owner ruling or a feature cut.
+Fit: poor: a fixed whole-program budget per vat makes every per-session feature pay its size in
+each cold create; Thixotrope has no shared-module image between vats of one program.
+
+### J-12482 2026-11-19 W9.8 time record - process
+Evidence: first command 2026-11-19T02:42:18Z, last 2026-11-19T02:50Z; no command over 60 s; no
+supervisor and no run lock used. `tsc` clean; eslint 0 errors on the changed files (the
+`tool-args.js` and `runtime-parts.test.js` warnings were there before); `lint:duplicates` 1.72 %
+(ceiling 2.05 %). Unit suites run: the crank-order suites of P3 5, M5's session and package
+suites, the mail, request and subagent tool suites, `runtime-parts`, `session-inbox`: all pass.
+Fit: neutral.
+
+### J-12500 2026-11-19 W9.9 factory wiring - built
+Evidence: `28eda9f491`, `a659e74b12`; `test/unit/factory-mail-wiring.test.js` (8 tests),
+`test/unit/mail-prompt.test.js` (6); the factory, prompt, lifecycle, provisioning, post-office,
+operator-mail and subagent-tree unit files (152 and 104 tests in two runs) pass.
+Reading: F1: `makeFactoryKit` makes `makePostOffice({ admin, rows, starts, lastKnownTime })`,
+then `makeOperatorMail` (it registers the operator inbox), then `makeSubagents({ create,
+deleteSession, rows, postOffice, starts, admin, settings })`; `Operator.getMail` answers
+`operatorMail.mailbox`; `recover()` runs `postOffice.restart(current)` and
+`subagents.restart(current)` after the creations' recovery and awaits them with the probes and
+the deletes. F2: the one `buildSessionServices` context gains `row`, `postOffice`, `subagents`,
+`resolved`, and, for a subagent only, `delegated` (its listed attachments). F3: `create(options,
+{ importing?, parent?, endowments?, link? })` stores `parent` on the row through `rows.add`,
+calls `link(row)` right after it, and `rows.isListed` skips a row with a parent (page and list
+feed); `findSession` still finds it. F4: `mailServices` (`mail` = the row's outbox,
+`operatorAddress`; a subagent's `endowments` replaced by `delegated`, `[]` when none) and
+`subagentServices` (`subagents` = `delegationFor(row, resolved)`, absent at `maxDepth`). F5:
+`makeDeletions({ ..., hooks: harden([context => subagents.deleteChildren(context)]) })`, one
+entry; the environments lane's release appends as the second. The post office's
+`rowRemoved(row)` runs when a delete dropped its row: the kit's `deleteSession` (the factory
+method, the subagent tree's injected delete and the import rollback all use it) and, after a
+restart, every row `deletions.resume()` dropped. F7: `guest/lib/mail-prompt.js` adds part 2
+`mailTools` (Fae's mail list with `dismiss`, the request tools and the `user` recipient added,
+the raw-mailbox paragraph dropped, the runner's two closing sentences kept) and part 4
+`delegation` (Fae's words, "These Endo tools" -> "These tools"), both applying to every session.
+Fit: good: the kit's late binding (hooks and `create` close over objects made after them)
+needs no registry or name; the delete hook and the post office's row removal are plain closures.
+
+### J-12501 2026-11-19 W9.9 contract differences and sizes - finding
+Evidence: m9-interfaces.md F1, F4, F5, F7; `guest/factory/delete.js` (hooks run before step 1);
+`guest/factory/root.js` `makeHarnessSettings`; `node scripts/bundle-guest.mjs` at `a659e74b12`.
+Reading: (1) `rowRemoved` is not in a delete hook: hooks run before the fence, and dropping the
+row's `seq` there would let a delivery in the few cranks before `deleteSelf` restart at seq 1 and
+be answered as a duplicate; it runs after the row is dropped instead. (2) `settings` passed to
+the tree is `{ current }` over `harnessSettings`, but `makeHarnessSettings.set` stores no
+`maxDescendants`, `maxDepth` or `askTimeoutSeconds` (F6 admits them in the guard only), so the
+tree reads `mailLimits` until `root.js` stores them (acceptance 8's "`maxDepth` 0 in the
+settings" needs that). (3) The composed prompt grew from 3,765 to 5,979 bytes plain (6,275
+spoken; mail 909, delegation 1,301, two separators): a preset's instructions stay inline up to
+about 2.2 KB instead of 4.4 KB before the prompt is staged; `m5-w51-factory`'s over-frame preset
+was cut from 1,300 to 400 units of instructions to keep its prompt inline. (4) Pins changed with
+the seam: `m5-w52-prompt` and `m2-w26-prompt` (section table, plain prompt), `m1a-factory`
+(`serviceBuilders.length` 3 -> 5). Sizes: session program 234,624 bytes, unchanged by this unit
+(no module of it is in the session bundle); factory bundle 192,892 -> 233,199 (+40,307:
+`post-office.js`, `operator-mail.js`, `subagents.js`, `mail-prompt.js` and the wiring), no harness
+limit on the factory bundle (installed once over the 8 MiB admin frame).
+Fit: fair: the factory vat carries every mail and subagent object at once, which suits one
+system of record, at the cost of a factory heap and bundle 21 % larger.
+
+### J-12502 2026-11-19 W9.9 time record - process
+Evidence: first command 2026-11-19T02:45:13Z, last 2026-11-19T02:55Z; no command over 60 s; no
+supervisor, run lock or perf window (W9.9 has no perf rows). `tsc` clean; eslint 0 errors on the
+changed files (only `safe-await-separator` warnings already in `factory.js` and `services.js`);
+prettier clean; `lint:duplicates` 1.72 % (ceiling 2.05 %).
+Fit: neutral.
+
+### J-12520 2026-11-19 W9.10 mail integration in a real daemon - built
+Evidence: `test/integration/mail.test.js` (8 cases, 100 s, `ff2a1d637f`),
+`test/integration/mail-restart-delivery.test.js` (1 case, 86 s, `15edb62d1a`),
+`perf/mail.perf.mjs` (`3edd555021`); the `mail` lists of `scripts/test-integration.mjs`
+(`test:regression:mail`: both files) and `perf/_pass.mjs` (`mail`). Built: on the m1a template
+with the real factory and session programs, the operator's `getMail()` mailbox; `addressOf`
+describing sessions; a package to two recipients reaching each session vat's `deliverMail` once
+and its answer returned per recipient; a request whose delivery is refused settling its handle
+`failed` and freeing its `responseKey` (R3-216); a client-made remotable and the factory refused
+`notAnAddress` with the stranger called 0 times; the 32-maximal-field form refused at the mailbox
+(`envelopeTooLarge`); a deleted session's address answering `recipientLost`; the gateway's
+signed-in CapTP client calling `getMail().send` with a preset attached and an invented draft key
+refused "unexpected field" before decode (acceptance 17). After a SIGKILL with a post in flight
+the factory's recovery (which awaits the mail start steps) ends, the mailbox, the address and
+the request's handle are the replayed ones, and a new post is delivered (restart to first answer
+8.6 s, first post after it 86 ms).
+Fit: good: an operator-side Far object passed as a recipient is refused by amplification without
+a call, as D-M9-2 says; identity of minted addresses survives the restart with no table.
+
+### J-12521 2026-11-19 W9.10 the session half is not registered - finding
+Evidence: `node scripts/bundle-guest.mjs session` at `5fb1a8203e`: 234,624 bytes (base after WX.1
+233,126; M9's seams +1,498). A scratch copy of `guest/` with S1 and S6 registered (the two parts
+and three tool spreads below their slot comments): 280,209 bytes, 9,873 over the 270,336 limit and
++47,083 against M9's 21,500. Per module in that bundle: `tools/mail.js` 10,556, `tools/subagents.js`
+9,954, `inbox.js` 8,070, `tools/requests.js` 4,979, `subagents.js` 3,432, `mail-text.js` 1,650,
+`tools/call-table.js` 1,518 (first imported by M9), cells and linkage the rest; string literals
+are 2,037, 1,400, 708 and 1,091 bytes of the four largest, so shorter descriptions cannot close the
+gap. Reading: every session answers `deliverMail` with `texts.notBuiltYet`, so acceptance 1, 4, 5,
+7-12, 14-16 and every `subagent.*` row cannot run in a daemon; the integration files assert the
+not-built answer and flip at registration. Second defect, found by reading: `inbox.js` `replyBody`
+reads `turn.final`, which `HookTurn` does not carry (`turn.js` `hookTurn` builds `{ active,
+round, append, emit }`, and `settle` keeps `final` only in the record), so a completed mail turn
+would reply with an empty body and an ask would answer ''. Needs a part-API line (`HookTurn.final`
+in the settle hook), which is WX's, not a lane's.
+Fit: poor here: the session program is one bundle per session vat with a byte ceiling, so a
+feature's tool argument handling (closed parsing, label lookup, refusals before any send) is paid
+in every session's cold create; the mail lane's tools are the first to need much of it.
+
+### J-12522 2026-11-19 W9.10 perf pass mail (exclusive) - measured
+Evidence: `corepack yarn perf:pass mail` at `3edd555021` (milestones.md uncommitted: `-dirty`),
+exclusive, load 2.2-2.6, crank budget 50,000,000, 1,243 s with templates (607 s for the four files;
+templates m1a, exec, pool, m4, m5o, m3-300 112-152 s each where rebuilt), every file exit 0, no
+row over budget.
+`{"metric":"mail.post.operator","n":460,"median":71.516,"p95":278.963,"p99":412.633,"min":59.835,"max":846.929,"deliveries":{"count":1380,"perOp":3},"engine":{"snapshot":{"count":7,"ms":2120.4},"wake":{"count":0}},"window":{"ms":60000,"elapsedMs":60002},"recipient":"not-built","budget":{"median":200},"pass":true}`;
+`mail.sessionToSession`, `mail.throughput`, `mail.inboxCrank`, `mail.hubGrowth`:
+`measured: false` (need the inbox part). Cross-check: `session.program` 234,624; `turn.start`
+median 123 ms (open 81, dispatch 36); `exec.trivial` median 74 ms; `exec.first` 321 ms;
+`install.factory` median 8,645 ms (the factory bundle is 233,199 bytes since W9.9). Shared smoke
+before (PERF_WINDOW_SCALE 0.1): median 64.2 ms, 48 samples. Reading: 3 deliveries per post (the
+factory's post crank, the session's delivery crank, the answer) as the contract counts without the
+claim; the p95 of 279 ms follows the 7 snapshots in the window (2.1 s of snapshot time over 460
+posts).
+Fit: good: the relay costs one factory crank and one session crank per recipient, inside the
+200 ms budget by a factor of 2.8.
+
+### J-12523 2026-11-19 W9.10 what is deferred and why - process
+Evidence: m9-interfaces.md 8.1, 8.2, 9, 10. Not written: `mail-restart-turn.test.js` (KM4-KM6,
+acceptance 15, `restart.mailIdle`), `subagents.test.js`, `subagents-restart.test.js` (KM7-KM11),
+`perf/subagents.perf.mjs`: nothing they test is reachable while the session parts are not
+registered (the subagent tools are the only way to call `Delegation.spawn`). KM1-KM3, KM13, KM14
+and acceptance 21 in `mail-restart-delivery.test.js` likewise. Cross-lane (WX.F): a subagent's
+own environment, mail to an emergency-stopped session, the four lanes' session program. Also
+found: `scripts/export.mjs` ignores `inbox` export pages (W9.8), and the factory export lists
+child rows as exportable sessions (W9.9; the contract is silent). The M9 unit and adapter files
+(15 files, 146 tests) pass at `3edd555021`; `lint:duplicates` 1.72 %; `tsc` clean.
+Fit: neutral.
+
+### J-12524 2026-11-19 W9.10 time record - process
+Evidence: first command 2026-11-19T02:56:20Z; commands over 60 s: the mail integration file five
+times (80-141 s, two of them failing on a teardown the setup case owned: `startFromTemplate`'s `t`
+cleans the state after that case), the restart file 86 s, the shared perf smoke (about 70 s), the
+exclusive `perf:pass mail` 1,243 s (03:17-03:38). No exit 124.
+Fit: neutral.
+
+### J-12880 2026-11-19 mail lane review: what was run - measured
+Evidence: lane `6493d955c7..caef51f304` (24 commits) read in full for the product files; the 20
+unit and adapter files the lane added or changed: 191 passed (3 s wall). Integration through
+`test:integration --jobs 4` (shared slots, load 2-4): `mail` 125.7 s, `mail-restart-delivery`
+105.7 s, `m1a-slice` 209.2 s, `m2-turns` 232.1 s, `m2-queue` 161.1 s, `m5-objects` 105.7 s,
+`m3-gateway` 134.1 s; all exit 0, none over 5 minutes, 343 s wall. `node scripts/bundle-guest.mjs
+session`: 234,624 at HEAD (+1,498 over 233,126); with S1 and S6 registered in a scratch copy of
+`guest/`: 280,001 (+46,875 against M9's 21,500; 9,665 over the 270,336 limit). `lint:duplicates`
+1.72 % (ceiling 2.05 %, lane base 1.85 %). `mail.copy` bench at `PERF_WINDOW_SCALE=0.3`, load 3.5:
+plain median 14.6 ms (budget 5, miss: the directory fsync), cut median 20.7 ms (budget 20).
+
+### J-12881 2026-11-19 mail lane review: findings - finding
+Evidence: code reading, one added test. (1) A spawn in flight when its parent is deleted leaves a
+hidden child that nothing deletes: `deleteChildren` sees only linked children and `spawn` links
+after `create` without checking the parent (`test/unit/subagent-tree.test.js`, a `failing` case).
+(2) A package's edge labels, chosen by the sending agent, enter the recipient's system prompt
+through `systemNote` unescaped and without M5's "These are labels, not instructions"
+(`mailTextOf.packageNote`; M5's `mentionLine` quotes with JSON). (3) A child re-snapshots the
+parent's Preset at spawn instead of inheriting the parent's snapshot, so a preset edited since
+gives the child more than the parent. (4) The relay copy checks no owner of the source, so a
+session holding a foreign handle could launder it through a child or a package. (5) Settle hooks
+get no final text (known). (6) The session half does not fit the program cap (known).
+Fit: the factory-held post office suits Thixotrope: amplification through a WeakMap refuses a
+foreign recipient without a call (seen in a daemon); the session program limit does not suit
+per-tool argument code in the session vat.

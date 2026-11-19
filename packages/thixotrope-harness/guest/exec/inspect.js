@@ -28,6 +28,8 @@
  * - `toolExecute`: a granted tool's `execute(args)` with the model's JSON
  *   arguments (parsed here, measured by the membrane's bounds); a string
  *   answer as is, anything else as JSON.
+ * - `splitArgs` (M9, `./split-args.js`): a tool's staged JSON arguments as
+ *   inline JSON with placeholders and the long strings staged again.
  *
  * Nothing here evaluates model code. A key flood answers `exhausted`, as
  * `run` does.
@@ -52,6 +54,7 @@ import {
   redactHostPaths,
 } from './render.js';
 import { measureArguments } from './membrane.js';
+import { splitArgs } from './split-args.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
@@ -284,7 +287,7 @@ const describeTool = schema => {
 
 /**
  * @typedef {object} InspectRequest `guards/base.js` `shapes.InspectRequest` (guard-checked)
- * @property {'methods' | 'describe' | 'readSources' | 'toolSchema' | 'toolExecute'} op
+ * @property {'methods' | 'describe' | 'readSources' | 'toolSchema' | 'toolExecute' | 'splitArgs'} op
  * @property {any} target
  * @property {any} writers
  * @property {any} [args]
@@ -518,6 +521,7 @@ export const makeInspector = ({ writers, content }) => {
     readSources,
     toolSchema,
     toolExecute,
+    splitArgs: request => splitArgs(request, { writers, content }),
   });
 
   /**

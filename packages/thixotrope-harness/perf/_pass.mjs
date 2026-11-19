@@ -80,7 +80,7 @@ export const perfLists = Object.freeze({
     'environments-restart',
   ]),
   context: Object.freeze(['compaction', 'images']),
-  mail: Object.freeze(/** @type {string[]} */ ([])),
+  mail: Object.freeze(['mail']),
   voice: Object.freeze(['voice', 'voice-session']),
 });
 

@@ -51,6 +51,10 @@ import {
 import { releaseEnvironment } from './environments.js';
 import { resolveCreateOptions } from './session-options.js';
 import { makeVoice } from './voice.js';
+import { makePostOffice } from './post-office.js';
+import { makeOperatorMail } from './operator-mail.js';
+import { makeSubagents } from './subagents.js';
+import { composeSystemPrompt } from '../lib/system-prompt-base.js';
 
 /** @import { StartCount } from './starts.js' */
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -145,13 +149,14 @@ export const makeFactoryKit = ({
   /** @type {Set<Creation>} creations not yet finished or rolled back */
   const creations = new Set();
   // M2 W2.7 (m2-interfaces.md 7.1): delete records, completed after restarts.
-  // Delete hooks run before step 1's fence: the subagents' own first when
-  // they exist, then the environment's release (D-M6-16).
+  // Delete descendants before releasing their parent's environment.
   const deletions = makeDeletions({
     admin,
     rows,
     starts,
     hooks: harden([
+      (/** @type {{ row: Row, session: any }} */ context) =>
+        subagents.deleteChildren(context),
       ({ session }) =>
         releaseEnvironment({ session, settings: harnessSettings }),
     ]),
@@ -250,14 +255,31 @@ export const makeFactoryKit = ({
 
   /**
    * A creation (contract 9); with `importing` (M2 W2.7, 7.3) its row stays
-   * unlisted until the session reports its import's end.
+   * unlisted until the session reports its import's end. With `parent` (a
+   * subagent, m9-interfaces.md F3) the row is stored with its parent and
+   * never listed, `link(row)` is told of it at once, `endowments` are the
+   * session's only endowments, and `presetSnapshot` (the parent's) is the
+   * session's snapshot: its prompt and config come from it, not from a new
+   * snapshot of the live preset (m9-interfaces.md D-M9-10, 4.4).
    * @param {Record<string, any>} options
-   * @param {{ importing: boolean }} how
+   * @param {{ importing?: boolean, parent?: Row, endowments?: readonly { label: string, value: any }[], link?: (row: Row) => void, presetSnapshot?: any }} how
    */
-  const create = async (options, { importing }) => {
+  const create = async (
+    options,
+    { importing, parent, endowments, link, presetSnapshot },
+  ) => {
     // M5 W5.1 (2.3 step 1): the preset (given or default) and its model
     // defaults, refused here before any row or vat (R4-6).
-    const given = catalog.withDefaults(options);
+    const filled = catalog.withDefaults(options);
+    // A subagent's prompt is composed from its parent's snapshot.
+    /** @type {Record<string, any>} */
+    const given =
+      presetSnapshot === undefined || filled.systemPrompt !== undefined
+        ? filled
+        : harden({
+            ...filled,
+            systemPrompt: composeSystemPrompt({ snapshot: presetSnapshot }),
+          });
     // The caller has the clock (J-9150): its `at` is the session's createdAt.
     const { at } = given;
     if (typeof at === 'number' && at > latestAt) latestAt = at;
@@ -275,10 +297,14 @@ export const makeFactoryKit = ({
       if (defaultModelId !== undefined) context.defaultModelId = defaultModelId;
       context.turnDeadlineMs = harnessSettings.turnDeadlineMs();
     }
-    const resolved = await resolveCreateOptions(
+    const fresh = await resolveCreateOptions(
       given,
       /** @type {any} */ (harden(context)),
     );
+    const resolved =
+      presetSnapshot === undefined
+        ? fresh
+        : harden({ ...fresh, presetSnapshot });
     const program = programs.current();
     if (program === undefined) throw Error(NO_PROGRAM_TEXT);
     const row = rows.add({
@@ -286,8 +312,10 @@ export const makeFactoryKit = ({
       backendTitle: resolved.backendTitle,
       modelId: resolved.modelId,
       userInitiated: resolved.userInitiated,
+      ...(parent === undefined ? {} : { parent }),
     });
     if (importing) rows.setImporting(row, true);
+    link?.(row);
     /** @type {Record<string, any>} */
     const extras = resolved;
     /** @type {Creation} */
@@ -315,7 +343,9 @@ export const makeFactoryKit = ({
         admin,
         backend: resolved.backend,
         preset: resolved.preset,
-        presetSnapshot: resolved.presetSnapshot,
+        // A subagent's endowments are its parent's attachments only (R4-70).
+        presetSnapshot:
+          parent === undefined ? resolved.presetSnapshot : undefined,
         key: row.key,
         host: creation.spareHost,
         makeExecVat:
@@ -323,6 +353,12 @@ export const makeFactoryKit = ({
             ? undefined
             : () => makeExecHandle({ pool, settings }),
         settings: harnessSettings,
+        // Mail (m9-interfaces.md F2): the row's outbox and delegation.
+        row,
+        postOffice,
+        subagents,
+        resolved,
+        ...(parent === undefined ? {} : { delegated: endowments ?? [] }),
       });
       // Rolled back while the services were built: release them here.
       if (creation.abandoned) releaseServices(services);
@@ -393,6 +429,39 @@ export const makeFactoryKit = ({
     }
   };
 
+  // Mail and subagents (m9-interfaces.md F1): the post office, the
+  // operator's mailbox (it registers the operator's inbox with the post
+  // office, so it is made next) and the subagent tree, which creates
+  // children through `create` and deletes them through the delete records.
+  const postOffice = makePostOffice({ admin, rows, starts, lastKnownTime });
+  const operatorMail = makeOperatorMail({ postOffice, admin, rows });
+  /**
+   * A delete that dropped its row also drops the row from the post office
+   * (its undelivered mail is refused, later mail answers `recipientLost`).
+   * @param {Row} row
+   */
+  const forgetIfDropped = row => {
+    if (row.dropped) postOffice.rowRemoved(row);
+  };
+  /** @param {any} session */
+  const deleteSession = session => {
+    const row = rows.ofSession(session);
+    return deletions.delete(session).finally(() => {
+      if (row !== undefined) forgetIfDropped(row);
+    });
+  };
+  const subagents = makeSubagents({
+    create,
+    deleteSession,
+    rows,
+    postOffice,
+    starts,
+    admin,
+    settings: {
+      current: () => harnessSettings?.current() ?? harden({}),
+    },
+  });
+
   /** @param {Record<string, any>} options */
   const createSession = async options =>
     (await create(options, { importing: false })).session;
@@ -455,7 +524,7 @@ export const makeFactoryKit = ({
     sessionListFeed: () =>
       harden({ rev: listFeed === undefined ? rows.rev() : listFeed.rev() }),
     /** @param {any} session M2 W2.7 (m2-interfaces.md 7.1) */
-    deleteSession: session => deletions.delete(session),
+    deleteSession,
     listBackends: () => harnessSettings?.backends() ?? harden([]),
     listModels,
   });
@@ -466,12 +535,7 @@ export const makeFactoryKit = ({
     getSecrets: () => E(admin).getSecrets(),
     getPresets: () => catalog.facet,
     getInventory: () => inventory.facet,
-    // WX.1: the guard's mail method (m9-interfaces.md F6) refuses until
-    // its lane replaces this body (seam F1).
-    getMail: () => {
-      throw Error(texts.notBuiltYet);
-    },
-    /** M11 (m11-interfaces.md 3.1, seam H2): the shared voice records. */
+    getMail: () => operatorMail.mailbox,
     getVoice: () => voice.facet,
   });
 
@@ -548,12 +612,22 @@ export const makeFactoryKit = ({
     );
     // M2 W2.7: an import cut off by the restart is rolled back (7.2), and
     // every delete record completes from its step (7.1, R4-9).
-    const deleting = deletions.resume();
+    const resumed = rows.all().filter(row => deletions.isDeleting(row));
+    const deleting = deletions.resume().then(() => {
+      for (const row of resumed) forgetIfDropped(row);
+    });
     for (const row of rows.all()) {
       if (row.importing && row.session !== undefined && !row.dropped) {
-        void deletions.delete(row.session).catch(() => undefined);
+        void deleteSession(row.session).catch(() => undefined);
       }
     }
+    // Mail (F1): re-drive deliveries cut off by the restart; release or
+    // link spawns and close asks cut off by it, after the creations'
+    // recovery above. Neither waits for a guest call (CC-110).
+    const mail = Promise.all([
+      postOffice.restart(current),
+      subagents.restart(current),
+    ]);
     const working = rows
       .all()
       .filter(
@@ -563,7 +637,7 @@ export const makeFactoryKit = ({
           row.state !== 'deleting' &&
           row.activity === 'working',
       );
-    await Promise.all([probeAll(working), deleting]);
+    await Promise.all([probeAll(working), deleting, mail]);
   };
 
   /** Settles when the latest start's recovery is done (tests). */
@@ -601,6 +675,10 @@ export const makeFactoryKit = ({
     deletions,
     exports,
     configureSpeech: voice.configureSpeech,
+    /** Mail and subagents (tests, status). */
+    postOffice,
+    operatorMail,
+    subagents,
   });
 };
 harden(makeFactoryKit);

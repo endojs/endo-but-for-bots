@@ -176,6 +176,7 @@ export const makeSession = (
     info,
     rowReporter,
     execution: runtime.environment,
+    inbox: runtime.inbox,
   });
   const refuseIfDeleting = () => {
     if (fence.closed()) throw Error(texts.sessionDeleting);
@@ -378,13 +379,30 @@ export const makeSession = (
     importState(chunk) {
       return inCrank(() => lifecycle.importState(chunk));
     },
-    // WX.1: the guard's mail methods (m9-interfaces.md S9): no inbox yet,
-    // so a delivery is refused and nothing can be cancelled, until the
-    // `inbox` part replaces these two bodies (seam S5).
-    deliverMail() {
-      return harden({ refused: texts.notBuiltYet });
+    // M9 (m9-interfaces.md 3.2, S5): a delivery is recorded by the `inbox`
+    // part and, when new, claimed in this crank if the session is idle and
+    // not held (a `restart` hold lets it through, turn.js `claimNext`). A
+    // runtime without the part refuses, as before it was built.
+    /** @param {any} envelope */
+    deliverMail(envelope) {
+      const { inbox } = runtime;
+      if (fence.closed()) return harden({ refused: texts.sessionDeleting });
+      if (inbox === undefined) return harden({ refused: texts.notBuiltYet });
+      return inCrank(() => {
+        runner.see(envelope.at);
+        const delivery = inbox.deliver(envelope);
+        if (delivery.number !== undefined && delivery.duplicate === undefined)
+          runner.claimNext();
+        return delivery;
+      });
     },
-    cancelMail() {},
+    /** @param {number} postmark */
+    cancelMail(postmark) {
+      inCrank(() => {
+        if (runtime.inbox?.cancel(postmark) === 'cancel-turn')
+          runner.cancelCurrent();
+      });
+    },
   });
 
   return harden({ session, internal });
