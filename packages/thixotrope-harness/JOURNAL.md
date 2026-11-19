@@ -15321,3 +15321,46 @@ source bytes before stripping). No rate measured: the perf rows (`subagent.spawn
 lock; `tsc` clean, eslint 0 errors (4 `safe-await-separator` warnings, as in `post-office.js`),
 `lint:duplicates` 1.73 % (ceiling 2.05 %).
 Fit: neutral.
+
+### J-12480 2026-11-19 W9.8 session wiring - built (registration withheld)
+Evidence: `f9265ef456`; `test/unit/session-mail-wiring.test.js` (8), `session-mail-export.test.js`
+(3), `tool-args-strings.test.js` (2); `session-inbox.test.js` now runs on the real packages part
+and the `runtime.inbox` getter (`_inbox-packages.js` deleted).
+Reading: built S3 (`reserve(above = 0)`, `open({ number? })`), S4 (`strings` kind), S5
+(`deliverMail` claims in the delivery crank, `cancelMail`), S7 (inbox blobs in `blobPage`, the
+last queue page's `next` is `m0`, `m<n>` pages, `importState` of `inbox`), and of S1 only the
+two getters. A runtime without the `inbox` part keeps WX.1's answers (`notBuiltYet` refusal, no
+`m0` page, an `inbox` chunk refused), so the tree stays correct while the parts are not
+registered. Not built: the S1 import, `requiredParts` and `runtimeParts` lines and the S6
+spreads (J-12481), and S8: `makeLabels` refuses the reserved label `user`
+(`labels.js` `isValidLabel`), so the seed as written would fail every session holding an
+`operatorAddress`; the tools already resolve `user` from `services.operatorAddress`.
+Fit: good: the claim-in-delivery-crank rule needed no runner change (WX.1's `take` and the
+`restart` hold suffice); one crank does record, claim and first sends.
+
+### J-12481 2026-11-19 W9.8 session program over the limit - finding
+Evidence: `node scripts/bundle-guest.mjs session` on `f9265ef456`: 234,624 bytes (+1,498 over
+the 233,126 base: tool-args +558, session.js +466, export.js +246, packages.js +90,
+runtime-parts.js +94). With the S1 and S6 lines added in a scratch copy of `guest/`: 280,001
+bytes, +46,875 over the base, over M9's 21,500 cap by 25,375 and over the 270,336 limit by
+9,665. Per module in that bundle (stripped functor text): `tools/mail.js` 10,602,
+`tools/subagents.js` 9,996, `inbox.js` 8,118, `tools/requests.js` 5,021, `subagents.js` 3,477,
+`mail-text.js` 1,687, `tools/call-table.js` 1,559 (not in the base bundle: `exec.js` does not
+use it), the rest bundle linkage and the two seam files.
+Reading: the modules are about 1.6 to 2.5 times D-M9-19's estimates (inbox 6,000, mail tools
+5,000, requests 3,500, subagent tools 4,000, subagents 2,500). Registering would make the
+factory refuse the session program, so W9.8 stops there. Trims within the lane: the two list
+readers (`tools/mail.js` `readStrings`, `tools/subagents.js` `elementsOf`) onto S4's kind; one
+`ok`/`failed` and one staged-argument reader (`readMailArgs` and `readStagedArgs` are the same
+flow); shorter tool descriptions; draft checks left to the factory (D-M9-19). Those reach a few
+KB, not 25 KB: the cap needs an owner ruling or a feature cut.
+Fit: poor: a fixed whole-program budget per vat makes every per-session feature pay its size in
+each cold create; Thixotrope has no shared-module image between vats of one program.
+
+### J-12482 2026-11-19 W9.8 time record - process
+Evidence: first command 2026-11-19T02:42:18Z, last 2026-11-19T02:50Z; no command over 60 s; no
+supervisor and no run lock used. `tsc` clean; eslint 0 errors on the changed files (the
+`tool-args.js` and `runtime-parts.test.js` warnings were there before); `lint:duplicates` 1.72 %
+(ceiling 2.05 %). Unit suites run: the crank-order suites of P3 5, M5's session and package
+suites, the mail, request and subagent tool suites, `runtime-parts`, `session-inbox`: all pass.
+Fit: neutral.
