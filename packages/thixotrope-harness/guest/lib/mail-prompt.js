@@ -8,7 +8,7 @@
  * 1315bef86:
  * - part 2, `mailTools`: Fae's "Mail tools" list with the harness's mail
  *   and request tools (`dismiss`, `resolveRequest`, `rejectRequest`,
- *   `submitForm`) and the operator's label `user` added, and without Fae's
+ *   `submitForm`) and the recipient `user` (the operator) added, and without Fae's
  *   raw-mailbox paragraph, which describes Endo mailbox promises
  *   (`dismissed`, `settled`, `done`) the harness never exposes. Its last
  *   two sentences, which describe the runner's own reply and dismissal,
@@ -34,8 +34,8 @@ objects attached:
   the edge names of any attached objects.
 - adopt ${DASH} take an attached object into your petstore by giving the message
   number and the object's edge name, plus a petname to file it under.
-- send ${DASH} send a message (and optionally objects) to another party. The
-  petname \`user\` is the person who operates this harness.
+- send ${DASH} send a message (and optionally objects) to another party; send to
+  \`user\` to reach the person who operates this harness.
 - reply ${DASH} respond to a message by its number.
 - dismiss ${DASH} remove a message you have finished with.
 - resolveRequest, rejectRequest and submitForm ${DASH} answer a request or a form
