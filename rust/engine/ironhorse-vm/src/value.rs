@@ -430,6 +430,7 @@ fn materialized_page() -> Box<[Cell<Slot>]> {
 /// Handle into the slot arena. `u32::MAX` is the null sentinel
 /// (XS's `C_NULL`), never a live index.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub struct SlotIndex(pub u32);
 
 impl SlotIndex {
@@ -442,6 +443,7 @@ impl SlotIndex {
 
 /// Handle into the chunk (byte) arena.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub struct ChunkOffset(pub u32);
 
 impl ChunkOffset {
@@ -455,6 +457,7 @@ impl ChunkOffset {
 /// Slot kind byte. Values mirror the XS `XS_*_KIND` ordering for the
 /// represented kinds; this enum does not claim every XS kind is supported.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 #[repr(u8)]
 pub enum Kind {
     Undefined = 0,
@@ -562,6 +565,7 @@ impl Kind {
 
 /// The 16-byte value payload for the represented XS value-union arms.
 #[derive(Copy, Clone, Debug)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub enum Payload {
     None,
     Boolean(bool),
@@ -617,6 +621,7 @@ impl PartialEq for Payload {
 /// It is 24 bytes on the audited 64-bit build; the snapshot codec encodes fields
 /// individually and does not copy or rely on this resident layout.
 #[derive(Copy, Clone, Debug, PartialEq)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub struct Slot {
     /// XS `next` link (property lists, frame chains): a slot index.
     pub next: SlotIndex,
