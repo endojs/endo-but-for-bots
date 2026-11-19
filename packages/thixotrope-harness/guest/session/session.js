@@ -346,6 +346,7 @@ export const makeSession = (
     /** 4.5: running again; the hold stays until a new message or send-now. */
     resume() {
       return runtime.environment.resume().then((/** @type {any} */ state) => {
+        if (queue.holdReason() === 'stopped') runner.claimNext();
         announce();
         return state;
       });
