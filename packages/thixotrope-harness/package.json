@@ -54,7 +54,9 @@
     "@endo/marshal": "workspace:^",
     "@endo/thixotrope": "workspace:^",
     "preact": "^10.29.8",
-    "ses": "workspace:^"
+    "rollup": "^4.65.0",
+    "ses": "workspace:^",
+    "terser": "^5.51.2"
   },
   "devDependencies": {
     "@endo/ses-ava": "workspace:^",

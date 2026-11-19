@@ -36,6 +36,8 @@
  *
  * Guest rules: model JSON never becomes a record; no `JSON.parse`.
  */
+import { failed, ok } from './outcomes.js';
+export { failed, ok } from './outcomes.js';
 import {
   textOf,
   textOf as mailTextOf,
@@ -56,10 +58,6 @@ import { heldObject } from './subagents.js';
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
 
-/** @param {string} text */
-export const ok = text => harden({ status: 'ok', text });
-/** @param {string} text */
-export const failed = text => harden({ status: 'failed', text });
 /** @param {string} text */
 const refused = text => ({ outcome: failed(text) });
 

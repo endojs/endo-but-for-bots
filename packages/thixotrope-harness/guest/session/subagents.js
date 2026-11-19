@@ -33,6 +33,7 @@
  * Nothing here is exported with the session (D-M9-21): an imported row has
  * a `Delegation` of its own and no children. Guest rules.
  */
+import { failed } from './tools/outcomes.js';
 import {
   texts as mailTexts,
   textOf as mailTextOf,
@@ -44,9 +45,6 @@ import { makeCallTable } from './tools/call-table.js';
 /** @import { HookTurn } from './runtime-parts.js' */
 /** @import { CallEntry } from './tools/call-table.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
-
-/** @param {string} text */
-const failed = text => harden({ status: 'failed', text });
 
 /**
  * @typedef {object} OpenAsk
