@@ -13,10 +13,16 @@
  * returns `makeAdapter({ label, bind, unbind })`.
  */
 import { makeAdapter } from '@endo/thixotrope/native-adapter.js';
-import { randomBytes } from 'node:crypto';
-import { createRequire } from 'node:module';
-import { join } from 'node:path';
-import { pid } from 'node:process';
+// Node builtins without the `node:` prefix, on purpose: the daemon's
+// native bundle (compartment-mapper `makeFunctor`, format cjs) cannot
+// locate a builtin exit that two modules of one bundle both import ("Unable
+// to locate module for key .../#node:crypto"), and the agent host's loader
+// imported below already imports `node:crypto`, `node:module`, `node:path`
+// and `node:process`. The unprefixed names are distinct exits.
+import { randomBytes } from 'crypto';
+import { createRequire } from 'module';
+import { join } from 'path';
+import { pid } from 'process';
 
 import { findHarnessRoot } from '../agent-host/ephemeral.js';
 
