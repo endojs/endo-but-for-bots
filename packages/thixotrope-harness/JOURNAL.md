@@ -14900,3 +14900,54 @@ Reading: over 60 s: unit and adapter lanes 67 s, `session.perf` in a shared slot
 m1a-slice 155 s. Commits `b95cf790a0` and this journal commit; nothing pushed; no change to
 `packages/thixotrope` or `rust/**`.
 Fit: neutral.
+
+### J-12600 2026-11-19 W11.4 the openai-audio speech engines - built
+Evidence: `6591bd9408`; `AH/speech/openai-audio.js`, `test/fixtures/fake-speech-server.mjs`,
+`test/adapter/speech-openai-audio.test.js` (30 cases pass, the `[real-provider]` case skipped
+without `THIX_HARNESS_REAL_SPEECH=provider`; five repeats, no flake, about 1 s each).
+Reading: `makeOpenAiSpeechIn(options) -> SttEngine` and `makeOpenAiSpeechOut(options) ->
+TtsEngine` of `engine-types.js`, options `{ settings, readGrant, log?, timeouts?, limits?,
+fetch? }`, and `openAiAudioKind = { speechIn, speechOut }` for W11.5's `kinds.js`. The base URL
+goes through `providerBaseUrl` in the maker (a refused URL throws `BASE_URL_REFUSED` before any key
+read); the key is read through `readGrant(settings.key)` once per request and sent as a bearer;
+`HttpFailure`, `failureKind`, `requestSignalOf`, `postJson`, `bodyChunks`, `boundedChunks`,
+`discardBody` imported from `providers/http.js`, nothing copied. Speech in: partials by
+re-transcription every `partialIntervalMs` when the audio changed and is under `partialMaxBytes`,
+one in flight, older and post-END answers dropped; the final after END with an `engineTimeoutMs`
+deadline (`engineTimeout`); any failed request aborts `engineFailed`; `sttIdleMs` and the
+utterance bound as for the process kind. Speech out: one request per sentence in order, PCM in
+whole samples and frames of at most `pcmFrameBytes - 4`, `drained()` awaited after each frame with
+the `synthTimeoutMs` clock stopped while waiting; 401/403 or a key failure abort the playback
+`synthFailed`, every other failure (429, 5xx, hang, stalled or empty body) is `sentence-failed`
+and the next sentence is asked. Log lines carry kind, direction, stage and status only; the tests
+assert no key and no provider body in any log line or event.
+Fit: good.
+
+### J-12601 2026-11-19 W11.4 latency against the fake server - measured
+Evidence: `6591bd9408`; a scratch script through `perf/_window.mjs` `runWindow`/`windowMs` and
+`perf/_harness.mjs` `summarize`, `PERF_WINDOW_SCALE=0.1` (6 s windows), no supervisor.
+Reading: `provider.final.fake` (END to final of a 1 s utterance: WAV build, multipart, loopback
+HTTP, the fake's multipart parse, bounded JSON read) median 0.289 ms, p95 0.666, p99 1.447, n
+16,735; `provider.firstPcm.fake` (sentence to the first PCM frame) median 0.240 ms, p95 0.386, p99
+1.149, n 20,295. The engine adds well under 1 ms to what a real provider costs; the
+`provider.*` rows stay `[real-provider]` owner rows (contract 14.1), so no budget is set here.
+Fit: good.
+
+### J-12602 2026-11-19 W11.4 contract gaps found while building - finding
+Evidence: contract sections 3.3, 5.2, 6.3; `engine-types.js`.
+Reading: (1) the engine-maker signature is not fixed by the contract; W11.4 chose the options
+record above. (2) `UtteranceSink` has no way to carry the `utteranceTooLong` note of section 5.2:
+the engine ends the utterance at the bound and the route must add the note from its own byte
+count. (3) The fake speech server's modes cannot come from an `x-fake-mode` header alone (the
+product never sends one): the server also takes a per-request queue (`setModes`). (4) 6.3 names no
+behaviour for speech-out failures; W11.4 applies D-M11-10's sentence-failed rule, with 401/403
+fatal. (5) There is no fixed text for an unusable `defaultVoice` of this kind; the catalogue's
+`warning` is `speechTextOf.unknownVoice(id)`.
+Fit: neutral.
+
+### J-12603 2026-11-19 W11.4 time record - process
+Evidence: first command 2026-11-19T02:22:37Z.
+Reading: no command over 60 s (package tsc 7 s, the adapter test about 1 s). Commits `6591bd9408`
+and this journal commit; nothing pushed; session bundle 233,126 bytes before and after (M11's
+cap 0: this unit adds no guest code); no change to `packages/thixotrope` or `rust/**`.
+Fit: neutral.
