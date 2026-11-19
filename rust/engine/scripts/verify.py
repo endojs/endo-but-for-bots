@@ -42,6 +42,11 @@ LEDGER = ENGINE / "VERIFICATION.md"
 SELFTEST = ENGINE / "verification" / "selftest"
 LOGS = ENGINE / "target" / "kani" / "verify-logs"
 MUTANT_TREE = ENGINE / "target" / "verify-mutants" / "tree"
+# Mutant builds get their own target directory. Cargo hashes a workspace
+# member by its path relative to the workspace root, so a copy of the tree
+# built into the main target directory would overwrite the real artifacts,
+# and a later real run could reuse mutated code that looks fresh.
+MUTANT_TARGET = ENGINE / "target" / "verify-mutants" / "target"
 BEGIN = "<!-- BEGIN GENERATED: scripts/verify.py ledger -->"
 END = "<!-- END GENERATED: scripts/verify.py ledger -->"
 
@@ -614,17 +619,20 @@ def cmd_ledger(args) -> int:
 
 def copy_tree(dest: Path):
     """A scratch copy of the engine workspace's member sources and manifests
-    (no target directories), so a mutant never touches the working tree."""
+    (no target directories), so a mutant never touches the working tree.
+    Files are copied with fresh mtimes, so Cargo rebuilds every crate rather
+    than reusing an artifact built from the previous mutant."""
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
     for name in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml"):
         if (ENGINE / name).exists():
-            shutil.copy2(ENGINE / name, dest / name)
+            shutil.copy(ENGINE / name, dest / name)
     members = tomllib.loads((ENGINE / "Cargo.toml").read_text())["workspace"]["members"]
     ignore = shutil.ignore_patterns("target", "kani-list.json")
     for m in members:
-        shutil.copytree(ENGINE / m, dest / m, ignore=ignore, symlinks=True)
+        shutil.copytree(ENGINE / m, dest / m, ignore=ignore, symlinks=True,
+                        copy_function=shutil.copy)
 
 
 def cmd_mutants(args) -> int:
@@ -637,6 +645,8 @@ def cmd_mutants(args) -> int:
     if args.id:
         names = [n for n in names if n.startswith(args.id)]
     failures = []
+    saved = os.environ.get("CARGO_TARGET_DIR")
+    os.environ["CARGO_TARGET_DIR"] = str(MUTANT_TARGET)
     try:
         for name in names:
             harnesses = [h for h in data["harness"] if name in h["mutants"]]
@@ -663,6 +673,10 @@ def cmd_mutants(args) -> int:
             else:
                 failures.append(f"{name}: SURVIVED (no referencing harness found a counterexample)")
     finally:
+        if saved is None:
+            os.environ.pop("CARGO_TARGET_DIR", None)
+        else:
+            os.environ["CARGO_TARGET_DIR"] = saved
         if MUTANT_TREE.exists():
             shutil.rmtree(MUTANT_TREE)
     for f in failures:

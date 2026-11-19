@@ -94,7 +94,10 @@ The runner enforces these; a violation fails `verify.py run` like a counterexamp
   Each guarantee lists one-line semantic mutants in
   `verification/mutants/<ID>-<x>.patch`.
   `verify.py mutants` applies each to a scratch copy of the workspace sources
-  (`target/verify-mutants/tree`, removed afterwards) and requires at least one
+  (`target/verify-mutants/tree`, removed afterwards), builds it into its own
+  target directory (`target/verify-mutants/target`: Cargo keys a workspace
+  member by its workspace-relative path, so sharing the main target directory
+  would let mutated artifacts pass as fresh in a later real run), and requires at least one
   referencing harness to fail with a counterexample.
   A surviving mutant, a resource failure instead of a counterexample, or a
   patch that no longer applies is an error.
