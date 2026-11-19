@@ -58,7 +58,7 @@
  * `message_delta`; the window is 0 here: a configured window comes from the
  * session's `contextLength` (open decision 13; seam 3 of m2-interfaces.md
  * 2.4), since the API reports none; the catalogue gives every row
- * `contextLimits.anthropicContextTokens` for it (`withWindow`, M8).
+ * `anthropicContextTokens` for it (`withWindow`, M8).
  *
  * Native context (R4-31): the round's thinking blocks as JSON text
  * `{ v: 1, model, textDigest, blocks }`, staged by the round driver into
@@ -81,7 +81,7 @@ import { createHash } from 'node:crypto';
 import { texts, textOf } from '../../../../guest/lib/interfaces.js';
 import { limits } from '../../../../guest/lib/limits.js';
 import { usageFromAnthropic } from '../../../../guest/lib/token-usage.js';
-import { contextLimits } from '../../../../guest/lib/guards/context.js';
+import { anthropicContextTokens } from '../../../../config/defaults.js';
 /* eslint-enable import/no-relative-packages */
 import { NATIVE_CONTEXT_FORMAT } from '../projection.js';
 import { anthropicToolResultContent, toolResultImages } from './images.js';
@@ -891,14 +891,14 @@ harden(readAnthropicModels);
 
 /**
  * A catalogue row with a context window: the API's listing reports none, so
- * a row without one gets `contextLimits.anthropicContextTokens` (open
+ * a row without one gets `anthropicContextTokens` (open
  * decision 13, R4-37; contract D-M8-12), which a creation stores as the
  * session's `contextLength` and compaction reads.
  * @param {import('./catalog-core.js').CatalogModel} model
  */
 const withWindow = model =>
   model.contextLength === undefined
-    ? harden({ ...model, contextLength: contextLimits.anthropicContextTokens })
+    ? harden({ ...model, contextLength: anthropicContextTokens })
     : model;
 
 /** The `backendKinds` entry (`kinds.js`). */

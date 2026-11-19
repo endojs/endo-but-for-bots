@@ -18,7 +18,7 @@ import path from 'node:path';
 
 import { E } from '@endo/far';
 
-import { summaryInstruction } from '../../resources/agent-host/impl/providers/compaction-texts.js';
+import { summaryInstruction } from '../../resources/agent-host/impl/providers/compaction.js';
 import {
   anthropicEvents,
   startFakeProviderServer,

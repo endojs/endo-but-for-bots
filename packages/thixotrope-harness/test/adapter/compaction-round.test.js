@@ -28,7 +28,7 @@ import { makeChannelRegistry } from '../../resources/agent-host/impl/channels.js
 import {
   compactionSkipTexts,
   summaryInstruction,
-} from '../../resources/agent-host/impl/providers/compaction-texts.js';
+} from '../../resources/agent-host/impl/providers/compaction.js';
 import {
   BODY_MARKER,
   anthropicEvents,

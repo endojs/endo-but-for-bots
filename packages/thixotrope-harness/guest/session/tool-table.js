@@ -65,6 +65,7 @@ import { packageToolEntries } from './tools/mentions.js';
 // slot: shell
 import { shellToolEntries } from './environment.js';
 // slot: viewImage
+import { viewImageEntry } from './tools/view-image.js';
 // slot: mail
 // slot: requests
 // slot: subagents
@@ -164,6 +165,7 @@ export const toolTable = harden([
   // slot: shell
   ...shellToolEntries,
   // slot: viewImage
+  viewImageEntry,
   // slot: mail
   // slot: requests
   // slot: subagents

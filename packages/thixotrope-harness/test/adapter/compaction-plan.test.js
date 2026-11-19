@@ -9,14 +9,14 @@ import '../unit/_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { contextLimits } from '../../guest/lib/guards/context.js';
-import { imageTextOf } from '../../guest/lib/image-guards.js';
+import { contextLimits } from '../../guest/lib/limits.js';
+import { imageTextOf } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import {
   planCompaction,
   wireBytes,
 } from '../../resources/agent-host/impl/providers/compaction.js';
-import { compactionSkipTexts } from '../../resources/agent-host/impl/providers/compaction-texts.js';
+import { compactionSkipTexts } from '../../resources/agent-host/impl/providers/compaction.js';
 import { askOf, imageEnvelope, makeTurnLog } from './_compaction-records.js';
 
 /** @import { CompactionPlan as Plan } from '../../resources/agent-host/impl/providers/compaction.js' */

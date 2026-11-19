@@ -17130,3 +17130,17 @@ releasing an environment, and passes both execution state and inbox state to ses
 Both optional provisioning steps and all four regression/performance lists survive the merges.
 The lane review fixes, session tool registration, bundle measurement and combined acceptance
 runs are still open at this point.
+
+### J-12860 2026-11-19 M8 fold on the four-lane tree - measured
+
+Evidence: `test/unit/view-image-entry.test.js`, `context-guards`, `runtime-parts`, the
+compaction and image adapter suites, the vocabulary pin, factory, prompt and provisioning
+tests. All 129 selected tests passed with the provider fixtures listening on loopback.
+`lint:types` passed.
+
+Reading: the static tool table now registers the image entry after the shell tools.
+The session owns the image description and compaction guards; the Node interface module owns
+the image protocol builders. Both adapters use the same image bounds. The Anthropic fallback
+window is a host configuration value. Compaction plan and summary texts now live in the
+provider's compaction module. On this intermediate tree the session bundle was 251,935 bytes
+and the factory 251,745. The session figure precedes registration of the mail parts.

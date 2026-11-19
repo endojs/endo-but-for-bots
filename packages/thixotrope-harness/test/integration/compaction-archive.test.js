@@ -32,7 +32,7 @@ import test from 'ava';
 
 import { E } from '@endo/far';
 
-import { scriptedSummary } from '../../resources/agent-host/impl/providers/compaction-texts.js';
+import { scriptedSummary } from '../../resources/agent-host/impl/providers/compaction.js';
 import { exportState, importState } from '../../scripts/export.mjs';
 import {
   integrationEnabled,

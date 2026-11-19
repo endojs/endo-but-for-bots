@@ -35,8 +35,8 @@ import {
   IMAGE_ENVELOPE_PREFIX,
   imageMediaTypes,
   imageTextOf,
-} from '../../../../guest/lib/image-guards.js';
-import { imageLimits } from '../../../../guest/lib/guards/images.js';
+} from '../../../../guest/lib/interfaces.js';
+import { imageLimits } from '../../../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 
 /**

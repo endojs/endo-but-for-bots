@@ -31,12 +31,12 @@ import {
   environmentTexts,
   environmentShapes,
 } from '../../../guest/lib/guards/environments.js';
-import { imageLimits } from '../../../guest/lib/guards/images.js';
+import { imageLimits } from '../../../guest/lib/limits.js';
 import {
   imageInterfaceBuilders,
   imageShapeBuilders,
   imageTexts,
-} from '../../../guest/lib/image-guards.js';
+} from '../../../guest/lib/interfaces.js';
 import {
   lazyTable,
   shapes as baseShapes,

@@ -19,21 +19,209 @@ import {
   lazyTable,
 } from './base.js';
 import * as below from './base.js';
-// The cross-lane seam unit (WX.1): the shared entries of the context
-// window (`./context.js`, seam G-1) and of mail (`./mail.js`, seams S9,
-// S9b) join these tables here; each slice module is folded in and deleted
-// by its lane's fold.
-import {
-  contextShapeBuilders,
-  compactionKindLetters,
-  contextSinkMethods,
-} from './context.js';
 import { mailTables } from './mail.js';
 import { mailLimits } from '../mail-limits.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 
 const { M } = /** @type {GuestGlobals} */ (globalThis);
+
+/** The record kinds compaction adds to the session log, in order of use. */
+export const compactionKinds = harden([
+  'compaction-started',
+  'compaction',
+  'compaction-skipped',
+]);
+
+/**
+ * Kind letters for the archive's seal fingerprint (m2-interfaces.md 4.4
+ * A1); `./session.js` spreads them into `archiveKindLetters`. Letters not
+ * used by M2's kinds (`s d p r i t e v`).
+ */
+export const compactionKindLetters = harden([
+  ['compaction-started', 'c'],
+  ['compaction', 'k'],
+  ['compaction-skipped', 'x'],
+]);
+
+// ---------------------------------------------------------------- texts
+
+/**
+ * The fixed texts the session vat writes itself. The skip reasons the
+ * adapter produces (the plan and the summary checks) are Node-only, in
+ * `AH/providers/compaction-texts.js` `compactionSkipTexts`; the vat records
+ * whichever reason it is given (`CompactionSkipped.reason`). No reason
+ * quotes a provider body (R4-79).
+ */
+export const compactionTexts = harden({
+  /** R4-50: the phase while a compaction ask is out. */
+  phase: 'compacting context',
+  /** The vat refused the boundary the adapter answered (contract 4.2). */
+  invalidBoundary: 'Compaction skipped: the proposed boundary is not a cut',
+});
+
+// ---------------------------------------------------------------- shapes
+
+/**
+ * Shape builders for the session table; `table()` answers the table that
+ * holds them (the session's `shapes`), read only when a shape is built.
+ * @param {() => any} table
+ */
+export const contextShapeBuilders = table => ({
+  /**
+   * `RoundRequest.compaction` (vat -> adapter, outbound): the session asks
+   * the adapter to plan and summarize before this round. `epoch` is the
+   * epoch the compaction creates; `boundary` the current one; `askedAt` the
+   * index of the `compaction-started` record; `startIndex` the index of the
+   * current turn's `turn-started`; `floor` the lowest index a new boundary
+   * may take (the archive's `sealedTo`, D-M8-4); the token figures are the
+   * reading the decision used.
+   */
+  CompactionAsk: () =>
+    record({
+      epoch: count,
+      boundary: count,
+      askedAt: count,
+      startIndex: count,
+      floor: count,
+      usedTokens: count,
+      windowTokens: count,
+      thresholdTokens: count,
+    }),
+  /** Recorded in the crank that sends the ask (intent before effect). */
+  CompactionStarted: () => {
+    const S = table();
+    return record({
+      kind: 'compaction-started',
+      turnId: S.Id,
+      round: count,
+      epoch: count,
+      boundary: count,
+      usedTokens: count,
+      windowTokens: count,
+      at: count,
+    });
+  },
+  /**
+   * Recorded when the vat accepts a summary: from now on the model sees
+   * `summary` (an assistant message), then `directive` when the boundary
+   * lies after the current turn's `turn-started`, then the records from
+   * `boundary`.
+   */
+  Compaction: () => {
+    const S = table();
+    return record(
+      {
+        kind: 'compaction',
+        turnId: S.Id,
+        round: count,
+        epoch: count,
+        boundary: count,
+        summary: staged(S.Text),
+        at: count,
+      },
+      { directive: staged(S.SubmissionText) },
+    );
+  },
+  /** Recorded when the adapter or the vat refused to compact. */
+  CompactionSkipped: () => {
+    const S = table();
+    return record({
+      kind: 'compaction-skipped',
+      turnId: S.Id,
+      round: count,
+      reason: S.Reason,
+      at: count,
+    });
+  },
+  /**
+   * `TurnSink.compacted` argument (adapter -> vat). `usage` is the summary
+   * call's counts; the vat adds them to the turn and ignores any `context`
+   * reading in it (R4-36: charged, not continuation occupancy).
+   */
+  CompactionResult: () => {
+    const S = table();
+    return M.or(
+      record(
+        {
+          round: count,
+          at: count,
+          outcome: 'done',
+          boundary: count,
+          summary: staged(text(limits.inlineBytes)),
+        },
+        { usage: S.Usage, servedBy: S.ServedBy },
+      ),
+      record(
+        { round: count, at: count, outcome: 'skipped', reason: S.Reason },
+        { usage: S.Usage },
+      ),
+    );
+  },
+  /**
+   * `TurnSink.compacted` answer (vat -> adapter). `go: false`: the turn is
+   * no longer running this round; send nothing more. `go: true`: the
+   * cache's next `{ base, append }` for this round (the records appended
+   * since the round request, the compaction record among them).
+   */
+  CompactionReply: () => {
+    const S = table();
+    return M.or(
+      record({ go: false }),
+      record({
+        go: true,
+        base: record(
+          { count, epoch: count },
+          { boundary: count, archive: S.ArchiveState },
+        ),
+        append: list(S.TurnRecord, limits.maxAppendRecords),
+      }),
+    );
+  },
+});
+
+/**
+ * The method `TurnSink` gains (seam G-1).
+ * @param {() => any} table
+ */
+export const contextSinkMethods = table => ({
+  compacted: M.call(table().CompactionResult).returns(table().CompactionReply),
+});
+
+/** Method names added per interface. */
+export const contextMethodNames = harden({ TurnSink: harden(['compacted']) });
+
+/** Closed argument names (R3-26; Fae `image-tool.js:44-56`). */
+export const viewImageArgumentNames = harden(['petName', 'path']);
+
+/**
+ * The tool as offered to the model (R3-30; Fae `image-tool.js:38-58`,
+ * adapted: a held image source or a workspace, no Endo blob or mount).
+ */
+export const viewImageDescription = harden({
+  name: 'viewImage',
+  description:
+    'Read a PNG, JPEG or WebP through an already-held capability and see it as image input (requires a vision-capable model). Use petName for an image source or a workspace; path is an optional array of relative file segments inside a workspace. Example: {"petName":"workspace","path":["screenshots","mobile.png"]}. Maximum 2 MiB; resize larger images first. For visual development, render in a browser, save desktop/mobile screenshots into the workspace, call viewImage, inspect browser errors, and iterate. Source code or a syntax check alone does not verify the rendered scene. This tool does not render HTML or fetch URLs.',
+  parameters: JSON.stringify({
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      petName: { type: 'string', minLength: 1, maxLength: 256 },
+      path: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 64,
+        items: { type: 'string', minLength: 1, maxLength: 255 },
+      },
+    },
+    required: ['petName'],
+  }),
+});
+
+/** The argument text the vat checks before any send (Fae `image-tool.js:73`). */
+export const viewImageTexts = harden({
+  badPetName: 'petName must be a nonempty name of at most 256 characters',
+});
 
 // ---------------------------------------------------------------- texts
 

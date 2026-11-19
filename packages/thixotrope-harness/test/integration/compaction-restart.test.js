@@ -39,13 +39,13 @@ import test from 'ava';
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
-import { compactionTexts } from '../../guest/lib/guards/context.js';
+import { compactionTexts } from '../../guest/lib/guards/session.js';
 import { texts } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import {
   compactionSkipTexts,
   summaryHeadings,
-} from '../../resources/agent-host/impl/providers/compaction-texts.js';
+} from '../../resources/agent-host/impl/providers/compaction.js';
 import { integrationEnabled, takeIntegrationLock } from '../template/index.js';
 import { waitFor } from './_m1a-slice.js';
 import {

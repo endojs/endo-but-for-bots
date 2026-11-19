@@ -73,7 +73,7 @@ import {
   tailText,
 } from './round.js';
 import { compactBeforeRound } from './compaction-round.js';
-import { scriptedSummary } from './compaction-texts.js';
+import { scriptedSummary } from './compaction.js';
 import { makeProviderShell } from './shell.js';
 
 /**

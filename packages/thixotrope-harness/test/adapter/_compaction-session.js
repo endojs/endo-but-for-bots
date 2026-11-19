@@ -11,10 +11,8 @@
 // prelude.
 /* eslint-disable import/no-relative-packages */
 import { interfaces } from '../../guest/lib/interfaces.js';
-import {
-  compactionTexts,
-  contextLimits,
-} from '../../guest/lib/guards/context.js';
+import { compactionTexts } from '../../guest/lib/guards/session.js';
+import { contextLimits } from '../../guest/lib/limits.js';
 import { inCallOrder, makeRecordLog } from '../../guest/session/records.js';
 import { makeContextSource } from '../../guest/session/context-source.js';
 import { makeContextWindow } from '../../guest/session/compaction.js';

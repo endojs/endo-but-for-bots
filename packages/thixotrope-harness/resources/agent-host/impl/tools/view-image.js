@@ -36,13 +36,13 @@ import { Buffer } from 'node:buffer';
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { shapes } from '../../../../guest/lib/interfaces.js';
 import { lazyTable } from '../../../../guest/lib/guards/base.js';
-import { imageLimits } from '../../../../guest/lib/guards/images.js';
+import { imageLimits } from '../../../../guest/lib/limits.js';
 import {
   imageInterfaceBuilders,
   imageShapeBuilders,
   imageTextOf,
   imageTexts,
-} from '../../../../guest/lib/image-guards.js';
+} from '../../../../guest/lib/interfaces.js';
 import { isRetiredBreak } from '../../../../guest/lib/retired.js';
 /* eslint-enable import/no-relative-packages */
 import { encodeImageEnvelope } from '../providers/images.js';

@@ -5,7 +5,7 @@
 // it, and the session's compaction ask. Import after the guest prelude.
 /* eslint-disable import/no-relative-packages */
 import { makeRecordLog } from '../../guest/session/records.js';
-import { contextLimits } from '../../guest/lib/guards/context.js';
+import { contextLimits } from '../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { encodeImageEnvelope } from '../../resources/agent-host/impl/providers/images.js';
 import { makeFakeBlobSink } from './_m1b-blobs.js';

@@ -389,3 +389,70 @@ export const limits = harden({
   /** Nesting depth of one such message. */
   membraneDepth: 32,
 });
+
+export const contextLimits = harden({
+  /**
+   * R4-100 [default]: compaction fires before a round when the previous
+   * request's used tokens reach this share of the window (percent;
+   * `floor(window * 70 / 100)`, as lal `context-compaction.js:35`).
+   */
+  compactionThresholdPercent: 70,
+  /**
+   * R4-35: the verbatim tail may take 1 / this of the byte headroom left
+   * after the system text, the directive and the tools (half).
+   */
+  tailHeadroomDivisor: 2,
+  /**
+   * At most this many compaction asks per turn that end `done`; an ask
+   * that ends `skipped` ends the asks of its turn (contract D-M8-6).
+   */
+  compactionsPerTurn: 4,
+  /**
+   * A summary longer than this (UTF-8 bytes) is refused (`skipped`,
+   * `compactionTexts.summaryTooLong`): the model was asked for a compact
+   * handoff; the bound keeps one staged field small.
+   */
+  summaryMaxBytes: 65_536,
+  /** Preview of a staged summary in the record (units). */
+  summaryPreviewUnits: 256,
+  /** Halvings of the old tool excerpts before a summary request gives up. */
+  excerptHalvings: 24,
+  /**
+   * What one image result counts in the plan's byte sizing (contract
+   * D-M8-14): about 1,600 tokens at 4 bytes a token, in place of its
+   * 2.8 MB of base64, so images do not inflate the headroom.
+   */
+  imageSizingBytes: 6400,
+});
+
+export const imageLimits = harden({
+  /** R4-39: the largest image, bytes (hosted-agent `image-result.js:8`). */
+  maxImageBytes: 2 * 1024 * 1024,
+  /**
+   * Raw bytes asked of an `ImageSource` per `readBase64` call (an answer
+   * of 262,144 base64 characters; it travels toward the adapter, never
+   * into a vat).
+   */
+  readPageBytes: 196_608,
+  /** Empty pages before a source is refused (Fae `image-tool.js:125`). */
+  maxEmptyReads: 64,
+  /** The whole read, from the first call to the last page (ms). */
+  readTimeoutMs: 30_000,
+  /**
+   * Images sent natively per provider request, newest first; older image
+   * results are sent as their receipt (contract D-M8-9, open question Q-2).
+   */
+  imagesPerRequest: 20,
+  /** `petName` (Fae `image-tool.js:46`). */
+  petNameUnits: 256,
+  /** `path` segments and their length (Fae `image-tool.js:51-53`). */
+  pathSegments: 64,
+  segmentUnits: 255,
+  /**
+   * The raw `path` text the vat passes on: the arguments of a local tool
+   * are at most `inlineBytes` (staged arguments are refused, M5 2.4.2),
+   * so a path of 64 segments of 255 characters is refused as too large;
+   * the bound only caps the guard.
+   */
+  pathTextUnits: 8192,
+});

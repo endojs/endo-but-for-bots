@@ -14,7 +14,7 @@ import './_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { compactionTexts } from '../../guest/lib/guards/context.js';
+import { compactionTexts } from '../../guest/lib/guards/session.js';
 import {
   compactionPart,
   makeContextWindow,

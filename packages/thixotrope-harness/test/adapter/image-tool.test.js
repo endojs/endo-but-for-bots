@@ -17,12 +17,12 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { limits } from '../../guest/lib/limits.js';
-import { imageLimits } from '../../guest/lib/guards/images.js';
+import { imageLimits } from '../../guest/lib/limits.js';
 import {
   IMAGE_ENVELOPE_PREFIX,
   imageTextOf,
   imageTexts,
-} from '../../guest/lib/image-guards.js';
+} from '../../guest/lib/interfaces.js';
 import {
   environmentInterfaces,
   gitReaderMethodNames,

@@ -16,7 +16,7 @@ import {
   compactionKindLetters,
   compactionKinds,
   compactionTexts,
-} from '../../guest/lib/guards/context.js';
+} from '../../guest/lib/guards/session.js';
 import { limits } from '../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 

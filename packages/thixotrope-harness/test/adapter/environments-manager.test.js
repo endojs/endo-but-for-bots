@@ -32,7 +32,7 @@ import {
 import {
   imageInterfaceBuilders,
   imageShapeBuilders,
-} from '../../guest/lib/image-guards.js';
+} from '../../guest/lib/interfaces.js';
 import { HUB_RETIRED_MESSAGE } from '../../guest/lib/retired.js';
 /* eslint-enable import/no-relative-packages */
 import {

@@ -20,7 +20,7 @@ import {
 import {
   compactionSkipTexts,
   scriptedSummary,
-} from '../../resources/agent-host/impl/providers/compaction-texts.js';
+} from '../../resources/agent-host/impl/providers/compaction.js';
 import { makeContextCache } from '../../resources/agent-host/impl/context-cache.js';
 import { makeEndpoint } from '../../resources/agent-host/impl/endpoint.js';
 import { makeChannelRegistry } from '../../resources/agent-host/impl/channels.js';

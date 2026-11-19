@@ -14,8 +14,8 @@ import test from '@endo/ses-ava/test.js';
 import {
   IMAGE_ENVELOPE_PREFIX,
   imageTextOf,
-} from '../../guest/lib/image-guards.js';
-import { imageLimits } from '../../guest/lib/guards/images.js';
+} from '../../guest/lib/interfaces.js';
+import { imageLimits } from '../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import {
   encodeImageEnvelope,

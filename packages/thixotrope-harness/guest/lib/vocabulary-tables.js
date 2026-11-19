@@ -85,10 +85,6 @@ export const vocabularyExclusions = harden({
   // WX.1: the four lanes' guard modules that are not listed.
   'guards/environments.js':
     'environments manager vat and adapter table; no browser path reaches these objects',
-  'image-guards.js':
-    'adapter and source guards (builders), not browser-sendable',
-  'guards/context.js': 'the context slice of guards/session.js, spread by it',
-  'guards/images.js': 'the viewImage description and limits, not a guard',
 });
 
 /**
@@ -97,7 +93,4 @@ export const vocabularyExclusions = harden({
  * not. Each is also in `vocabularyExclusions`.
  * @type {readonly string[]}
  */
-export const notBrowserSendable = harden([
-  'guards/environments.js',
-  'image-guards.js',
-]);
+export const notBrowserSendable = harden(['guards/environments.js']);

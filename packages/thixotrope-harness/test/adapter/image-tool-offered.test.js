@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { imageTexts } from '../../guest/lib/image-guards.js';
+import { imageTexts } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import {
   adapterTools,

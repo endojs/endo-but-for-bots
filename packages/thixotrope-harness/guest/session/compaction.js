@@ -33,7 +33,8 @@
  *
  * Guest rules.
  */
-import { compactionTexts, contextLimits } from '../lib/guards/context.js';
+import { compactionTexts } from '../lib/guards/session.js';
+import { contextLimits } from '../lib/limits.js';
 
 /** @import { RecordLog } from './records.js' */
 /** @import { HookTurn, Runtime, RuntimePart } from './runtime-parts.js' */

@@ -13,8 +13,8 @@ import { makeWorkspaceFixture } from './_environments-git.js';
 
 /* eslint-disable import/no-relative-packages */
 import { environmentTexts } from '../../guest/lib/guards/environments.js';
-import { imageLimits } from '../../guest/lib/guards/images.js';
-import { imageMethodNames, imageTexts } from '../../guest/lib/image-guards.js';
+import { imageLimits } from '../../guest/lib/limits.js';
+import { imageMethodNames, imageTexts } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import { openImage } from '../../resources/environments/impl/image-source.js';
 

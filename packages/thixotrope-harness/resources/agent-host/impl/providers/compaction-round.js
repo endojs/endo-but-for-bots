@@ -38,11 +38,11 @@ import { E } from '@endo/far';
 import { textOf } from '../../../../guest/lib/interfaces.js';
 import { cutText, utf8Bytes } from '../../../../guest/lib/bounded.js';
 import { limits } from '../../../../guest/lib/limits.js';
-import { contextLimits } from '../../../../guest/lib/guards/context.js';
+import { contextLimits } from '../../../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { isAbandoned, planInputOf } from '../context-cache.js';
 import { checkSummary, planCompaction, summaryRequest } from './compaction.js';
-import { compactionSkipTexts } from './compaction-texts.js';
+import { compactionSkipTexts } from './compaction.js';
 
 /** @param {unknown} error */
 const messageOf = error =>

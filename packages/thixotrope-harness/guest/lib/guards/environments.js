@@ -49,7 +49,7 @@ import {
 import { shapes as sessionShapes } from './session.js';
 // M8's image bounds (seam X-1): `openImage` takes the path M8's image tool
 // checked, by the same rule (imported, not copied: review rule 3).
-import { imageLimits } from './images.js';
+import { imageLimits } from '../limits.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 

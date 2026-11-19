@@ -174,3 +174,6 @@ export const blobLimits = Object.freeze({
 
 // M4 (W4.1, H-11): the subscription settings.
 export { subscriptionDefaults } from './subscription-defaults.js';
+
+/** Fallback window when the Anthropic model catalogue omits a context length. */
+export const anthropicContextTokens = 200_000;

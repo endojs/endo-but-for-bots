@@ -18,7 +18,7 @@ import {
   viewImageArgumentNames,
   viewImageDescription,
   viewImageTexts,
-} from '../../guest/lib/guards/images.js';
+} from '../../guest/lib/guards/session.js';
 import { RETIRED_TEXT } from '../../guest/lib/retired.js';
 import { makeLabels } from '../../guest/session/labels.js';
 import { isRestartSignal } from '../../guest/session/recovery.js';

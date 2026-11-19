@@ -37,13 +37,13 @@ import test from 'ava';
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
-import { compactionTexts } from '../../guest/lib/guards/context.js';
+import { compactionTexts } from '../../guest/lib/guards/session.js';
 /* eslint-enable import/no-relative-packages */
 import {
   compactionSkipTexts,
   scriptedSummary,
   summaryHeadings,
-} from '../../resources/agent-host/impl/providers/compaction-texts.js';
+} from '../../resources/agent-host/impl/providers/compaction.js';
 import { integrationEnabled, takeIntegrationLock } from '../template/index.js';
 import {
   ANTHROPIC_WINDOW,
