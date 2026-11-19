@@ -3,7 +3,11 @@
     "./tsconfig.json",
     "../../tsconfig-build-options.json"
   ],
-  "include": ["src/**/*.ts"],
+  "include": [
+    "src/**/*.ts",
+    "src/tool.js",
+    "src/json-tools/package-manager.js"
+  ],
   "exclude": [
     "test/",
     "types-index.types.d.ts",
