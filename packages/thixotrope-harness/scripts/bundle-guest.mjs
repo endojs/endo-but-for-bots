@@ -155,6 +155,8 @@ const linkSession = async (entry, sources) => {
     import('terser'),
   ]);
   let supported = true;
+  let supportedSyntax = true;
+  const { traverseFast } = requireSource('@babel/types');
   const graph = await rollup({
     input: entry,
     treeshake: {
@@ -188,20 +190,42 @@ const linkSession = async (entry, sources) => {
           const bytes = sources.get(id);
           if (bytes === undefined)
             throw Error(`Unadmitted session module ${id}`);
-          return new TextDecoder().decode(bytes);
+          const source = new TextDecoder().decode(bytes);
+          // Relocating import.meta would expose the entry's module location.
+          // Keep the original mapper environment for it and dynamic loading.
+          traverseFast(
+            parser.parse(source, { sourceType: 'module' }),
+            (/** @type {any} */ node) => {
+              if (
+                node.type === 'MetaProperty' ||
+                node.type === 'Import' ||
+                node.type === 'ImportExpression'
+              )
+                supportedSyntax = false;
+            },
+          );
+          return source;
         },
       },
     ],
+  }).catch(error => {
+    // The mapper has already accepted the source. Rollup may support a
+    // narrower grammar or decline a valid linking pattern.
+    if (typeof error.code === 'string') return undefined;
+    throw error;
   });
+  if (!graph) return undefined;
   try {
-    if (!supported) return undefined;
+    if (!supported || !supportedSyntax) return undefined;
     const { output } = await graph.generate({ format: 'es' });
     if (!supported || output.length !== 1) return undefined;
     const { code } = await minify(output[0].code, {
       module: true,
       keep_fnames: true,
       keep_classnames: true,
-      compress: { passes: 3 },
+      // Rollup deliberately preserves a seemingly unused lexical read that
+      // can throw during initialization. Keep it in the printed module.
+      compress: { passes: 3, side_effects: false },
       format: { ascii_only: true, comments: false },
     });
     return code === undefined ? undefined : new TextEncoder().encode(code);

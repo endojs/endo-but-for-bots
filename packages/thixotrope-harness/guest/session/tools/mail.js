@@ -37,7 +37,6 @@
  * Guest rules: model JSON never becomes a record; no `JSON.parse`.
  */
 import { failed, ok } from './outcomes.js';
-export { failed, ok } from './outcomes.js';
 import {
   textOf,
   textOf as mailTextOf,
@@ -52,6 +51,8 @@ import { fieldBytes, isStaged } from '../staging.js';
 import { readArgs } from './objects.js';
 import { inspectFor } from './inspect-client.js';
 import { heldObject } from './subagents.js';
+
+export { failed, ok };
 
 /** @import { ToolTableEntry } from '../tool-table.js' */
 /** @import { ArgSpec } from '../../lib/tool-args.js' */
