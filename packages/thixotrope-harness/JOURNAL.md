@@ -15494,6 +15494,21 @@ renders it with `uiTextOf.statusError`; the assertion now checks the controller'
 The restart case reached the post-SIGKILL home read before it reused the disconnected backend
 presence. Its second setup now obtains a backend from the reconnected client.
 
+### J-12102 2026-11-19 W6.7 shell and performance acceptance
+
+The fake-runtime daemon completed Git writes from shell and exec, paged and reassembled a
+20,000-byte image, enforced the round limit, returned three tool results in request order and
+served the command following cancellation. Cancellation took 419.7 ms. The concurrent turn
+took 3,742.7 ms against 1,969.7 ms for the single call. Its ratio of 1.90 exceeded the
+1.6 gate. The separate oversized scripted-backend input was refused at the control boundary.
+The three guest-only boundary probes remain explicit TODOs in the test source.
+
+In the shared performance window, hot commands took 68 ms median, with zero manager deliveries
+and one additional session delivery. The first command took 175 ms median. Development session
+creation added 281.1 ms against the 175 ms limit. Median cancellation was 321.3 ms and stop
+cleanup was 64.7 ms. All five staged large outputs returned valid data within 955 ms and the
+next turn ran. The host had no configured OCI runtime for the optional cold-start sample.
+
 ### J-12120 2026-11-19 W6.8 shared layout and guarded bundle boundaries
 
 `32fccde460` shares the package and state path resolvers between the two native resources and
