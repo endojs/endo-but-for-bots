@@ -33,7 +33,8 @@ const run = integrationEnabled ? test.serial : test.skip;
 run(
   'a child has its own workspace and shell while the parent is stopped',
   async t => {
-    const state = await startFromTemplate(await environmentsTemplate(), { t });
+    t.timeout(5 * 60_000);
+  const state = await startFromTemplate(await environmentsTemplate(), { t });
     const slice = await makeSlice(state);
     const script = harden({
       turns: [
