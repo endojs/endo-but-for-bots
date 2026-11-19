@@ -134,7 +134,7 @@ impl TemporalDurationRecord {
     }
 
     /// The pure time part (`hours`…`nanoseconds`) as a single nanosecond count,
-    /// ignoring the calendar/day fields entirely. Unlike [`time_nanoseconds`]
+    /// ignoring the calendar/day fields entirely. Unlike `time_nanoseconds`
     /// this never rejects a duration that also carries date units — the caller
     /// handles those through calendar arithmetic against a `relativeTo` date.
     pub(super) fn time_only_nanoseconds(self) -> Option<i128> {

@@ -1,5 +1,5 @@
 //! `corpus-to-262`: the mechanical corpus → test262-style case converter
-//! (design [`designs/ironhorse-test262-convergence.md`] § Part 1,
+//! (design `designs/ironhorse-test262-convergence.md` § Part 1,
 //! "Conversion mechanics and corpus retirement").
 //!
 //! For each line of every `corpora/*.js` file it dual-runs the program once

@@ -1,6 +1,6 @@
 //! Committed, parameterized test262 expectation lists and the
 //! two-directional ratchet (design
-//! [`designs/test262-fixture-consolidation.md`] § The expectation-list
+//! `designs/test262-fixture-consolidation.md` § The expectation-list
 //! mechanism).
 //!
 //! Without an expectation list, the runner is green iff it produces zero

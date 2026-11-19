@@ -21,7 +21,7 @@ impl Interp {
     /// ([`Self::invoke_value`]) rather than the native-frame fast path? A
     /// promise resolving function, finally thunk, or capability executor
     /// (every function in `promise_functions`) carries a native-method marker
-    /// for reflection but its [[Call]] settles a captured promise, and
+    /// for reflection but its `[[Call]]` settles a captured promise, and
     /// `Function.prototype.call`/`apply` themselves redispatch their
     /// receiver; `call_native_method` refuses all of them as "never reaches
     /// here", so `Function.prototype.apply.call({}, {}, [])` or
@@ -448,7 +448,7 @@ impl Interp {
 
     /// `new boundF(...)` for a bound function whose ultimate target is not
     /// bytecode (see [`Self::bound_construct_enters_bytecode`]): take the
-    /// frame at `base` apart and run BoundFunction [[Construct]] through the
+    /// frame at `base` apart and run BoundFunction `[[Construct]]` through the
     /// general construct, `new.target` the bound function unless a `super()`
     /// named its own. A Proxy target takes this path too. Out of line, so the
     /// dispatch loop's `RUN` arm, which every native re-entry holds, does not

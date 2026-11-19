@@ -193,7 +193,7 @@ impl Meter {
     /// escaping `throw`/`rethrow` opcode's `mxBreak` is bypassed by the
     /// `fxJump` longjmp into the host, so XS never meters it, whereas
     /// ironhorse's dispatch loop pre-meters every opcode. See
-    /// [`crate::interp::THROW_HOST_ESCAPE_METERING`].
+    /// `crate::interp::THROW_HOST_ESCAPE_METERING`.
     #[inline]
     pub fn untick_code(&mut self) {
         self.index -= CODE_METERING;
@@ -260,7 +260,7 @@ impl Meter {
     /// during program entry (a bundle of `fxNewSlot`/`fxNewChunk`
     /// allocations building the program's environment instance and frame
     /// that this stage models as a measured constant rather than
-    /// individually — see [`crate::interp`] § Allocation-faithful
+    /// individually — see `crate::interp` § Allocation-faithful
     /// metering), and by the callers that meter a property-creation slot
     /// cluster.
     #[inline]

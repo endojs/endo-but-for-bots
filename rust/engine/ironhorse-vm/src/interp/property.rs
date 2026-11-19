@@ -419,7 +419,7 @@ impl Interp {
     /// defines `caller` (undefined, non-enumerable) on every sloppy plain
     /// function, async ones included, and Ironhorse's compiler keeps XS's
     /// bytes. Only that define matches: its value and attributes, onto a
-    /// function whose [[Prototype]] is still %AsyncFunction.prototype%, as
+    /// function whose `[[Prototype]]` is still %AsyncFunction.prototype%, as
     /// it is between ASYNC_FUNCTION and the define.
     pub(in crate::interp) fn is_async_function_caller_define(
         &mut self,
@@ -507,7 +507,7 @@ impl Interp {
     }
 
     /// [`Self::property_at_set`] on a primitive base: the wrapper
-    /// prototype's [[Set]] with the primitive as the receiver. Out of line, so
+    /// prototype's `[[Set]]` with the primitive as the receiver. Out of line, so
     /// the object path, which a Proxy `set` trap or an inherited setter
     /// re-enters level after level, does not carry this path's frame.
     #[inline(never)]
@@ -1339,7 +1339,7 @@ impl Interp {
         }
     }
 
-    /// [[Get]] for fixed, non-index Intl/Temporal option fields, without
+    /// `[[Get]]` for fixed, non-index Intl/Temporal option fields, without
     /// interning an ordinary negative lookup. These specification fields do
     /// not name lazy intrinsic methods. If no global id exists, no ordinary
     /// object can own the field; numeric index storage is outside this domain.
@@ -1807,7 +1807,7 @@ impl Interp {
         String::from_utf8_lossy(&bytes[..end]).into_owned()
     }
 
-    /// Explain an ordinary [[Set]] rejection without invoking another getter
+    /// Explain an ordinary `[[Set]]` rejection without invoking another getter
     /// or Proxy trap. XS native setters use fxSetAll's caller-specific prefix.
     pub(super) fn failed_set_error(
         &mut self,

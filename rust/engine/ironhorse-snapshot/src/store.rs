@@ -725,7 +725,7 @@ impl StoreManifest {
     ///
     /// A manifest stamped with an older schema encodes that schema's
     /// layout, the root and seal strings in place of the token (an empty
-    /// root, and a seal [`CommitToken::to_legacy_seal`] reads back), with
+    /// root, and a seal `CommitToken::to_legacy_seal` reads back), with
     /// each schema's tail fields: this build writes one only for test and
     /// tooling fixtures that stand in for an older store.
     pub fn encode(&self) -> Vec<u8> {

@@ -1028,7 +1028,7 @@ impl Opcode {
     /// Raw `gxCodeSizes` entry. A positive value is the fixed
     /// instruction size; `0` marks an ID-operand opcode (size `1 +
     /// ID_SIZE`); a negative `-n` marks a length-prefixed variable
-    /// opcode (`1 + n + payload`). Use [`Opcode::instruction_len`] to
+    /// opcode (`1 + n + payload`). Use `Opcode::instruction_len` to
     /// resolve the concrete length against a byte stream.
     #[inline]
     pub fn size(self) -> i8 {

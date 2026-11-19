@@ -362,7 +362,7 @@ pub const FRAME_OVERHEAD_SLOTS: usize = 4;
 ///
 /// An ordinary bytecode CALL loops within a single `dispatch_at` (it rewrites
 /// `pc` and pushes a `CallerState`), so deep JS recursion consumes value-stack
-/// slots, not native Rust stack, and is bounded by the [`STACK_SLOT_COUNT`]
+/// slots, not native Rust stack, and is bounded by the `STACK_SLOT_COUNT`
 /// value-stack budget alone. Everything else the engine does on a guest's
 /// behalf recurses on the **host thread's native stack**, whose exhaustion is a
 /// `SIGABRT` no `catch_unwind` can contain: a callback (`forEach`/`map`/…), an
@@ -376,7 +376,7 @@ pub const FRAME_OVERHEAD_SLOTS: usize = 4;
 /// and exotic objects are walked in place (XS's `fxGetProperty` loop); only
 /// a Proxy in the chain forwards, and only that forwarding is a frame.
 ///
-/// One counter, [`Interp::native_depth`], is charged by every one of those
+/// One counter, `Interp::native_depth`, is charged by every one of those
 /// re-entry points and checked against this ceiling; past it the engine halts
 /// with [`Halt::ReentryLimit`] — distinct from the value-stack abort XS raises from
 /// `fxCheckCStack`, deterministic across hosts because it is a counter rather
@@ -850,7 +850,7 @@ struct FuncInfo {
     /// `None` for any instance that has **no runnable bytecode body**: a
     /// native/method built-in, and — the trap this `Option` exists to defuse
     /// — a **bound function** (`f.bind(...)`), whose callability is realized
-    /// only by the bound trampoline ([`Interp::enter_call_bound`] and the
+    /// only by the bound trampoline (`Interp::enter_call_bound` and the
     /// bound arms of [`Interp::run_callback`]). A plain `usize` here was a
     /// loaded gun: `FuncInfo::default()` gave a bound entry `body_start = 0`,
     /// indistinguishable from "program start", so any dispatch site that
@@ -1669,7 +1669,7 @@ pub enum Halt {
     /// The interpreter ran past a caller-supplied **step ceiling** without
     /// completing — a bounded-execution guard for callers that install no
     /// metering host (notably the bytecode-decoder fuzz harness, which
-    /// [`run_program`] leaves un-metered). A malformed backward branch that
+    /// `run_program` leaves un-metered). A malformed backward branch that
     /// targets itself (e.g. `BRANCH_STATUS_1` with offset `-2` at pc 0) or
     /// any other non-terminating dispatch cycle aborts here in bounded time
     /// instead of hanging. Carries the dispatch count reached at the abort.
@@ -2575,7 +2575,7 @@ impl Interp {
     /// registered on it — ironhorse's mirror of XS's `the->rejection` unhandled-
     /// rejection latch (design § Part 2, the async row). A `.then`/`.catch`/
     /// `await` on the promise sets `ever_handled`
-    /// ([`Self::promise_then_with`]/[`Self::promise_then_native`]), so this is
+    /// (`Self::promise_then_with`/`Self::promise_then_native`), so this is
     /// true only for a rejection nothing ever observed — the shape an async
     /// test that throws without settling `$DONE` leaves behind. Read after
     /// [`Self::run`], once the job drain has settled every promise it can.
@@ -2852,7 +2852,7 @@ impl Interp {
     ///
     /// **What it does NOT put back.** The meter index and the dispatch count
     /// are snapshotted and restored, and the render is bounded by
-    /// [`RENDER_DISPATCH_BUDGET`]. Everything else a guest `toString` does
+    /// `RENDER_DISPATCH_BUDGET`. Everything else a guest `toString` does
     /// persists: heap slots and chunks it allocated, globals and the thrown
     /// object it mutated, a promise job it enqueued (the run's only drain has
     /// already happened by then, so such a job waits for the next crank), and

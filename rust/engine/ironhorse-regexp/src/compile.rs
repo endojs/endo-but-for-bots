@@ -275,8 +275,8 @@ const MAX_QUANTIFIER: i32 = 0x7FFF_FFFF;
 /// counter (deterministic across hosts and build profiles) rather than a
 /// stack-address margin, and it is part of what a release accepts. The limit
 /// is orders of magnitude above real patterns. Its passes keep their own
-/// stacks ([`Compiler::disjunction_parse`], `Compiler::charset_expression`,
-/// [`Compiler::measure`] and [`Compiler::emit`]), so neither nesting nor
+/// stacks (`Compiler::disjunction_parse`, `Compiler::charset_expression`,
+/// `Compiler::measure` and `Compiler::emit`), so neither nesting nor
 /// pattern *length* (an alternation, a sequence or a `v`-mode class's list of
 /// string alternatives, `[\q{ab|cd|…}]`, which becomes a left-nested
 /// disjunction) is native recursion depth: both cost heap linear in the

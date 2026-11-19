@@ -1,5 +1,5 @@
 //! Full test262 YAML frontmatter parse (design
-//! [`designs/ironhorse-test262-convergence.md`] § Part 2: "a real YAML
+//! `designs/ironhorse-test262-convergence.md` § Part 2: "a real YAML
 //! dependency replaces `test262.rs`'s three-field hand parser").
 //!
 //! `xst262.c` reads the whole frontmatter through libyaml; the analogue

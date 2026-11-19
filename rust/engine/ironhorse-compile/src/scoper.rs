@@ -4,12 +4,12 @@
 //! ([`crate::parser`], stage-5 children 2–3) and the coder (a later
 //! child), performing XS's two dispatch passes over the tree:
 //!
-//!   * **hoist** ([`fxParserHoist`]): builds the scope tree
+//!   * **hoist** (`fxParserHoist`): builds the scope tree
 //!     (global/eval/function/module/block/`with`/`catch` scopes), hoists
 //!     `var` / function declarations, records lexical (`let` / `const` /
 //!     `using`) declarations with their duplicate-declaration early
 //!     errors, and poisons scopes reached by direct `eval` / `with`.
-//!   * **bind** ([`fxParserBind`]): resolves every identifier access to
+//!   * **bind** (`fxParserBind`): resolves every identifier access to
 //!     its declaration up the scope chain, marks captured declarations as
 //!     **closure** slots, and computes each function's `scopeCount` — the
 //!     frame slot count the coder consumes.
@@ -21,7 +21,7 @@
 //! nodes in each scope, the closure flags, and the per-function
 //! `scopeCount` are a byte-identity contract. This module reproduces XS's
 //! exact declare ordering, counter arithmetic, and closure marking; the
-//! fixture tests ([`tests`]) pin them as the contract for the coder child.
+//! fixture tests (`tests`) pin them as the contract for the coder child.
 //!
 //! **Representation.** XS mutates the AST in place, hanging a `txScope*`
 //! off each scope-creating node and an `access->declaration` off each

@@ -1142,7 +1142,7 @@ pub enum Native {
     /// Open embedding service dispatch; function metadata carries its stable key.
     Host,
     /// The realm's intrinsic `eval` function. Direct calls are dispatched by
-    /// `XS_CODE_EVAL`; ordinary/indirect calls reach [`Interp::call_native`].
+    /// `XS_CODE_EVAL`; ordinary/indirect calls reach `Interp::call_native`.
     Eval,
     Locale,
     Collator,
@@ -1186,13 +1186,13 @@ pub enum Native {
     /// `WeakRef` — the weak-reference constructor (`xsMapSet.c` `fx_WeakRef`).
     /// Constructor-only; the target must be an object (the pinned XS rejects
     /// symbols, as its `WeakMap` does). The per-instance `[[WeakRefTarget]]`
-    /// lives in the [`Interp::weak_refs`] side table, which the full collector
+    /// lives in the `Interp::weak_refs` side table, which the full collector
     /// clears when the target dies (`fxMarkWeakStuff`).
     WeakRef,
     /// `FinalizationRegistry` — the cleanup-callback registry constructor
     /// (`xsMapSet.c` `fx_FinalizationRegistry`). Constructor-only; the
     /// callback must be callable. Its `[[Cells]]` live in the
-    /// [`Interp::finalization_registries`] side table; a cell whose target
+    /// `Interp::finalization_registries` side table; a cell whose target
     /// dies in a collection is cleaned up at the next job boundary
     /// (`fxCleanupFinalizationRegistries`).
     FinalizationRegistry,
@@ -1200,13 +1200,13 @@ pub enum Native {
     Iterator,
     /// `ArrayBuffer` — the raw byte-buffer constructor (`xsDataView.c`
     /// `fx_ArrayBuffer`). Its per-instance backing store lives in the
-    /// [`Interp::array_buffers`] side table.
+    /// `Interp::array_buffers` side table.
     ArrayBuffer,
     /// `SharedArrayBuffer` — a shared raw byte-buffer constructor
     /// (`xsAtomics.c` `fx_SharedArrayBuffer`). ironhorse is single-agent, so a
     /// SharedArrayBuffer is a plain byte buffer (its backing store lives in the
-    /// same [`Interp::array_buffers`] side table, marked in
-    /// [`Interp::shared_buffers`]); the "shared" distinction only gates
+    /// same `Interp::array_buffers` side table, marked in
+    /// `Interp::shared_buffers`); the "shared" distinction only gates
     /// `Atomics.wait`/`notify` and `ArrayBuffer.isView`-style brand checks.
     SharedArrayBuffer,
     /// `Compartment` — the guest-callable compartment constructor
@@ -1215,11 +1215,11 @@ pub enum Native {
     ///
     /// Constructor-only: a bare `Compartment(...)` call is a `TypeError`, as
     /// `Map`/`Set`/`Proxy` are. Each instance owns a fresh global object built
-    /// by [`Interp::create_environment`], holding references to the one shared
+    /// by `Interp::create_environment`, holding references to the one shared
     /// intrinsic graph rather than copies, and a fresh `eval`/`Function` bound
-    /// to it ([`Interp::compartment_evaluator`]). The per-instance environment
-    /// handle lives in the [`Interp::guest_compartments`] side table, which is
-    /// also the brand [`Interp::compartment_of`] checks.
+    /// to it (`Interp::compartment_evaluator`). The per-instance environment
+    /// handle lives in the `Interp::guest_compartments` side table, which is
+    /// also the brand `Interp::compartment_of` checks.
     Compartment,
     /// The non-global abstract `%TypedArray%` constructor, reachable as the
     /// `[[Prototype]]` of every concrete TypedArray constructor. Direct call
@@ -1228,32 +1228,32 @@ pub enum Native {
     /// A concrete TypedArray constructor (`Uint8Array`/`Int32Array`/… —
     /// `xsDataView.c` `fx_TypedArray`). The payload indexes
     /// [`TYPED_ARRAY_TYPES`] (the element type). Its per-instance view state
-    /// lives in the [`Interp::typed_arrays`] side table.
+    /// lives in the `Interp::typed_arrays` side table.
     TypedArray(u8),
     /// `DataView` — the endian-aware buffer view constructor (`xsDataView.c`
     /// `fx_DataView`). Its per-instance view state lives in the
-    /// [`Interp::data_views`] side table.
+    /// `Interp::data_views` side table.
     DataView,
     /// `Promise` — the promise constructor (`xsPromise.c` `fx_Promise`). Its
-    /// per-instance settlement state lives in the [`Interp::promises`] side
+    /// per-instance settlement state lives in the `Interp::promises` side
     /// table; the resolve/reject functions it hands the executor are host
-    /// functions recorded in [`Interp::promise_functions`].
+    /// functions recorded in `Interp::promise_functions`.
     Promise,
     /// `RegExp` — the regular-expression constructor (`xsRegExp.c`
     /// `fx_RegExp`). Its per-instance compiled program + source/flags live in
-    /// the [`Interp::regexps`] side table; `lastIndex` is an ordinary own
+    /// the `Interp::regexps` side table; `lastIndex` is an ordinary own
     /// integer property. The matcher itself is the `ironhorse-regexp` crate.
     RegExp,
     /// `Proxy` — the proxy constructor (`xsProxy.c` `fx_Proxy`). A special
     /// constructor: it has **no** `.prototype` property and its instances have
     /// no identity prototype. Constructing it validates the target/handler are
-    /// objects and records a [`ProxyData`] in the [`Interp::proxies`] side
+    /// objects and records a `ProxyData` in the `Interp::proxies` side
     /// table; the exotic behavior is the trap dispatch keyed off that table.
     Proxy,
     /// `%GeneratorFunction%` — the (non-global) dynamic **generator** function
     /// constructor, reachable as `(function*(){}).constructor`. Call and
     /// construct both run CreateDynamicFunction with the `function*` grammar
-    /// through the runtime source bridge ([`Interp::create_dynamic_function`]).
+    /// through the runtime source bridge (`Interp::create_dynamic_function`).
     GeneratorFunction,
     /// `%AsyncFunction%` — the (non-global) dynamic **async** function
     /// constructor, reachable as `(async function(){}).constructor`.

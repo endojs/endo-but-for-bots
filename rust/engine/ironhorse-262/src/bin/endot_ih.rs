@@ -1,5 +1,5 @@
 //! `endot-ih`: the xst-analogue test262 runner (design
-//! [`designs/ironhorse-test262-convergence.md`] § Part 2). It plays for
+//! `designs/ironhorse-test262-convergence.md` § Part 2). It plays for
 //! the Rust engine the role `xs/tools/xst.c` + `xst262.c` play for XS —
 //! full YAML frontmatter, the not-yet-implemented feature skip list,
 //! sloppy+strict mode selection, negative verdicts, the xst-shaped `-o` YAML

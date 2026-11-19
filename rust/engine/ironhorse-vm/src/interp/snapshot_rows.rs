@@ -281,7 +281,7 @@ pub struct AsyncRow {
 }
 
 /// One queued `next`/`return`/`throw` request on an async generator (the
-/// serialized [`AsyncGeneratorRequest`]): the completion it asks for, its
+/// serialized `AsyncGeneratorRequest`): the completion it asks for, its
 /// value, and the resolving-function pair that settles the request's
 /// promise (an ordinary `promise_functions` pair, carried in `PRMS`).
 #[derive(Clone, Debug, PartialEq)]
@@ -293,7 +293,7 @@ pub struct AsyncGeneratorRequestRow {
     pub reject: Slot,
 }
 
-/// One async generator instance (the serialized [`AsyncGeneratorData`]),
+/// One async generator instance (the serialized `AsyncGeneratorData`),
 /// carried in `ASYN` beside the async-function activations. Unlike an
 /// async function, an async generator is a guest-held object whose row
 /// `.next()` consults in EVERY state — between yields it has no reaction
@@ -353,7 +353,7 @@ impl AsyncGeneratorRow {
 }
 
 /// One registered reaction of a pending [`PromiseRow`] (the serialized
-/// [`PromiseReaction`]). The four handler/capability slots are ordinary
+/// `PromiseReaction`). The four handler/capability slots are ordinary
 /// value slots; `kind` is the reaction's drain behavior:
 ///
 /// | byte | kind | `a` | `b` |
@@ -386,7 +386,7 @@ pub struct PromiseReactionRow {
 }
 
 /// One promise instance's settlement state (the serialized
-/// [`PromiseData`]): status, result, pending reactions, and the
+/// `PromiseData`): status, result, pending reactions, and the
 /// handled-state flag [`Interp::has_unhandled_rejection`] reads.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PromiseRow {
@@ -401,7 +401,7 @@ pub struct PromiseRow {
 }
 
 /// One runtime-minted Promise callable's bound data (the serialized
-/// [`PromiseFnData`] plus the `FuncInfo` fields restore rebuilds — mirroring
+/// `PromiseFnData` plus the `FuncInfo` fields restore rebuilds — mirroring
 /// [`IntlBoundFunctionRow`], the other runtime-minted native population that
 /// travels outside `FUNC`).
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -423,7 +423,7 @@ pub struct PromiseFnRow {
 }
 
 /// One `Promise.all`/`allSettled`/`race`/`any` shared accumulator (the
-/// serialized [`CombinatorState`]).
+/// serialized `CombinatorState`).
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct CombinatorRow {
     /// 0 = All, 1 = AllSettled, 2 = Race, 3 = Any.

@@ -52,14 +52,14 @@ pub use snapshot::{
     RoundtripDivergence,
 };
 
-/// The store-seam decoder fuzz arm over `StoreManifest::decode`,
-/// `SmallState::decode`, `validate_store` and the adoption path — the
-/// targets the store-seam design's phase-1 acceptance bar names.
+// The store-seam decoder fuzz arm over `StoreManifest::decode`,
+// `SmallState::decode`, `validate_store` and the adoption path — the
+// targets the store-seam design's phase-1 acceptance bar names.
 pub mod store;
 pub use store::{export_adopt_is_identity, store_decoder_is_error_free, store_succession_is_total};
 
-/// The checked-in, derived seed corpus for every libFuzzer target, so
-/// coverage survives a cache eviction instead of silently resetting.
+// The checked-in, derived seed corpus for every libFuzzer target, so
+// coverage survives a cache eviction instead of silently resetting.
 pub mod seeds;
 
 /// The multi-crank differential arm: fuzzer bytes folded into a crank
@@ -153,7 +153,7 @@ const MAX_PROGRAM_CHARS: usize = 4_096;
 /// The recursion bound is drawn from the input rather than fixed, so the
 /// generator can emit both a bare literal and a deep nest, and libFuzzer
 /// can search the depth dimension. Generation still terminates: the drawn
-/// depth is capped at [`MAX_EXPR_DEPTH`] and decreases on every descent.
+/// depth is capped at `MAX_EXPR_DEPTH` and decreases on every descent.
 pub fn gen_program(data: &[u8]) -> String {
     let mut b = Bytes::new(data);
     let depth = 1 + b.choice(MAX_EXPR_DEPTH);
@@ -2195,7 +2195,7 @@ pub fn oracle_is_live() -> bool {
 /// [`run_program`] is not total on arbitrary bytecode — a malformed
 /// backward branch that targets itself (e.g. `BRANCH_STATUS_1` with offset
 /// `-2` at pc 0, decoded from seed 1750 of
-/// [`decoder_never_panics_on_arbitrary_bytes`]) spins forever with no
+/// `decoder_never_panics_on_arbitrary_bytes`) spins forever with no
 /// metering host armed to refuse it. Bounding execution turns any such hang
 /// into a [`ironhorse_vm::Halt::StepLimit`] in milliseconds. The bound is far
 /// above any well-formed `<= 40`-byte fuzz program's dispatch count, so it

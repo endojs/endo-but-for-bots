@@ -1961,7 +1961,7 @@ impl Interp {
     }
 
     /// Read a BigInt64/BigUint64 TypedArray element (kinds 0/1) into a freshly
-    /// allocated BigInt (the exotic index [[Get]] BigInt path), reading
+    /// allocated BigInt (the exotic index `[[Get]]` BigInt path), reading
     /// little-endian storage.
     pub(in crate::interp) fn typed_array_element_get_bigint(
         &mut self,

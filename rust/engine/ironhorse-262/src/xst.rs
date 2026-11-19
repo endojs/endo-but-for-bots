@@ -1,5 +1,5 @@
 //! `endot-ih`: the xst-analogue test262 runner for the Rust engine
-//! (design [`designs/ironhorse-test262-convergence.md`] § Part 2,
+//! (design `designs/ironhorse-test262-convergence.md` § Part 2,
 //! "Harness -> `endot-ih`"). It plays for ironhorse exactly the role
 //! `xs/tools/xst.c` + `xst262.c` (@ `48ee02d8cfe0`) play for XS, plus the
 //! one thing `xst` never had: a differential oracle.
@@ -2708,7 +2708,7 @@ fn ironhorse_terminates_alone(
 /// each path for readable failure labels. The primary differential runs under
 /// `cfg.per_case_timeout_seconds` (0 = unbounded, the library default); a
 /// timeout permits one additional bound for Ironhorse-only attribution (see
-/// [`run_case_bounded`]).
+/// `run_case_bounded`).
 pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf]) -> XstReport {
     let mut rep = XstReport {
         ses_mode: cfg.ses_mode,

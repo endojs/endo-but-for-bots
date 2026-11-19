@@ -197,7 +197,7 @@ impl ArrayData {
 
     /// Whether any element carries a non-default descriptor flag.
     ///
-    /// The dense fast paths ([`Interp::dense_array_this`] and the
+    /// The dense fast paths (`Interp::dense_array_this` and the
     /// `*_fast_safe` predicates) may only run when this is false. They write
     /// items directly, without carrying attributes across, so over an
     /// attributed element they would erase or relocate its flags — turning

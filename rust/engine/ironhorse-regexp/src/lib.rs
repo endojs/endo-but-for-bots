@@ -70,7 +70,7 @@ pub use matcher::{
 pub use opcode::{XS_PARSE_REGEXP_METERING, XS_REGEXP_METERING};
 
 /// The result of compiling and running one pattern: a convenience over
-/// [`compile`] + [`match_regexp`] mirroring what the oracle shim returns,
+/// [`compile()`] + [`match_regexp`] mirroring what the oracle shim returns,
 /// so a caller (and the parity suite) can compare in one shape.
 #[derive(Debug, Clone)]
 pub struct RunOutcome {

@@ -330,11 +330,11 @@ impl<'a> SymbolTable<'a> {
     /// copies it). The id-order walk is `fxParserCode`'s: buckets in index
     /// order, and within a bucket most-recent-first (the prepend order),
     /// numbering only `usage` symbols — the identical walk
-    /// [`assign_ids`] uses, so the strings land in ascending id order.
+    /// `assign_ids` uses, so the strings land in ascending id order.
     ///
     /// Even a symbol-free program yields a 2-byte `01 00` atom (`total`
     /// starts at `sizeof(txID)`), matching XS, which always allocates the
-    /// count. Call after [`assign_ids`].
+    /// count. Call after `assign_ids`.
     fn symbols_atom(&self) -> Result<Vec<u8>, crate::parser::ParseError> {
         let mut buckets: Vec<Vec<usize>> = vec![Vec::new(); SYMBOL_MODULO as usize];
         for i in 0..self.entries.len() {
@@ -1072,7 +1072,7 @@ thread_local! {
 /// - `delete o?.b` deletes the chain's member (XS deletes nothing);
 /// - `(eval)(s)` is a direct eval (XS calls it indirectly);
 /// - an array literal's spread and a rest element fill their array with
-///   CreateDataProperty (XS uses [[Set]], so an inherited setter runs).
+///   CreateDataProperty (XS uses `[[Set]]`, so an inherited setter runs).
 ///
 /// For differential harnesses only: the bytes it produces carry XS's bugs.
 pub fn with_xs_bytes<R>(f: impl FnOnce() -> R) -> R {
@@ -5008,7 +5008,7 @@ impl Coder<'_, '_> {
     /// Store the value on top of `[array, at, value]` as an element of a
     /// spread array literal or a rest element's array, consuming all three:
     /// a CreateDataProperty (`NEW_PROPERTY_AT`, attribute flag 0), so an
-    /// inherited index setter does not run. XS stores with [[Set]]
+    /// inherited index setter does not run. XS stores with `[[Set]]`
     /// (`SET_PROPERTY_AT` then `POP`), which [`with_xs_bytes`] restores.
     fn code_fill_element(&mut self) {
         if xs_bytes() {
@@ -6074,7 +6074,7 @@ impl Coder<'_, '_> {
     /// `fxParserCode`'s three passes, producing **both** the `codeBuffer`
     /// bytes and the `symbolsBuffer` atom (`(bytecode, symbols)`) — the two
     /// halves of XS's `txScript` the oracle shim hands back. The symbols
-    /// atom is emitted from the same [`assign_ids`] walk the bytecode's
+    /// atom is emitted from the same `assign_ids` walk the bytecode's
     /// symbol operands were numbered by, so ironhorse's SYMB payload is
     /// byte-identical to the oracle's whenever the operands are (the
     /// stage-5 id contract), letting the `Ironhorse` seam stop borrowing the
