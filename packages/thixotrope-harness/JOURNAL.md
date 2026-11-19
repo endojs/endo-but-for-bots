@@ -17280,5 +17280,7 @@ operator median 598 ms (two samples), inter-session median 589 ms (one), deliver
 500 ms, throughput 1.40 posts/s and hub growth 2.27 times. The crank threshold was 550 ms.
 The other four measurements missed their thresholds. Each load window completed only one
 batch. A full exclusive window is still required to grade performance. Two real supervisor
-SIGKILL cases passed independently: dispatch interrupted before turn creation and a stalled
-package turn whose recovery delivered one error reply.
+SIGKILL cases passed independently. The first killed the supervisor while a post was in flight
+and verified mailbox recovery, a settled request and a subsequent post. The second interrupted
+a stalled package turn and recovered one error reply. The first test does not pin the crank
+where the in-flight post was interrupted.
