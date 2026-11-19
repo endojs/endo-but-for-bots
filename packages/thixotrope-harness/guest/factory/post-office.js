@@ -700,6 +700,7 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
      */
     recipientOfPostmark: postmark => postmarks.get(postmark)?.recipient,
     copy,
+    release,
     /** The time a message without a caller's `at` is stamped with. */
     now: () => stampOf(undefined),
     /**

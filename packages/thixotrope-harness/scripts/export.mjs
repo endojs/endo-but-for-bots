@@ -477,7 +477,7 @@ export const importState = async ({
   };
   /** @type {any[]} */
   const sessions = [];
-  /** @type {{ session: any, internal: any, writers: any, chunk: any[], bytes: number, from: number, turns: number, sealed: number } | undefined} */
+  /** @type {{ session: any, internal: any, writers: any, inboxBodies: Map<number, any>, chunk: any[], bytes: number, from: number, turns: number, sealed: number } | undefined} */
   let current;
 
   /** @param {any} value */
@@ -624,6 +624,7 @@ export const importState = async ({
         session: made.session,
         internal: made.internal,
         writers,
+        inboxBodies: new Map(),
         chunk: [],
         bytes: CHUNK_SLACK,
         from: 0,
@@ -681,13 +682,38 @@ export const importState = async ({
     } else if (line.type === 'inbox') {
       if (current === undefined) throw Error('no import is open for inbox');
       await flush();
+      const { writers, internal, inboxBodies } = current;
+      /** @type {any[]} handles not yet attached to the importing session */
+      const fresh = [];
       try {
-        const messages = await staged(line.messages);
-        await E(current.internal).importState(
-          harden({ part: 'inbox', messages }),
-        );
+        if (
+          !Array.isArray(line.messages) ||
+          line.messages.length > limits.inboxMessages
+        )
+          throw Error('invalid inbox page size');
+        const messages = [];
+        for (const item of line.messages) {
+          if (item.body && typeof item.body === 'object' && isText(item.body)) {
+            const prior = inboxBodies.get(item.number);
+            const body = prior ?? (await stage(writers, item.body.text));
+            if (prior === undefined) fresh.push(body.blob);
+            messages.push({ ...item, body });
+          } else {
+            messages.push(item);
+          }
+        }
+        await E(internal).importState(harden({ part: 'inbox', messages }));
+        for (const item of messages) inboxBodies.set(item.number, item.body);
       } catch (error) {
-        await abandon(`contains a refused inbox page (${String(error)})`);
+        try {
+          for (let i = 0; i < fresh.length; i += limits.blobResolveBatch) {
+            await E(admin).releaseBlobs(
+              harden(fresh.slice(i, i + limits.blobResolveBatch)),
+            );
+          }
+        } finally {
+          await abandon(`contains a refused inbox page (${String(error)})`);
+        }
       }
     } else if (line.type === 'end') {
       await flush();
