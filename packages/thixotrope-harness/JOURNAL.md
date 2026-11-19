@@ -15162,3 +15162,59 @@ Reading: no command over 60 s (the longest: each spike run 37-40 s under the sha
 view smoke 31 s; the package typecheck 3 s). One supervisor per spike run, none exclusive.
 Commits `28fe58a0aa`, `f3aa873bb5`, `592793f9b0` and this journal commit; nothing pushed.
 Fit: neutral.
+
+### J-1070 2026-11-19 W8.4 the viewImage session entry built, not registered - built
+Evidence: `7255a27223`; `guest/session/tools/view-image.js`; `test/unit/view-image-entry.test.js`
+(6 tests, under 1 s).
+Reading: `viewImageEntry` (`site: 'adapter'`, the contract's description, offered when the ports
+carry a `viewImage` tool) reads the closed arguments with the object tools' exported `readArgs`
+(staged arguments refused as too large, unknown keys answer the R3-26 text with the closed
+names), checks `petName` (1-256 units), resolves it through `labelsOf(context).get` (unknown:
+`unknownLabel`; a stored JSON value: `badPetName`), and calls `E(tool).view({ opId, target,
+path? })` with the bound object and the model's raw `path` span (never parsed in the vat). An ok
+outcome calls `runtime.compaction.imageSeen(turnId)` (guarded: the M5 stand-in tables give an
+empty part); a failed outcome passes through unchanged; a rejection is left to the turn runner,
+whose `onToolError` runs recovery for an adapter-site restart signal. The fake `ImageTool` in
+the test is built with the adapter's `imageGuards.ImageTool`. The entry is NOT in `toolTable`:
+registering it does not fit the lane's session-program cap (J-1071), so the two slot lines in
+`tool-table.js` and the pinned name lists of `m5-w53-labels.test.js` wait for the PM.
+Fit: good for the behaviour (the vat passes an object and the model's text; no byte, mime type or
+parsed path enters it); poor for the bundle budget.
+
+### J-1071 2026-11-19 W8.4 session program bytes - measured
+Evidence: `node scripts/bundle-guest.mjs session` at `7255a27223` (239,354 bytes, the entry not
+imported) and on scratch copies of `guest/` with `--guest-root`.
+Reading: the M8 lane's 7,000 over 233,126 leaves 772 bytes after W8.1 (239,354). Registered as
+committed (two lines in `tool-table.js`): 244,311 bytes, +4,957 (lane total +11,185, 4,185 over
+its 7,000). Per module, comments stripped: `tools/view-image.js` 1,779, `guards/images.js` 1,570
+(first import into the session program: the description alone is about 1,100); the rest, about
+1,600, is the bundler's per-module wrapper (two new modules, about 800 each). A variant with the
+vat's three constants (description, `badPetName`, the 256 bound) inlined into the entry, so
+`guards/images.js` stays out of the bundle: 242,675 bytes, +3,321, still 2,549 over. No
+behaviour-preserving variant fits 772: the model-facing description must be in the vat
+(`ToolTableEntry.describe()` takes no ports, so it cannot be read from the port record). Note:
+`milestones.md` (the WX.1 caps paragraph) gives the context-window lane 3,500 over 233,126; this
+unit's task gave 7,000; W8.1's +6,228 already passes the former.
+Fit: poor. The per-module wrapper (about 800 bytes) makes a small vat module cost about twice
+its stripped source.
+
+### J-1072 2026-11-19 W8.4 differences from the contract - finding
+Evidence: `7255a27223`; `test/unit/m5-w53-args.test.js` "the specs follow the contract names, in
+order"; `test/unit/m5-w53-labels.test.js` (the pinned `toolTable` and `builtInToolNames` lists).
+Reading: (1) S-10d not applied: `argSpecs` in `tool-args.js` is pinned field for field to
+`toolArgumentNames` of the shared guards, which has no `viewImage` entry (and may not be edited
+by a lane), so `argSpecs.viewImage` would throw in that test; the spec lives in the entry module
+(two fields, the names of `viewImageArgumentNames`). (2) S-10b not applied: the cap (J-1071).
+When it is applied, `m5-w53-labels.test.js` must add `viewImage` after `adoptTool` in both pinned
+lists in the same commit. (3) The retired-break case is proven at the entry (it rejects with the
+break unchanged, `isRestartSignal` holds, `site` is `adapter`), not in a session run: the session
+test helpers (`_m2-queue-session.js`, the W5.3 file-local maker) offer no port tools or
+endowments; W8.7's "kill while reading" covers it end to end.
+Fit: neutral.
+
+### J-1073 2026-11-19 W8.4 time record - process
+Evidence: first command 2026-11-19T02:36:54Z, last 2026-11-19T02:42:46Z.
+Reading: no command over 60 s (the package typecheck about 2 s; the unit test under 1 s). No
+integration file, supervisor or perf run (W8.4 has no perf row). Commit `7255a27223` and this
+journal commit; nothing pushed.
+Fit: neutral.
