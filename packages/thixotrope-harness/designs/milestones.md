@@ -1972,7 +1972,9 @@ and dismissed 176 posts in 61.369 s, or 2.868 posts/s against the target of 3.
 A collector microbenchmark shared the host during part of the second run's ACK
 window. All three inbox p95 upper bounds were 500 ms (limit 550 ms). J-12549
 corrected the fresh hub denominator used in J-12547. J-1478 compares the
-single-recipient diagnostic with the full run. The factory and VM measurements
+single-recipient diagnostic with the full run. An isolated collector change
+improved its microbenchmark while the paired ordinary-mail run completed 51 posts
+on the baseline and 50 on the candidate (J-12560). The factory and VM measurements
 are in the [Ironhorse performance note](ironhorse-performance.md).
 
 The five daemon regression files passed 12 tests across the recorded runs

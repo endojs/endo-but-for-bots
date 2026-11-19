@@ -18527,3 +18527,31 @@ completed with zero errors and 925 warnings. The three installed-daemon
 files passed all ten tests, including both mail restart cases. They held
 test slots for 492.2 s in total and finished in 645.2 s wall time including
 their waits. These checks used the pinned release worker.
+
+### J-12560 2026-11-19 M9 ordinary mail on two source-matched research workers
+
+In four instrumented traffic windows (J-1478), the union of matched host
+delivery intervals in the factory vat covered 99.55–99.62% of elapsed time.
+The two single-recipient windows occupied 16.772 and 16.775 seconds at the
+factory, including 8.718 and 9.106 seconds in native collection. The factory
+handled 104 and 100 row updates for 52 and 50 complete posts respectively.
+
+An exclusive 15 s mail comparison ran the guarded-class harness `ecc7171aa2`
+against two separately built research workers, baseline first. The only worker
+source difference was `59dabaf09a`, reusing mark traversal storage. Both used
+the same compiler, release flags, build path, eight installed bundles, scheduling
+settings and fixture recipe. Baseline and treatment respectively recorded ACK
+medians of 143.499 ms (n=25) and 146.422 ms (n=26), and 51/16.318 s =
+3.1254 completed posts/s and 50/16.376 s = 3.0532/s. The synthetic collector
+gain did not translate to improved median ACK or throughput in this pair.
+Fresh growth was 0.338× and 1.757×, with fresh persisted sizes 1,162,741 and
+192,765 bytes at different log-compaction positions. The two benchmark exit
+codes were 0 and 1. The pinned release worker is unchanged. The CC-130 result
+at `e949361213` is retained on `codex/mail-gc-edge-scratch`.
+
+The [Ironhorse developer note](designs/ironhorse-performance.md) links the
+October core-mail profile, its raw traces and collector instrumentation.
+The VM hunks apply to the current sources. The worker integration hunk needs
+adapting to the allocation schedule. The older profile measured a colocated
+self-send with one recipient and a pushed inbox, while this benchmark used
+four clients, eight recipient sessions and confirmed reply dismissal.
