@@ -3,6 +3,7 @@
 import '../unit/_m1a-prelude.js';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { crc32 } from 'node:zlib';
 import test from 'ava';
 
 /* eslint-disable import/no-relative-packages */
@@ -25,6 +26,19 @@ import {
 
 takeIntegrationLock(test, 'view image in a workspace');
 const run = integrationEnabled ? test.serial : test.skip;
+
+/** A one-pixel grayscale PNG padded with a tEXt chunk to the upload limit. */
+const workspacePng = () => {
+  const pixel = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGP4DwABAQEAsTj2FAAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  const padding = Buffer.alloc(imageLimits.maxImageBytes - pixel.length, 0x61);
+  padding.writeUInt32BE(padding.length - 12);
+  padding.write('tEXtComment\0', 4, 'ascii');
+  padding.writeUInt32BE(crc32(padding.subarray(4, -4)), padding.length - 4);
+  return Buffer.concat([pixel.subarray(0, -12), padding, pixel.subarray(-12)]);
+};
 
 /** @param {string} root @param {any} before @param {any} after */
 const incomingFrames = async (root, before, after) => {
@@ -72,8 +86,7 @@ run(
     t.is(prepared.end.status, 'completed');
     const keys = environmentKeys(state.root);
     t.is(keys.length, 1);
-    const image = Buffer.alloc(imageLimits.maxImageBytes, 0x2a);
-    image.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const image = workspacePng();
     await writeFile(
       path.join(
         state.root,
