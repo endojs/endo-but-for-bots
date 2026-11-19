@@ -18487,3 +18487,33 @@ operator acknowledgment (98 sends; 200 ms limit) and 176 posts in 61.369 s
 300 ms target). Inbox p95 was 500 ms (550 ms limit). Fresh hub bytes went
 from 272,283 to 572,539 (2.103×, limit 1.25×) after 325 attachment posts.
 The file exited 1. The short comparison and the full row are both retained.
+### J-12551 2026-11-19 WX.F one-address admission and ordinary reply results
+
+d333ba1833 awaits the same admitted delivery for a one-address post,
+with its full receipt and failure behavior. The multicast branch retains
+per-address coalescing and result order. Reply validation still checks
+the sender and each address against the recorded parties. A delivered
+reply allocates its actual answer without also building the accepted
+answer used for closed and consumed replies. All 32 mail/post-office
+unit tests passed; typecheck and file ESLint passed (four warnings).
+
+One exclusive reservation ran independent 15 s four-sender windows in
+A/B/B/A order. Class-only A produced 2.919 and 2.857/s (94 posts in
+32.545 s); candidate B 3.088 and 2.969/s (102 in 33.676 s). In native
+worker timing across both periods, factory reply post JS fell from
+14.19 to 13.46 ms per completed post, factory send JS 12.37 to 11.88.
+The pooled reply-post wall dropped 91.44 to 66.96 ms and collection
+59.20 to 36.43 ms/post. Method collection timing varies with phase.
+
+The clean unscaled independent run on d333ba1833 exited 1. Throughput
+was 2.867906/s (176 posts in 61.369 s). All finished and were dismissed.
+Peak active and acknowledged backlog were eight; largest inbox five.
+ACK was 196.128 ms median, 98 samples (strict 200 ms), and session mail
+345 ms, 69 samples (strict 300 ms, wrapper 375 ms). The causal four-
+delivery gate remains unverified. The upper inbox histogram p95 was
+500 ms, median 30 ms, across 56 posts, inside the 550 ms p95 limit.
+Fresh growth was 2.102735 times (budget 1.25) after 325 attachment posts
+in 121.605 s. The image grew 178,203 to 216,894 bytes and log 94,080
+to 355,645 bytes, total 272,283 to 572,539. Fresh log records were
+seven on this run and 82 in J-12550. There were 34 natural compactions
+during the window. Raw rows are in `/private/tmp/thix-qc-mail-single-final.log`.
