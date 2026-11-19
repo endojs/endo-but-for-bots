@@ -14709,3 +14709,138 @@ the closure measure (a TypeScript-parser script over `guest` and `AH/impl`, now 
 `step3-plan.md` 2, the journal J-10077..J-10249, the code headers of the step 3 modules. Not run:
 browser perf, gateway perf, the other perf files, a perf run of the old tree (createCold and
 exec.trivial delivery baselines). Scratch `tmp/T3-CLOSE` removed. Fit: neutral.
+
+### J-1425 2026-11-19 WX.1 what the seam unit read, and the exo rule the contracts missed - read
+Evidence: `milestones.md` the group's section; `m6-interfaces.md` 6.1, 15; `m8-interfaces.md` 10,
+11, 4.6, 4.7; `m9-interfaces.md` 6.2, D-M9-5, D-M9-21..D-M9-24; `m11-interfaces.md` 11, appendix A;
+`step3-plan.md` 2; `runtime-parts.js`, `turn.js`, `turn-types.js` as built at `ea4e2c1c11`;
+`packages/exo/src/exo-tools.js` 398-400; J-1410..J-1421, J-10250..J-10254.
+Reading: the settled contracts resolve step 3's two limits without a new runner hook: M8's part
+writes `active.compactionAsk` in `beforeRound` and the runner reads it (S-5b), M9's `nextTurn`
+answers a `take` that `claim`'s existing third parameter runs. One rule none of them names: an exo
+refuses to be made when its guard lists a method its behaviour lacks ("methods ... not implemented
+by"), so adding `Session.emergencyStop`, `SessionInternal.deliverMail`, `TurnSink.compacted`,
+`Operator.getMail`/`getVoice` or `HarnessRoot.configureSpeech` to the guards alone would stop every
+session, the factory and seven TurnSink test fakes from being made.
+Fit: neutral.
+
+### J-1426 2026-11-19 WX.1 shared guard entries, and a "not built here" body per new method - decision
+Evidence: `5a27bf2fc9`; the contracts' lines listed in its message.
+Decision: every lane's guard entry applied as listed (M6 15.1-15.4, M8 G-1..G-4, M9 S9, S9b, S10,
+F6, V1, M11 H1, H3). Each new method of an existing interface gets the body its "not there"
+case has: `emergencyStop`/`resume` refuse `noEnvironmentToStop`, `getExecutionState` answers
+`{ running, supported: false }` (what M6 3.8 says for a session without an environment);
+`deliverMail` answers `{ refused }`, `cancelMail` nothing; `compacted` answers `{ go: false }`
+(M8 4.2's answer to an ask no longer pending); `configureSpeech` refuses `speechNotWired` (M11 H2b's
+own absent case); `getMail`/`getVoice` refuse one new text, `notBuiltYet`, which the group fold
+deletes. Each lane replaces its bodies in the seam it already owns (R-3, S5, S-5d, F1, H2, H2b).
+`importChunkView` also gets `execution` (M6 X-E reads it from the import chunk; 15.1 named only the
+export page). Rejected: guard entries held back as builders until each lane (every lane would
+re-pin the snapshot and vocabulary, the failure WX.1 exists to prevent).
+Fit: neutral.
+
+### J-1427 2026-11-19 WX.1 bundle sizes and the lanes' session program allowances - measure
+Evidence: `node scripts/bundle-guest.mjs` at `ea4e2c1c11` (from `git archive`, scratch) and at
+`4c4a011dac`; module-stub variants and a keyword attribution of the bundle diff (scratch scripts).
+Reading: before/after: session 212,484 / 233,126 (+20,642), exec 62,623 / 64,500 (+1,877:
+`mail-limits.js`, `SplitArgs`, the three attachment shapes), factory 156,955 / 192,892 (+35,937:
+`guards/post-office.js`, `guards/mail.js`, the voice guards). Of the session's +20,642: the mail
+modules 9,457, `guards/context.js` 2,985, the shell descriptions 2,097 (stubbed variants); by
+lane over all lines about 2,600 environments, 5,400 context window, 11,200 mail, 1,300 shared part
+API (keyword attribution, about +/- 1 KB). Remaining over 233,126: 6,400 / 3,500 / 21,500 / 0.
+Fit: neutral.
+
+### J-1428 2026-11-19 WX.1 the mail guard module and the session table import each other - decision
+Evidence: `eslint import/no-cycle` on `guards/session.js` <-> `guards/mail.js`; S9, S9b.
+Decision: `guards/mail.js` reads `Attachments`, `EdgeLabel`, `Reason`, `StagedText` from
+`guards/base.js`; `EdgeLabel`, `Attachment`, `Attachments` move there unchanged (the same entries
+answer through every table; snapshot digests unchanged); `SplitArgs` moves to `base.js` (the exec
+program checks `InspectOutcome`, S10 said "at the fold") and `mailTables().shapes.SplitArgs`
+answers that object. Two lines of M9's contract file change; M9's fold has less to move. Rejected:
+lazy reads of the session table from `mail.js` (an ESM cycle, refused by the lint rule).
+Fit: neutral.
+
+### J-1429 2026-11-19 WX.1 the one re-base of the pinned tests - decision
+Evidence: `6535027dc4`.
+Decision: `guard-fold-map.json` gains `added` (25 entries with reasons) and `vocabularyAdded`
+(70 keys, 33 methods); 35 entries enter `changed` with reasons (the widened guards and the shapes
+that carry them). `guards-split.test.js` admits an added entry only through the map;
+`gateway-vocabulary-tables.test.js` pins 258 + 70 keys and 141 + 33 methods from the same list,
+checks named files exist (builder-only modules, M8 G-4) and exempts `notBrowserSendable`
+modules (`guards/environments.js`, `image-guards.js`, D-M6-10) from contributing names. The m1b,
+m2, m5 interface tests leave WX.1's entries out through `_contract-tables.js` `seamLater`, as
+`m5Later` does for M5.
+Fit: neutral.
+
+### J-1430 2026-11-19 WX.1 the part API: admit, take, the restart hold, the context window - decision
+Evidence: `628a30884f`; m6 15.3, m8 T-1, T-2, m9 S2, S2b.
+Decision: `PartHooks.admit` / `RuntimeHooks.admit` (first refusal in table order, later parts not
+asked); `NextTurn.take`; `claimNext` asks sources under a `restart` hold and passes `take`;
+`makeRuntime({ contextWindow })`; `HookTurn.reading`, `ActiveTurn.startIndex`, `compactionAsk`
+optional (the context lane sets them). The rule that a part writes only `systemNote` and
+`compactionAsk` of `ActiveTurn` is written in the typedefs, not enforced by hardening (it would
+freeze the runner's own record). The claim-path `admit` calls (M6 R-2, R-3, R-4) are the
+environments lane's (the group's section gives WX.1 only S2 in `claimNext`). No send and no crank
+added to a turn that uses none of it.
+Fit: neutral.
+
+### J-1431 2026-11-19 WX.1 the part and tool orders as slotted tables - decision
+Evidence: `628a30884f`, `c7d4b0d9a3`.
+Decision: `PartName` names all nine parts and `Runtime` the four to come (optional), so the lanes'
+five-line R-1/S1/S-7 seams become four lines each, every one directly below its own
+`// slot: <name>` comment (import, `requiredParts`, `runtimeParts`, getter); the tool table has a
+slot per group (shell, `viewImage`, mail, requests, subagents). Lines of two lanes never touch, so
+git merges them without conflict. No part and no tool registered; `requiredParts` gains a part in
+the lane commit that adds it (a required part that does not exist yet would stop every session).
+Tests check the order as a subsequence, so a lane adding its line keeps them green.
+Fit: better.
+
+### J-1432 2026-11-19 WX.1 the shared call table and the object tools' exports - decision
+Evidence: `3d27f12cbd`; D-M6-17, D-M9-22, X-08, S-10c, L1.
+Decision: `guest/session/tools/call-table.js` `makeCallTable({ max = callWindow })`: `open`,
+`end`, `answer(opId, generation)`, `endTurn(turn, outcome, quiet)`, an `onEnd(outcome, quiet)`
+per call for a deadline's disarm; first ending wins, late answers ignored, bounded. Exec keeps its
+own one-at-a-time queue (not this table's shape). `readArgs` and `labelsOf` exported from
+`tools/objects.js`. No vat program imports the table yet (bundles unchanged by it).
+Fit: neutral.
+
+### J-1433 2026-11-19 WX.1 the session program limit is the harness's own everywhere - decision
+Evidence: `432bb9a0c3`; `guest/lib/limits.js:136`, `scripts/provision-steps.js:131`,
+`guest/factory/root.js:50` (`maxProgramBytes`, was `execSourceBytes` 262,144);
+`packages/thixotrope/src/core/evaluate-source.js:14` (`STAGING_FRAME_BYTES` bounds one message,
+never a total); J-0195 (400 k evaluated in one crank).
+Decision: no engine or core limit sits between 240,000 and 270,336, so the limit is 270,336 in
+`limits.js`, `provision-steps.js`, the program store (now the larger of the staged-source bound
+and the budget), README, `architecture.md` D-4, 11, 12.9; the unit test prints the base and
+checks every cap agrees and that the store keeps a program of the whole budget.
+Fit: neutral.
+
+### J-1434 2026-11-19 WX.1 reservations, core rows and journal ranges - decision
+Evidence: `f793f1c42e`, `212ee092ad`, `18ab149fd0`.
+Decision: `60-environments.js` and `70-voice.js` named in the step loader's header and its test;
+empty regression and perf lists `environments`, `context`, `mail`, `voice` (M11 H8/H9 asked for an
+`M11` key: by concept instead). CORE-CHANGES rows CC-090 (CC-091 merged), CC-092, CC-100, CC-101
+(spike step 2), CC-110 (C-10), CC-111, CC-112, CC-120, all requested, not built. Journal ranges:
+twenty a unit inside each milestone's hundred (M6 from J-0830 holds three before J-0900, M7's;
+M8 from J-1030 three before M9's J-1100; M9 from J-1130 three; M11 from J-1330 three), the rest in
+the overflow blocks J-12000..J-12799, review and fix blocks J-12800..J-12959; M11 asked 30 a
+unit, the PM set 20.
+Fit: neutral.
+
+### J-1435 2026-11-19 WX.1 verification: lanes, lint, shared integration files - measured
+Evidence: `4c4a011dac`; 6 shared slots.
+Reading: `corepack yarn test` 1,339 passed, 116 skipped, 67 s (three failures by design at
+`7bf6b5b38d`: none left). `lint:types` clean; `lint:eslint` 0 errors (the two errors the step-3
+tree carried, in `m1a-queue.bench.mjs` and `turn-runner-golden.test.js`, cleared in `4c4a011dac`,
+no assertion changed); `lint:duplicates` 1.86 % (524 of 28,221 lines, 26 clusters; ceiling
+2.05 %). `corepack yarn test:integration --jobs 5` m1a-slice, m1a-provision, m2-queue, m2-turns,
+m3-gateway, m5-objects, m5-snapshot and the browser m3-ui: all pass, 340 s wall, 1,538 s held
+(templates rebuilt in the files; m5o 52 s). Not run: perf, the other regression files.
+Fit: good: the shared changes moved nothing these files see.
+
+### J-1436 2026-11-19 WX.1 time record - process
+Evidence: first command 2026-11-19T01:23:07Z; last command logged with the WX.1 report.
+Reading: over 60 s: the unit and adapter lanes (66-67 s, six runs), the integration batch
+(340 s). Commits `5a27bf2fc9`..`4c4a011dac` and this journal commit. Nothing pushed; no change to
+`packages/thixotrope` or `rust/**`.
+Fit: neutral.
