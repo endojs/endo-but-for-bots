@@ -108,7 +108,13 @@ let chain = Promise.resolve();
 const sentence = text => {
   const index = loggedBefore();
   const pcm = toneOf(text);
-  logEntry({ type: 'sentence', pid: process.pid, index, text, bytes: pcm.length });
+  logEntry({
+    type: 'sentence',
+    pid: process.pid,
+    index,
+    text,
+    bytes: pcm.length,
+  });
   if (index === hangOn) {
     hung = true;
     process.stdin.pause();
@@ -120,7 +126,10 @@ const sentence = text => {
   chain = chain.then(
     () =>
       new Promise(resolve => {
-        setTimeout(() => process.stdout.write(pcm, () => resolve(undefined)), slowMs);
+        setTimeout(
+          () => process.stdout.write(pcm, () => resolve(undefined)),
+          slowMs,
+        );
       }),
   );
 };

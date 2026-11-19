@@ -25,11 +25,12 @@ import { join } from 'node:path';
 
 import { speechTextOf } from './audio-protocol.js';
 import { voiceFiles } from './engine-protocol.js';
+/* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
 import {
-  ttsDefaults,
   ttsRanges,
   voiceLimits,
 } from '../../../../guest/lib/voice-preferences.js';
+/* eslint-enable import/no-relative-packages */
 
 /** @import { CheckedTtsOptions, TtsCatalogue, TtsVoice } from './engine-types.js' */
 
@@ -79,7 +80,9 @@ const sampleRateOf = async (dir, id) => {
   try {
     const parsed = JSON.parse(await readFile(metadata, 'utf8'));
     const rate = parsed?.audio?.sample_rate;
-    return Number.isSafeInteger(rate) && rate > 0 ? rate : undefined;
+    return typeof rate === 'number' && Number.isSafeInteger(rate) && rate > 0
+      ? rate
+      : undefined;
   } catch {
     return undefined;
   }
@@ -133,7 +136,7 @@ harden(readVoiceCatalogue);
  */
 export const checkTtsOptions = (options, catalogue) => {
   const { defaults } = catalogue;
-  /** @param {keyof typeof ttsDefaults} name */
+  /** @param {keyof CheckedTtsOptions} name */
   const given = name =>
     options[name] === undefined ? defaults[name] : options[name];
   /** @type {Record<string, number>} */

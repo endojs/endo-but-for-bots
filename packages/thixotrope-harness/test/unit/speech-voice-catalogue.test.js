@@ -18,6 +18,7 @@ import {
 } from '../../resources/agent-host/impl/speech/voice-catalogue.js';
 import { speechTextOf } from '../../resources/agent-host/impl/speech/audio-protocol.js';
 import { voiceFiles } from '../../resources/agent-host/impl/speech/engine-protocol.js';
+/* eslint-disable-next-line import/no-relative-packages -- the guest tree is its own private package */
 import { ttsDefaults } from '../../guest/lib/voice-preferences.js';
 
 const VOICES = fileURLToPath(new URL('../fixtures/voices', import.meta.url));
@@ -27,8 +28,8 @@ test('usable voices are listed with their rates; broken ones are skipped', async
   t.deepEqual(
     voices.map(({ id, sampleRate }) => [id, sampleRate]),
     [
-      ['en_GB-other-low', 16000],
-      ['en_US-test-medium', 22050],
+      ['en_GB-other-low', 16_000],
+      ['en_US-test-medium', 22_050],
     ],
   );
   t.is(skipped, 2, 'the unparsable and the rate-less voice');
@@ -37,7 +38,10 @@ test('usable voices are listed with their rates; broken ones are skipped', async
 });
 
 test('display names follow Endo', t => {
-  t.is(voiceDisplayName('en_GB-alan-low'), 'English (UK / Europe) — alan (low)');
+  t.is(
+    voiceDisplayName('en_GB-alan-low'),
+    'English (UK / Europe) — alan (low)',
+  );
   t.is(voiceDisplayName('en_AU-some_one-x_low'), 'en AU — some one (x_low)');
   t.is(voiceDisplayName('de_DE-thorsten-high'), 'de DE thorsten high');
 });
@@ -57,12 +61,18 @@ test('a model without metadata, oversized metadata and a zero rate are skipped; 
     `{"audio":{"sample_rate":22050},"pad":"${'x'.repeat(voiceFiles.metadataBytes)}"}`,
   );
   writeFileSync(join(dir, 'empty-rate.onnx'), '');
-  writeFileSync(join(dir, 'empty-rate.onnx.json'), '{"audio":{"sample_rate":0}}');
+  writeFileSync(
+    join(dir, 'empty-rate.onnx.json'),
+    '{"audio":{"sample_rate":0}}',
+  );
   writeFileSync(join(dir, 'half.onnx.json'), '{"audio":{"sample_rate":1}}');
   for (let i = 0; i < voiceFiles.maxVoices + 3; i += 1) {
     const id = `v${String(i).padStart(3, '0')}`;
     writeFileSync(join(dir, `${id}.onnx`), '');
-    writeFileSync(join(dir, `${id}.onnx.json`), '{"audio":{"sample_rate":8000}}');
+    writeFileSync(
+      join(dir, `${id}.onnx.json`),
+      '{"audio":{"sample_rate":8000}}',
+    );
   }
   const { voices, skipped } = await readVoiceCatalogue(dir);
   t.is(voices.length, voiceFiles.maxVoices);
@@ -71,7 +81,7 @@ test('a model without metadata, oversized metadata and a zero rate are skipped; 
 });
 
 const catalogue = harden({
-  voices: harden([{ id: 'en_US-test-medium', name: 'x', sampleRate: 22050 }]),
+  voices: harden([{ id: 'en_US-test-medium', name: 'x', sampleRate: 22_050 }]),
   defaults: harden({ ...ttsDefaults, voice: 'en_US-test-medium' }),
 });
 
