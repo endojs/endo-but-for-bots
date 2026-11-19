@@ -9,6 +9,10 @@
 // remotable).
 import '../unit/_m1a-prelude.js';
 
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
@@ -21,6 +25,9 @@ import { interfaces, textOf } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { makeContent } from '../../resources/agent-host/impl/content.js';
+import { makeTimers } from '../../resources/agent-host/impl/timers.js';
+import { makeRunner } from '../../resources/environments/impl/runner.js';
+import { makeFakeRuntime } from '../../resources/environments/impl/runtime-fake.js';
 import {
   argsReadBytes,
   makeShellPort,
@@ -71,7 +78,7 @@ const raw = (stdout, rest = {}) => {
  * A stand-in runner that records its calls and answers as told.
  * @param {(argv: string[], options: { timeoutMs: number }) => any} [answer]
  */
-const makeRunner = (answer = () => raw('ok\n')) => {
+const makeStandInRunner = (answer = () => raw('ok\n')) => {
   /** @type {{ key: string, argv: string[], options: { timeoutMs: number } }[]} */
   const calls = [];
   const runner = {
@@ -101,7 +108,7 @@ const makeRunner = (answer = () => raw('ok\n')) => {
 const setup = (t, { answer, isWithdrawn, defaultTimeoutMs } = {}) => {
   const blobs = makeTestBlobs();
   t.teardown(blobs.cleanup);
-  const { runner, calls } = makeRunner(answer);
+  const { runner, calls } = makeStandInRunner(answer);
   const port = makeShellPort({
     key: 'e1',
     runner,
@@ -393,6 +400,12 @@ test('a runtime failure is a bounded reason without the state path; a fixed text
     ),
   );
   t.true(String(failed.text).length < 1200);
+  // The runner words its own failures: passed on, not wrapped twice.
+  message = environmentTextOf.runtimeFailed('container start failed');
+  t.deepEqual(await call(json({ command: 'true', args: [] })), {
+    status: 'failed',
+    text: message,
+  });
   message = environmentTexts.imageRefused;
   t.deepEqual(await call(json({ command: 'true', args: [] })), {
     status: 'failed',
@@ -489,5 +502,99 @@ test('blob access: stageText writes pieces of at most blobPieceBytes; readStaged
   t.is(await readStaged(staged, content, 100_000), text);
   await t.throwsAsync(() => readStaged(staged, content, 50_000), {
     message: /staged text too large/,
+  });
+});
+
+test('with the real runner over the fake runtime: argv, output budget and staging end to end', async t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'thix-shell-port-')));
+  t.teardown(() => rmSync(root, { recursive: true, force: true }));
+  const sessions = join(root, 'environments', 'sessions');
+  /** @param {string} key */
+  const dirsOf = key =>
+    harden({
+      workspace: join(sessions, key, 'workspace'),
+      home: join(sessions, key, 'home'),
+      run: join(sessions, key, 'run'),
+    });
+  const layout = harden({
+    tag: () => 'porttag',
+    dirsOf,
+    /** @param {string} key */
+    ensureWorkspace: async key => {
+      mkdirSync(dirsOf(key).workspace, { recursive: true });
+    },
+  });
+  const settings = harden({ runtime: 'fake', allowedCommands: allowed });
+  const runner = makeRunner({
+    runtime: makeFakeRuntime(),
+    settings,
+    layout,
+    timers: makeTimers(),
+  });
+  t.teardown(() => runner.release('e1').catch(() => {}));
+  const blobs = makeTestBlobs();
+  t.teardown(blobs.cleanup);
+  const port = makeShellPort({
+    key: 'e1',
+    runner,
+    settings,
+    redact: text => text.split(root).join('/workspace'),
+  });
+  const request = (/** @type {string} */ args) =>
+    harden({
+      opId: 'op',
+      args,
+      writers: blobs.store.writers,
+      content: makeContent({ store: blobs.store }),
+    });
+  const small = await E(port).runCommand(
+    request(json({ command: 'printf', args: ['%s|%s', 'a b', '$HOME'] })),
+  );
+  t.is(small.status, 'ok');
+  t.deepEqual(JSON.parse(small.text), {
+    stdout: 'a b|$HOME',
+    stderr: '',
+    exitCode: 0,
+    signal: null,
+    truncated: false,
+  });
+  const exit = await E(port).runCommand(
+    request(json({ command: 'sh', args: ['-c', 'echo oops >&2; exit 4'] })),
+  );
+  t.deepEqual(JSON.parse(exit.text), {
+    stdout: '',
+    stderr: 'oops\n',
+    exitCode: 4,
+    signal: null,
+    truncated: false,
+  });
+  // About 1 MiB on each stream: kept to 64 KiB each, then cut to the
+  // budget and staged.
+  const big = await E(port).runCommand(
+    request(
+      json({
+        command: 'sh',
+        args: [
+          '-c',
+          'i=0; while [ $i -lt 16 ]; do head -c 65536 /dev/zero | tr "\\0" x; head -c 65536 /dev/zero | tr "\\0" y >&2; i=$((i+1)); done',
+        ],
+      }),
+    ),
+  );
+  t.is(big.status, 'ok');
+  const text = await blobs.store.read(big.text.blob);
+  t.true(text.length <= limits.toolOutputUnits);
+  const parsed = JSON.parse(text);
+  t.true(parsed.truncated);
+  t.true(parsed.stdout.endsWith(textOf.truncationMarker(65_536)));
+  t.true(parsed.stderr.endsWith(textOf.truncationMarker(65_536)));
+  const timedOut = await E(port).runCommand(
+    request(
+      json({ command: 'sleep', args: ['5'], options: { timeoutMs: 200 } }),
+    ),
+  );
+  t.deepEqual(timedOut, {
+    status: 'failed',
+    text: environmentTextOf.timedOut(200),
   });
 });

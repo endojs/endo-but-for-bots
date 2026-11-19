@@ -58,6 +58,15 @@ const reasonUnits = 1024;
 
 /** Runner rejections whose message is already a fixed environments text. */
 const fixedTexts = new Set(Object.values(environmentTexts));
+/**
+ * Runner rejections already in a parameterised environments text: the
+ * runner words its own failures (`runtimeFailed`, `notAllowed`), so the
+ * port passes them on instead of wrapping them twice.
+ */
+const fixedPrefixes = harden([
+  environmentTextOf.runtimeFailed(''),
+  environmentTextOf.notAllowed('').split('""')[0],
+]);
 
 /**
  * @typedef {object} PortRunner the runner as the port uses it (`runner.js`)
@@ -157,6 +166,9 @@ export const makeShellPort = ({
   const runtimeFailure = error => {
     const message = messageOf(error);
     if (fixedTexts.has(message)) return message;
+    if (fixedPrefixes.some(prefix => message.startsWith(prefix))) {
+      return previewText(redact(message), reasonUnits);
+    }
     return environmentTextOf.runtimeFailed(
       previewText(redact(message), reasonUnits),
     );
