@@ -42,7 +42,8 @@ import { messageBytes, utf8Bytes } from '../lib/bounded.js';
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { RowTable } from './rows.js' */
 /** @import { PostOffice } from './post-office.js' */
-const { E, makeExo, makePromiseKit } = /** @type {GuestGlobals} */ (globalThis);
+const { E, defineExoClass, makeExo, makePromiseKit } =
+  /** @type {GuestGlobals} */ (globalThis);
 
 const ML = limits;
 /** Bytes kept free in an inbox page for the page record and its framing. */
@@ -144,6 +145,52 @@ export const makeOperatorMail = ({ postOffice, admin, rows }) => {
     }
   };
 
+  /** @type {((entry: InboxEntry) => any) | undefined} */
+  let makeMessageInstance;
+
+  /** @param {InboxEntry} record */
+  const makeMessage = record => {
+    makeMessageInstance ??= defineExoClass(
+      'OperatorMessage',
+      I.OperatorMessage,
+      /** @param {InboxEntry} entry */
+      entry => ({ entry }),
+      {
+        describe() {
+          return viewOf(this.state.entry);
+        },
+        /** @param {string} edge */
+        take(edge) {
+          const { entry } = this.state;
+          const found = entry.attachments.find(({ label }) => label === edge);
+          if (found === undefined) throw Error(postOfficeTexts.noAttachment);
+          return found.value;
+        },
+        /** @param {{ body: string, attachments: readonly any[] }} reply */
+        reply({ body, attachments }) {
+          const { entry } = this.state;
+          if (entry.postmark === undefined) {
+            throw Error(postOfficeTexts.mailFraud);
+          }
+          return postOffice.post({
+            from: { operator: true },
+            draft: harden({
+              to: [entry.from],
+              body,
+              attachments,
+              inReplyTo: entry.postmark,
+            }),
+          });
+        },
+        dismiss() {
+          dismiss(this.state.entry);
+          return undefined;
+        },
+      },
+    );
+    return makeMessageInstance(record);
+  };
+
   /**
    * Record a message in the inbox, or refuse it when the inbox is full.
    * @param {Omit<InboxEntry, 'number' | 'message'>} fields
@@ -157,34 +204,7 @@ export const makeOperatorMail = ({ postOffice, admin, rows }) => {
     lastNumber += 1;
     /** @type {InboxEntry} */
     const entry = { ...fields, number: lastNumber };
-    entry.message = makeExo('OperatorMessage', I.OperatorMessage, {
-      describe: () => viewOf(entry),
-      /** @param {string} edge */
-      take: edge => {
-        const found = entry.attachments.find(({ label }) => label === edge);
-        if (found === undefined) throw Error(postOfficeTexts.noAttachment);
-        return found.value;
-      },
-      /** @param {{ body: string, attachments: readonly any[] }} reply */
-      reply: ({ body, attachments }) => {
-        if (entry.postmark === undefined) {
-          throw Error(postOfficeTexts.mailFraud);
-        }
-        return postOffice.post({
-          from: { operator: true },
-          draft: harden({
-            to: [entry.from],
-            body,
-            attachments,
-            inReplyTo: entry.postmark,
-          }),
-        });
-      },
-      dismiss: () => {
-        dismiss(entry);
-        return undefined;
-      },
-    });
+    entry.message = makeMessage(entry);
     inbox.set(entry.number, entry);
     rev += 1;
     return harden({ number: entry.number });
