@@ -405,68 +405,55 @@ run(
   },
 );
 
-// Acceptance 22 through the export script: known gap, kept as a failing
-// test so it turns red the day it passes. `scripts/export.mjs` (M2's, not
-// this milestone's) writes a fixed set of head fields and drops the head
-// page's `execution` (seam X-E), and `importState` neither passes it back in
-// the head chunk nor carries the preset into `importSession`, so the
-// imported session has no environment and is running. The crank-level
-// export and import of the execution state passes
-// (`test/unit/session-environment-export.test.js`).
-const runFailing = integrationEnabled ? test.serial.failing : test.skip;
-
-runFailing(
-  '22: a stopped session exported and imported stays stopped',
-  async t => {
-    t.timeout(5 * 60_000);
-    const template = await environmentsTemplate();
-    const state = await startFromTemplate(template, { t });
-    const slice = await makeSlice(state);
-    const made = await slice.makeBackend(script);
-    await E(slice.harness).configure(harden({ backends: [made.backend] }));
-    const held = await startEnvironmentSession(
-      slice,
-      made.backend,
-      'development',
-      'held',
-    );
-    await E(held).emergencyStop();
-    const file = path.join(tmpRoot, `${shortName('e')}.jsonl`);
-    t.teardown(() => rm(file, { force: true }));
-    await exportState({ client: state.client, file });
-    const imported = await importState({
-      client: state.client,
-      file,
-      backends: [made.backend],
-    });
-    const importedHeld = await (async () => {
-      for (const one of imported.sessions) {
-        // eslint-disable-next-line no-await-in-loop
-        if ((await E(one).getInfo()).title === 'held') return one;
-      }
-      return undefined;
-    })();
-    t.truthy(importedHeld, 'the stopped session is imported');
-    t.deepEqual(
-      await E(importedHeld).getExecutionState(),
-      { state: 'stopped', supported: true },
-      'the imported session is stopped',
-    );
-    t.is(
-      (await E(importedHeld).listPending()).hold?.reason,
-      'stopped',
-      'its queue is held stopped',
-    );
-    t.deepEqual(
-      await E(importedHeld).resume(),
-      { state: 'running', supported: true },
-      'the imported session resumes',
-    );
-    const importedTurn = await turnsOf(slice)(importedHeld, 'after resume');
-    t.is(
-      stdoutOf(importedTurn.results[0].result),
-      'resumed',
-      "the imported session's new environment runs a command",
-    );
-  },
-);
+run('22: a stopped session exported and imported stays stopped', async t => {
+  t.timeout(5 * 60_000);
+  const template = await environmentsTemplate();
+  const state = await startFromTemplate(template, { t });
+  const slice = await makeSlice(state);
+  const made = await slice.makeBackend(script);
+  await E(slice.harness).configure(harden({ backends: [made.backend] }));
+  const held = await startEnvironmentSession(
+    slice,
+    made.backend,
+    'development',
+    'held',
+  );
+  await E(held).emergencyStop();
+  const file = path.join(tmpRoot, `${shortName('e')}.jsonl`);
+  t.teardown(() => rm(file, { force: true }));
+  await exportState({ client: state.client, file });
+  const imported = await importState({
+    client: state.client,
+    file,
+    backends: [made.backend],
+  });
+  const importedHeld = await (async () => {
+    for (const one of imported.sessions) {
+      // eslint-disable-next-line no-await-in-loop
+      if ((await E(one).getInfo()).title === 'held') return one;
+    }
+    return undefined;
+  })();
+  t.truthy(importedHeld, 'the stopped session is imported');
+  t.deepEqual(
+    await E(importedHeld).getExecutionState(),
+    { state: 'stopped', supported: true },
+    'the imported session is stopped',
+  );
+  t.is(
+    (await E(importedHeld).listPending()).hold?.reason,
+    'stopped',
+    'its queue is held stopped',
+  );
+  t.deepEqual(
+    await E(importedHeld).resume(),
+    { state: 'running', supported: true },
+    'the imported session resumes',
+  );
+  const importedTurn = await turnsOf(slice)(importedHeld, 'after resume');
+  t.is(
+    stdoutOf(importedTurn.results[0].result),
+    'resumed',
+    "the imported session's new environment runs a command",
+  );
+});
