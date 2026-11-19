@@ -17872,7 +17872,7 @@ M5's thirteen for 1,536 and M3's six for 930.
 The normal M3 browser history fixture has 300 turns. A previous fresh
 build through the template API took 207.5 s. The fixture's key covers
 the guest, adapter, archive and import inputs. The combined candidate at
-ea857fc639 with the pinned worker computes key 51c1ca349e for this
-fixture; stale pre-linker states have different keys. A job using the
+ea857fc639 uses the 50,000,000 crank budget from `config/defaults.js`
+when resolving this fixture. A job using the
 normal template API and shared run lock was queued beside the
 functional batch. Each fixture key has its own build lock.
