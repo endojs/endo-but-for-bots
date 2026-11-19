@@ -14984,3 +14984,65 @@ Reading: no command over 60 s (the regression set of 16 blob and agent-host file
 wall in one `yarn test` call); no supervisor, browser or run lock used; nothing pushed; no
 change to `packages/thixotrope` or `rust/**`.
 Fit: neutral.
+
+### J-1130 2026-11-19 W9.1 the inbox part and its mail texts - built
+Evidence: `e9fc06289b`; `guest/session/inbox.js` (`inboxPart`), `guest/lib/mail-text.js`
+(`listingText`, `mailTurnInput`, `mailTurnNote`, `bodyText`); tests
+`test/unit/session-inbox.test.js` (16), `test/unit/mail-text.test.js` (4), helper
+`test/unit/_inbox-packages.js` (a `packages` part with seam S3's table, until the session wiring
+adds it to `packages.js`).
+Reading: contract 3.2 as written: one `Map<number, InboxMessage>` in number order, bound
+`inboxMessages` (the 257th delivery refused with `inboxFull`, the refusal remembered), the
+64-outcome ring by `seq` for re-drives, `waiting` for package/request/form and `kept` for
+reply/value, `nextTurn` offering the oldest waiting message whose `take` marks it `handling`,
+`onClaim` opening the package under the message's own number with `mailTextOf.packageNote` as the
+turn's `systemNote`, `onSettle` posting the reply (`inReplyTo` the postmark; the final text, an
+inline one cut to `inlineBytes`, or `textOf.errorResult(error or status)`), rejecting an unanswered
+request of a completed turn with `unansweredRequest`, keeping a failed request or an unsubmitted
+form. Precisions the contract left open: (1) at most one message is `handling` (one turn is
+current), kept as the part's `handling` variable, so `onClaim` and `onSettle` find it without a
+scan; a settle of another turn leaves the inbox alone. (2) `cancel(postmark)` marks a handling
+message `cancelled` so its settle removes it rather than keeping a cancelled request; a waiting or
+kept message is removed (`dismissed`); imported messages never match. (3) `settleRequest` removes
+a kept message at once and a handling one at its settle. (4) `exportPage(from)` takes `from` as a
+message number (`m<number>`), so a dismissal between two pages does not shift the cursor; its last
+page's `next` is `e`. (5) `importPage` refuses a session that has had a delivery, a page over
+`frameBytes`, an unknown type or state, more than 256 messages; a page sent again is applied
+without effect. (6) The counter resumes above the highest imported number through
+`packages.table.reserve(floor)` (S3 with an optional `above` argument).
+Fit: good. A part closing over plain records suits orthogonal persistence: the inbox needs no
+record kind, its state replays with the vat, and the export is a data copy of the same records.
+
+### J-1131 2026-11-19 W9.1 the settle's final text - finding
+Evidence: `guest/session/turn.js` `settle` and `hookTurn` (`6493d955c7`):
+`hookTurn(active)` is `{ active, round, append, emit }`; `TurnSettled.final` is built from the
+`settle(active, { status, error, final })` argument and not kept on `ActiveTurn` or `TurnInfo`
+(`info.error` and `active.state` are).
+Reading: contract 3.2's settle rule ("body `TurnSettled.final`") cannot be met by a part as the
+runner is built: no hook can read the final text. The inbox reads `HookTurn.final` (undefined
+today, so a completed mail turn would reply with an empty body). Needed (PM, a part-API line WX.1
+owns): `hooks.onSettle(hookTurn(active))` passes the settle's `final` on the HookTurn (or
+`ActiveTurn` gains `final`, set by `settle` before the hooks run), with the typedef line in
+`runtime-parts.js`. Tested at the unit level with a HookTurn carrying `final`.
+Fit: poor for this seam, cheap to fix: one field on a frozen record, no new delivery.
+
+### J-1132 2026-11-19 W9.1 sizes and timings - measured
+Evidence: `e9fc06289b`; `node scripts/bundle-guest.mjs session`, and the same over a scratch
+copy of `guest/` with the four `runtime-parts.js` slot lines for `inbox` added (S1, not
+committed: the wiring's); Node probe over `perf/_window.mjs` `runWindow`, PERF_WINDOW_SCALE 0.5
+(5 s windows), the real parts plus the inbox, fakes for the packages table.
+Reading: session program 233,126 (base, unchanged by this commit: the part is not registered) ->
+244,587 with the part registered: +11,461 bytes of M9's 21,500 (inbox.js 7,199 and mail-text.js
+1,098 comment-stripped, the rest the bundle's per-module wrapping and the getter). Above the
+contract's estimate (6,000 + 1,500); the remaining 10,039 must hold the tools, the subagents part
+and the wiring. `mail.inboxCrank.node` (deliver a 32-attachment package into 255 kept messages,
+claim, settle): median 0.013 ms, p95 0.016 ms (314,649 samples, 62,930/s); `mail.listing.node`
+(32 rows): median 0.006 ms. Unit files: 20 tests in about 2 s.
+Fit: the inbox's own compute is negligible; the crank's cost in a vat is the 32 handles crossing
+(7-15 ms each, ARCH 6) and the claim's sends, not measured here (W9.10's `mail.inboxCrank`).
+
+### J-1133 2026-11-19 W9.1 time record - process
+Evidence: first command 2026-11-19T02:23:32Z; last 2026-11-19T02:35Z.
+Reading: no command over 60 s; no supervisor, browser or run lock used; nothing pushed; no
+change to `packages/thixotrope` or `rust/**`; no shared file edited.
+Fit: neutral.
