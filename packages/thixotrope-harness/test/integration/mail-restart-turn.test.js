@@ -30,7 +30,7 @@ run(
     const { postmark } = receipt.results[0];
     t.true(Number.isSafeInteger(postmark));
     await waitFor(
-      () => made.log().length > 0,
+      () => made.log().some(line => line.kind === 'request'),
       30_000,
       'the recipient provider round',
     );
