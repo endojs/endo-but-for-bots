@@ -2065,7 +2065,7 @@ W11.8 after WX.1; journal ranges PM assigns, 30 or more each)
 | W11.6 client audio | `AH/speech/capture-worklet.js`, `UI/src/voice/{capture,endpointing,audio-socket,playback,wake-lock}.js` | capture, endpointing, socket client, gapless playback, wake lock | `voice-endpointing`, `voice-audio-socket`, `voice-playback` (unit) | WX.1 |
 | W11.7 factory `Voice` | `guest/factory/voice.js`, `scripts/provision-steps/70-voice.js`; seams H2, H2b | preferences, launch claims, `HarnessRoot.configureSpeech`, the `voice` preset pin | `factory-voice` (unit), `voice-session`, `voice-restart` (integration) | WX.1 |
 | W11.8 voice UI | `UI/src/voice/{feature,state,VoiceControls,VoicePanel,ReplayButton}.js`, `UI/src/voice/voice.css`; seam H10 | the voice feature, settings, slots, launch link | `voice-state` (unit); browser cases in W11.9 | WX.1; W11.6 signatures |
-| W11.9 integration (last) | `test/integration/{voice-speak,voice-provider}.test.js`, `test/browser/voice-ui.mjs`, `test/fixtures/voice-clip.mjs`, `perf/{voice,voice-session}.perf.mjs`; seams H8, H9, H12 | wiring, acceptance, perf; session and exec bundles byte-identical | the files named; M11 regression list under 20 min | W11.1-W11.8 |
+| W11.9 integration (last) | `test/integration/{voice-speak,voice-provider}.test.js`, `test/browser/voice-ui.test.mjs`, `test/fixtures/voice-clip.mjs`, `perf/{voice,voice-session}.perf.mjs`; seams H8, H9, H12 | wiring, acceptance, perf; session and exec bundles byte-identical | the files named; M11 regression list under 20 min | W11.1-W11.8 |
 | M11 fold (after the merge) | contract section 17 F-1..F-11 | documents, plain exports in `speech-guards.js`, no in-test engines; F-7 after M6 (or WX.F) | greps and tests of section 17 | the M11 merge |
 
 **Acceptance** (fakes everywhere; owner runs `[real-moonshine]` 1, 2; `[real-piper]` 5;
@@ -2076,19 +2076,19 @@ W11.8 after WX.1; journal ranges PM assigns, 30 or more each)
 3. Code blocks and markup not spoken; abbreviations and lists do not split; short chunks merge. `speech-text.test.js`.
 4. `speak` plays finished messages then live deltas; a tool call breaks the sentence; the last finished turn replays; older answers `turnNotLive`. `speech-turn-view.test.js`, `voice-speak.test.js`.
 5. Out-of-range or non-finite speed, unknown voice: R5-41 texts, no stream; broken voices skipped. `speech-tts-process.test.js`, `speech-voice-catalogue.test.js`, `speech-host.test.js`.
-6. Endpointing: calibration, 400 ms burst, junk, 1,200 ms silence then 800 ms grace, speech during grace. `voice-endpointing.test.js`, `voice-ui.mjs`.
-7. Barge-in stops audio and synthesis; the turn completes; the new utterance queues. `voice-ui.mjs`, `voice-speak.test.js`.
-8. Preferences shared between connections; a stale shortcut revision refused; Talk uses the chosen preset. `voice-session.test.js`, `voice-ui.mjs`.
+6. Endpointing: calibration, 400 ms burst, junk, 1,200 ms silence then 800 ms grace, speech during grace. `voice-endpointing.test.js`, `voice-ui.test.mjs`.
+7. Barge-in stops audio and synthesis; the turn completes; the new utterance queues. `voice-ui.test.mjs`, `voice-speak.test.js`.
+8. Preferences shared between connections; a stale shortcut revision refused; Talk uses the chosen preset. `voice-session.test.js`, `voice-ui.test.mjs`.
 9. Only voice-started sessions get the spoken introduction. `voice-session.test.js`.
 10. Timeouts: engine, `sttIdle`, a hanging TTS sentence skipped, no HELLO, token expiry. `speech-timeouts.test.js`.
-11. Replay of a finished turn (inline and staged pieces); the level meter moves. `speech-audio-route.test.js`, `voice-ui.mjs`.
-12. Auto-speak on the sending page only, also for a queued message. `voice-ui.mjs`.
+11. Replay of a finished turn (inline and staged pieces); the level meter moves. `speech-audio-route.test.js`, `voice-ui.test.mjs`.
+12. Auto-speak on the sending page only, also for a queued message. `voice-ui.test.mjs`.
 13. Launch claims: one session per invocation id, 32 kept, survives a restart. `voice-session.test.js`, `voice-restart.test.js`.
 14. G-11: a pinned model missing from the catalogue falls back with `voiceModelUnavailable`. `voice-session.test.js`.
 15. The provider key reaches the fake server as a bearer and never the state or a log; 401 aborts. `voice-provider.test.js`.
 16. Restart kill points K11-1..K11-5 as the contract's section 8 states. `voice-restart.test.js`.
 17. Security: token, HELLO and Origin checks; no `Voice`, `Speech` or port reachable from a session vat. `speech-audio-route.test.js`, `voice-session.test.js`.
-18. The wake lock is held while mic, speech or turn are active. `voice-ui.mjs`.
+18. The wake lock is held while mic, speech or turn are active. `voice-ui.test.mjs`.
 19. No `configureSpeech` on `Voice`; `HarnessRoot.configureSpeech` changes the settings revision. `factory-voice.test.js`, `voice-session.test.js`.
 20. Only the speech extension's context has `readGrant`. `gateway-speech-extension.test.js`.
 21. After a clean restart the engine starts at the first `openAudio` with the earlier settings. `voice-restart.test.js`.

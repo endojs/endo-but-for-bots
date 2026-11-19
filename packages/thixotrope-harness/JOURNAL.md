@@ -15434,3 +15434,11 @@ three programs at a88083f75e with the fold gives session 233,126 bytes
 J-12661, which also records install.factory at 7,833 ms. Duplicate lines
 measure 1.61% against the 2.05% ceiling. The feature-context migration awaits
 step 5(a), M13 owns export/import, and WX.F owns the M6 built-in preset rerun.
+
+### J-12721 2026-11-19 M11 fold — gateway vocabulary and UI state
+
+The unmodified WX.1 vocabulary pin and the voice UI state suite passed together
+(24 tests). The browser acceptance references now name the collected file,
+`test/browser/voice-ui.test.mjs`. The browser UI build collected nine features
+and produced digest 9cfe83b9c353. The original source paths in the historical
+reuse survey identify upstream artifacts and remain available for provenance.

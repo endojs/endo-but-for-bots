@@ -462,7 +462,9 @@ adapter loads ES modules synchronously with `require`, so no top-level await) an
 - `csp: { directive: [sources] }`: added, never removed.
 
 The `GatewayContext` an extension receives (`contract-m3.js`): `live`, `composer`, `content`,
-`history()`, `whenAttached(callback)`, `secretWriter()`, `stateDir`, `log` and `operator()`. The speech extension also receives `readGrant(grant)` through the agent host’s per-extension powers table, keyed by extension object identity. **As built (XA,
+`history()`, `whenAttached(callback)`, `secretWriter()`, `stateDir`, `log` and `operator()`. The speech
+extension also receives `readGrant(grant)` through the agent host’s per-extension powers table,
+keyed by extension object identity. **As built (XA,
 J-10005; X-FIX, J-10054):** `secretWriter()` answers the gateway's own in-process writer
 (`GatewaySecretWriter`, A-11), one per incarnation, made by `GW/index.js` over the secrets
 module's `replaceLocal` and `publicKeyLocal`; it is not the hub's `SecretWriter` that
