@@ -17676,3 +17676,12 @@ blobs again produced the same SHA-256 digests. The final canonical lint run at
 against 1.77%. Changes after that verification update the results and documentation.
 The per-file regression and performance times are in `designs/process.md`. J-1451
 records the older core file whose updated observation lacks a standalone pass.
+
+### J-1485 2026-11-19 M9 post-office envelope validation
+
+The factory formerly cloned, hardened and measured the full envelope twice on
+each turn-starting post. It now reuses the validated envelope for every
+recipient. Only a session receiving a shortened body needs its own envelope
+and second validation. The operator still receives the full original.
+The post-office and subagent-tree suites passed all 39 cases at b669cf1f8f.
+The change is in the factory and does not reduce the session allocation.
