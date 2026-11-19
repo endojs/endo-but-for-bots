@@ -507,6 +507,7 @@ Endpoint         holdTurn(turnHandle) -> settles at turn end (lease, D-5) ; rele
                  blobWriter() -> BlobWriter   // for the exec vat's large results (section 6)
 TurnSink         (session-vat exo passed in startRound) dispatching(round) ; progress({ partial: Blob, tail })
                  roundFinal(RoundResult) ; roundFailed(reason) ; deadline(opId)
+                 compacted(result) -> reply with the accepted context boundary
 ContextSource    (session-vat exo passed in startRound) page(cursor) -> { records, next }   // records only, no projection
 SecretsAdmin     list() ; create({ label, description }) -> Secret ; openWriter() -> SecretWriter (adapter-local)
 Secret           describe() ; makeReadGrant() -> ReadGrant ; revoke() ; delete() ; audit(limit)
@@ -517,6 +518,11 @@ Blob             describe() -> { bytes, preview }   // manager-minted handle; co
 BlobWriter       append(piece) -> undefined ; close() -> Blob             // adapter-local, answered per piece
 ChannelPublisher publish({ rev, events }) ; SessionHostFacet.liveChannel() -> LivePublisher (same shape)
 ```
+
+The `viewImage` tool in `TurnPorts.tools` accepts an object already held by the session.
+For a workspace path, the environments manager forwards `openImage(path)` and returns an
+adapter-side source. The agent-host adapter reads the pages and stages the provider image
+envelope as a session-owned Blob. The session records its handle and preview.
 
 **D-6. Secrets never enter a vat or the hub in clear.** The secret store (values, generation,
 revoked flag, audit) is the adapter's encrypted file; the wrapping key is a separate 0600 file
@@ -843,10 +849,15 @@ holds its Backend presences strongly (bounded) because a presence collected betw
 back as a new object (J-9403). Since step 3 the providers sit under one shell and one kind table
 (section 4.9).
 
-Compaction (P-36, M8): the vat decides from the previous usage reading (R4-34) and records
-`CompactionStarted` before a tool-less summary round; the adapter plans the retained tail on its cache
-and returns the summary as an ordinary round result; the vat records `Compaction`. A restart during
-compaction is an ordinary outcome-unknown round. Unknown outcomes stay in the retained context (R4-35).
+After usage reaches 70% of the known context window, the session records
+`compaction-started` before the next provider round. The adapter plans a cut on its cached
+projection, keeps unresolved tool outcomes, and requests a summary with no tools.
+The session's `TurnSink.compacted` validates the cut. On success it records `compaction`,
+advances the context epoch, charges the summary usage, and starts the real round with the
+summary and retained tail. On refusal it records `compaction-skipped` and keeps the previous
+context. A restart during a dispatched summary leaves its outcome unknown.
+The archive uses the persisted epoch and boundary to rebuild the same projection.
+
 
 ### 4.6 OCapN GC frames (core change CORE-9, C-17)
 
@@ -1246,6 +1257,8 @@ too. The other rows below are design settings, kept in the module that enforces 
 | Tool calls per round / in flight | 64 / 16 | | none - open decision 11 |
 | Live publish batch from a vat | 64 events and `frameBytes` | | n/a |
 | History page | 32 turns and `frameBytes` | | 32 turns |
+| Context threshold and summary | 70% of the window, 65,536 bytes per summary | `contextLimits` | R4-34 to R4-36 |
+| Image input | 2 MiB, up to 20 native images in one provider request | `imageLimits` | R4-39 |
 | Context page to adapter, session list page | `contextPageBytes` (98,304) and 512 records, to the adapter only (M1b decision 16.4); 50 rows | | n/a |
 | Exec deadline | 120 s; compute bound = crank budget | | none (G-18; R4-48) - open decision 10 |
 | Turn wall-clock deadline | off (configurable) | | none (R4-48; G-06) |

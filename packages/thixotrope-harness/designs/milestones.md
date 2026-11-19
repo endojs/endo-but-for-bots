@@ -1540,8 +1540,8 @@ measured at `ea4e2c1c11`: **environments (M6) 9,000, context window (M8) 9,000, 
 `mail-limits.js`, the part API), counted against the caps. By line (a keyword attribution of the
 bundle diff, about +/- 1 KB): environments about 2,600, context window about 5,400, mail about
 11,200, the shared part API about 1,300. So each lane may add over the base after WX.1 (233,126):
-**environments 6,400, context window 3,500, mail and subagents 21,500, voice 0** (rounded down;
-spare about 5,800 for the group fold). `test/unit/m1a-session-program.test.js` prints the base and
+**environments 6,400, context window 7,000, mail and subagents 21,500, voice 0**
+(context received 3,500 additional bytes from the shared reserve before its lane build). `test/unit/m1a-session-program.test.js` prints the base and
 the caps; each lane reports its own growth from `node scripts/bundle-guest.mjs session` against
 its line here.
 
@@ -1812,7 +1812,7 @@ policy change to next turn <= environment restart time + 1 s.
 
 ## M8. Compaction, images and context window
 
-**Status: contract settled, not built.** Reference: `m8-interfaces.md` (seams 10, work units 11,
+**Status: integrated.** The session registers `viewImage` after the shell tools. The lane outcome below records tests before registration. Combined image and compaction runs are recorded in the group journal. Reference: `m8-interfaces.md` (seams 10, work units 11,
 acceptance 12, perf 13, probes 14, fold 18); constants and guards in `guest/lib/guards/context.js`,
 `guest/lib/guards/images.js`, `guest/lib/image-guards.js` (Node only) and
 `AH/providers/compaction-texts.js`, frozen until the fold.
@@ -1933,7 +1933,7 @@ at `1881601aab`, load 1.9-3.2, 690.9 s held, 786 s of wall for the files; J-1226
 
 ## M9. Mail and subagents
 
-**Status: contract settled, not built.** Reference: `m9-interfaces.md` (seams 6, work units 7,
+**Status: integrated, group acceptance in progress.** The inbox and subagent runtime parts and their ten session tools are registered. Reference: `m9-interfaces.md` (seams 6, work units 7,
 acceptance 8, restart files 9, perf 10, probes 11, fold 12); guards and limits in
 `guest/lib/guards/mail.js` (session vat), `guest/lib/guards/post-office.js` (factory) and
 `guest/lib/mail-limits.js`, until W9.F.
@@ -2076,7 +2076,7 @@ read-only static site (P-64).
 
 ## M11. Voice
 
-**Status: contract settled, not built.** Reference: `m11-interfaces.md` (seams 11, work units 12,
+**Status: integrated, group acceptance in progress.** The speech service, shortcut preset and browser controls are wired. Reference: `m11-interfaces.md` (seams 11, work units 12,
 acceptance 13, perf and probes 14, fold 17, appendix A for WX.1, appendix C item by item); fixed
 files `AH/speech/{audio-protocol,engine-protocol,engine-types}.js`,
 `guest/lib/{voice-preferences,speech-guards}.js`, `UI/src/voice/{endpointing-defaults,texts}.js`.
@@ -2326,7 +2326,7 @@ Whylip or irrelevant slash commands). They are scheduled after M13 by default on
   | `guest/session/export.js` | - | X-E: head page `execution` | - | S7: inbox page, `extras` |
   | `guest/session/tool-table.js` | - | T-1 shell entries | S-10b `viewImage` | S6 mail, requests, subagents |
   | `guest/session/label-seeds.js` | - | L-1 `workspace`, `shell` | - | S8 `user` (last) |
-  | `guest/lib/tool-args.js` | - | - | S-10d `viewImage` | S4 `'strings'` kind |
+  | `guest/lib/tool-args.js` | - | - | S-10d `viewImage` | S4 checked string-list spans |
   | `guest/factory/factory.js` | H2: `makeVoice`, `getVoice`, `configureSpeech` | F-3: settings in the one `buildSessionServices` context, binders, releasers; F-4: its hook second | - | F1, F2 (same context object), F3, F5: its hook first |
   | `guest/factory/services.js` | - | F-2: builder, `serviceBinders`, `serviceReleasers` | - | F4: two builders |
   | `guest/factory/root.js` | H2b: `configureSpeech` | F-5: `makeHarnessSettings` | - | - |

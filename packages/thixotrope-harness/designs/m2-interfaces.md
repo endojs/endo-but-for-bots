@@ -673,6 +673,8 @@ length (4.13).
 
 ### 4.12 The compaction boundary hook (M8)
 
+Implemented by the session and provider adapter in `m8-interfaces.md` sections 5.4 and 5.5.
+
 M8 records `CompactionStarted { boundary }` and `Compaction { summary, boundary }` with
 `boundary` a record index, and increments the epoch (architecture 4.5). With the archive:
 

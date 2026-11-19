@@ -233,7 +233,8 @@ S1's inbound part takes about 7 minutes per budget; S6's creation of 50 spares a
 node perf/frames.perf.mjs          # one check; it takes the run lock itself
 corepack yarn perf                 # every perf/<feature>.perf.mjs in turn
 corepack yarn perf:pass M4         # a milestone's recorded pass: its checks and session, turn, exec,
-                                   # exclusive, back to back, after its templates (M2, M3, M4, M5, all)
+                                   # exclusive, back to back, after its templates
+corepack yarn perf:pass context    # compaction and images; the other group lists are environments, mail, voice
 ```
 
 Each script uses `perf/_harness.mjs`: state goes in `tmp/pf<pid>` and is removed afterwards
