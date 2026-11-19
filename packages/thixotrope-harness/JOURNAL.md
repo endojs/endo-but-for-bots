@@ -15068,3 +15068,97 @@ Reading: no command over 60 s (the longest, the 570-test session run, about 6 s)
 integration file, no supervisor, no perf run (W8.1 has no perf row). Commits `334d31ae56`,
 `d329e76af3` and this journal commit; nothing pushed.
 Fit: neutral.
+
+### J-12220 2026-11-19 W8.5 the viewImage adapter tool built - built
+Evidence: `28fe58a0aa` (first commit: the `makeImageTool`, `imageTypeOf` and `imageGuards`
+exports, refusing with `notReadable`), `f3aa873bb5`; `resources/agent-host/impl/tools/view-image.js`;
+`test/adapter/image-tool.test.js` (26 tests, about 1 s).
+Reading: `ImageTool.view({ opId, target, path? })` parses the model's raw path text (a JSON array
+of 1-64 strings of 1-255 units, no `.`/`..`, `/`, `\` or NUL; then the `ImagePath` guard) before
+any call on the target; descends through `openImage(path)` (M6's `Git`/`GitReader`, seam X-1;
+the test fake is built from the environments `GitReader` guard) or `lookup(path)`; calls `size()`
+when listed (over 2 MiB refuses before a read); reads `readBase64` pages into one 2 MiB buffer,
+asking `min(readPageBytes, max + 1 - offset)` so a larger source stops after 2 MiB + 1 bytes and
+a source that honours its ask is refused `tooLarge` there; checks each page (record, string, base64
+alphabet with end padding, length for the ask, decoded length) before decoding; advances by what a
+page decoded (15,360-byte vat pages read to the end); counts empty pages (64 pass, the 65th
+refuses); bounds descent and read together by `readTimeoutMs` through `timers.after`; checks PNG,
+JPEG, WebP magic; stages `encodeImageEnvelope` (W8.6's export, not copied) with the session as
+owner and answers `{ status: 'ok', text: { ...staged, preview: receipt } }`. Every refusal is a
+`failed` outcome with the fixed text; a retired break (exact `HUB_RETIRED_MESSAGE`) from the
+target or the source is `sourceLost`; only a defect rejects. The exo keeps no state. Kill points
+I1-I3 are shown with the blob store's trace hook copying the directory at `rename` and `bind`
+into a second directory, then a new store over it sweeping: I1 nothing on disk while pages are
+read, I2 one `.part` deleted at the next start, I3 one committed unnamed file kept (M13 sweep).
+Fit: good. The adapter is the right place for bytes: one buffer, a fixed page protocol and a
+timer, no vat delivery; the only per-view crank in the session is the tool result it already had.
+
+### J-12221 2026-11-19 W8.5 adapter-only view latency - measured
+Evidence: `592793f9b0`; a scratch script over `perf/_window.mjs` `runWindow` (not a committed perf
+file: the `images.*` rows are W8.7's), `PERF_WINDOW_SCALE=0.17` (10.2 s windows), under the shared
+run lock, load average 6.5-6.7 (other lanes running). In process, a Node `ImageSource` exo built
+with the guard, real blob store with fsync, each staged blob discarded after the sample.
+Reading: `imageTool.view.adapterOnly.1MiB` median 16.2 ms, p95 23.6, n 590;
+`...2MiB` median 23.0 ms, p95 37.1, n 394; `...1MiB.vatPages` (15,360-byte pages, 69 calls)
+median 20.1 ms, p95 31.9, n 460. These exclude the hub hops of a real source and the session's
+result crank, which the `images.view` budget (400 ms) is mostly made of; the tool itself is under
+6 % of that budget.
+Fit: good.
+
+### J-12222 2026-11-19 W8.5 byte-array probe P-B1..P-B4 - measured
+Evidence: `test/spikes/byte-array-passing.test.js` at `592793f9b0` (rows from the identical file
+uncommitted at `79e7c58e37-dirty`), `THIX_HARNESS_SPIKES=1 node scripts/run-lock.mjs --shared`,
+crank budget 50,000,000, one supervisor in throwaway state (`_spike.js` `startHost`), load average
+5.2-5.8, 37 s for the file. Four runs; the rows below are the fourth, the first three agree on
+timings within 10 %.
+Reading:
+- P-B1 (Node answer into a vat): passable **yes**; 1,024 bytes, byte 0 read back, frozen
+  `[object Uint8Array]`, 48.9 ms for the call round trip.
+- P-B2 (built in a vat, answered out): passable **yes** for both `new Uint8Array(buf.sliceToImmutable())`
+  and `Uint8Array.fromBase64(s)` then the same (pass style `byteArray`, 1,024 bytes, first and last
+  bytes right), 25-36 ms. In the vat `Uint8Array.fromBase64` decodes correctly (CC-002 holds).
+- P-B3 (toward the vat, ms per call, median of 3): ByteArray 16 KiB 257.9 ms (15.7 us/byte),
+  32 KiB 427 (13.0), 48 KiB 609.9 (12.4), 60 KiB 770.6 (12.5); 64 KiB refused by the hub with
+  "the message exceeds the inbound frame ceiling of its target" (CC-027), the vat alive after.
+  Base64 text of the same raw bytes: 16 KiB 309.3 ms (18.9 us per raw byte), 32 KiB 547.8 (16.7),
+  45 KiB 756.7 (16.4). Per raw byte a ByteArray costs about 75 % of base64 text toward a vat;
+  per wire unit the two are the same (about 12.5 us). The inbound cost is per byte as fact 2 says
+  (expected about 10 us; measured 12-16 us under load).
+- P-B4 (eight 128 KiB pages between two Node control clients through the hub; a vat only relays
+  the reference): ByteArray 95.6 ms per page (788 ms for 1 MiB), base64 text 132.5 ms per page
+  (1,072 ms): ByteArray 28 % faster. The relay vat's journal grew 0 bytes (no page passed through
+  it). `hub-log.jsonl` grew 0 bytes after each page and 47,127 bytes in all 2 s after 2 MiB had
+  moved (16 pages): about 23 KB per MiB, not proportional to the payload (session-row rewrites),
+  so control-client frames are not persisted.
+Decision (6.6's rule): P-B4 ByteArray >= 20 % faster and P-B2 yes: propose `readBytes(range) ->
+ByteArray` on `ImageSource` to the owner as a later widening (not built in M8). CC-100 stays
+asked: this probe cannot confirm its +2.9-3.0 MB per MiB, because the peers here are control
+clients, a session kind whose frames are not persisted; the spike's number was measured between
+resource adapters, the path M6's X-1 pages take. The survey disagreement (J-0023 against
+`spike-dataref/design-ocapn.md` 7.3) is settled for this build: a ByteArray is passable into and
+out of an Ironhorse vat, as an answer and as an argument, up to the frame ceiling.
+Fit: good for the question asked; the probe is cheap (37 s, one supervisor).
+
+### J-12223 2026-11-19 W8.5 findings and differences from the contract - finding
+Evidence: `f3aa873bb5`, `592793f9b0`.
+Reading: (1) The image guard table lives in `AH/tools/view-image.js` as `imageGuards` (a
+`lazyTable` over `image-guards.js`'s builders with `guest/lib/interfaces.js` `shapes` below it);
+the contract left its place open ("the adapter builds them with `lazyTable` until the fold"). An
+adapter-side `ImageSource` (M6's X-1) can import it instead of building a second table. (2) The
+deadline covers the descent as well as the read (6.2 says "the whole read"): a hanging
+`openImage` or `lookup` must not hold the round either. (3) A source's rejected `size()` and a
+non-count answer are `badPage`; a rejected `readBase64` is `badPage` (6.2 names no text for
+them). (4) A guard-built source cannot omit `size` (the guard lists it) and cannot answer a
+hostile page (its own return guard refuses it), so the no-size and hostile cases use `Far`
+objects, named in the test's header. (5) `Buffer.from` of a ByteArray over the emulated immutable
+buffer reads zeros in Node: the first spike run sent 1,024 zero bytes as base64 that way. Node
+code that turns a ByteArray into a `Buffer` must copy through `.slice()` or keep the mutable
+source; a later `readBytes` in the adapter would need this.
+Fit: neutral; (5) is a trap for any adapter code that receives ByteArrays.
+
+### J-12224 2026-11-19 W8.5 time record - process
+Evidence: first command 2026-11-19T02:23:30Z.
+Reading: no command over 60 s (the longest: each spike run 37-40 s under the shared lock; the
+view smoke 31 s; the package typecheck 3 s). One supervisor per spike run, none exclusive.
+Commits `28fe58a0aa`, `f3aa873bb5`, `592793f9b0` and this journal commit; nothing pushed.
+Fit: neutral.
