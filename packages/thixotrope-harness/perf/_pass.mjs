@@ -77,7 +77,7 @@ export const perfLists = Object.freeze({
   environments: Object.freeze(/** @type {string[]} */ ([])),
   context: Object.freeze(/** @type {string[]} */ ([])),
   mail: Object.freeze(/** @type {string[]} */ ([])),
-  voice: Object.freeze(/** @type {string[]} */ ([])),
+  voice: Object.freeze(['voice', 'voice-session']),
 });
 
 /** The cross-check every milestone pass ends with. */
