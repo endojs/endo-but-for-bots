@@ -783,7 +783,7 @@ contract and its settle unit) used J-1310..J-1329; every build unit's range is *
 | W11.6 client audio modules | `AH/speech/capture-worklet.js`, `UI/src/voice/{capture,endpointing,audio-socket,playback,wake-lock}.js` | section 9 capture, endpointing, socket client, playback, wake lock | `test/unit/voice-endpointing.test.js` (synthetic level sequences: calibration, 400 ms burst, junk, silence 1,200 ms then grace 800 ms, speech during grace, barge-in and echo factor, invocation mode), `test/unit/voice-audio-socket.test.js` (frame encode and decode against `audio-protocol.js`), `test/unit/voice-playback.test.js` (scheduler with a fake clock) | WX.1 | PM assigns |
 | W11.7 factory `Voice` | `guest/factory/voice.js`, `scripts/provision-steps/70-voice.js`; seams H2 (`factory.js`), H2b (`main.js`, `root.js`) | section 3.1, D-M11-21, D-M11-25; the step: `options.voice = { speech?: SpeechSettings-like data with a key label, voiceBackend?: label, voiceModelId? }`: `HarnessRoot.configureSpeech` (the key's `Secret` found by label in `SecretsAdmin.list`, its `makeReadGrant()`) and pins the `voice` preset's backend and model with `Preset.save` (labels at the config boundary, F.2) | `test/unit/factory-voice.test.js` (with the real catalogue and guards; `configureSpeech` absent from `Voice`), `test/integration/voice-session.test.js`, `test/integration/voice-restart.test.js` | WX.1 | PM assigns |
 | W11.8 voice UI feature | `UI/src/voice/{feature,state,VoiceControls,VoicePanel,ReplayButton}.js`, `UI/src/voice/voice.css`; seam H10 (`UI/src/controller/index.js`) | section 9 feature, settings, slots, fresh turn, launch link | `test/unit/voice-state.test.js` (fakes from `speech-guards.js` and appendix A guards), browser cases in W11.9's file | WX.1; W11.6's module signatures (section 9) | PM assigns |
-| W11.9 integration (last) | `test/integration/voice-speak.test.js`, `test/integration/voice-provider.test.js`, `test/browser/voice-ui.mjs`, `test/fixtures/voice-clip.mjs`, `perf/voice.perf.mjs`, `perf/voice-session.perf.mjs`; seams H8, H9, H12 | wiring of all units; acceptance and perf below; the fold list (section 17) checked; session and exec bundles byte-identical (D-M11-24) | the files named; the M11 regression list under 20 minutes | all of W11.1-W11.8 | PM assigns |
+| W11.9 integration (last) | `test/integration/voice-speak.test.js`, `test/integration/voice-provider.test.js`, `test/browser/voice-ui.test.mjs`, `test/fixtures/voice-clip.mjs`, `perf/voice.perf.mjs`, `perf/voice-session.perf.mjs`; seams H8, H9, H12 | wiring of all units; acceptance and perf below; the fold list (section 17) checked; session and exec bundles byte-identical (D-M11-24) | the files named; the M11 regression list under 20 minutes | all of W11.1-W11.8 | PM assigns |
 
 Ownership check (each file has exactly one unit): `child-engine.js` W11.1 only (W11.2 imports
 it); `openai-audio.js` both directions in W11.4; `GW/protocol.js` and `GW/extensions.js` only
@@ -830,13 +830,13 @@ WX.1's); W11.9 last. Six to eight agents.
 6. Endpointing: calibration sets the floor; a 400 ms burst is discarded; junk finals are dropped;
    1,200 ms of silence sends END and 800 ms of grace sends the message; speech during grace joins
    it; clearing the box cancels. `voice-endpointing.test.js`; in the browser with synthetic audio,
-   `voice-ui.mjs`.
+   `voice-ui.test.mjs`.
 7. Barge-in during playback stops audio and synthesis (the fake TTS process is killed), shows
    "continuing in background…", the turn completes and is recorded, and the new utterance's
-   message is queued behind it. `voice-ui.mjs`, `voice-speak.test.js`.
+   message is queued behind it. `voice-ui.test.mjs`, `voice-speak.test.js`.
 8. Preferences written from connection A are what connection B reads and what B's playback uses;
    a stale `setVoicePreset` revision is refused; Talk creates the session from the chosen preset.
-   `voice-session.test.js`, `voice-ui.mjs`.
+   `voice-session.test.js`, `voice-ui.test.mjs`.
 9. A session from `startVoiceSession` has the spoken introduction; a session from the new-session
    dialog has the plain one (the fake provider's request log). `voice-session.test.js`.
 10. Timeouts: a hanging fake speech-in engine fails the utterance after `engineTimeoutMs` with
@@ -845,10 +845,10 @@ WX.1's); W11.9 last. Six to eight agents.
     sentence plays; a socket with no HELLO is closed after `helloMs`; an unused token expires.
     `speech-timeouts.test.js`.
 11. Replay plays a finished turn's text again, inline pieces and a staged Blob piece alike; the level
-    meter moves with input. `speech-audio-route.test.js`, `voice-ui.mjs`.
+    meter moves with input. `speech-audio-route.test.js`, `voice-ui.test.mjs`.
 12. Auto-speak: a send from page A (typed or spoken) is spoken on page A when its turn starts, also
     when the message was queued behind a running turn; page B, watching the same session, speaks
-    nothing. `voice-ui.mjs`.
+    nothing. `voice-ui.test.mjs`.
 13. Launch claims: `startVoiceSession({ invocationId })` twice answers one session, the second
     `duplicate: true`; after 33 distinct ids the first is forgotten; the claim survives a restart
     (K11-5). `voice-session.test.js`, `voice-restart.test.js`.
@@ -864,7 +864,7 @@ WX.1's); W11.9 last. Six to eight agents.
     Origin is refused 403; `thix reachability` from a session vat finds no `Voice`, `Speech` or port.
     `speech-audio-route.test.js`, `voice-session.test.js`.
 18. The wake lock is held while the mic is on, speech plays or the turn runs, and released after.
-    `voice-ui.mjs` (with a stub `navigator.wakeLock`).
+    `voice-ui.test.mjs` (with a stub `navigator.wakeLock`).
 19. Settings authority (D-M11-21): a CapTP client signed in to the gateway finds no
     `configureSpeech` on `Voice` (the guard refuses the method); `HarnessRoot.configureSpeech` from
     the provisioning step changes `Voice.speechSettings().revision`, and the speech host uses the
@@ -1241,7 +1241,7 @@ records a difference; "not M11" names the owner. Spec items not listed are not v
 | R5-44 | look-ahead and gapless scheduling; a new playback replaces the old | M11 7, 11; `voice-playback.test.js` |
 | R5-45 | auto-speak only on the submitting page | M11 12 |
 | R5-46, R5-47 | soft barge-in; stopping playback ends synthesis, not the turn | M11 7 |
-| R5-48 | Stop cancels the turn; mute stops the reply | M11 7; `voice-ui.mjs` |
+| R5-48 | Stop cancels the turn; mute stops the reply | M11 7; `voice-ui.test.mjs` |
 | R5-49 | latency mechanisms | perf rows `speech.*` (section 14.1) |
 | R5-50 | debounced settings change restarts speech | M11 8; section 9 Settings |
 | R5-51 | fixed delays, no measured figures | perf rows; `stt.*`, `tts.*` owner rows |
@@ -1254,7 +1254,7 @@ records a difference; "not M11" names the owner. Spec items not listed are not v
 | R5-59 | services hold no capabilities, ambient OS authority | section 10 (engines reach only their pipes or HTTP; settings written on the provisioning path, D-M11-21) |
 | R5-60 .. R5-62 | Android shell, invocation, pause | not M11 (P-60, open decision 7); the launch claim (R5-61's 32 ids) is M11 13; the wake lock (R5-62) M11 18 |
 | R5-63 .. R5-71 | context items | R5-66: D-M11-12; R5-67: D-M11-10, M11 10; R5-68: D-M11-11; R5-70: D-M11-16; R5-71: not built (section 1.2) |
-| R6-53 | the voice controls of the UI | M11 6, 7, 8, 11, 18 (`voice-ui.mjs`) |
+| R6-53 | the voice controls of the UI | M11 6, 7, 8, 11, 18 (`voice-ui.test.mjs`) |
 | R6-60 | launch claims | M11 13 |
 | R8-17 | voice configuration and its defaults (speed 1.0, speech in on, language `en`) | `70-voice.js` defaults; M11 19 |
 | R8-29 | engines fresh at every start with the current configuration | M11 21; departure D-M11-23, O-12 |

@@ -17144,3 +17144,10 @@ the image protocol builders. Both adapters use the same image bounds. The Anthro
 window is a host configuration value. Compaction plan and summary texts now live in the
 provider's compaction module. On this intermediate tree the session bundle was 251,935 bytes
 and the factory 251,745. The session figure precedes registration of the mail parts.
+### J-12721 2026-11-19 M11 fold — gateway vocabulary and UI state
+
+The unmodified WX.1 vocabulary pin and the voice UI state suite passed together
+(24 tests). The browser acceptance references now name the collected file,
+`test/browser/voice-ui.test.mjs`. The browser UI build collected nine features
+and produced digest 9cfe83b9c353. The original source paths in the historical
+reuse survey identify upstream artifacts and remain available for provenance.
