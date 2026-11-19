@@ -17607,6 +17607,34 @@ include concurrent host work; the measurements do not isolate the CPU cost
 of the row report. Four ordinary forwards had a 176.5 ms median sender
 round-final crank, 37.5 ms factory post and 102.5 ms recipient delivery.
 
+### J-12548 2026-11-19 WX.F native collection timing and ask setup
+
+An isolated daemon at the J-12546 code logged only method labels, enqueue
+and delivery times, native worker timing counters, and host output timing.
+The 12 s diagnostic ran ordinary short asks with no stress input. From its
+first parent tool-call arrival to its last tool result, four of 30 factory
+row-change cranks collected. Among those four, median host wall time was
+325 ms, worker-reported total 256.8 ms, collection 235.3 ms, and JS run
+18.1 ms. The other 26 had medians of 34, 7.1, 0 and 6.5 ms respectively.
+The longest row-change crank took 328 ms on the host, with 235.26 ms in
+native collection and 19.719 ms in JS. These worker timing counters
+measure elapsed time inside the operation.
+
+Three of those four row-change collections ran between measured ask
+intervals; one overlapped the outward leg of ask t9. In t5, a different
+factory method (`ask`) spent 232 ms in native collection and the child's
+`deliverMail` spent 186 ms in collection, both during its 569 ms outward
+leg. In t6 the factory's reply `post` spent 238 ms in collection across
+the child's end. The observed latency cannot be assigned to processing
+the row data alone.
+
+The final unmeasured child spawn starts a replacement spare. In the
+first diagnostic, seven background spare evaluations overlapped the
+eight-ask window. Waiting once for the public pool to settle before
+the ask window removed all of them in the repeat. The short medians were
+366 ms (eight asks, 13.698 s) and 300 ms (ten asks, 12.762 s), respectively;
+neither diagnostic replaces the 60 s gate in J-12546.
+
 ### J-1446 2026-11-19 WX.F workspace image and local landing
 
 The workspace-image case passed on Ironhorse with the manager and session journals retained
