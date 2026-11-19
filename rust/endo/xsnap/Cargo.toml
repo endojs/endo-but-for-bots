@@ -7,7 +7,6 @@ description = "Rust bindings for the XS JavaScript engine (Moddable)"
 
 [dependencies]
 cap-std = "3"
-cap-tempfile = "3"
 sha2 = "0.10"
 rand = "0.8"
 ed25519-dalek = { version = "2", features = ["rand_core"] }

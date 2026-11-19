@@ -871,11 +871,8 @@ jobs:
       # `[package.metadata.cargo-machete] ignored`, not here.
       - name: Check for unused dependencies
         env:
-          # crate:dependency. getrandom is a false positive: ocapn_noise
-          # depends on it only to enable its `custom` backend for wasm.
-          KNOWN_UNUSED: >-
-            ocapn_noise_protocol_facilities:getrandom
-            xsnap:cap-tempfile
+          # Space-separated crate:dependency pairs; empty today.
+          KNOWN_UNUSED: ''
         run: |
           status=0
           cargo machete --skip-target-dir > "$RUNNER_TEMP/machete.log" || status=$?
@@ -884,7 +881,7 @@ jobs:
           if [ "$status" -gt 1 ]; then exit "$status"; fi
           awk '/ -- .*Cargo\.toml:$/ { crate = $1; next } /^\t/ { sub(/^\t+/, ""); print crate ":" $0 }' \
             "$RUNNER_TEMP/machete.log" | sort > "$RUNNER_TEMP/found.txt"
-          printf '%s\n' $KNOWN_UNUSED | sort > "$RUNNER_TEMP/known.txt"
+          printf '%s\n' $KNOWN_UNUSED | sed '/^$/d' | sort > "$RUNNER_TEMP/known.txt"
           if ! diff -u "$RUNNER_TEMP/known.txt" "$RUNNER_TEMP/found.txt"; then
             echo "::error::cargo-machete findings differ from KNOWN_UNUSED (- now used, + newly unused)"
             exit 1

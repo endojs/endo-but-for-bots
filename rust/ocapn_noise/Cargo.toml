@@ -37,5 +37,10 @@ features = ['rand_core']
 #[target.wasm32-unknown-unknown]
 #rustflags = ['--cfg', 'getrandom_backend="custom"']
 
+# getrandom is never named in the source: the dependency exists only to turn
+# on its `custom` backend for the wasm build.
+[package.metadata.cargo-machete]
+ignored = ["getrandom"]
+
 [lints]
 workspace = true
