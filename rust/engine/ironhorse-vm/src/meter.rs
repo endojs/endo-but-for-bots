@@ -685,3 +685,512 @@ mod tests {
         assert_eq!(m.index, 3, "index untouched when no wrap");
     }
 }
+
+/// Kani proofs of the meter guarantees MTR-1 … MTR-6 (`VERIFICATION.md`;
+/// manifest `verification/proofs.toml`). Every harness starts from an
+/// arbitrary restored [`MeterState`], which is what a snapshot's `METR`
+/// atom can carry, and models the host callback as a symbolic answer.
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    /// A meter restored from an arbitrary snapshot state.
+    fn any_meter() -> Meter {
+        let mut meter = Meter::new();
+        meter.restore(MeterState {
+            index: kani::any(),
+            interval: kani::any(),
+            count: kani::any(),
+        });
+        meter
+    }
+
+    /// A host callback with a symbolic answer that records how it was
+    /// consulted.
+    #[derive(Copy, Clone)]
+    struct Host {
+        answer: bool,
+        calls: u32,
+        seen: u64,
+    }
+
+    impl Host {
+        fn any() -> Host {
+            Host {
+                answer: kani::any(),
+                calls: 0,
+                seen: 0,
+            }
+        }
+
+        fn consult(&mut self, computrons: u64) -> bool {
+            self.calls += 1;
+            self.seen = computrons;
+            self.answer
+        }
+    }
+
+    /// The result of one operation, comparable across meters.
+    #[derive(Copy, Clone, PartialEq, Eq)]
+    enum Outcome {
+        Unit,
+        Check(MeterCheck),
+        Admitted(bool),
+        Value(u64),
+    }
+
+    /// The operations a guest-driven crank can apply to a restored meter,
+    /// with arbitrary arguments; `op` selects one. `begin`, `rearm` and
+    /// `restore` are host-side configuration, handled separately. The
+    /// unticks are applied paired with their tick (the only way the
+    /// engine issues them; see [`Meter::untick_raw`]).
+    const CHARGING_OPS: u8 = 15;
+
+    fn apply(meter: &mut Meter, op: u8, arg: u64, host: &mut Host) -> Outcome {
+        match op {
+            0 => meter.tick_code(),
+            1 => meter.tick_code_n(arg),
+            2 => meter.tick_builtin(),
+            3 => meter.tick_builtin_some(arg),
+            4 => meter.tick_slot_alloc(),
+            5 => meter.tick_chunk_alloc(arg),
+            6 => meter.tick_chunk_new(arg),
+            7 => meter.tick_string(arg),
+            8 => meter.tick_raw(arg),
+            9 => return Outcome::Check(meter.check(&mut |c| host.consult(c))),
+            10 => return Outcome::Check(meter.check_compilation(&mut |c| host.consult(c))),
+            11 => return Outcome::Check(meter.charge_and_check(arg, &mut |c| host.consult(c))),
+            12 => {
+                let mut consult = |c| host.consult(c);
+                return Outcome::Admitted(meter.charge_compilation(arg, Some(&mut consult)));
+            }
+            13 => return Outcome::Admitted(meter.charge_compilation(arg, None)),
+            14 => return Outcome::Value(meter.computrons()),
+            15 => {
+                meter.tick_code();
+                meter.untick_code();
+            }
+            _ => {
+                meter.tick_raw(arg);
+                meter.untick_raw(arg);
+            }
+        }
+        Outcome::Unit
+    }
+
+    /// The exact (unbounded) total of a tick, for the saturation claim.
+    fn exact_tick(index: u64, op: u8, arg: u64) -> Option<u128> {
+        let i = u128::from(index);
+        let a = u128::from(arg);
+        let cost = match op {
+            0 => u128::from(CODE_METERING),
+            1 => a * u128::from(CODE_METERING),
+            2 => u128::from(BUILTIN_METERING),
+            3 => a * u128::from(BUILTIN_METERING),
+            4 => u128::from(SLOT_ALLOCATION_METERING),
+            5 => a * u128::from(CHUNK_ALLOCATION_METERING),
+            6 => u128::from(ironhorse_meter::chunk_cost(arg)),
+            7 => u128::from(ironhorse_meter::string_chunk_cost(arg)),
+            8 => a,
+            _ => return None,
+        };
+        Some(i + cost)
+    }
+
+    // ---- MTR-1: no panic from any restored state -------------------------
+
+    #[kani::proof]
+    fn mtr1_tick_code() {
+        let mut m = any_meter();
+        m.tick_code();
+        kani::cover!(m.raw() == u64::MAX, "the tick reaches the ceiling");
+    }
+
+    #[kani::proof]
+    fn mtr1_tick_code_n() {
+        let mut m = any_meter();
+        let before = m.raw();
+        m.tick_code_n(kani::any());
+        kani::cover!(
+            before < u64::MAX && m.raw() == u64::MAX,
+            "the tick saturates"
+        );
+    }
+
+    #[kani::proof]
+    fn mtr1_tick_builtin() {
+        let mut m = any_meter();
+        m.tick_builtin();
+        kani::cover!(m.raw() == u64::MAX, "the tick reaches the ceiling");
+    }
+
+    #[kani::proof]
+    fn mtr1_tick_builtin_some() {
+        let mut m = any_meter();
+        let before = m.raw();
+        m.tick_builtin_some(kani::any());
+        kani::cover!(
+            before < u64::MAX && m.raw() == u64::MAX,
+            "the tick saturates"
+        );
+    }
+
+    #[kani::proof]
+    fn mtr1_tick_slot_alloc() {
+        let mut m = any_meter();
+        m.tick_slot_alloc();
+        kani::cover!(m.raw() == u64::MAX, "the tick reaches the ceiling");
+    }
+
+    #[kani::proof]
+    fn mtr1_tick_chunk_alloc() {
+        let mut m = any_meter();
+        let before = m.raw();
+        m.tick_chunk_alloc(kani::any());
+        kani::cover!(
+            before < u64::MAX && m.raw() == u64::MAX,
+            "the tick saturates"
+        );
+    }
+
+    #[kani::proof]
+    fn mtr1_tick_chunk_new_and_string() {
+        let mut m = any_meter();
+        let before = m.raw();
+        if kani::any() {
+            m.tick_chunk_new(kani::any());
+        } else {
+            m.tick_string(kani::any());
+        }
+        kani::cover!(
+            before < u64::MAX && m.raw() == u64::MAX,
+            "the tick saturates"
+        );
+    }
+
+    #[kani::proof]
+    fn mtr1_tick_raw() {
+        let mut m = any_meter();
+        let before = m.raw();
+        m.tick_raw(kani::any());
+        kani::cover!(
+            before < u64::MAX && m.raw() == u64::MAX,
+            "the tick saturates"
+        );
+    }
+
+    /// The unticks are refunds of a prior tick: the harness assumes the
+    /// pairing precondition `index ≥ n` that [`Meter::untick_raw`]'s
+    /// `debug_assert!` states (Kani builds with debug assertions on). The
+    /// release-mode behaviour of an unpaired untick is a unit test.
+    #[kani::proof]
+    fn mtr1_untick_code() {
+        let mut m = any_meter();
+        kani::assume(m.raw() >= CODE_METERING);
+        m.untick_code();
+        kani::cover!(m.raw() == 0, "the refund empties the meter");
+    }
+
+    #[kani::proof]
+    fn mtr1_untick_raw() {
+        let mut m = any_meter();
+        let n: u64 = kani::any();
+        kani::assume(m.raw() >= n);
+        m.untick_raw(n);
+        kani::cover!(n > 0 && m.raw() == 0, "the refund empties the meter");
+    }
+
+    #[kani::proof]
+    fn mtr1_checks_and_charges() {
+        let mut m = any_meter();
+        let mut host = Host::any();
+        let op: u8 = kani::any();
+        kani::assume((9..=13).contains(&op));
+        let out = apply(&mut m, op, kani::any(), &mut host);
+        kani::cover!(host.calls == 1, "the host is consulted");
+        kani::cover!(
+            out == Outcome::Check(MeterCheck::Continue) && host.calls == 1,
+            "a consulted check continues"
+        );
+    }
+
+    #[kani::proof]
+    fn mtr1_configuration() {
+        let mut m = any_meter();
+        let interval: u64 = kani::any();
+        if kani::any() {
+            m.begin(interval);
+        } else {
+            m.rearm(interval);
+        }
+        let _ = (m.state(), m.computrons(), m.is_armed(), m.interval_raw());
+        kani::cover!(
+            m.is_armed() && m.state().count == u64::MAX,
+            "the window saturates"
+        );
+    }
+
+    /// Four arbitrary operations in sequence, from an arbitrary state.
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn mtr1_sequence_of_four() {
+        let mut m = any_meter();
+        let mut host = Host::any();
+        for _ in 0..4 {
+            let op: u8 = kani::any();
+            kani::assume(op <= CHARGING_OPS + 1);
+            apply(&mut m, op, kani::any(), &mut host);
+        }
+        kani::cover!(host.calls >= 3, "the host is consulted three times");
+    }
+
+    // ---- MTR-2: charging fails closed ------------------------------------
+
+    /// Every tick leaves exactly `min(index + cost, u64::MAX)`.
+    #[kani::proof]
+    fn mtr2_ticks_saturate_exactly() {
+        let mut m = any_meter();
+        let before = m.raw();
+        let op: u8 = kani::any();
+        kani::assume(op <= 8);
+        let arg: u64 = kani::any();
+        let mut host = Host::any();
+        apply(&mut m, op, arg, &mut host);
+        let exact = exact_tick(before, op, arg).unwrap();
+        assert_eq!(u128::from(m.raw()), exact.min(u128::from(u64::MAX)));
+        kani::cover!(exact > u128::from(u64::MAX), "the exact total overflows");
+    }
+
+    /// An unrepresentable admission aborts and leaves the index unchanged;
+    /// one that lands exactly on the ceiling aborts at the ceiling.
+    #[kani::proof]
+    fn mtr2_charge_and_check_fails_closed() {
+        let mut m = any_meter();
+        let before = m.raw();
+        let n: u64 = kani::any();
+        let mut host = Host::any();
+        let out = m.charge_and_check(n, &mut |c| host.consult(c));
+        match before.checked_add(n) {
+            None => {
+                assert!(out == MeterCheck::Abort);
+                assert_eq!(m.raw(), before);
+                assert_eq!(host.calls, 0);
+            }
+            Some(u64::MAX) => {
+                assert!(out == MeterCheck::Abort);
+                assert_eq!(m.raw(), u64::MAX);
+                assert_eq!(host.calls, 0);
+            }
+            Some(total) => assert_eq!(m.raw(), total),
+        }
+        kani::cover!(
+            before.checked_add(n).is_none(),
+            "the total is unrepresentable"
+        );
+        kani::cover!(
+            !m.is_armed() && out == MeterCheck::Abort,
+            "aborts while un-armed"
+        );
+    }
+
+    #[kani::proof]
+    fn mtr2_charge_compilation_fails_closed() {
+        let mut m = any_meter();
+        let before = m.raw();
+        let n: u64 = kani::any();
+        let mut host = Host::any();
+        let admitted = if kani::any() {
+            let mut consult = |c| host.consult(c);
+            m.charge_compilation(n, Some(&mut consult))
+        } else {
+            m.charge_compilation(n, None)
+        };
+        match before.checked_add(n) {
+            None => {
+                assert!(!admitted);
+                assert_eq!(m.raw(), before);
+            }
+            Some(u64::MAX) => {
+                assert!(!admitted);
+                assert_eq!(m.raw(), u64::MAX);
+            }
+            Some(total) => assert_eq!(m.raw(), total),
+        }
+        kani::cover!(
+            before.checked_add(n).is_none(),
+            "the total is unrepresentable"
+        );
+    }
+
+    /// `index == u64::MAX` is absorbing: no guest-driven operation leaves
+    /// it, and every check or admission from it refuses, armed or not,
+    /// without consulting the host.
+    #[kani::proof]
+    fn mtr2_exhausted_is_absorbing() {
+        let mut m = any_meter();
+        kani::assume(m.raw() == u64::MAX);
+        let op: u8 = kani::any();
+        kani::assume(op <= CHARGING_OPS + 1);
+        let mut host = Host::any();
+        let out = apply(&mut m, op, kani::any(), &mut host);
+        assert_eq!(m.raw(), u64::MAX);
+        assert_eq!(host.calls, 0);
+        match out {
+            Outcome::Check(c) => assert!(c == MeterCheck::Abort),
+            Outcome::Admitted(a) => assert!(!a),
+            Outcome::Unit | Outcome::Value(_) => {}
+        }
+        kani::cover!(!m.is_armed() && op == 9, "an un-armed check refuses");
+        kani::cover!(op == CHARGING_OPS, "a paired refund stays exhausted");
+    }
+
+    // ---- MTR-3: limit enforcement cannot be bypassed ---------------------
+
+    #[kani::proof]
+    fn mtr3_check_consults_the_host_when_due() {
+        let mut m = any_meter();
+        let before = m.state();
+        let monotone: bool = kani::any();
+        let mut host = Host::any();
+        let out = if monotone {
+            m.check_compilation(&mut |c| host.consult(c))
+        } else {
+            m.check(&mut |c| host.consult(c))
+        };
+        let due = before.interval != 0 && before.index > before.count;
+        if before.index == u64::MAX {
+            assert!(out == MeterCheck::Abort);
+            assert_eq!(host.calls, 0);
+        } else if due {
+            assert_eq!(host.calls, 1);
+            assert_eq!(host.seen, before.index >> 16);
+            if !host.answer {
+                assert!(out == MeterCheck::Abort);
+            } else if out == MeterCheck::Continue {
+                assert!(m.state().count > m.state().index);
+            } else {
+                // Only an unrepresentable next deadline refuses an
+                // approved check, and only on the execution path.
+                assert!(!monotone);
+                assert!(before.index.checked_add(before.interval).is_none());
+            }
+        } else {
+            assert_eq!(host.calls, 0);
+            assert!(out == MeterCheck::Continue);
+            assert_eq!(m.state(), before);
+        }
+        assert_eq!(m.raw(), before.index);
+        kani::cover!(
+            due && host.answer && out == MeterCheck::Continue,
+            "an approved check"
+        );
+        kani::cover!(
+            due && host.answer && out == MeterCheck::Abort,
+            "an approved check whose next deadline is unrepresentable"
+        );
+    }
+
+    #[kani::proof]
+    fn mtr3_unarmed_never_consults() {
+        let mut m = any_meter();
+        kani::assume(!m.is_armed());
+        let op: u8 = kani::any();
+        kani::assume((9..=12).contains(&op));
+        let mut host = Host::any();
+        apply(&mut m, op, kani::any(), &mut host);
+        assert_eq!(host.calls, 0);
+        kani::cover!(m.raw() > m.state().count, "the index is past the threshold");
+    }
+
+    // ---- MTR-4: unit relations -------------------------------------------
+
+    #[kani::proof]
+    fn mtr4_computrons_and_interval_scaling() {
+        let m = any_meter();
+        assert_eq!(m.computrons(), m.raw() >> 16);
+        let i: u64 = kani::any();
+        let scaled = scale_interval(i);
+        assert_eq!(scaled != 0, i != 0);
+        assert_eq!(
+            u128::from(scaled),
+            (u128::from(i) << 16).min(u128::from(u64::MAX))
+        );
+        let mut armed = Meter::new();
+        armed.begin(i);
+        assert_eq!(armed.is_armed(), i != 0);
+        kani::cover!(
+            i != 0 && i % (1 << 48) == 0,
+            "a multiple of 2^48 stays armed"
+        );
+    }
+
+    // ---- MTR-5: state and restore round trip -----------------------------
+
+    #[kani::proof]
+    fn mtr5_restore_state_round_trip() {
+        let s = MeterState {
+            index: kani::any(),
+            interval: kani::any(),
+            count: kani::any(),
+        };
+        let mut m = Meter::new();
+        m.tick_raw(kani::any());
+        m.restore(s);
+        assert_eq!(m.state(), s);
+        kani::cover!(
+            s.index != 0 && s.interval != 0 && s.count != 0,
+            "a full state"
+        );
+    }
+
+    /// `last_reported` feeds no computation: two meters that differ only
+    /// in it give equal results, states and host consultations.
+    #[kani::proof]
+    fn mtr5_last_reported_feeds_nothing() {
+        let mut a = any_meter();
+        let mut b = a.clone();
+        b.last_reported = kani::any();
+        let op: u8 = kani::any();
+        kani::assume(op <= CHARGING_OPS + 1);
+        let arg: u64 = kani::any();
+        let mut host_a = Host::any();
+        let mut host_b = host_a;
+        let out_a = apply(&mut a, op, arg, &mut host_a);
+        let out_b = apply(&mut b, op, arg, &mut host_b);
+        assert!(out_a == out_b);
+        assert_eq!(a.state(), b.state());
+        assert_eq!((host_a.calls, host_a.seen), (host_b.calls, host_b.seen));
+        kani::cover!(host_a.calls == 1, "the host is consulted");
+    }
+
+    // ---- MTR-6: monotonicity, with its exact exceptions ------------------
+
+    /// No charging operation decreases the index; a paired refund returns
+    /// it to at least its value before the paired tick, exactly that value
+    /// unless the tick reached the exhausted ceiling.
+    #[kani::proof]
+    fn mtr6_index_is_monotone() {
+        let mut m = any_meter();
+        let before = m.raw();
+        let op: u8 = kani::any();
+        kani::assume(op <= CHARGING_OPS + 1);
+        let arg: u64 = kani::any();
+        let mut host = Host::any();
+        apply(&mut m, op, arg, &mut host);
+        assert!(m.raw() >= before);
+        if op == CHARGING_OPS && before < u64::MAX - CODE_METERING {
+            assert_eq!(m.raw(), before);
+        }
+        if op == CHARGING_OPS + 1 && before.checked_add(arg).is_some_and(|t| t < u64::MAX) {
+            assert_eq!(m.raw(), before);
+        }
+        if (9..=10).contains(&op) {
+            assert_eq!(m.raw(), before, "a check never moves the index");
+        }
+        kani::cover!(op == 9 && host.calls == 1, "a consulted check");
+        kani::cover!(
+            op == CHARGING_OPS + 1 && arg > 0 && m.raw() == before,
+            "a paired refund"
+        );
+    }
+}

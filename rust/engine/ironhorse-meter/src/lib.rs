@@ -357,3 +357,39 @@ mod tests {
         assert!(TABLE.windows(2).all(|w| w[0].0 < w[1].0));
     }
 }
+
+/// Kani proofs of the allocation-cost formulas (MTR-4 in
+/// `rust/engine/VERIFICATION.md`).
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    /// `chunk_cost(b)` is `fxAdjustChunkSize`'s geometry,
+    /// `(round_up_8(b) + 16) × CHUNK_ALLOCATION_METERING`, exactly when
+    /// that is representable in `u64`, and `u64::MAX` otherwise.
+    #[kani::proof]
+    fn mtr4_chunk_cost_formula() {
+        let b: u64 = kani::any();
+        let exact = (u128::from(b).div_ceil(8) * 8 + 16) * u128::from(CHUNK_ALLOCATION_METERING);
+        let cost = u128::from(chunk_cost(b));
+        assert_eq!(cost, exact.min(u128::from(u64::MAX)));
+        kani::cover!(exact > u128::from(u64::MAX), "the exact cost overflows");
+        kani::cover!(b % 8 != 0 && exact < 1 << 20, "a small unaligned chunk");
+    }
+
+    /// `string_chunk_cost(u)` is `chunk_cost(u + 1)` (the terminator),
+    /// saturating, i.e. `(round_up_8(u + 1) + 16) × weight` capped at
+    /// `u64::MAX`.
+    #[kani::proof]
+    fn mtr4_string_chunk_cost_formula() {
+        let u: u64 = kani::any();
+        let exact =
+            ((u128::from(u) + 1).div_ceil(8) * 8 + 16) * u128::from(CHUNK_ALLOCATION_METERING);
+        assert_eq!(
+            u128::from(string_chunk_cost(u)),
+            exact.min(u128::from(u64::MAX))
+        );
+        kani::cover!(exact > u128::from(u64::MAX), "the exact cost overflows");
+        kani::cover!(u == 7, "the terminator crosses an alignment boundary");
+    }
+}
