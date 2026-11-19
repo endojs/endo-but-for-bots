@@ -18091,7 +18091,12 @@ retains the factory's exact byte and event-count limits and leaves the full
 shape check at the public adapter. The 28 list-channel and pool/factory
 tests passed, including batched rows, removals, order, refresh after restart
 and refusal of unknown keys and oversized batches at the receiver. Its full
-performance results are pending.
+performance results are pending. The combined factory and fresh-growth
+driver passed the full lockdown unit and adapter suite (2,004 passed, 168
+skipped, three TODOs for the candidate guest and adapter code) and package
+type, ESLint and duplication checks. The second full package run executed
+before the subsequent benchmark-only fresh-growth edit. The final lint
+command included that edit.
 ### J-1464 2026-11-19 Fixture costs and normal cases in mixed milestone files
 
 The combined checkout ea857fc639 built the UI normally, used the pinned

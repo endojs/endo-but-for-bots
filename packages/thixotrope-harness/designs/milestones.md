@@ -1688,7 +1688,10 @@ workspace isolation, runner and supervisor recovery, and both Chromium settings 
 The native manager measures 75,511 bytes against its 80,000-byte limit. J-12100..J-12105
 and J-12121 record the measurements and the deferred guest-level checks. Five exclusive restarts
 took 5.95–8.00 s, started zero process groups and woke zero session vats. Development creation
-and Git log missed their latency budgets. Reference: `m6-interfaces.md` (work units 8, acceptance
+and Git log missed their latency budgets. On the reviewed creation code at
+`ff4b360a3d`, Git status took 632 ms median (40 samples, target 1,000 ms) and the
+50-commit log took 827 ms median (44 samples, target 500 ms). Reference:
+`m6-interfaces.md` (work units 8, acceptance
 9, perf 10, probes 11, fold 14); guards and texts `guest/lib/guards/environments.js`.
 
 **Goal.** Development sessions: a per-session rootless container with `/workspace` backed by the

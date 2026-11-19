@@ -625,7 +625,7 @@ and lint jobs are outside this table. The preceding generated block covers Claud
 
 ## QC follow-up to the four-milestone integration
 
-Completed machine-wide acquisitions as of 2026-11-19 12:19 UTC, for follow-up runs
+Completed machine-wide acquisitions as of 2026-11-19 12:39 UTC, for follow-up runs
 requested since 11:25 UTC. The two timing columns sum each acquisition independently.
 Overlapping waits and holds can exceed elapsed wall time. A setup failure counts as
 a nonzero exit even when the actual test or benchmark collected no samples.
@@ -633,6 +633,8 @@ a nonzero exit even when the actual test or benchmark collected no samples.
 | Checkout and work | Finished | Waited (s) | Held (s) | Nonzero exits | Releases without an exit code |
 |---|---:|---:|---:|---:|---:|
 | Integration checkout | 5 | 1954 | 1334 | 0 | 0 |
-| Worker retirement and M9 timing | 10 | 1659 | 1333 | 7 | 0 |
-| M9 runtime and milestone regression | 11 | 4616 | 1927 | 2 | 2 |
-| Session, voice and environments | 6 | 1902 | 550 | 3 | 0 |
+| Worker retirement and M9 timing | 11 | 1829 | 1814 | 8 | 0 |
+| M9 runtime and milestone regression | 37 | 13677 | 5201 | 3 | 2 |
+| Session, voice and environments | 8 | 2636 | 929 | 4 | 0 |
+| Factory row and ordinary mail diagnostics | 5 | 867 | 595 | 4 | 0 |
+| Subagent timing diagnostics | 2 | 614 | 198 | 0 | 0 |
