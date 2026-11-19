@@ -756,7 +756,7 @@ commit with the other lanes'. No M11 unit edits a file WX.1 edits.
 | H8 | `scripts/test-integration.mjs` `regressionLists` | an `M11` list: `voice-session`, `voice-restart`, `voice-speak`, `voice-provider`, browser `voice-ui` (M11's own list, not the core list: X-14) | M6 K-2, M8, M9 | W11.9 |
 | H9 | `perf/_pass.mjs` `perfLists` (PM-merged) | `M11: ['voice', 'voice-session']` | M6, M8, M9 | W11.9 |
 | H10 | `UI/src/controller/index.js` | in `send`, after `sendThroughChain` answered: notify submission listeners `{ sessionKey: key, session, requestId, receipt }`; a controller action `onSubmission(listener) -> unsubscribe` (a `Set` in the closure, cleared on reconnect); 10-15 lines | none in the group; M12 (Home, spaces) and step 5 (a) later | W11.8 |
-| H11 | `H/package.json` (PM-merged) | nothing unless W11.9 adds a script; no dependency (`ws` is gone since HR-SYN-35) | all | - |
+| H11 | `H/package.json` (PM-merged) | test drivers use the `ws` devDependency to avoid pooled socket cleanup in Node 24 under SES. Production and browser code use their existing WebSocket implementations | all | - |
 | H12 | `GW/extensions/README.md` | the `GatewayContext` table gains `operator()` (every extension) and `readGrant(grant)` (only the extensions given it through `extensionPowers`); a `speech.js` row in the file list | none known | W11.9 (one owner: W11.5 writes no README line) |
 
 Not edited by M11: `AH/channel-taps.js`, `AH/projection-hooks.js`, `guest/session/**`, the turn

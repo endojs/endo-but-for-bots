@@ -15460,3 +15460,21 @@ The benchmark now times the synchronous gateway callback around the actual
 route, checks every frame against the child engine log, and retains the
 client-to-engine distribution next to it. The respawn row now runs the
 full window (the 600-sample cap previously ended it at 33.5 seconds).
+
+### J-12724 2026-11-19 W11.9 — restart drivers and transport verification
+
+Four voice speech-restart tests pass on Node 22.23.4 and 24.22.1 with the
+unpooled WebSocket test drivers, including SIGKILL during recognition and
+synthesis. Node 24 previously passed the four assertions but exited 1 on
+26 unhandled `ClientDestroyedError` cleanup rejections. The WebSocket
+library and types are development dependencies.
+
+The revised full transport run exited 0 on Node 22.23.4 (eaf1af1a6d).
+All 11,296 frames were received during the 60-second, 16-utterance window.
+Gateway forwarding p99 was 0.071 ms in that window and 0.115 ms with one
+utterance. Under load, client send to engine read p99 was 24.802 ms.
+First audio took 13.898 ms median, 26.364 ms p99. Respawn took 44.718 ms
+median (1,260 samples in 60.036 s). Real Moonshine, Piper and remote speech
+provider timings are owner-run rows. The sub-millisecond partial-relay
+measure showed a negative minimum using separately calibrated time origins;
+the parent and fixture now timestamp with the machine monotonic clock.
