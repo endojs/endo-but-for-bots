@@ -72,6 +72,12 @@ export const perfLists = Object.freeze({
     'accounts',
   ]),
   M5: Object.freeze(['presets', 'creation-m5', 'exec-m5', 'tools', 'mentions']),
+  // Reserved by WX.1 for the group of four lanes, named by concept; each
+  // lane adds its perf checks to its own list (empty until then).
+  environments: Object.freeze(/** @type {string[]} */ ([])),
+  context: Object.freeze(/** @type {string[]} */ ([])),
+  mail: Object.freeze(/** @type {string[]} */ ([])),
+  voice: Object.freeze(/** @type {string[]} */ ([])),
 });
 
 /** The cross-check every milestone pass ends with. */
@@ -79,7 +85,8 @@ export const CROSS_CHECK = Object.freeze(['session', 'turn', 'exec']);
 
 /**
  * The checks of one pass, in order.
- * @param {string} milestone `M2`, `M3`, `M4`, `M5` or `all`
+ * @param {string} milestone `M2`, `M3`, `M4`, `M5`, a lane of the next
+ *   group (`environments`, `context`, `mail`, `voice`) or `all`
  * @returns {string[]}
  */
 export const passFiles = milestone => {

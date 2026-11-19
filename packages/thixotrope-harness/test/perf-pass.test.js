@@ -36,6 +36,17 @@ test('a milestone pass is its files and the cross-check; all is every file', t =
   t.deepEqual(passFiles('M2'), perfLists.M2);
   t.deepEqual(passFiles('all'), Object.values(perfLists).flat());
   t.throws(() => passFiles('M9'), { message: /unknown milestone M9/ });
+  // The lists reserved by WX.1 for the next group of lanes (by concept).
+  t.deepEqual(Object.keys(perfLists), [
+    'M2',
+    'M3',
+    'M4',
+    'M5',
+    'environments',
+    'context',
+    'mail',
+    'voice',
+  ]);
 });
 
 test('each check runs exclusive in its own boxed wrapper, ui with the browser', t => {

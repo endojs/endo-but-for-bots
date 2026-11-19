@@ -41,8 +41,11 @@
  * `steps` (a `ProvisionStep[]`), run after the table above in file-name
  * order: `30-gateway.js` (M3, `options.gateway`), `40-subscriptions.js`
  * (M4, `options.subscriptions`), `50-m5-fixtures.js` (M5,
- * `options.m5Fixtures`); later milestones take further numbers. A lane adds
- * its file and edits nothing here. `makeProvision` forwards every option it
+ * `options.m5Fixtures`); reserved for the lanes building them (WX.1; no
+ * file yet): `60-environments.js` (the environments resource,
+ * `options.environments`) and `70-voice.js` (speech settings through
+ * `HarnessRoot.configureSpeech`); later milestones take further numbers. A
+ * lane adds its file and edits nothing here. `makeProvision` forwards every option it
  * does not use itself to every step untouched (the same values, not
  * copies), so a later step's options need no edit of `makeProvision`
  * either. A step that is not asked for answers `{ skipped: true }`.

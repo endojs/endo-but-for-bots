@@ -73,6 +73,17 @@ test('the milestones list is M3, M4 and M5 together', t => {
   ]);
   t.deepEqual(listFiles('core'), regressionLists.core);
   t.throws(() => listFiles('M9'), { message: /unknown list M9/ });
+  // The lists reserved by WX.1 for the next group of lanes (by concept).
+  t.deepEqual(Object.keys(regressionLists), [
+    'core',
+    'M3',
+    'M4',
+    'M5',
+    'environments',
+    'context',
+    'mail',
+    'voice',
+  ]);
   t.deepEqual(parseArgs(['--list', 'core']).list, 'core');
 });
 
