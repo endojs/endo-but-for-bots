@@ -17578,3 +17578,17 @@ exit 1. Eight-child bursts completed in 18.54, 18.42 and 19.57 seconds against a
 30 s maximum. All three subtree stops removed the expected three sessions, in
 2.01, 1.88 and 2.02 seconds. The measured bursts and cleanup are faster than the
 shared smoke in J-12545. The budget for ask remains open.
+
+### J-1450 2026-11-19 WX.F exclusive compaction and image results
+
+The combined compaction workload planned in 9.4 ms median (1,892 observations) against
+50 ms. The median turn overhead was 285 ms (67 turns) against 300 ms. The session
+received exactly one extra delivery per compaction. Rebuilding the projected context
+after restart took 615 ms median across six samples against 359 ms, giving the file
+exit 1. The original lane measurement in J-12262 also missed the rebuild target.
+
+The image file exited 0. Preparing one request took 9.61 ms median on the Messages
+adapter (2,064 samples) and 9.54 ms on the Responses adapter (2,076) against a 15 ms
+target for each. The separate end-to-end workspace and provider byte checks are in
+J-1446. J-12105 records the combined exclusive environment pass, including five
+restarts with zero new process groups and zero session wakes.
