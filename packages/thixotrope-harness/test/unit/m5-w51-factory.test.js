@@ -246,7 +246,7 @@ test('a make argument over frameBytes fails the creation with presetTooLarge', a
       label: wide(limits.presetLabelUnits),
       template: 'general',
       // The composed prompt stays inline (under inlineBytes).
-      instructions: wide(1300),
+      instructions: wide(400),
       backend,
       modelId: wide(256),
       endowments: Array.from({ length: limits.maxEndowments }, (_, i) =>

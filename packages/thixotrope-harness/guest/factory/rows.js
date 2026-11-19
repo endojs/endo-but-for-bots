@@ -53,6 +53,8 @@ const PAGE_OVERHEAD_BYTES = 1024;
  * @property {any} execVat the session's ExecHandle, if any (M2 W2.7)
  * @property {boolean} importing an import whose `end` has not arrived: the
  *   row is not listed (M2 W2.7, m2-interfaces.md 7.2)
+ * @property {Row} [parent] a subagent's parent row: the row is never listed
+ *   (R4-5), though `get` and `ofSession` still find it
  */
 
 /**
@@ -61,6 +63,7 @@ const PAGE_OVERHEAD_BYTES = 1024;
  * @property {string} backendTitle
  * @property {string} modelId
  * @property {boolean} userInitiated
+ * @property {Row} [parent] a subagent's parent row
  */
 
 /**
@@ -101,7 +104,7 @@ export const makeRowTable = ({ onChange, rev: revOf } = {}) => {
    * @param {RowSeed} seed
    * @returns {Row}
    */
-  const add = ({ title, backendTitle, modelId, userInitiated }) => {
+  const add = ({ title, backendTitle, modelId, userInitiated, parent }) => {
     counter += 1;
     /** @type {Row} */
     const row = {
@@ -122,6 +125,7 @@ export const makeRowTable = ({ onChange, rev: revOf } = {}) => {
       execVat: undefined,
       importing: false,
     };
+    if (parent !== undefined) row.parent = parent;
     byKey.set(row.key, row);
     order.push(row);
     bump(row);
@@ -266,7 +270,10 @@ export const makeRowTable = ({ onChange, rev: revOf } = {}) => {
 
   /** @param {Row} row */
   const isListed = row =>
-    row.state !== 'creating' && row.userInitiated && !row.importing;
+    row.state !== 'creating' &&
+    row.userInitiated &&
+    !row.importing &&
+    row.parent === undefined;
 
   /**
    * One page of listed rows in creation order: at most `limit` rows (at

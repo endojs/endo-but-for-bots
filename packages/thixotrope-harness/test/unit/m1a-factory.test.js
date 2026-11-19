@@ -756,8 +756,9 @@ test('the hook tables have M1a entries and the services are attenuated', async t
   // M1a's three entries first; later milestones append (M2: W2.2, W2.6, W2.7).
   t.true(optionResolvers.length >= 3);
   // M1b W1b.5 appends the execVat builder (empty without a pool); M5 W5.1
-  // the presetEndowments builder (empty without a snapshot revision).
-  t.is(serviceBuilders.length, 3);
+  // the presetEndowments builder (empty without a snapshot revision); mail
+  // the mailServices and subagentServices builders (empty without a row).
+  t.is(serviceBuilders.length, 5);
   t.deepEqual(
     await serviceBuilders[2]({
       admin: makeFakeAdmin().admin,

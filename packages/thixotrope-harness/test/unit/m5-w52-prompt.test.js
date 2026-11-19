@@ -31,6 +31,10 @@ import {
   objectToolsSection,
   promptSections,
 } from '../../guest/lib/prompt-sections.js';
+import {
+  delegationSection,
+  mailToolsSection,
+} from '../../guest/lib/mail-prompt.js';
 import { composeSystemPrompt } from '../../guest/lib/system-prompt-base.js';
 import { promptResolver, promptTextFor } from '../../guest/session/prompt.js';
 import { resolveCreateOptions } from '../../guest/factory/session-options.js';
@@ -150,6 +154,8 @@ test('the section table: parts 1, 2, 3 and 7 in part order; part 3 empty (R4-26)
       [2, 'guestSection'],
       [3, 'environment'],
       [7, 'instructions'],
+      [2, 'mailTools'],
+      [4, 'delegation'],
     ],
   );
   t.true(Object.isFrozen(promptSections));
@@ -159,10 +165,18 @@ test('the section table: parts 1, 2, 3 and 7 in part order; part 3 empty (R4-26)
   t.false(environment.applies(context));
   t.is(environment.text(context), '');
   // Introduction, a blank line, the guest section, trimmed (Fae
-  // composePresetPrompt with parts 3-6 empty).
-  t.is(plain, `${flootIntroduction(false)}\n${guestSection}`.trimEnd());
+  // composePresetPrompt with parts 3, 5 and 6 empty), then the mail tools
+  // and the delegation section (`mail-prompt.js`).
+  t.is(
+    plain,
+    [
+      `${flootIntroduction(false)}\n${guestSection}`.trimEnd(),
+      mailToolsSection,
+      delegationSection,
+    ].join('\n\n'),
+  );
   t.true(plain.startsWith('You are Floot, a warm, concise assistant'));
-  t.true(plain.endsWith('Reach for it whenever no other tool fits.'));
+  t.true(plain.includes('Reach for it whenever no other tool fits.\n\n'));
 });
 
 test('composition: applying entries in part order, table order within a part, empty texts dropped', t => {

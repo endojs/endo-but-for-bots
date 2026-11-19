@@ -35,6 +35,7 @@
  *
  * Guest rules: prelude globals only; texts are built once at module load.
  */
+import { mailPromptSections } from './mail-prompt.js';
 
 /** U+2014 EM DASH, as Fae writes it. */
 const DASH = '\u2014';
@@ -221,4 +222,7 @@ export const promptSections = harden([
   guest,
   environment,
   instructions,
+  // Part 2 after the guest section, and part 4: mail and delegation
+  // (`mail-prompt.js`).
+  ...mailPromptSections,
 ]);

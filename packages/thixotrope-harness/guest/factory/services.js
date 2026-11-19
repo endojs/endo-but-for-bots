@@ -16,6 +16,9 @@ import { shapes } from '../lib/guards/factory.js';
 import { presetEndowmentsAt } from './presets.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
+/** @import { Row } from './rows.js' */
+/** @import { PostOffice } from './post-office.js' */
+/** @import { Subagents } from './subagents.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
 /** @type {GuestGlobals['mustMatch']} */
 const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
@@ -32,6 +35,14 @@ const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
  *   (M1b W1b.5; absent without a pool)
  * @property {any} [presetSnapshot] the preset's snapshot the creation's
  *   resolvers read (M5 W5.1, seam H-3)
+ * @property {Row} [row] the new session's row (mail, seam F2)
+ * @property {PostOffice} [postOffice] the factory's post office (mail)
+ * @property {Subagents} [subagents] the factory's subagent tree (mail)
+ * @property {Record<string, any>} [resolved] the creation's resolved
+ *   options: what a subagent of this session inherits (mail)
+ * @property {readonly { label: string, value: any }[]} [delegated] a
+ *   subagent's endowments: the attachments its parent listed, possibly
+ *   none (R4-70); set only for a subagent
  */
 
 /**
@@ -73,11 +84,48 @@ const presetEndowments = async ({ preset, presetSnapshot }) => {
   return { endowments };
 };
 
+/**
+ * Mail (designs/m9-interfaces.md F4): the session's `Outbox`, which posts
+ * as this session only, and the operator's address (the `user` label). A
+ * subagent's endowments are the attachments its parent listed and nothing
+ * else (R4-70): the field replaces the preset's, empty when none were
+ * listed.
+ * @type {ServiceBuilder}
+ */
+const mailServices = async ({ row, postOffice, delegated }) => {
+  if (row === undefined || postOffice === undefined) return {};
+  /** @type {Record<string, any>} */
+  const services = {
+    mail: postOffice.outboxFor(row),
+    operatorAddress: postOffice.operatorAddress(),
+  };
+  if (delegated !== undefined) services.endowments = delegated;
+  return services;
+};
+
+/**
+ * Subagents (F4): the session's `Delegation` while its depth is below
+ * `maxDepth`; no field at the limit (R4-69), so the subagent tools are not
+ * offered.
+ * @type {ServiceBuilder}
+ */
+const subagentServices = async ({ row, subagents, resolved }) => {
+  if (row === undefined || subagents === undefined || resolved === undefined)
+    return {};
+  const delegation = subagents.delegationFor(
+    row,
+    /** @type {any} */ (resolved),
+  );
+  return delegation === undefined ? {} : { subagents: delegation };
+};
+
 /** Hook table (append-only). */
 export const serviceBuilders = harden([
   backendAndHost,
   execVat,
   presetEndowments,
+  mailServices,
+  subagentServices,
 ]);
 
 /**

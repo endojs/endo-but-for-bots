@@ -23,6 +23,10 @@ import {
   guestSection,
   objectToolsSection,
 } from '../../guest/lib/system-prompt-base.js';
+import {
+  delegationSection,
+  mailToolsSection,
+} from '../../guest/lib/mail-prompt.js';
 import { promptResolver, promptTextFor } from '../../guest/session/prompt.js';
 import {
   optionResolvers,
@@ -135,12 +139,16 @@ test('composition: introduction, a line break, the guest section, trimmed; prese
   const plain = composeSystemPrompt({ spoken: false });
   t.is(
     plain,
-    `${flootIntroduction(false)}\n${guestSection}`.trimEnd(),
-    'Fae composePresetPrompt with parts 3-6 empty',
+    [
+      `${flootIntroduction(false)}\n${guestSection}`.trimEnd(),
+      mailToolsSection,
+      delegationSection,
+    ].join('\n\n'),
+    'Fae composePresetPrompt with parts 3, 5 and 6 empty; mail and delegation',
   );
   t.true(plain.startsWith('You are Floot, a warm, concise assistant'));
   // M5 (W5.2) appends the object-tools section after Fae's last paragraph.
-  t.true(plain.endsWith(objectToolsSection.trimEnd()));
+  t.true(plain.includes(`${objectToolsSection.trimEnd()}\n\n`));
   const spoken = composeSystemPrompt({ spoken: true });
   t.true(spoken.startsWith('You are Floot, a warm, concise voice assistant'));
   t.true(spoken.includes('never read code, secrets, or raw tool output aloud'));
