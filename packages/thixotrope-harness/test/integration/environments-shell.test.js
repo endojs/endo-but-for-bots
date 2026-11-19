@@ -192,10 +192,12 @@ run('environments on the turn and exec paths', async t => {
   t.teardown(() => live.stop());
   /** @param {string} input */
   const turn = async input => {
+    const start = performance.now();
     const ran = await runTurn(slice, session, live, input);
+    const turnMs = performance.now() - start;
     const results = toolResultsOf(await turnRecords(ran.turn));
     t.log(input, ran.end.status, JSON.stringify(results).slice(0, 1500));
-    return { ...ran, results };
+    return { ...ran, results, turnMs };
   };
 
   // 2: one repository.
@@ -318,12 +320,11 @@ run('environments on the turn and exec paths', async t => {
   );
 
   // 7: concurrency.
-  let t1 = performance.now();
-  await turn('one call');
-  const oneMs = performance.now() - t1;
-  t1 = performance.now();
+  // Time submit through the delivered end. Transcript pagination and assertion
+  // logging occur after completion and their cost varies with the call count.
+  const { turnMs: oneMs } = await turn('one call');
   const concurrent = await turn('concurrent');
-  const bothMs = performance.now() - t1;
+  const bothMs = concurrent.turnMs;
   t.is(concurrent.end.status, 'completed', 'the concurrent round completes');
   t.deepEqual(
     concurrent.results.map(r => r.failed),
