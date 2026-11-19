@@ -93,6 +93,7 @@ export const makeListFeed = ({ admin, listed, isListed }) => {
     let events = [];
     let bytes = BATCH_OVERHEAD_BYTES;
     let batches = 0;
+    const singleRow = pending.size === 1;
     for (const row of [...pending.keys()]) {
       if (batches >= MAX_BATCHES_PER_FLUSH) break;
       const event = eventOf(row);
@@ -100,7 +101,8 @@ export const makeListFeed = ({ admin, listed, isListed }) => {
       if (event !== undefined) {
         if (event.type === 'row') published.add(row);
         else published.delete(row);
-        const size = messageBytes(event);
+        // A lone row has no next event to compare with the page byte limit.
+        const size = singleRow ? 0 : messageBytes(event);
         if (
           events.length > 0 &&
           (events.length >= limits.publishBatchEvents ||

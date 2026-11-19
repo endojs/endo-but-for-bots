@@ -595,8 +595,8 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
     };
     if (ticket !== undefined) base.ticket = ticket;
     if (fields !== undefined) base.fields = fields;
+    let sessionBytes = checkedBytes(base);
     const full = harden(base);
-    let sessionBytes = checkedBytes(full);
     let toSessions = full;
     if (!startsTurn) {
       const kept = strayBody(draft.body);
