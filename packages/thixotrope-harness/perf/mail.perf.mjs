@@ -98,6 +98,12 @@ await runPerf('mail', async ({ provision }) => {
     }),
     { label: 'Mail sender' },
   );
+  // The receiver for this interval starts with an empty transcript, independent
+  // of how many messages the preceding operator window completed.
+  const betweenReceiver = await slice.createSession(
+    made.backend,
+    'Session mail recipient',
+  );
   const sender = await slice.createSession(
     senderBackend.backend,
     'Mail sender',
@@ -105,7 +111,7 @@ await runPerf('mail', async ({ provision }) => {
   const receipt = await post(
     mailbox,
     sender,
-    [{ label: 'target', value: await E(mailbox).addressOf(receiver) }],
+    [{ label: 'target', value: await E(mailbox).addressOf(betweenReceiver) }],
     'remember',
   );
   await dismissReplies(mailbox, [receipt.postmark]);
@@ -239,26 +245,50 @@ await runPerf('mail', async ({ provision }) => {
       });
     }
     /** @param {number} ms @param {boolean} edges */
-    const waves = async (ms, edges) => {
+    const measureThroughput = async (ms, edges) => {
       let largest = 0;
-      const w = await runWindow(
-        async i => {
-          const receipts = await Promise.all(
-            clients.map(c =>
-              post(c.mailbox, c.sessions[i % 2], edges ? c.attachments : []),
-            ),
-          );
-          const seen = await dismissReplies(
-            mailbox,
-            receipts.map(r => r.postmark),
-          );
-          largest = Math.max(largest, seen);
-        },
-        { ms },
+      let posts = 0;
+      // Each sender alternates its two recipients. Concurrent consumers share
+      // one inbox page request; each consumes only its own reply.
+      /** @type {Promise<any> | undefined} */
+      let page;
+      const readPage = () => {
+        page ??= E(mailbox)
+          .list()
+          .finally(() => {
+            page = undefined;
+          });
+        return page;
+      };
+      const start = performance.now();
+      await Promise.all(
+        clients.map(async c => {
+          let n = 0;
+          do {
+            const { postmark } = await post(
+              c.mailbox,
+              c.sessions[n % 2],
+              edges ? c.attachments : [],
+            );
+            const reply = await waitFor(
+              async () => {
+                const { messages } = await readPage();
+                largest = Math.max(largest, messages.length);
+                return messages.find(m => m.inReplyTo === postmark);
+              },
+              60_000,
+              'the recipient turn and its reply',
+            );
+            await E(reply.message).dismiss();
+            posts += 1;
+            n += 1;
+          } while (performance.now() - start < ms);
+        }),
       );
-      return { posts: w.samples.length * clients.length, largest, w };
+      const elapsedMs = performance.now() - start;
+      return { posts, largest, w: { samples: posts, ms, elapsedMs, few: 10 } };
     };
-    const rate = await waves(window, false);
+    const rate = await measureThroughput(window, false);
     const perSecond = (rate.posts * 1000) / rate.w.elapsedMs;
     emit({
       metric: 'mail.throughput',
@@ -273,7 +303,7 @@ await runPerf('mail', async ({ provision }) => {
     });
     if (perSecond < 3) process.exitCode = 1;
     const before = await hubJsonBytes(run.root);
-    const growth = await waves(growthWindow, true);
+    const growth = await measureThroughput(growthWindow, true);
     for (let i = 0; i < 32; i += 1) await E(mailbox).rev();
     const after = await hubJsonBytes(run.root);
     const ratio = before && after ? after / before : Infinity;
