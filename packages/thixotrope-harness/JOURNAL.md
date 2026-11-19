@@ -17241,6 +17241,16 @@ creation added 281.1 ms against the 175 ms limit. Median cancellation was 321.3 
 cleanup was 64.7 ms. All five staged large outputs returned valid data within 955 ms and the
 next turn ran. The host had no configured OCI runtime for the optional cold-start sample.
 
+### J-12103 2026-11-19 W6.7 browser and child workspace acceptance
+
+Headless Chromium on a local daemon passed both environment Settings cases. A chat-only
+session hid the execution section in 87.2 s. The development session showed the running
+state and the emergency stop, retained the refused draft and displayed its reason, then
+resumed with the queue held in 68.3 s. The file held a shared slot for 210.2 s after
+waiting 215.6 s. The combined child workspace case passed in 64.6 s. It read distinct
+parent and child markers from disk, checked the two Git histories and confirmed that the
+parent remained stopped while the child wrote its own workspace.
+
 ### J-12120 2026-11-19 W6.8 shared layout and guarded bundle boundaries
 
 `32fccde460` shares the package and state path resolvers between the two native resources and
