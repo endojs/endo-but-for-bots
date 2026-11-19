@@ -17989,3 +17989,27 @@ limited to four concurrent files (2,004 passed, 168 skipped and three TODOs).
 Type checking and ESLint passed with zero errors and 924 warnings. Duplication
 was 584 of 38,420 normalized lines (1.52%, ceiling 1.77%). J-12547 records
 the eight-recipient measurement; J-12108 records creation and voice validation.
+### J-1463 2026-11-19 Milestone batch timing baseline
+
+The earlier six-slot group run of the original 54-file milestones list
+took 7,945.1 seconds wall. Its per-file table totals 7,579.4 seconds held
+and 39,801.5 seconds waiting. Median wait was 410.6 seconds. Waits
+overlapped in six runner processes, so their sum is not elapsed wall.
+Six M3 files failed in that run. Their partial times do not establish
+passing runtimes.
+
+At those observed held times the six-slot capacity floor was 1,263.2 s
+before packing and runner overhead. The 20-minute wall gate provides
+7,200 slot-seconds, 379.4 fewer than the observed work. Ordering those
+historical file times longest first in a simulated six-slot pool gives
+1,289.4 s. A different order alone cannot explain a passing result at
+those durations. M4's twelve files accounted for 2,407 slot-seconds,
+M5's thirteen for 1,536 and M3's six for 930.
+
+The normal M3 browser history fixture has 300 turns. A previous fresh
+build through the template API took 207.5 s. The fixture's key covers
+the guest, adapter, archive and import inputs. The combined candidate at
+ea857fc639 uses the 50,000,000 crank budget from `config/defaults.js`
+when resolving this fixture. A job using the
+normal template API and shared run lock was queued beside the
+functional batch. Each fixture key has its own build lock.
