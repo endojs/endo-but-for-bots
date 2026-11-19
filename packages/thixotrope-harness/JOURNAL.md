@@ -14017,3 +14017,91 @@ eslint and prettier on changed files, lint:duplicates 1.80 % of 2.05 %, bundle-g
 m5-objects + m5-security (`--jobs 2`, 137.9 s wall, over 60 s, background). Not run: perf rows
 (exec-m5 probe b uses the changed predicate), browser lane, regression lists, kill points. No
 manager-part file touched. No scratch left. Fit: neutral.
+
+### J-10250 2026-11-19 T3-CLOSE templates rebuilt after step 3 - measured
+Every template key changed with step 3 (session, exec and factory bundles; adapter sources).
+Bundles (`scripts/bundle-guest.mjs`) at `804398c4d9`: session 212,484 of 240,000, exec 62,623,
+factory 156,955; before step 3 (`9bb9f4f2ea`, J-10193) 206,907, 61,688, 155,427 (+5,577, +935,
++1,528 bytes). Milestone templates, six parallel shared wrappers (`node perf/_pass.mjs templates
+<name>`), 00:06:00-00:08:49, 169 s wall: held `m1a` 124 s, `exec` 128, `pool` 131, `m4` 118,
+`m3-300` 169 (builds 67, 70, 73, 59, 110 s); `m5o` was current (T3-FIX's run). Long-session
+chain (`node perf/_long-template.mjs history journal throughput`, background, one shared slot
+beside the regression lists and the perf pass), 00:08:52-01:20:07: held long 200 / 1,000 / 5,000
+89 / 153 / 469 s, busy 10..50 393, 355, 357, 360, 361 s (2,537 s held; CL-CLOSE 2,558 s).
+Fit: neutral: one rebuild per bundle change, as designed.
+
+### J-10251 2026-11-19 T3-CLOSE regression run on the restructured tree - measured
+At `804398c4d9` (documents edited only), 6 jobs, shared slots, load 2.0-4.3, the long chain holding
+one slot. `corepack yarn test:regression:core` 00:09:04-00:25:34: unit and adapter lanes 1,328
+passed, 116 skipped, 67.3 s; 25 files, 4,344 s held, 922 s wall (989 s, 16.5 min, with the lanes);
+all pass (`m1b-exec-tool`, CL-CLOSE's load flake, passed, 182 s held; `m1a-slice`, which failed
+its timing ratio twice in the build units, passed, 236 s). `corepack yarn
+test:regression:milestones` (browser files included) 00:25:59-00:37:04: 31 files, 3,326 s held,
+665 s wall (11.1 min), all pass; slot waits up to 191 s (`m4-wire`). Longest held `m1b-followups`
+297 s. Both lists fit the 20-minute rule; 56 files, 7,670 s held against CL-CLOSE's 7,494 s
+(+2.3 %, inside the load range of the two runs). Per file: `process.md` 3.1.
+Fit: good: the restructure moved no behaviour any file sees.
+
+### J-10252 2026-11-19 T3-CLOSE exclusive perf mini-pass - measured
+00:37:28-01:14:06 UTC, `804398c4d9`-dirty (documents), load 1.6-4.3, back to back exclusive (as
+`perf:pass` runs each file; the six chosen by hand): session 160 s held, turn 129, exec 110,
+history 240 (exit 1), archive 245, exec-m5 275; 1,159 s held, 2,198 s wall (1,038 s waiting for
+the long chain's steps). Against CL-CLOSE (J-10192) and K2 (J-10082, J-10083):
+deliveries: `turn.start.deliveries` 2 per start (2), `turn.round` 3 (3), `turn.lease` 1 (1),
+`turn.delta` 0 (0), `turn.start` daemon deliveries 6.027 per turn (M1a-M2 6.02-6.03): no
+delivery count moved. `session.createCold` 38.6 deliveries per create: no recorded value at
+CL-CLOSE; the program is staged in 10 pieces now (`pieces` in the row) and the count follows the
+pieces (34.6 at 8, 40.6 at 11, J-9697), so unchanged [inferred]. `exec.trivial` 10.2 deliveries per
+op: no recorded baseline. Times: `session.program` 212,484 (206,907); `session.createCold` 6,379
+ms median, p99 6,607, n 5 (6,095, p99 6,331): +284 ms for +5,577 bytes, about 51 ms per KB against
+the 20-26 ms per KB of earlier growth; n 5 and under 1.25 x the 6,000 budget, but larger than the
+bytes explain; `install.factory` 6.56 s (6.32); `turn.start` 114 ms, p99 312 (118, p99 462);
+`turn.delta` 0.19 ms (0.20); `exec.first` 309 ms (295); `exec.trivial` 59 ms (66);
+`exec.sends.answered` 1,143 ms (1,089). History: stall at 200 / 1,000 / 5,000 976 / 1,009 / 899
+ms (K2 965 / 975 / 1,011); `archive.flat.turnStart.at1000` 1.83 x (258 against 141; K2 1.99 x,
+261 against 131): the carried miss, not step 3; hub row 9,104 / 9,084 / 9,323 (9,292 / 9,408 /
+8,825), slots 1.05 / 1.05 x. Archive: `archive.stall.at200` p99 1,233 ms (1,239), median 646
+(630); history page 280 ms, archived page 53 ms; context rebuild 90 ms. exec-m5:
+`exec.powersLookup` 55 ms (53.5), `exec.membrane` -12.2 ms (-9.9), `exec.scope1000` 63 ms (58),
+probe b `helpUnavailable`, passes (CL-CLOSE's failure was the check, fixed by the shared
+`tooBigOutcome`), probes a, c, f1, f2 pass.
+Fit: good, with one open reading: `session.createCold` grew more per KB than before.
+
+### J-10253 2026-11-19 T3-CLOSE what step 3 achieved; documents - decision
+From `9bb9f4f2ea` to `804398c4d9`, 37 commits by P3, T3-SESSION, T3-PROVIDERS, T3-HOST, T3-QC and
+T3-FIX. Largest closures (top-level function spans, lines): `makeTurnRunner` 1,553 -> 1,266
+(`turn.js` 1,728 -> 1,380 lines); `makeChannel` 310 -> 176, `makeListChannel` 178 -> 82;
+`makeScriptedProvider` 553 -> 450; `makeAnthropicProvider` 108 and `makeOpenRouterProvider` 110
+-> one `makeApiProvider` 78 plus `makeProviderShell` 20; two catalogue owners (96 + 55) -> one
+`makeCatalogOwner` 102; `makeHistory` 427 -> 382. About unchanged: `makeArchiveStore` 1,237 -> 1,240,
+`makeBlobStore` 732, `makeContextCache` 569 (not step 3's). Modules: 17 added (guest: `outbox`,
+`usage`, `ports`, `turn-index`, `turn-import`, `turn-types`, `factory/starts`,
+`lib/usage-counts`, `lib/record-preview`; adapter: `providers/shell`, `api`, `kinds`,
+`catalog-core`, `event-log`, `channel-subscriber`, `files`, `secrets/wrapping-key`), 1 deleted
+(`turn-hooks.js`); guest and adapter 4,006 lines added, 3,395 deleted. Duplicate share 3.00 % ->
+1.80 % (478 of 26,614 lines, 23 clusters), ceiling 3.25 -> 2.05 %. Bundles J-10250. Deliveries
+per turn unchanged (J-10252). Rows: done HR-SYN-4, -15, -17, -21, -24, -25, -26, -28, -30, -35,
+-36, HR-GUEST-11, -12; partly -3 ((b) plan), -5 ((b) plan; the store's error contract), -23, -32,
+-33. Documents (`a42d3b63a8`): ARCH 4.7-4.9, D-6, D-8, D-18 as built; the nine drifted places of
+HR-SYN-30 (`open(host) -> TurnPorts`, content methods, `ExecHandle.scope`, the sign-in file, 240,000
+bytes, `SessionRow.state`, `PresetCatalog`, binary frames, the union key guard stated as weaker);
+ARCH 14, a glossary of 50 terms; `harness.md` 8; `README.md`; `process.md` 3.1, 3.2, 6 (ceiling,
+shared index); `milestones.md` rule 3 and where later jobs go. For the M6-M11 contracts, beyond
+the plan: a part's `beforeRound` returns nothing and `HookTurn` has no way to change the round
+request, so M8's tool-less summary round needs a contract addition (a returned round option or a
+`HookTurn` member) and a runner change; `nextTurn` answers `{ text, at }` only, so M9 mail with
+attachments must go through the `packages` part or widen it; a pool kind adds a line to
+`guest/lib/subscription-texts.js`, a guest file, so its templates rebuild; the granted-tool
+`ANSWER_OVER_FRAME_TEXT` (model text, T3-SESSION) stays without a recorded PM sign-off.
+Fit: better.
+
+### J-10254 2026-11-19 T3-CLOSE time record - verified
+First command 00:05:26Z. Over 60 s: milestone templates 169 s (parallel); long-session chain
+00:08:52-01:20:07 (background); core list 989 s; milestones list 665 s; perf mini-pass 2,198 s;
+the adapter and unit lanes inside the core list 67 s. Ran: bundle-guest, lint:duplicates,
+the closure measure (a TypeScript-parser script over `guest` and `AH/impl`, now and at
+`9bb9f4f2ea` from `git archive`, scratch), the docs tests, prettier on the documents. Read only:
+`harness.md`, `harness-ontology.md` 5, `core-ontology.md` 5, `harness-edge.md` HR-EDGE-11,
+`step3-plan.md` 2, the journal J-10077..J-10249, the code headers of the step 3 modules. Not run:
+browser perf, gateway perf, the other perf files, a perf run of the old tree (createCold and
+exec.trivial delivery baselines). Scratch `tmp/T3-CLOSE` removed. Fit: neutral.
