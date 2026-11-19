@@ -76,6 +76,9 @@ const SUBMIT_REFUSALS = new Set([
   texts.requestIdReused,
   texts.receiptLimit,
   textOf.queueFull(limits.maxWaiting),
+  // A session emergency-stopped or stopping (`hooks.admit`, refused before
+  // any write; m6-interfaces.md 4.5, seam C-1).
+  texts.sessionStopped,
 ]);
 /** What `QueueEntry.edit` refuses a staged edit with: the entry is gone. */
 const EDIT_REFUSALS = new Set([texts.entryGone]);
