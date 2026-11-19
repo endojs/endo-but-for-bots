@@ -199,7 +199,7 @@ and OAuth servers on loopback): `m4-secrets` (1), `m4-pools` (2, 3), `m4-restart
 
 ```sh
 corepack yarn test:regression:core        # unit and adapter lanes, then the M0-M2 files and the template test
-corepack yarn test:regression:milestones  # the M3, M4 and M5 files with their browser files
+corepack yarn test:regression:milestones  # M3–M5, environments, context, mail and voice, including browser tests
 ```
 
 Each prints every file's held and waited time from `runs.jsonl` and the batch's wall time; the

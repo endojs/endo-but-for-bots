@@ -137,6 +137,11 @@ M6 uses `corepack yarn test:integration --list environments` for the preset, she
 stop/export and browser settings files. In a deep checkout, set `THIX_HARNESS_TMP` to a short,
 private directory dedicated to this checkout so its Unix socket paths fit the host limit.
 
+The M8 lane ran its three integration files individually in shared slots.
+`compaction.test.js` held its slot for 101 s, `compaction-restart.test.js` for 126 s and
+`compaction-archive.test.js` for 184.5 s. All three passed. The combined context list also
+contains the workspace-image case in the table below.
+
 Four-milestone group fold, 2026-11-19. All four cross-lane files passed on the combined
 daemon, using two runner invocations (J-1445, J-1446). The three-file invocation took
 1,752.0 s elapsed and the separate image run took 1,289.4 s. The final local checkout
@@ -268,10 +273,11 @@ The whole list is now 25 + 13 = 38 files (M0-M2 69.5 minutes, M3-M5 about 55 min
 than two hours of every lane stopped. **PM ruling (2026-11-18, recorded by K1,
 J-10075):** a milestone's recorded perf pass is its own files plus the cross-check `session`,
 `turn` and `exec` (the cross-check about 7 minutes); the whole list runs only when the PM asks
-for it (a core or worker change). One command runs it (S2): `corepack yarn perf:pass <M2|M3|M4|M5|all>`
+for it (a core or worker change). One command runs it (S2): `corepack yarn perf:pass <M2|M3|M4|M5|environments|context|mail|voice|all>`
 brings the templates up to date in shared slots, runs the files back to back in exclusive mode
 and prints each file's held time; the lists are `perfLists` in `perf/_pass.mjs`, and a unit test
-keeps every perf check in exactly one of them.
+keeps every perf check in exactly one of them. The context list runs `perf/compaction.perf.mjs`
+and `perf/images.perf.mjs` with the shared cross-check.
 
 **M3, M4, M5 and the cross-check** (X-CLOSE, 2026-11-18 16:12-17:19 UTC, at `404e60ea3a`, load
 1.0-2.8: 15 files, **4,004 s held (66.7 minutes), 66.8 minutes of wall**; exit 1 means a budget
