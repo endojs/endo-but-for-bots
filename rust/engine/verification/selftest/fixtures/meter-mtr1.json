@@ -1,0 +1,308 @@
+{
+ "metadata": {
+  "version": "1.0",
+  "timestamp": "2026-11-19T17:24:27.334851069Z",
+  "kani_version": "0.68.0",
+  "target": "x86_64-unknown-linux-gnu",
+  "build_mode": "release"
+ },
+ "error_details": [
+  {
+   "harness_id": "meter::proofs::mtr1_checks_and_charges",
+   "has_errors": false
+  },
+  {
+   "harness_id": "meter::proofs::mtr1_sequence_of_four",
+   "has_errors": false
+  },
+  {
+   "harness_id": "meter::proofs::mtr1_tick_code",
+   "has_errors": false
+  }
+ ],
+ "property_details": [
+  {
+   "harness_id": "meter::proofs::mtr1_checks_and_charges",
+   "property_details": {
+    "total_properties": 585,
+    "passed": 580,
+    "failed": 0,
+    "unreachable": 3,
+    "undetermined": 0,
+    "solver_error": 0,
+    "satisfied": 2,
+    "unsatisfiable": 0,
+    "covered": 0,
+    "uncovered": 0
+   }
+  },
+  {
+   "harness_id": "meter::proofs::mtr1_sequence_of_four",
+   "property_details": {
+    "total_properties": 463,
+    "passed": 461,
+    "failed": 0,
+    "unreachable": 1,
+    "undetermined": 0,
+    "solver_error": 0,
+    "satisfied": 1,
+    "unsatisfiable": 0,
+    "covered": 0,
+    "uncovered": 0
+   }
+  },
+  {
+   "harness_id": "meter::proofs::mtr1_tick_code",
+   "property_details": {
+    "total_properties": 44,
+    "passed": 43,
+    "failed": 0,
+    "unreachable": 0,
+    "undetermined": 0,
+    "solver_error": 0,
+    "satisfied": 1,
+    "unsatisfiable": 0,
+    "covered": 0,
+    "uncovered": 0
+   }
+  }
+ ],
+ "verification_results": {
+  "summary": {
+   "total_harnesses": 13,
+   "executed": 13,
+   "status": "completed",
+   "successful": 13,
+   "failed": 0,
+   "duration_ms": 3974
+  },
+  "results": [
+   {
+    "harness_id": "meter::proofs::mtr1_sequence_of_four",
+    "status": "Success",
+    "duration_ms": 3004,
+    "checks": [
+     {
+      "id": 1,
+      "function": "meter::Meter::check_inner::<{closure@ironhorse-vm/src/meter.rs:762:74: 762:77}>",
+      "status": "Success",
+      "description": "unreachable code",
+      "location": {
+       "file": "ironhorse-vm/src/meter.rs",
+       "line": "432",
+       "column": "19"
+      },
+      "category": "unreachable"
+     },
+     {
+      "id": 2,
+      "function": "meter::Meter::untick_raw",
+      "status": "Success",
+      "description": "\"untick_raw({n}) below the index {}\", self.index",
+      "location": {
+       "file": "ironhorse-vm/src/meter.rs",
+       "line": "321",
+       "column": "9"
+      },
+      "category": "assertion"
+     },
+     {
+      "id": 3,
+      "function": "meter::proofs::mtr1_sequence_of_four",
+      "status": "Success",
+      "description": "unreachable code",
+      "location": {
+       "file": "ironhorse-vm/src/meter.rs",
+       "line": "938",
+       "column": "18"
+      },
+      "category": "unreachable"
+     },
+     {
+      "id": 5,
+      "function": "meter::proofs::mtr1_sequence_of_four",
+      "status": "Satisfied",
+      "description": "the host is consulted three times",
+      "location": {
+       "file": "ironhorse-vm/src/meter.rs",
+       "line": "943",
+       "column": "9"
+      },
+      "category": "cover"
+     },
+     {
+      "id": 17,
+      "function": "std::fmt::Arguments::<'_>::from_str",
+      "status": "Unreachable",
+      "description": "attempt to shift left with overflow",
+      "location": {
+       "file": "<runner>/.rustup/toolchains/nightly-2026-08-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/fmt/mod.rs",
+       "line": "820",
+       "column": "38"
+      },
+      "category": "assertion"
+     }
+    ]
+   },
+   {
+    "harness_id": "meter::proofs::mtr1_checks_and_charges",
+    "status": "Success",
+    "duration_ms": 387,
+    "checks": [
+     {
+      "id": 1,
+      "function": "<ironhorse_vm::meter::Meter>::check_inner::<dyn core::ops::function::FnMut<(u64,), Output = bool>>",
+      "status": "Success",
+      "description": "assertion",
+      "location": {
+       "file": "unknown",
+       "line": "unknown",
+       "column": "unknown"
+      },
+      "category": "missing_definition"
+     },
+     {
+      "id": 2,
+      "function": "meter::Meter::check_inner::<dyn std::ops::FnMut(u64) -> bool>",
+      "status": "Success",
+      "description": "unreachable code",
+      "location": {
+       "file": "ironhorse-vm/src/meter.rs",
+       "line": "432",
+       "column": "19"
+      },
+      "category": "unreachable"
+     },
+     {
+      "id": 3,
+      "function": "<std::ops::RangeInclusive<u8> as std::ops::RangeBounds<u8>>::contains::<u8>",
+      "status": "Success",
+      "description": "unreachable code",
+      "location": {
+       "file": "ironhorse-vm/src/lib.rs",
+       "line": "0",
+       "column": "0"
+      },
+      "category": "unreachable"
+     },
+     {
+      "id": 11,
+      "function": "ironhorse_meter::chunk_cost",
+      "status": "Unreachable",
+      "description": "attempt to subtract with overflow",
+      "location": {
+       "file": "ironhorse-meter/src/lib.rs",
+       "line": "314",
+       "column": "40"
+      },
+      "category": "assertion"
+     },
+     {
+      "id": 12,
+      "function": "ironhorse_meter::chunk_cost",
+      "status": "Unreachable",
+      "description": "attempt to subtract with overflow",
+      "location": {
+       "file": "ironhorse-meter/src/lib.rs",
+       "line": "314",
+       "column": "64"
+      },
+      "category": "assertion"
+     },
+     {
+      "id": 13,
+      "function": "meter::Meter::untick_raw",
+      "status": "Unreachable",
+      "description": "\"untick_raw({n}) below the index {}\", self.index",
+      "location": {
+       "file": "ironhorse-vm/src/meter.rs",
+       "line": "321",
+       "column": "9"
+      },
+      "category": "assertion"
+     },
+     {
+      "id": 16,
+      "function": "meter::proofs::mtr1_checks_and_charges",
+      "status": "Satisfied",
+      "description": "the host is consulted",
+      "location": {
+       "file": "ironhorse-vm/src/meter.rs",
+       "line": "910",
+       "column": "9"
+      },
+      "category": "cover"
+     },
+     {
+      "id": 17,
+      "function": "meter::proofs::mtr1_checks_and_charges",
+      "status": "Satisfied",
+      "description": "a consulted check continues",
+      "location": {
+       "file": "ironhorse-vm/src/meter.rs",
+       "line": "911",
+       "column": "9"
+      },
+      "category": "cover"
+     }
+    ]
+   },
+   {
+    "harness_id": "meter::proofs::mtr1_tick_code",
+    "status": "Success",
+    "duration_ms": 34,
+    "checks": [
+     {
+      "id": 1,
+      "function": "meter::Meter::restore",
+      "status": "Success",
+      "description": "attempt to shift right with overflow",
+      "location": {
+       "file": "ironhorse-vm/src/meter.rs",
+       "line": "358",
+       "column": "30"
+      },
+      "category": "assertion"
+     },
+     {
+      "id": 3,
+      "function": "meter::Meter::raw",
+      "status": "Success",
+      "description": "dereference failure: pointer NULL",
+      "location": {
+       "file": "ironhorse-vm/src/meter.rs",
+       "line": "332",
+       "column": "9"
+      },
+      "category": "pointer_dereference"
+     },
+     {
+      "id": 4,
+      "function": "meter::Meter::raw",
+      "status": "Success",
+      "description": "dereference failure: pointer invalid",
+      "location": {
+       "file": "ironhorse-vm/src/meter.rs",
+       "line": "332",
+       "column": "9"
+      },
+      "category": "pointer_dereference"
+     },
+     {
+      "id": 2,
+      "function": "meter::proofs::mtr1_tick_code",
+      "status": "Satisfied",
+      "description": "the tick reaches the ceiling",
+      "location": {
+       "file": "ironhorse-vm/src/meter.rs",
+       "line": "806",
+       "column": "9"
+      },
+      "category": "cover"
+     }
+    ]
+   }
+  ]
+ },
+ "note": "Trimmed: all but three SUCCESS checks per harness removed."
+}

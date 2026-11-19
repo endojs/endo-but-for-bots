@@ -1,0 +1,362 @@
+cargo kani --lib -Z unstable-options --export-json <repo>/rust/engine/target/kani/verify-logs/selftest-selftest-00000000.json --harness-timeout 121s --harness proofs::good --harness proofs::fails --harness proofs::unsat_cover --harness proofs::vacuous_assume --harness proofs::library_branch_excluded --exact
+
+Kani Rust Verifier 0.68.0 (cargo plugin)
+CBMC 6.11.0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.00s
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+Checking harness proofs::library_branch_excluded...
+CBMC 6.11.0 (cbmc-6.11.0)
+CBMC version 6.11.0 (cbmc-6.11.0) 64-bit x86_64 linux
+Reading GOTO program from file <repo>/rust/engine/target/selftest/kani/x86_64-unknown-linux-gnu/debug/build/ironhorse-verify-selftest/dd14e8c736be75a3/out/ironhorse_verify_selftest-dd14e8c736be75a3__RNvNtCsfCiUEpAWoKs_25ironhorse_verify_selftest6proofs23library_branch_excluded.out
+Generating GOTO Program
+Adding CPROVER library (x86_64)
+Removal of function pointers and virtual functions
+Generic Property Instrumentation
+Running with 16 object bits, 48 offset bits (user-specified)
+Starting Bounded Model Checking
+aborting path on assume(false) at file src/lib.rs line 8 column 9 function checked_half thread 0
+Runtime Symex: 0.00212969s
+size of program expression: 145 steps
+slicing removed 69 assignments
+Generated 12 VCC(s), 6 remaining after simplification
+Runtime Postprocess Equation: 4.8277e-05s
+Passing problem to propositional reduction
+converting SSA
+Runtime Convert SSA: 0.000327252s
+Running propositional reduction
+Post-processing
+Runtime Post-process: 2.1536e-05s
+Solving with CaDiCaL 3.0.0
+138 variables, 433 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 0.000124734s
+Runtime decision procedure: 0.000560483s
+Running propositional reduction
+Solving with CaDiCaL 3.0.0
+139 variables, 434 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 7.4631e-05s
+Runtime decision procedure: 0.000119562s
+Running propositional reduction
+Solving with CaDiCaL 3.0.0
+140 variables, 435 clauses
+SAT checker: instance is UNSATISFIABLE
+Runtime Solver: 4.5947e-05s
+Runtime decision procedure: 8.9719e-05s
+
+RESULTS:
+Check 1: checked_half.assertion.1
+	 - Status: SUCCESS
+	 - Description: "attempt to calculate the remainder with a divisor of zero"
+	 - Location: src/lib.rs:7:8 in function checked_half
+
+Check 2: checked_half.arithmetic_overflow.1
+	 - Status: SUCCESS
+	 - Description: "attempt to calculate the remainder with a divisor of zero"
+	 - Location: src/lib.rs:7:8 in function checked_half
+
+Check 3: checked_half.assertion.2
+	 - Status: SUCCESS
+	 - Description: "odd input"
+	 - Location: src/lib.rs:8:9 in function checked_half
+
+Check 4: checked_half.assertion.3
+	 - Status: SUCCESS
+	 - Description: "attempt to divide by zero"
+	 - Location: src/lib.rs:10:5 in function checked_half
+
+Check 5: checked_half.arithmetic_overflow.2
+	 - Status: SUCCESS
+	 - Description: "attempt to divide by zero"
+	 - Location: src/lib.rs:10:5 in function checked_half
+
+Check 6: proofs::library_branch_excluded.assertion.1
+	 - Status: SUCCESS
+	 - Description: "attempt to calculate the remainder with a divisor of zero"
+	 - Location: src/lib.rs:56:22 in function proofs::library_branch_excluded
+
+Check 7: proofs::library_branch_excluded.arithmetic_overflow.1
+	 - Status: SUCCESS
+	 - Description: "attempt to calculate the remainder with a divisor of zero"
+	 - Location: src/lib.rs:56:22 in function proofs::library_branch_excluded
+
+Check 8: proofs::library_branch_excluded.cover.1
+	 - Status: SATISFIED
+	 - Description: "a reachable even input"
+	 - Location: src/lib.rs:58:9 in function proofs::library_branch_excluded
+
+
+SUMMARY:
+ ** 0 of 7 failed
+
+ ** 1 of 1 cover properties satisfied
+
+
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.047333285s
+
+Checking harness proofs::vacuous_assume...
+CBMC 6.11.0 (cbmc-6.11.0)
+CBMC version 6.11.0 (cbmc-6.11.0) 64-bit x86_64 linux
+Reading GOTO program from file <repo>/rust/engine/target/selftest/kani/x86_64-unknown-linux-gnu/debug/build/ironhorse-verify-selftest/dd14e8c736be75a3/out/ironhorse_verify_selftest-dd14e8c736be75a3__RNvNtCsfCiUEpAWoKs_25ironhorse_verify_selftest6proofs14vacuous_assume.out
+Generating GOTO Program
+Adding CPROVER library (x86_64)
+Removal of function pointers and virtual functions
+Generic Property Instrumentation
+Running with 16 object bits, 48 offset bits (user-specified)
+Starting Bounded Model Checking
+Runtime Symex: 0.00165487s
+size of program expression: 110 steps
+slicing removed 48 assignments
+Generated 4 VCC(s), 4 remaining after simplification
+Runtime Postprocess Equation: 4.6815e-05s
+Passing problem to propositional reduction
+converting SSA
+Runtime Convert SSA: 0.000211518s
+Running propositional reduction
+Post-processing
+Runtime Post-process: 1.3094e-05s
+Solving with CaDiCaL 3.0.0
+39 variables, 81 clauses
+SAT checker: instance is UNSATISFIABLE
+Runtime Solver: 0.00051814s
+Runtime decision procedure: 0.000789635s
+
+RESULTS:
+Check 1: proofs::vacuous_assume.assertion.1
+	 - Status: UNREACHABLE
+	 - Description: ""anything at all""
+	 - Location: src/lib.rs:46:9 in function proofs::vacuous_assume
+
+Check 2: proofs::vacuous_assume.cover.1
+	 - Status: UNREACHABLE
+	 - Description: "never"
+	 - Location: src/lib.rs:47:9 in function proofs::vacuous_assume
+
+
+SUMMARY:
+ ** 0 of 1 failed (1 unreachable)
+
+ ** 0 of 1 cover properties satisfied (1 unreachable)
+
+
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.037532914s
+
+Checking harness proofs::unsat_cover...
+CBMC 6.11.0 (cbmc-6.11.0)
+CBMC version 6.11.0 (cbmc-6.11.0) 64-bit x86_64 linux
+Reading GOTO program from file <repo>/rust/engine/target/selftest/kani/x86_64-unknown-linux-gnu/debug/build/ironhorse-verify-selftest/dd14e8c736be75a3/out/ironhorse_verify_selftest-dd14e8c736be75a3__RNvNtCsfCiUEpAWoKs_25ironhorse_verify_selftest6proofs11unsat_cover.out
+Generating GOTO Program
+Adding CPROVER library (x86_64)
+Removal of function pointers and virtual functions
+Generic Property Instrumentation
+Running with 16 object bits, 48 offset bits (user-specified)
+Starting Bounded Model Checking
+Runtime Symex: 0.00111548s
+size of program expression: 71 steps
+slicing removed 29 assignments
+Generated 2 VCC(s), 2 remaining after simplification
+Runtime Postprocess Equation: 3.9919e-05s
+Passing problem to propositional reduction
+converting SSA
+Runtime Convert SSA: 0.000134279s
+Running propositional reduction
+Post-processing
+Runtime Post-process: 2.3376e-05s
+Solving with CaDiCaL 3.0.0
+30 variables, 44 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 0.000126955s
+Runtime decision procedure: 0.000347966s
+Running propositional reduction
+Solving with CaDiCaL 3.0.0
+31 variables, 45 clauses
+SAT checker: instance is UNSATISFIABLE
+Runtime Solver: 4.0896e-05s
+Runtime decision procedure: 0.000104864s
+
+RESULTS:
+Check 1: proofs::unsat_cover.cover.1
+	 - Status: UNSATISFIABLE
+	 - Description: "impossible"
+	 - Location: src/lib.rs:38:9 in function proofs::unsat_cover
+
+
+SUMMARY:
+ ** 0 of 0 failed
+
+ ** 0 of 1 cover properties satisfied
+
+
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.03876745s
+
+Checking harness proofs::fails...
+CBMC 6.11.0 (cbmc-6.11.0)
+CBMC version 6.11.0 (cbmc-6.11.0) 64-bit x86_64 linux
+Reading GOTO program from file <repo>/rust/engine/target/selftest/kani/x86_64-unknown-linux-gnu/debug/build/ironhorse-verify-selftest/dd14e8c736be75a3/out/ironhorse_verify_selftest-dd14e8c736be75a3__RNvNtCsfCiUEpAWoKs_25ironhorse_verify_selftest6proofs5fails.out
+Generating GOTO Program
+Adding CPROVER library (x86_64)
+Removal of function pointers and virtual functions
+Generic Property Instrumentation
+Running with 16 object bits, 48 offset bits (user-specified)
+Starting Bounded Model Checking
+Runtime Symex: 0.00122753s
+size of program expression: 90 steps
+slicing removed 39 assignments
+Generated 4 VCC(s), 4 remaining after simplification
+Runtime Postprocess Equation: 0.00412636s
+Passing problem to propositional reduction
+converting SSA
+Runtime Convert SSA: 0.000307283s
+Running propositional reduction
+Post-processing
+Runtime Post-process: 8.426e-06s
+Solving with CaDiCaL 3.0.0
+23 variables, 36 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 5.469e-05s
+Runtime decision procedure: 0.00041756s
+Running propositional reduction
+Solving with CaDiCaL 3.0.0
+24 variables, 37 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 2.0518e-05s
+Runtime decision procedure: 4.7786e-05s
+Running propositional reduction
+Solving with CaDiCaL 3.0.0
+25 variables, 38 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 2.0592e-05s
+Runtime decision procedure: 5.375e-05s
+
+RESULTS:
+Check 1: proofs::fails.assertion.1
+	 - Status: FAILURE
+	 - Description: ""x below 200""
+	 - Location: src/lib.rs:30:9 in function proofs::fails
+
+Check 2: proofs::fails.cover.1
+	 - Status: SATISFIED
+	 - Description: "small"
+	 - Location: src/lib.rs:31:9 in function proofs::fails
+
+
+SUMMARY:
+ ** 1 of 1 failed
+
+ ** 1 of 1 cover properties satisfied
+
+Failed Checks: "x below 200"
+ File: "src/lib.rs", line 30, in proofs::fails
+
+VERIFICATION:- FAILED
+Verification Time: 0.044531226s
+
+Checking harness proofs::good...
+CBMC 6.11.0 (cbmc-6.11.0)
+CBMC version 6.11.0 (cbmc-6.11.0) 64-bit x86_64 linux
+Reading GOTO program from file <repo>/rust/engine/target/selftest/kani/x86_64-unknown-linux-gnu/debug/build/ironhorse-verify-selftest/dd14e8c736be75a3/out/ironhorse_verify_selftest-dd14e8c736be75a3__RNvNtCsfCiUEpAWoKs_25ironhorse_verify_selftest6proofs4good.out
+Generating GOTO Program
+Adding CPROVER library (x86_64)
+Removal of function pointers and virtual functions
+Generic Property Instrumentation
+Running with 16 object bits, 48 offset bits (user-specified)
+Starting Bounded Model Checking
+aborting path on assume(false) at file src/lib.rs line 8 column 9 function checked_half thread 0
+Runtime Symex: 0.00304052s
+size of program expression: 236 steps
+slicing removed 110 assignments
+Generated 14 VCC(s), 8 remaining after simplification
+Runtime Postprocess Equation: 6.3909e-05s
+Passing problem to propositional reduction
+converting SSA
+Runtime Convert SSA: 0.000510706s
+Running propositional reduction
+Post-processing
+Runtime Post-process: 1.1326e-05s
+Solving with CaDiCaL 3.0.0
+206 variables, 647 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 7.8957e-05s
+Runtime decision procedure: 0.000665674s
+Running propositional reduction
+Solving with CaDiCaL 3.0.0
+207 variables, 648 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 3.5432e-05s
+Runtime decision procedure: 6.6858e-05s
+Running propositional reduction
+Solving with CaDiCaL 3.0.0
+208 variables, 649 clauses
+SAT checker: instance is UNSATISFIABLE
+Runtime Solver: 2.187e-05s
+Runtime decision procedure: 4.307e-05s
+
+RESULTS:
+Check 1: checked_half.assertion.1
+	 - Status: SUCCESS
+	 - Description: "attempt to calculate the remainder with a divisor of zero"
+	 - Location: src/lib.rs:7:8 in function checked_half
+
+Check 2: checked_half.arithmetic_overflow.1
+	 - Status: SUCCESS
+	 - Description: "attempt to calculate the remainder with a divisor of zero"
+	 - Location: src/lib.rs:7:8 in function checked_half
+
+Check 3: checked_half.assertion.2
+	 - Status: SUCCESS
+	 - Description: "odd input"
+	 - Location: src/lib.rs:8:9 in function checked_half
+
+Check 4: checked_half.assertion.3
+	 - Status: SUCCESS
+	 - Description: "attempt to divide by zero"
+	 - Location: src/lib.rs:10:5 in function checked_half
+
+Check 5: checked_half.arithmetic_overflow.2
+	 - Status: SUCCESS
+	 - Description: "attempt to divide by zero"
+	 - Location: src/lib.rs:10:5 in function checked_half
+
+Check 6: proofs::good.assertion.1
+	 - Status: SUCCESS
+	 - Description: "attempt to calculate the remainder with a divisor of zero"
+	 - Location: src/lib.rs:21:22 in function proofs::good
+
+Check 7: proofs::good.arithmetic_overflow.1
+	 - Status: SUCCESS
+	 - Description: "attempt to calculate the remainder with a divisor of zero"
+	 - Location: src/lib.rs:21:22 in function proofs::good
+
+Check 8: proofs::good.assertion.2
+	 - Status: SUCCESS
+	 - Description: "assertion failed: checked_half(x) <= 127"
+	 - Location: src/lib.rs:22:9 in function proofs::good
+
+Check 9: proofs::good.cover.1
+	 - Status: SATISFIED
+	 - Description: "the largest even input"
+	 - Location: src/lib.rs:23:9 in function proofs::good
+
+
+SUMMARY:
+ ** 0 of 8 failed
+
+ ** 1 of 1 cover properties satisfied
+
+
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.040283144s
+
+Manual Harness Summary:
+Verification failed for - proofs::fails
+Complete - 4 successfully verified harnesses, 1 failures, 5 total.

@@ -1,0 +1,16 @@
+# Trimmed: the verdict lines of three harnesses.
+Checking harness meter::proofs::mtr1_sequence_of_four...
+SUMMARY:
+ ** 0 of 462 failed (1 unreachable)
+ ** 1 of 1 cover properties satisfied
+VERIFICATION:- SUCCESSFUL
+Checking harness meter::proofs::mtr1_checks_and_charges...
+SUMMARY:
+ ** 0 of 583 failed (3 unreachable)
+ ** 2 of 2 cover properties satisfied
+VERIFICATION:- SUCCESSFUL
+Checking harness meter::proofs::mtr1_tick_code...
+SUMMARY:
+ ** 0 of 43 failed
+ ** 1 of 1 cover properties satisfied
+VERIFICATION:- SUCCESSFUL

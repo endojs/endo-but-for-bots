@@ -1,0 +1,16 @@
+# Runner self-test fixtures (VERIFICATION.md § Runner self-test): a
+# standalone crate outside the engine workspace whose harnesses are
+# deliberately bad, so `scripts/test-verify.py` can require `verify.py` to
+# reject each one for the expected reason. Never part of a proof run.
+[package]
+name = "ironhorse-verify-selftest"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[lints.rust]
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
+[workspace]

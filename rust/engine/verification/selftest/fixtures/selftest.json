@@ -1,0 +1,422 @@
+{
+ "metadata": {
+  "version": "1.0",
+  "timestamp": "2026-11-19T17:25:41.731979201Z",
+  "kani_version": "0.68.0",
+  "target": "x86_64-unknown-linux-gnu",
+  "build_mode": "release"
+ },
+ "error_details": [
+  {
+   "harness_id": "proofs::fails",
+   "has_errors": true,
+   "error_type": "assertion_failure",
+   "failed_properties_type": "PanicsOnly",
+   "exit_status": "properties_failed"
+  },
+  {
+   "harness_id": "proofs::good",
+   "has_errors": false
+  },
+  {
+   "harness_id": "proofs::library_branch_excluded",
+   "has_errors": false
+  },
+  {
+   "harness_id": "proofs::unsat_cover",
+   "has_errors": false
+  },
+  {
+   "harness_id": "proofs::vacuous_assume",
+   "has_errors": false
+  }
+ ],
+ "property_details": [
+  {
+   "harness_id": "proofs::fails",
+   "property_details": {
+    "total_properties": 2,
+    "passed": 0,
+    "failed": 1,
+    "unreachable": 0,
+    "undetermined": 0,
+    "solver_error": 0,
+    "satisfied": 1,
+    "unsatisfiable": 0,
+    "covered": 0,
+    "uncovered": 0
+   }
+  },
+  {
+   "harness_id": "proofs::good",
+   "property_details": {
+    "total_properties": 9,
+    "passed": 8,
+    "failed": 0,
+    "unreachable": 0,
+    "undetermined": 0,
+    "solver_error": 0,
+    "satisfied": 1,
+    "unsatisfiable": 0,
+    "covered": 0,
+    "uncovered": 0
+   }
+  },
+  {
+   "harness_id": "proofs::library_branch_excluded",
+   "property_details": {
+    "total_properties": 8,
+    "passed": 7,
+    "failed": 0,
+    "unreachable": 0,
+    "undetermined": 0,
+    "solver_error": 0,
+    "satisfied": 1,
+    "unsatisfiable": 0,
+    "covered": 0,
+    "uncovered": 0
+   }
+  },
+  {
+   "harness_id": "proofs::unsat_cover",
+   "property_details": {
+    "total_properties": 1,
+    "passed": 0,
+    "failed": 0,
+    "unreachable": 0,
+    "undetermined": 0,
+    "solver_error": 0,
+    "satisfied": 0,
+    "unsatisfiable": 1,
+    "covered": 0,
+    "uncovered": 0
+   }
+  },
+  {
+   "harness_id": "proofs::vacuous_assume",
+   "property_details": {
+    "total_properties": 2,
+    "passed": 0,
+    "failed": 0,
+    "unreachable": 2,
+    "undetermined": 0,
+    "solver_error": 0,
+    "satisfied": 0,
+    "unsatisfiable": 0,
+    "covered": 0,
+    "uncovered": 0
+   }
+  }
+ ],
+ "verification_results": {
+  "summary": {
+   "total_harnesses": 5,
+   "executed": 5,
+   "status": "completed",
+   "successful": 4,
+   "failed": 1,
+   "duration_ms": 206
+  },
+  "results": [
+   {
+    "harness_id": "proofs::library_branch_excluded",
+    "status": "Success",
+    "duration_ms": 47,
+    "checks": [
+     {
+      "id": 1,
+      "function": "checked_half",
+      "status": "Success",
+      "description": "attempt to calculate the remainder with a divisor of zero",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "7",
+       "column": "8"
+      },
+      "category": "assertion"
+     },
+     {
+      "id": 2,
+      "function": "checked_half",
+      "status": "Success",
+      "description": "attempt to calculate the remainder with a divisor of zero",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "7",
+       "column": "8"
+      },
+      "category": "arithmetic_overflow"
+     },
+     {
+      "id": 3,
+      "function": "checked_half",
+      "status": "Success",
+      "description": "odd input",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "8",
+       "column": "9"
+      },
+      "category": "assertion"
+     },
+     {
+      "id": 4,
+      "function": "checked_half",
+      "status": "Success",
+      "description": "attempt to divide by zero",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "10",
+       "column": "5"
+      },
+      "category": "assertion"
+     },
+     {
+      "id": 5,
+      "function": "checked_half",
+      "status": "Success",
+      "description": "attempt to divide by zero",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "10",
+       "column": "5"
+      },
+      "category": "arithmetic_overflow"
+     },
+     {
+      "id": 6,
+      "function": "proofs::library_branch_excluded",
+      "status": "Success",
+      "description": "attempt to calculate the remainder with a divisor of zero",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "56",
+       "column": "22"
+      },
+      "category": "assertion"
+     },
+     {
+      "id": 7,
+      "function": "proofs::library_branch_excluded",
+      "status": "Success",
+      "description": "attempt to calculate the remainder with a divisor of zero",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "56",
+       "column": "22"
+      },
+      "category": "arithmetic_overflow"
+     },
+     {
+      "id": 8,
+      "function": "proofs::library_branch_excluded",
+      "status": "Satisfied",
+      "description": "a reachable even input",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "58",
+       "column": "9"
+      },
+      "category": "cover"
+     }
+    ]
+   },
+   {
+    "harness_id": "proofs::vacuous_assume",
+    "status": "Success",
+    "duration_ms": 37,
+    "checks": [
+     {
+      "id": 1,
+      "function": "proofs::vacuous_assume",
+      "status": "Unreachable",
+      "description": "\"anything at all\"",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "46",
+       "column": "9"
+      },
+      "category": "assertion"
+     },
+     {
+      "id": 2,
+      "function": "proofs::vacuous_assume",
+      "status": "Unreachable",
+      "description": "never",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "47",
+       "column": "9"
+      },
+      "category": "cover"
+     }
+    ]
+   },
+   {
+    "harness_id": "proofs::unsat_cover",
+    "status": "Success",
+    "duration_ms": 38,
+    "checks": [
+     {
+      "id": 1,
+      "function": "proofs::unsat_cover",
+      "status": "Unsatisfiable",
+      "description": "impossible",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "38",
+       "column": "9"
+      },
+      "category": "cover"
+     }
+    ]
+   },
+   {
+    "harness_id": "proofs::fails",
+    "status": "Failure",
+    "duration_ms": 44,
+    "checks": [
+     {
+      "id": 1,
+      "function": "proofs::fails",
+      "status": "Failure",
+      "description": "\"x below 200\"",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "30",
+       "column": "9"
+      },
+      "category": "assertion"
+     },
+     {
+      "id": 2,
+      "function": "proofs::fails",
+      "status": "Satisfied",
+      "description": "small",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "31",
+       "column": "9"
+      },
+      "category": "cover"
+     }
+    ]
+   },
+   {
+    "harness_id": "proofs::good",
+    "status": "Success",
+    "duration_ms": 40,
+    "checks": [
+     {
+      "id": 1,
+      "function": "checked_half",
+      "status": "Success",
+      "description": "attempt to calculate the remainder with a divisor of zero",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "7",
+       "column": "8"
+      },
+      "category": "assertion"
+     },
+     {
+      "id": 2,
+      "function": "checked_half",
+      "status": "Success",
+      "description": "attempt to calculate the remainder with a divisor of zero",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "7",
+       "column": "8"
+      },
+      "category": "arithmetic_overflow"
+     },
+     {
+      "id": 3,
+      "function": "checked_half",
+      "status": "Success",
+      "description": "odd input",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "8",
+       "column": "9"
+      },
+      "category": "assertion"
+     },
+     {
+      "id": 4,
+      "function": "checked_half",
+      "status": "Success",
+      "description": "attempt to divide by zero",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "10",
+       "column": "5"
+      },
+      "category": "assertion"
+     },
+     {
+      "id": 5,
+      "function": "checked_half",
+      "status": "Success",
+      "description": "attempt to divide by zero",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "10",
+       "column": "5"
+      },
+      "category": "arithmetic_overflow"
+     },
+     {
+      "id": 6,
+      "function": "proofs::good",
+      "status": "Success",
+      "description": "attempt to calculate the remainder with a divisor of zero",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "21",
+       "column": "22"
+      },
+      "category": "assertion"
+     },
+     {
+      "id": 7,
+      "function": "proofs::good",
+      "status": "Success",
+      "description": "attempt to calculate the remainder with a divisor of zero",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "21",
+       "column": "22"
+      },
+      "category": "arithmetic_overflow"
+     },
+     {
+      "id": 8,
+      "function": "proofs::good",
+      "status": "Success",
+      "description": "assertion failed: checked_half(x) <= 127",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "22",
+       "column": "9"
+      },
+      "category": "assertion"
+     },
+     {
+      "id": 9,
+      "function": "proofs::good",
+      "status": "Satisfied",
+      "description": "the largest even input",
+      "location": {
+       "file": "src/lib.rs",
+       "line": "23",
+       "column": "9"
+      },
+      "category": "cover"
+     }
+    ]
+   }
+  ]
+ }
+}

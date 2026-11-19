@@ -1,0 +1,54 @@
+{
+ "metadata": {
+  "version": "1.0",
+  "timestamp": "2026-11-19T17:25:43.419713525Z",
+  "kani_version": "0.68.0",
+  "target": "x86_64-unknown-linux-gnu",
+  "build_mode": "release"
+ },
+ "error_details": [
+  {
+   "harness_id": "proofs::exhausts_memory",
+   "has_errors": true,
+   "error_type": "verification_failure",
+   "failed_properties_type": "Other",
+   "exit_status": "exit_code_6"
+  }
+ ],
+ "property_details": [
+  {
+   "harness_id": "proofs::exhausts_memory",
+   "property_details": {
+    "total_properties": null,
+    "passed": null,
+    "failed": null,
+    "unreachable": null,
+    "undetermined": null,
+    "solver_error": null,
+    "satisfied": null,
+    "unsatisfiable": null,
+    "covered": null,
+    "uncovered": null,
+    "error": "Could not extract property details due to verification failure"
+   }
+  }
+ ],
+ "verification_results": {
+  "summary": {
+   "total_harnesses": 1,
+   "executed": 1,
+   "status": "completed",
+   "successful": 0,
+   "failed": 1,
+   "duration_ms": 2400
+  },
+  "results": [
+   {
+    "harness_id": "proofs::exhausts_memory",
+    "status": "Failure",
+    "duration_ms": 2400,
+    "checks": []
+   }
+  ]
+ }
+}
