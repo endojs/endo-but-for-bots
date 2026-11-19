@@ -18121,3 +18121,29 @@ was 627 ms. The three burst-of-eight runs took 13.829, 14.325 and
 13.685 s against 30 s. All stops removed three workers, in 1.769,
 1.808 and 1.724 s. Raw output is in
 `/private/tmp/thix-qc-post-allocation-subagents.log`.
+
+### J-1468 2026-11-19 Independent operator message facet regression
+
+Reviewed ecc7171aa2, which constructs each operator message with the
+same guarded class. Every construction still receives its own inbox
+entry, the capacity check precedes construction, and the list method
+uses the existing row count, UTF-8 byte bound and numeric cursor.
+Dismiss still deletes by number and releases a staged body only on
+successful deletion. A held facet still refers to its own entry.
+The ordinary build produced the same 145,957-byte session with digest
+`9611cc3ef25d553fa10c0a92479a2619ababcb94a1857fa79431cdbb2925c193`.
+
+The two-message public mailbox regression (8e3367ec6b) sends from
+distinct sessions with different capabilities under the same attachment
+label. It verifies separate identities, list membership after one
+dismissal, attachment identity from both held facets, and reply
+routing to the correct original postmark and sender. All 13
+operator-mail unit cases passed, including overflow and page bounds.
+
+The installed candidate passed all eight real mail cases, the mailbox
+SIGKILL/replay case (11,689.5 ms to serve, 528.9 ms to first post)
+and the separate interrupted-turn case (one error reply after waking).
+The last file held its slot for 144.3 s after waiting 481.5 s. The
+restart cases reacquire mailbox capabilities after reconnecting.
+Logs: thix-qc-message-class-integration.log,
+thix-mail-independent-restart-turn.log, thix-mail-independent-unit.log.
