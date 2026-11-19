@@ -14900,3 +14900,66 @@ Reading: over 60 s: unit and adapter lanes 67 s, `session.perf` in a shared slot
 m1a-slice 155 s. Commits `b95cf790a0` and this journal commit; nothing pushed; no change to
 `packages/thixotrope` or `rust/**`.
 Fit: neutral.
+
+### J-12240 2026-11-19 W8.6 image wire translation - built
+Evidence: `877de82567` (`AH/providers/images.js`, first commit: `encodeImageEnvelope`,
+`imageReceiptText`, `imageOf`, `selectImages`, `toolResultImages`, the three wire forms),
+`1f32ef0315` (S-19 in `openrouter.js`, `subscriptions/responses.js`), `10e9b9d6c2` (S-19 and
+S-20 in `anthropic.js`), `01ca519ee9` (`test/adapter/image-wire.test.js`, 11 tests).
+Reading: a `tool-result` is an image only when it did not fail, its call (same id, earlier in the
+same transcript array) is named `viewImage`, and its content is a valid envelope (hosted-agent
+`validate`'s checks: two keys, mime in `imageMediaTypes`, alphabet, padding, 2 MiB); everything
+else, a malformed envelope included, is text and never throws. Per request: the newest 20
+non-incomplete image results go natively; older ones `omittedReceipt`, incomplete ones
+`incompleteReceipt`. Messages API (Anthropic API and Claude pool share `anthropicMessages`): an
+`image` block with base64 source as the `tool_result` content; Responses (Codex pool): an
+`input_image` data URL as the `function_call_output` output; chat (OpenRouter): the receipt in the
+`tool` message and one user message after the run of tool messages with a text label and an
+`image_url` per image (lal's form, one message instead of one per image). Each builder makes
+one `toolResultImages(transcript)` per request and asks it once at its `tool-result` branch, so a
+transcript without `viewImage` results sends byte-for-byte what it sent before (the provider wire
+golden is unchanged for every round). Signature difference from contract 16: the wire forms take
+the `{ text, image? }` form that `toolResultImages` answers, not `(entry, image)`, and
+`chatImageMessages` takes the waiting `[{ id, image }]`, because the receipt variant (omitted or
+incomplete) is decided once per request; no other unit calls them.
+Fit: good. The projection being a plain transcript in Node made this a translation at three
+branches; nothing touches a vat.
+
+### J-12241 2026-11-19 W8.6 the Anthropic catalogue window - built
+Evidence: `10e9b9d6c2`; `m2-w22-catalog.test.js` "an Anthropic row without a context length gets
+the 200,000-token window"; `provider-wire-golden.json` catalogue anthropic rows.
+Reading: `anthropicKind.readModels` maps every read row to `contextLength ??
+contextLimits.anthropicContextTokens` (S-20), so `listModels` rows and `resolveModel` answer
+200,000 and a creation stores it (D-M8-12). Two pinned expectations moved with it, by design:
+the existing Anthropic `resolveModel` assertion and the golden file's two Anthropic catalogue
+rows (each gains `contextLength: 200000`; hand-edited, not regenerated, so no other entry moved).
+The golden file is not in W8.6's owned list: a necessary consequence of S-20.
+Fit: good.
+
+### J-12242 2026-11-19 W8.6 request build cost with images - measured
+Evidence: `01ca519ee9`; a scratch script through `perf/_window.mjs` `runWindow` and
+`perf/_harness.mjs` `summarize`, 10 s windows, Node only, machine under load from three other
+lanes. Body = `JSON.stringify` of the wire's messages, as the providers send it.
+Reading (median ms): one new 2 MiB PNG envelope (no decode cache hit): Messages 6.7 (p95 7.4,
+n 766), Responses 6.8 (p95 7.9, n 744), chat 6.8 (p95 7.8, n 728); twenty 2 MiB images warm:
+130-135 ms (n 74-75), about 6.6 ms per image, nearly all of it the body's stringify of 56 MB.
+Budget `images.requestBuild` <= 15 ms per 2 MiB image: met on all three wires (W8.7 records
+the row). The decode cache (at most 20 envelopes, keyed by the string) saves the parse and
+alphabet check, not the stringify.
+Fit: neutral: base64 in JSON is the wire's own cost; the harness adds little to it.
+
+### J-12243 2026-11-19 W8.6 retained state and bundle - measured
+Evidence: `877de82567`; `node scripts/bundle-guest.mjs` in the shared worktree.
+Reading: retained state of `images.js`: the decode cache (<= 20 entries, the envelope strings
+the context cache already holds, so no new copies) and a `WeakMap` of call names per
+transcript array. No vat module changed: the session program does not include any W8.6 file
+(W8.6 adds 0 bytes; the measured 239,290 includes W8.1's uncommitted work in this worktree).
+Fit: good.
+
+### J-12244 2026-11-19 W8.6 time record - process
+Evidence: first command 2026-11-19T02:23:30Z.
+Reading: over 60 s: the request build measurement 71 s. Adapter tests run directly
+(image-wire, provider-wire-golden, catalog, both API providers, both pool wires, pool,
+provider, manager, fake server: 129 passed). No supervisor started; nothing pushed; no change to
+`packages/thixotrope` or `rust/**`.
+Fit: neutral.
