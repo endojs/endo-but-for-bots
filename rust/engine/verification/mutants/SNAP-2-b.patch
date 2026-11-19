@@ -1,0 +1,12 @@
+Mutant SNAP-2-b: decode_payload ignores the first unused payload byte.
+--- a/ironhorse-snapshot/src/slot_codec.rs
++++ b/ironhorse-snapshot/src/slot_codec.rs
+@@ -199,7 +199,7 @@
+     // are its low `(10 - used) * 8` bits. Loop-free, so the SNAP-2 proofs
+     // need no unwinding bound.
+     let field = u128::from_be_bytes([0, 0, 0, 0, 0, 0, d0, d1, d2, d3, d4, d5, d6, d7, d8, d9]);
+-    let unused_bits = (10 - used) * 8;
++    let unused_bits = (9 - used) * 8;
+     if field & ((1u128 << unused_bits) - 1) != 0 {
+         return Err(SlotCodecError::UnusedPayloadBytes);
+     }

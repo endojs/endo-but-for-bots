@@ -1,0 +1,12 @@
+Mutant SNAP-2-a: decode_slot re-admits a non-zero reserved byte 9 (only 0xFF refused).
+--- a/ironhorse-snapshot/src/slot_codec.rs
++++ b/ironhorse-snapshot/src/slot_codec.rs
+@@ -153,7 +153,7 @@
+     let id = u16::from_be_bytes([id0, id1]);
+     let next = SlotIndex(u32::from_be_bytes([n0, n1, n2, n3]));
+     let value = decode_payload(tag, data)?;
+-    if reserved != 0 {
++    if reserved == 0xFF {
+         return Err(SlotCodecError::ReservedByte(reserved));
+     }
+     Ok(Slot {

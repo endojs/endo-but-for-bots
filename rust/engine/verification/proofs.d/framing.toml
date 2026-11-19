@@ -1,0 +1,78 @@
+# Snapshot/bytecode framing, text and structural guarantees (SNAP, TXT, STR):
+# designs/ironhorse-formal-verification.md, "Snapshot and bytecode framing",
+# "Text" and "Structural invariants". Merged into proofs.toml by verify.py.
+# Budgets are 3x the time measured on the development host (4 shared cores),
+# at least 5 s; memory budgets are the measured peak rounded up.
+
+[[guarantee]]
+id = "SNAP-2"
+title = "Slot record codec: total, round-tripping and canonical"
+claim = "decode_slot is total on every 20-byte record and returns BadLength(len) on every other width up to 41 bytes; decode_slot(encode_slot(s)) is s with a NaN Number payload replaced by the canonical NaN, for every Slot, and re-encoding reproduces the bytes; an accepted record re-encodes to exactly its own 20 bytes unless its Number payload is a non-canonical NaN (the documented carve-out, refused for format >= 16 at the image gate)."
+spec = "ironhorse-snapshot/src/slot_codec.rs layout table: \"9 | reserved (0)\", \"10..20 | payload data (tag-specific; unused bytes 0)\"; \"Encoding always zero-fills the record first, so a round-trip (write -> read -> write) is byte-identical\"; \"Decoding preserves legacy NaN bits; re-encoding normalizes them.\""
+trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
+
+[[harness]]
+guarantee = "SNAP-2"
+crate = "ironhorse-snapshot"
+name = "slot_codec::proofs::snap2_decode_total"
+tier = "pr"
+statement = "decode_slot does not panic on any 20-byte record."
+domain = "every [u8; 20]"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = ["SNAP-2-e"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-2"
+crate = "ironhorse-snapshot"
+name = "slot_codec::proofs::snap2_bad_length"
+tier = "pr"
+statement = "decode_slot on a slice of any length other than 20 returns Err(BadLength(len)) without panicking."
+domain = "every prefix buf[..len] of every [u8; 41], len <= 41"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = ["SNAP-2-c"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-2"
+crate = "ironhorse-snapshot"
+name = "slot_codec::proofs::snap2_round_trip"
+tier = "pr"
+statement = "decode_slot(encode_slot(s)) == Ok(s with a NaN Number canonicalised), and encode_slot of the result equals the first encoding."
+domain = "every kani::Arbitrary Slot (all kinds, flags, ids, next links, payload arms and payload bits)"
+unwind = 0
+flags = []
+time_budget_s = 16
+memory_budget_gb = 1
+unreachable = 7
+unreachable_reason = "Vec growth and core::fmt overflow checks in alloc/core that the fixed 20-byte encode never reaches"
+mutants = ["SNAP-2-d"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "SNAP-2"
+crate = "ironhorse-snapshot"
+name = "slot_codec::proofs::snap2_accepted_is_canonical"
+tier = "pr"
+statement = "If decode_slot(r) == Ok(s) and r's Number payload (if any) is not a non-canonical NaN, encode_slot(s) == r."
+domain = "every [u8; 20]"
+unwind = 0
+flags = []
+time_budget_s = 11
+memory_budget_gb = 1
+unreachable = 7
+unreachable_reason = "Vec growth and core::fmt overflow checks in alloc/core that the fixed 20-byte encode never reaches"
+mutants = ["SNAP-2-a", "SNAP-2-b"]
+expect = "pass"
+canary = false

@@ -500,3 +500,99 @@ mod tests {
         assert_eq!(decode_slots(&bytes).unwrap(), slots);
     }
 }
+
+/// Kani harnesses for guarantee SNAP-2 (`verification/proofs.d/framing.toml`).
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    /// The slot the codec promises to return for `s`: `s` with a NaN
+    /// Number payload replaced by the canonical NaN, everything else as is.
+    fn canonical(mut s: Slot) -> Slot {
+        if let Payload::Number(n) = s.value {
+            s.value = Payload::Number(canonicalize_nan(n));
+        }
+        s
+    }
+
+    fn encode(s: &Slot) -> Vec<u8> {
+        let mut out = Vec::with_capacity(SLOT_RECORD_BYTES);
+        encode_slot(s, &mut out);
+        out
+    }
+
+    /// The documented carve-out: a Number record whose bits are a NaN
+    /// other than the canonical one.
+    fn non_canonical_nan(rec: &[u8; SLOT_RECORD_BYTES]) -> bool {
+        let [_, _, _, _, _, _, _, _, tag, _, d0, d1, d2, d3, d4, d5, d6, d7, _, _] = *rec;
+        let bits = u64::from_be_bytes([d0, d1, d2, d3, d4, d5, d6, d7]);
+        tag == P_NUM && f64::from_bits(bits).is_nan() && bits != 0x7ff8_0000_0000_0000
+    }
+
+    /// SNAP-2(a): `decode_slot` does not panic on any 20-byte record.
+    #[kani::proof]
+    fn snap2_decode_total() {
+        let rec: [u8; SLOT_RECORD_BYTES] = kani::any();
+        let result = decode_slot(&rec);
+        kani::cover!(result.is_ok(), "a record the decoder accepts");
+        kani::cover!(
+            matches!(result, Err(SlotCodecError::UnusedPayloadBytes)),
+            "a record refused for a dirty unused payload byte"
+        );
+    }
+
+    /// SNAP-2(a): on every other width up to 41 bytes the answer is
+    /// `BadLength(len)`, without panicking.
+    #[kani::proof]
+    fn snap2_bad_length() {
+        let buf: [u8; 2 * SLOT_RECORD_BYTES + 1] = kani::any();
+        let len: usize = kani::any_where(|&l| l <= buf.len());
+        let result = decode_slot(&buf[..len]);
+        if len != SLOT_RECORD_BYTES {
+            assert!(result == Err(SlotCodecError::BadLength(len)));
+        }
+        kani::cover!(len == 0, "the empty record");
+        kani::cover!(
+            len == SLOT_RECORD_BYTES && result.is_ok(),
+            "an accepted full record"
+        );
+    }
+
+    /// SNAP-2(b): `decode(encode(s))` is `s` up to NaN canonicalisation,
+    /// and re-encoding the result reproduces the bytes.
+    #[kani::proof]
+    fn snap2_round_trip() {
+        let s: Slot = kani::any();
+        let bytes = encode(&s);
+        assert!(bytes.len() == SLOT_RECORD_BYTES);
+        let back = decode_slot(&bytes);
+        assert!(back == Ok(canonical(s)));
+        if let Ok(back) = back {
+            assert!(encode(&back) == bytes);
+        }
+        kani::cover!(
+            matches!(s.value, Payload::Number(n) if n.is_nan() && n.to_bits() != 0x7ff8_0000_0000_0000),
+            "a non-canonical NaN that the encoder normalises"
+        );
+        kani::cover!(matches!(s.value, Payload::At(..)), "an At payload");
+    }
+
+    /// SNAP-2(c): an accepted record re-encodes to exactly its own bytes,
+    /// for every record outside the non-canonical-NaN carve-out.
+    #[kani::proof]
+    fn snap2_accepted_is_canonical() {
+        let rec: [u8; SLOT_RECORD_BYTES] = kani::any();
+        if let Ok(s) = decode_slot(&rec) {
+            let again = encode(&s);
+            if non_canonical_nan(&rec) {
+                kani::cover!(true, "the NaN carve-out is reachable");
+            } else {
+                assert!(again[..] == rec[..]);
+                kani::cover!(
+                    matches!(s.value, Payload::Boolean(true)),
+                    "an accepted true Boolean"
+                );
+            }
+        }
+    }
+}
