@@ -17248,3 +17248,13 @@ identical stub refusals. Commit f574398d1d starts one delivery per distinct addr
 its result at every original position. All twenty post-office unit tests passed, including the
 three-position, two-address case. The combined daemon also passed the child workspace/shell
 case while its parent was stopped.
+
+### J-12544 2026-11-19 M9 real-daemon regression results
+
+The corrected operator and gateway file passed all eight cases on Ironhorse. The model-tool
+test passed spawn, ask (the reply was `Hello!`) and stop. The subagent restart file passed
+asking and stopping the existing child by name after a SIGKILL. Both standalone mail restart
+files also passed across the runs. Together those five regression files cover twelve passing
+tests. The first multi-file run had one repeated-recipient failure; its corrected file passed
+on rerun. The child environment daemon check passed on the combined tree. These cases do not
+exercise every intermediate crash point in the M9 design.
