@@ -145,7 +145,11 @@ export const regressionLists = Object.freeze({
   // Reserved by WX.1 for the group of four lanes, one list each, named by
   // concept; each lane adds its files to its own list (empty until then).
   environments: Object.freeze(/** @type {string[]} */ ([])),
-  context: Object.freeze(/** @type {string[]} */ ([])),
+  context: Object.freeze(
+    ['compaction', 'compaction-restart', 'compaction-archive'].map(
+      name => `test/integration/${name}.test.js`,
+    ),
+  ),
   mail: Object.freeze(/** @type {string[]} */ ([])),
   voice: Object.freeze(/** @type {string[]} */ ([])),
 });

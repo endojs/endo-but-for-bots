@@ -386,7 +386,7 @@ run('ByteArray passing into, out of and between peers of a vat', async t => {
           median(growth) === undefined
             ? undefined
             : Math.round(
-                /** @type {number} */ (median(growth) * 1024 * 1024) /
+                (/** @type {number} */ (median(growth)) * 1024 * 1024) /
                   pageBytes,
               ),
         compactions,

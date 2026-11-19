@@ -65,11 +65,15 @@ test('every integration, template and browser file is in exactly one regression 
     t.notRegex(file, /test\/browser\//, file);
 });
 
-test('the milestones list is M3, M4 and M5 together', t => {
+test('the milestones list is M3, M4, M5 and the group lanes together', t => {
   t.deepEqual(listFiles('milestones'), [
     ...regressionLists.M3,
     ...regressionLists.M4,
     ...regressionLists.M5,
+    ...regressionLists.environments,
+    ...regressionLists.context,
+    ...regressionLists.mail,
+    ...regressionLists.voice,
   ]);
   t.deepEqual(listFiles('core'), regressionLists.core);
   t.throws(() => listFiles('M9'), { message: /unknown list M9/ });
