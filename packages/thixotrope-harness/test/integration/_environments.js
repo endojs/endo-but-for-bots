@@ -263,16 +263,29 @@ export const killEnvironmentsAdapter = root => {
 };
 
 /**
- * Where the state directory's absolute path appears in a vat's heap,
- * journal or snapshot (D-M6-14; acceptance 17): the `heaps/` and `workers/`
- * trees of the state, in every encoding `grepState` tries.
+ * Where the environments state directory's absolute path
+ * (`<root>/environments`, the parent of every workspace and home) appears
+ * in a vat's heap, journal or snapshot (D-M6-14; acceptance 17): the
+ * `heaps/` and `workers/` trees of the state, in every encoding `grepState`
+ * tries. The state root alone is not the needle: the daemon keeps its
+ * control socket's path (`<root>/control.sock`) in a vat snapshot in every
+ * state, environments or not (not this resource's path).
  * @param {string} root
  */
 export const stateHasPath = async root => {
+  /** @type {{ file: string, encoding: string }[]} */
   const hits = [];
+  let files = 0;
+  let bytes = 0;
   for (const dir of ['heaps', 'workers']) {
     // eslint-disable-next-line no-await-in-loop
-    hits.push(...(await grepState(path.join(root, dir), root)));
+    const found = await grepState(
+      path.join(root, dir),
+      path.join(root, 'environments'),
+    );
+    hits.push(...found);
+    files += found.files;
+    bytes += found.bytes;
   }
-  return hits;
+  return Object.assign(hits, { files, bytes });
 };
