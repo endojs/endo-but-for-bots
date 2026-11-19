@@ -14844,3 +14844,59 @@ Reading: over 60 s: the unit and adapter lanes (66-67 s, six runs), the integrat
 (340 s). Commits `5a27bf2fc9`..`4c4a011dac` and this journal commit. Nothing pushed; no change to
 `packages/thixotrope` or `rust/**`.
 Fit: neutral.
+
+### J-1480 2026-11-19 WX.1-QC the four contracts against WX.1, line by line - finding
+Evidence: `git diff 7bf6b5b38d..ea6804f6de`; m6-interfaces.md 6.1 and 15, m8-interfaces.md 10,
+m9-interfaces.md 6.2, m11-interfaces.md 11 and appendix A.
+Reading: every line given to WX.1 is in (M6 15.1-15.4, M8 G-1..G-5, T-1, T-2, S-10c, M9 S2, S2b,
+S9, S9b, S10, F6, V1, G1, L1, C1, M11 H1, H3, H4); the shell descriptions equal agent-tools
+`json-tools/shell.js` at `1315bef86` word for word. Lane-owned lines built: only the bodies an exo
+needs for its guard (session.js, standin-session.js, turn.js `compacted`, factory.js
+`getMail`/`getVoice`, root.js `configureSpeech`; checked against `packages/exo/src/exo-tools.js`
+398-400) and the six-line import change in `guards/mail.js` that breaks the cycle. One gap: 15.2
+says a unit test keeps `texts.runnerRequired` equal to `environmentTexts.runnerRequired`; none
+did. Added `test/unit/shared-guard-texts.test.js` (`b95cf790a0`, also the shell argument names).
+Lanes still edit `test/unit/runtime-parts.test.js` lines 32-40 (the exact part lists), M6, M8 and
+M9 the same two lines; and `turn-types.js` only if M8 makes `startIndex` required (keep optional).
+Fit: good, with the test added.
+
+### J-1481 2026-11-19 WX.1-QC behaviour of existing sessions - measured
+Evidence: `b95cf790a0`; unit and adapter lanes; `test:integration m1a-slice`.
+Reading: the golden turn test's digest is unchanged (only a loop bound typed); `guards-split`
+and the vocabulary pin pass with exactly the 25 added, 35 changed, 70 keys and 33 methods listed
+in `6535027dc4`. The claim path adds no message or crank: `admit` is combined but not called;
+`claimNext` asks turn sources under a `restart` hold, and with no source part `nextTurn()` is
+undefined. Unit and adapter lanes 1,339 passed, 116 skipped, 67 s; m1a-slice 6 passed, 154 s
+held. tsc clean; eslint 0 errors on the changed files; `lint:duplicates` 1.85 %.
+Fit: good.
+
+### J-1482 2026-11-19 WX.1-QC the session program limit and cold create - measured
+Evidence: `ea6804f6de`; `node perf/session.perf.mjs --shared`, INSTALL_N 1, shared slot.
+Reading: 270,336 in `limits.js`, `provision-steps.js`, `root.js` `maxProgramBytes`
+(max of 262,144 and 270,336), README, architecture D-4, 11, 12.9; the core bounds only one staged
+message (`STAGING_FRAME_BYTES`). Bundles 233,126 / 64,500 / 192,892 as reported.
+`session.createCold` median 6,672 ms (n 5, under load 1.4-2.0) against 6,379 at step 3: +293 ms
+for +20,642 bytes of program, about 14 ms per KB, so the program growth, not the limit, moved it.
+The context share of WX.1's growth, measured by bundling a copy without the context lines:
+4,975 bytes (WX.1: about 5,400). M8's own estimate of what it still adds (part and window 3,500,
+entry 1,500, `guards/images.js` 1,412, blocks 300) is about 6,700 against 3,500 left: the PM's
+call before W8.1, from the 5,800 spare.
+Fit: neutral.
+
+### J-1483 2026-11-19 WX.1-QC the vocabulary - finding
+Evidence: `guest/lib/vocabulary-tables.js` at `ea6804f6de`.
+Reading: excluded and not browser-sendable: `guards/environments.js` (manager vat and adapter),
+`image-guards.js` (adapter); excluded as slices: `guards/context.js` (spread by `guards/session.js`,
+so its names are counted), `guards/images.js` (no guard). Every browser-reached method (`Session`
+environment methods, `Operator.getMail`/`getVoice`, `Voice`, `Speech`, `AudioPort`, the operator
+mailbox) is in a listed table. Listed though no browser reaches it: `RelayWriters` (adapter,
+factory-held), as V1 asks; `interfaces.js` already lists `AgentHostAdmin` the same way, so this
+follows the existing rule rather than breaking it.
+Fit: good.
+
+### J-1484 2026-11-19 WX.1-QC time record - process
+Evidence: first command 2026-11-19T02:08:31Z.
+Reading: over 60 s: unit and adapter lanes 67 s, `session.perf` in a shared slot 82 s,
+m1a-slice 155 s. Commits `b95cf790a0` and this journal commit; nothing pushed; no change to
+`packages/thixotrope` or `rust/**`.
+Fit: neutral.
