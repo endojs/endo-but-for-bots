@@ -87,7 +87,7 @@ takeIntegrationLock(test, 'voice preset');
     const { turn } = await runTurn(slice, made.session, live, input);
     const results = toolResultsOf(await turnRecords(turn));
     t.is(results.length, 1);
-    t.false(results[0].failed);
+    t.false(results[0].failed, results[0].result);
     t.regex(results[0].result, /voice-ok/);
   },
 );
