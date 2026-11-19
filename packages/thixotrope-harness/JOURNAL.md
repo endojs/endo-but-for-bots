@@ -17522,3 +17522,16 @@ on their corrected reruns. The two wider regression lists and combined-head excl
 performance checks continue. J-12104 gives the verified twenty-session fixture and all five
 shared restart observations. J-12726 and J-12727 give the exclusive voice transport and
 Chromium results.
+
+### J-1448 2026-11-19 WX.F exclusive mail pass on the combined tree
+
+At `f1e9192223`, the full mail file took the exclusive lock and exited 1.
+Operator ACK median was 363.3 ms over 99 posts against 200 ms. Session-to-session
+delivery took 390 ms over 63 sends against 300 ms. Four concurrent clients sent
+140 posts at 2.29 posts/s against the minimum of 3. The inbox delivery crank met
+its 550 ms p95 target at 500 ms. After 228 posts over the 120 s growth window,
+the hub used 0.925 times its initial bytes against a maximum of 1.25.
+
+The five-file daemon regression and two cross-lane mail integration tests remain
+green in J-12544, J-1444 and J-1445. The exclusive storage result supersedes
+the short shared-slot growth observation in J-12542.
