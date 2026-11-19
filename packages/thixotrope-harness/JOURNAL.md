@@ -18763,3 +18763,16 @@ posts in 61.059 seconds (3.210019/s) with 160.827 ms median operator ACK.
 Control measured 2.741411/s and 216.441 ms. The candidate's fresh attachment
 growth ratio was 0.968065 after 375 posts. Session-to-session latency measured
 359 ms against its strict 300 ms target.
+
+### J-12563 2026-11-20 M9 integrated release verification
+
+The integrated guest and benchmark sources match the clean `e4dafe639d`
+source used in J-12553. The full unit and adapter suite passed 2,006 tests,
+skipped 168 and reported three TODOs. Type checking and lint passed with
+zero errors and 925 warnings, including the existing duplication check at
+1.52%. Emitting the production session independently from the integration
+checkout produced 145,946 bytes with SHA-256
+`f55c7602aaa398573c129337bc499259b488dfa65d950e18910f3a5e4db215c6`.
+J-12902 covers the isolated WX.1/M9 size inputs, ten installed mail and
+restart cases, and ordinary message refusals versus receiver-side failures.
+All seven modified or untracked M6 sources matched their checkpoint digests.

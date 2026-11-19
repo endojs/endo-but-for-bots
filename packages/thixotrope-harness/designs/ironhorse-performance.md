@@ -30,6 +30,12 @@ git show 59369d4afee4:rust/engine/benches/results/thixotrope-warm-factory-gc.jso
 git show --stat 419e73c1b471
 ```
 
+## A return trip the application could remove
+
+The automatic reply to a completed package sent a checked `Outbox.post` and discarded both the answer and any rejection. On this one path, `E.sendOnly(mail).post(...)` sends the same ordered reply with its body, attachments and postmark, without allocating an answer route back to the recipient. An application refusal is still handled by the receiving method. Unexpected receiver rejections use the ordinary one-way receiver diagnostic. Operator sends and the model's send/reply tools still need and receive their receipts. [Package settlement](../guest/session/inbox.js) · [Mail contract](m9-interfaces.md#31-factory-vat-guestfactorypost-officejs-operator-mailjs-subagentsjs)
+
+On the pinned worker, the immediately preceding full run recorded 216.441 ms ACK and 168 completed posts in 61.282 s (2.741/s). The one-way automatic reply recorded 160.827 ms and 196 in 61.059 s (3.210/s) in the same unscaled benchmark, including the final dismissal drain. Fresh hub growth was 0.968×. Session-to-session delivery was 359 ms against 300 ms. Both runs used the same factory code. This is one full run per revision; the measured difference includes run-to-run variation. For other mail operations, first establish whether any caller consumes a result or depends on its failure before considering a one-way send. [Release measurements](../JOURNAL.md#j-12553-2026-11-20-wxf-pinned-worker-meets-ack-and-throughput-together)
+
 ## Earlier factory and startup measurements
 
 | Observation | Workload and evidence | What to investigate |

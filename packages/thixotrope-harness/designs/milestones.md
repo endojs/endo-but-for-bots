@@ -1483,8 +1483,10 @@ core verification gap and elapsed-time misses. Performance and lifecycle follow-
 at `53ce64395a` (J-1453). The full pool lifecycle and the dedicated real-daemon
 exec-retirement test passed. A deadline removed the old worker and the next task in the
 same session saw a fresh scope (J-1473). M8 cold context rebuild met its 359 ms target
-(J-1454). M9 added 21,430 bytes against its 21,500-byte allocation with the same
-emitter on both inputs (J-1460). Two further full-file passes bring core regression
+(J-1454). M9 now adds 21,419 bytes against its 21,500-byte allocation with the same
+emitter on both inputs (J-1460 and the M9 outcome below). The unscaled pinned-worker
+run passed the 200 ms operator ACK and 3 posts/s throughput targets together
+(J-12553). Two further full-file passes bring core regression
 coverage to 25 of the current 26 files across runs (J-1456). The remaining file is
 the original mixed `m1b-qc` suite. The individual sections record the other performance
 results. The four contracts are the reference:
@@ -1959,10 +1961,14 @@ at `1881601aab`, load 1.9-3.2, 690.9 s held, 786 s of wall for the files; J-1226
 
 ## M9. Mail and subagents
 
-**Integrated with open performance gates.** The latest candidate, `69997bd0c5`,
-acknowledged operator sends in 216.441 ms (target 200 ms). Four clients and eight
-recipients completed and dismissed 168 posts in 61.282 s, or 2.741 posts/s
-(target 3). The full benchmark exited 1.
+**Operator ACK and throughput passed together on the pinned worker.** In the
+unscaled release run at `e4dafe639d`, median operator acknowledgment was
+160.827 ms over 102 sends (limit 200 ms). Four clients and eight recipients
+completed and dismissed 196 posts in 61.059 s, or 3.210 posts/s (target 3).
+The automatic package reply sends its checked message without requesting a
+return receipt. Callers of the operator and model mail tools still get receipts.
+The fresh hub-growth and inbox gates passed and the file exited 0.
+Session-to-session delivery remains above its strict 300 ms target (J-12553).
 
 | Full run on the pinned worker | Operator ACK median (limit 200 ms) | Completed posts / elapsed | Posts/s (target 3) | Session delivery (limit 300 ms) | Fresh hub growth (limit 1.25×) |
 |---|---:|---:|---:|---:|---:|
@@ -1970,11 +1976,12 @@ recipients completed and dismissed 168 posts in 61.282 s, or 2.741 posts/s
 | `ecc7171aa2` (J-12550) | 205.186 ms, n=104 | 182 / 60.786 s | 2.994131 | 335 ms | 1.101× |
 | `d333ba1833` (J-12551) | 196.128 ms, n=98 | 176 / 61.369 s | 2.867906 | 345 ms | 2.103× |
 | `69997bd0c5` (J-12552) | 216.441 ms, n=98 | 168 / 61.282 s | 2.741411 | 328 ms | 3.051× |
+| **`e4dafe639d`** (J-12553) | **160.827 ms, n=102** | **196 / 61.059 s** | **3.210019** | 359 ms | 0.968× |
 
 A collector microbenchmark shared the host during part of the second run's ACK
-window. All four inbox p95 upper bounds were 500 ms (limit 550 ms). J-12549
+window. All five inbox p95 upper bounds were 500 ms (limit 550 ms). J-12549
 corrected the fresh hub denominator used in J-12547. J-1478 compares the
-single-recipient diagnostic with the full run. The latest factory candidate completed
+single-recipient diagnostic with the full run. The factory revision at `69997bd0c5` completed
 193 posts in 61.359 s in an instrumented fresh-daemon comparison. The release
 throughput row reuses the daemon from the preceding ACK, session-to-session, and
 255-message inbox phases. An isolated collector change
@@ -1984,14 +1991,19 @@ are in the [Ironhorse performance note](ironhorse-performance.md).
 
 The five daemon regression files passed 12 tests across the recorded runs
 (J-12544). The combined branch also passed the stopped-mail and child-environment
-cases. The latest candidate passed all eight installed mail tests, both
-restart files and four list/live tests (J-12561). The four-deliveries-per-forwarded-mail gate still needs a causally
-attributed count. All three eight-child bursts and subtree stops passed. Ask
+cases. The factory revision passed all eight installed mail tests, both
+restart files and four list/live tests (J-12561). After the automatic-reply change,
+all ten installed mail and restart tests passed, including single delivery of an
+interrupted turn’s error reply. The integrated suite also passed 2,006 unit and
+adapter tests (J-12902 and J-12563). The four-deliveries-per-forwarded-mail
+gate still needs a causally attributed count. All three eight-child bursts and subtree stops passed. Ask
 overhead was 363 ms against 300 ms and spawn was 1,513 ms against 1,500 ms
 (J-12549).
 The ten mail, request and subagent tools are registered. With the production session
-linker, M9 adds 21,430 bytes to the WX.1 base of 115,502, within its 21,500-byte
-allocation. J-1460 gives both Git inputs, the exact command and the earlier J-12541 miss.
+linker, the isolated M9 session adds 21,419 bytes to the WX.1 base of 115,502,
+leaving 81 bytes of its 21,500-byte allocation. The combined session is 145,946
+bytes. J-12902 gives the final measurements and J-1460 gives the original fixed
+inputs and the earlier J-12541 miss.
 The session and factory guard tables own the corresponding mail interfaces. The
 limits are in `guest/lib/limits.js`.
 The contract is `m9-interfaces.md` (seams 6, work units 7, acceptance 8, restart files 9,
