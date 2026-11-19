@@ -206,6 +206,43 @@ test('linked session reads preserve lexical initialization errors in the entry a
   });
 });
 
+test('elided imports retain otherwise unused getter effects and early lexical reads', async t => {
+  const dir = await scratch(t, 'effects');
+  const entry = path.join(dir, 'session', 'main.js');
+  const effect = path.join(dir, 'effect.js');
+  await mkdir(path.dirname(entry));
+  await writeFile(
+    path.join(dir, 'package.json'),
+    '{"name":"guest","type":"module"}',
+  );
+  await writeFile(
+    entry,
+    "import { unused } from '../effect.js'; export const ready = true;",
+  );
+  await writeFile(
+    effect,
+    'const read = () => late; const discarded = read(); const late = 1; export const unused = 0;',
+  );
+  const early = await bundleGuest(entry);
+  t.throws(() => evaluateBundle(early.source, {}), {
+    instanceOf: ReferenceError,
+  });
+  await writeFile(
+    effect,
+    'const discarded = globalThis.counter.value; export const unused = 0;',
+  );
+  let reads = 0;
+  const counter = {
+    get value() {
+      reads += 1;
+      return 1;
+    },
+  };
+  const getter = await bundleGuest(entry);
+  t.true(evaluateBundle(getter.source, { counter }).ready);
+  t.is(reads, 1);
+});
+
 test('a guest that imports @endo/patterns does not bundle', async t => {
   const dir = await scratch(t, 'bg');
   await mkdir(path.join(dir, 'bad'));

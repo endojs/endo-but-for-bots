@@ -17711,3 +17711,56 @@ restarts each needed one vat page, with rebuild median 60 ms and p95 76 ms (359 
 budget, previous combined median 615 ms). Planning took 10.2 ms across 1,821 samples.
 Overhead took 288 ms across 76 turns, with one compacted delivery per compaction.
 All four gated rows passed.
+### J-1460 2026-11-19 Same-emitter M9 allocation and cold staging
+
+J-12541 measured the compact mapper emitter on WX.1 at 203,585 bytes and the
+isolated folded M9 guest at 240,676. The M9 allocation missed by 15,591 bytes.
+The candidate at b09f365895 first resolves, checks and records the original
+guest graph with compartment-mapper. Rollup then links only those source
+bytes, Terser preserves function/class names and standalone reads with side
+effects, and the mapper emits the final ESM namespace. Diagnostic bundles
+retain all original modules and comments. The factory and exec emitters are
+unchanged. Object, mail, request and subagent tools share their result
+constructors (06349c1d8a). The factory also reuses an unchanged validated
+envelope across recipients (b669cf1f8f, J-1485).
+
+| Guest input | Production session bytes | Original modules |
+| --- | ---: | ---: |
+| WX.1 6493d955c7 | 115,502 | 45 |
+| Isolated M9 d552fb5675 | 136,932 | 51 |
+| Combined b09f365895 | 145,957 | 54 |
+
+M9 adds **21,430 bytes**, 70 below the strict 21,500-byte lane allocation.
+The combined SHA-256 is
+`9611cc3ef25d553fa10c0a92479a2619ababcb94a1857fa79431cdbb2925c193`.
+Its ASCII program occupies six 23,552-byte pieces and one 4,645-byte piece.
+Each piece leaves at least 1,024 bytes in the 24,576-byte frame. The
+combined program limit remains 270,336. The other guest programs were
+75,093 bytes for exec (10 original modules) and 247,997 for factory (35).
+The manager bundle check reported 335,447 bytes.
+
+To reproduce from an installed checkout containing `b09f365895` and the
+auxiliary ref `codex/thix-m9-allocation-input`, run the following from the
+repository root. The latter ref pins the isolated guest used by J-12541 at
+6e594305a0 (based on 936e1014de), the shared-result change at aa3ae83891
+and the export placement at d552fb5675. The two checkout directories are
+inputs to the **same** production bundler in the emitter checkout.
+
+```sh
+git worktree add --detach ../thix-wx1-bytes 6493d955c7
+git worktree add --detach ../thix-m9-bytes d552fb5675
+git worktree add --detach ../thix-emitter-bytes b09f365895
+cd ../thix-emitter-bytes
+corepack yarn install --immutable --mode=skip-build
+for input in ../thix-wx1-bytes ../thix-m9-bytes .; do
+  node packages/thixotrope-harness/scripts/bundle-guest.mjs \
+    --guest-root "$input/packages/thixotrope-harness/guest" \
+    --out "$input/packages/thixotrope-harness/dist-guest" session
+done
+```
+
+The CLI emits the SHA-256, bytes and sorted full source-module list on each row.
+The bundle, M3 guard bundle, mail tool and subagent tool suites passed 42 tests.
+Coverage includes lexical initialization in the entry and a dependency,
+unused imports with observable effects, module-specific globals, cycles,
+mutable entry exports, namespace keys and retained function names.
