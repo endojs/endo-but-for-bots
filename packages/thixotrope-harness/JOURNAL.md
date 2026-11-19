@@ -17315,6 +17315,20 @@ The pinned-image OCI cold-start workload is unimplemented. The benchmark always 
 `run: false`, including when `THIX_HARNESS_REAL_RUNTIME` is set, so there are zero OCI timing
 samples. The Docker CLI was installed, and the selected local daemon socket was absent.
 
+### J-12107 2026-11-19 creation and workspace timing audit
+
+The development-versus-chat stopwatch called `startEnvironmentSession`, which enumerates
+presets and describes them in order before calling the factory. The two presets occur at
+different positions in the catalogue. Commit `05c938cb59` resolves both public preset
+facets before the window and times the complete `Factory.createSession` call with each
+preset. The per-sample pool settle and post-sample delete keep their original boundaries.
+
+On the old 257,142-byte program a shared-slot experiment sent two bounded staging pieces
+at a time. Three cold creations took 7,436 ms median. The combined scope-linked candidate
+is being measured first with ordinary sequential staging. A host-only profile on a
+10,000-file fixture took 57–66 ms for the bounded 50-commit Git page in twelve reads.
+The public benchmark includes the session, exec vat, manager and adapter round trips.
+
 ### J-12120 2026-11-19 W6.8 shared layout and guarded bundle boundaries
 
 `32fccde460` shares the package and state path resolvers between the two native resources and
