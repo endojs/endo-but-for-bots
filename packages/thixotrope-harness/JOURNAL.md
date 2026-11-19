@@ -18388,3 +18388,21 @@ The last file held its slot for 144.3 s after waiting 481.5 s. The
 restart cases reacquire mailbox capabilities after reconnecting.
 Logs: thix-qc-message-class-integration.log,
 thix-mail-independent-restart-turn.log, thix-mail-independent-unit.log.
+
+### J-1476 2026-11-19 Ironhorse collector observations from ordinary mail
+
+The factory worker ran two collections on 19 of 45 ordinary reply cranks in
+a 15 s, four-client diagnostic. Those cranks spent a median 257.3 ms in the
+two collections. The matched capture billed 4,969 ms to collection and
+837 ms to guest execution across all 45 factory reply cranks. The end-of-
+delivery slot counter after collection had a median of 83,242 and capacity
+676,688. The existing worker counters do not separate the first and second
+collections or indicate how much time the capacity scans consumed.
+
+`designs/ironhorse-performance.md` links the measured paths to the worker
+and VM and records two isolated review branches. Mark-edge buffer reuse
+(`59dabaf09a`, CC-130) reduced first-collection time 5.5–6.8% and immediate
+repeat collection time 21.6–23.4% in the existing optimized heap benchmark.
+The opt-in worker timing prototype (`3646bd8307`, CC-131) reports individual
+rounds and preserved the ordinary outbound frames in its bounded checks.
+The release mail measurements continue to use the original pinned worker.

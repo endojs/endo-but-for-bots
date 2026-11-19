@@ -1971,6 +1971,7 @@ Session-to-session delivery measured 349 ms against 300 ms. Inbox p95 passed at
 sizes; the earlier J-12547 ratio used the post-throughput state as its denominator.
 J-1458 traces time spent in collection on the previous acknowledgment path.
 The four-deliveries-per-forwarded-mail limit still needs a causally attributed count.
+J-1476 records the collector measurements and isolated Ironhorse experiments.
 All three eight-child bursts and subtree stops passed. Ask overhead was 363 ms
 against 300 ms and spawn was 1,513 ms against 1,500 ms (J-12549).
 The ten mail, request and subagent tools are registered. With the production session

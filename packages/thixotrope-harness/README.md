@@ -14,6 +14,7 @@ second copy of an `@endo/*` library.
   measured and changed, and every core-change candidate with its status (C-1..C-25):
   `designs/m0-results.md`. The M1a interface contract, crank by crank: `designs/m1a-interfaces.md`.
   Surveys and plan reviews: `designs/survey/`, `designs/review-*.md`.
+- [Ironhorse performance](designs/ironhorse-performance.md) connects mail and session-start measurements to the worker and VM collector.
 - Journal: `JOURNAL.md` records what fits Thixotrope and what does not, and every perf
   measurement. Append in your milestone's number block; never rewrite an entry.
 - Core changes: `CORE-CHANGES.md` journals every change made outside this package (Thixotrope,
