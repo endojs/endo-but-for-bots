@@ -1260,7 +1260,7 @@ The ledger holds what is true now, and the runner keeps it honest.
   The job is registered in `scripts/ci-changes.py` per `docs/ci-change-selection.md`.
   It is selected by changes to any crate that holds a harness, to `ironhorse-spec`, or to
   `verification/`, `VERIFICATION.md` or the runner.
-- **`ironhorse-verify-nightly.yml` (scheduled, plus manual dispatch).** It runs the `nightly`
+- **`ironhorse-kani-nightly.yml` (scheduled, plus manual dispatch).** It runs the `nightly`
   tier, every Bolero target at a longer budget, and the mutation sanity job.
   It is a separate workflow file, following the precedent of `cargo-deny-advisories.yml` and
   `ironhorse-deep-fuzz.yml`, so that a `schedule` trigger never makes the detector select every
