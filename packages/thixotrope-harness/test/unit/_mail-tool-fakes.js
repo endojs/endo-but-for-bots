@@ -1,14 +1,14 @@
 // @ts-check
 // Fakes for the mail and request tools' unit tests (mail-tools.test.js,
 // request-tools.test.js): an Outbox, MailAddresses, SubagentHandles and
-// RequestTickets made with the real guards (postOfficeTables), a stand-in
+// RequestTickets made with the real guards (interfaces as factoryInterfaces), a stand-in
 // `inbox` part with the methods of m9-interfaces.md 3.2 that the tools
 // call, and a ToolContext over the real label map. AVA skips files that
 // start with an underscore.
 import './_m1a-prelude.js';
 
 /* eslint-disable import/no-relative-packages */
-import { postOfficeTables } from '../../guest/lib/guards/post-office.js';
+import { interfaces as factoryInterfaces } from '../../guest/lib/guards/factory.js';
 import { interfaces } from '../../guest/lib/interfaces.js';
 import { makeLabels } from '../../guest/session/labels.js';
 import { execPart } from '../../guest/session/tools/exec.js';
@@ -18,7 +18,7 @@ import { execPart } from '../../guest/session/tools/exec.js';
 const { makeExo } = /** @type {GuestGlobals} */ (globalThis);
 
 /** @type {any} */
-const I = postOfficeTables().interfaces;
+const I = factoryInterfaces;
 /** @type {any} */
 const B = interfaces;
 

@@ -13,28 +13,20 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { texts } from '../../guest/lib/guards/session.js';
-import { postOfficeTables } from '../../guest/lib/guards/post-office.js';
+import { interfaces as factoryInterfaces } from '../../guest/lib/guards/factory.js';
 import { holdTexts } from '../../guest/session/holds.js';
-import { inboxPart } from '../../guest/session/inbox.js';
 import { makePackages } from '../../guest/session/packages.js';
 import { makeQueue as realMakeQueue } from '../../guest/session/queue.js';
 import { runtimeParts } from '../../guest/session/runtime-parts.js';
-import { subagentsPart } from '../../guest/session/subagents.js';
 /* eslint-enable import/no-relative-packages */
 import { AT, drain, makeQueueSession } from './_m2-queue-session.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { makeExo } = /** @type {GuestGlobals} */ (globalThis);
 
-const mailParts = harden([...runtimeParts, inboxPart, subagentsPart]);
-
-const sender = makeExo(
-  'MailAddress',
-  postOfficeTables().interfaces.MailAddress,
-  {
-    describe: () => harden({ title: 'Bea', kind: 'session' }),
-  },
-);
+const sender = makeExo('MailAddress', factoryInterfaces.MailAddress, {
+  describe: () => harden({ title: 'Bea', kind: 'session' }),
+});
 
 /**
  * @param {number} seq
@@ -58,7 +50,7 @@ const makeMailSession = async () => {
   /** @type {any} */
   let queue;
   const s = await makeQueueSession({
-    parts: mailParts,
+    parts: runtimeParts,
     makeQueue: options => {
       queue = realMakeQueue(options);
       return queue;
@@ -155,16 +147,6 @@ test('cancelMail dismisses a waiting message and cancels a handling one', async 
   // An unknown postmark changes nothing.
   s.internal.cancelMail(999);
   t.is(s.internal.rowSnapshot().activity, 'passive');
-});
-
-test('without the inbox part a delivery is refused as before', async t => {
-  const s = await makeQueueSession();
-  t.deepEqual(s.internal.deliverMail(envelope(1)), {
-    refused: texts.notBuiltYet,
-  });
-  s.internal.cancelMail(101);
-  await drain();
-  t.deepEqual(s.sent(), []);
 });
 
 test('packages: reserve raises the counter; open keeps a reserved number', t => {

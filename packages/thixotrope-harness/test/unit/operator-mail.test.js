@@ -8,14 +8,16 @@ import test from '@endo/ses-ava/test.js';
 import { makeMailWorld, settle, stagedText } from './_post-office-fakes.js';
 
 /* eslint-disable import/no-relative-packages */
-import { mailLimits } from '../../guest/lib/mail-limits.js';
 import { limits } from '../../guest/lib/limits.js';
 import { textOf } from '../../guest/lib/guards/base.js';
-import { mailTexts, mailTextOf } from '../../guest/lib/guards/mail.js';
 import {
-  postOfficeTexts,
-  postOfficeTextOf,
-} from '../../guest/lib/guards/post-office.js';
+  texts as mailTexts,
+  textOf as mailTextOf,
+} from '../../guest/lib/guards/session.js';
+import {
+  texts as postOfficeTexts,
+  textOf as postOfficeTextOf,
+} from '../../guest/lib/guards/factory.js';
 import { makeOperatorMail } from '../../guest/factory/operator-mail.js';
 /* eslint-enable import/no-relative-packages */
 
@@ -112,7 +114,7 @@ test('the operator inbox refuses the 257th message (acceptance 13)', async t => 
   const world = makeOperatorWorld();
   const a = world.addSession('Alpha');
   const operator = world.postOffice.operatorAddress();
-  for (let i = 0; i < mailLimits.operatorInboxMessages; i += 1) {
+  for (let i = 0; i < limits.operatorInboxMessages; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     await E(a.outbox).post(
       harden({ to: [operator], body: `m${i}`, attachments: none }),
@@ -122,11 +124,9 @@ test('the operator inbox refuses the 257th message (acceptance 13)', async t => 
     harden({ to: [operator], body: 'one too many', attachments: none }),
   );
   t.deepEqual(full.results[0], {
-    refused: postOfficeTextOf.operatorInboxFull(
-      mailLimits.operatorInboxMessages,
-    ),
+    refused: postOfficeTextOf.operatorInboxFull(limits.operatorInboxMessages),
   });
-  t.is(world.mail.status().inbox, mailLimits.operatorInboxMessages);
+  t.is(world.mail.status().inbox, limits.operatorInboxMessages);
 });
 
 test('inbox pages hold at most operatorPageRows rows and frameBytes, with a cursor', async t => {
@@ -155,7 +155,7 @@ test('inbox pages hold at most operatorPageRows rows and frameBytes, with a curs
     const page = await E(world.mailbox).list(
       after === undefined ? undefined : harden({ after }),
     );
-    t.true(page.messages.length <= mailLimits.operatorPageRows);
+    t.true(page.messages.length <= limits.operatorPageRows);
     let bytes = 0;
     for (const view of page.messages) bytes += view.body.length;
     t.true(bytes <= limits.frameBytes);
@@ -279,7 +279,7 @@ test('a request whose turn text would pass inlineBytes is refused at the mailbox
   const world = makeOperatorWorld();
   const a = world.addSession('Alpha');
   // 4,096 units of a three-byte character.
-  const description = '€'.repeat(mailLimits.requestDescriptionUnits);
+  const description = '€'.repeat(limits.requestDescriptionUnits);
   await t.throwsAsync(
     E(world.mailbox).request(harden({ to: a.session, description })),
     { message: /^The message is \d+ bytes .* the limit is 8192$/ },
@@ -400,11 +400,11 @@ test('a form whose envelope passes envelopeBytes is refused at the mailbox (acce
   const world = makeOperatorWorld();
   const a = world.addSession('Alpha');
   const fields = harden(
-    Array.from({ length: mailLimits.formFields }, (_, i) => ({
+    Array.from({ length: limits.formFields }, (_, i) => ({
       name: `field${i}`,
       kind: 'string',
-      description: 'd'.repeat(mailLimits.formFieldDescriptionUnits),
-      default: `"${'x'.repeat(mailLimits.formDefaultUnits - 2)}"`,
+      description: 'd'.repeat(limits.formFieldDescriptionUnits),
+      default: `"${'x'.repeat(limits.formDefaultUnits - 2)}"`,
     })),
   );
   await t.throwsAsync(
@@ -422,7 +422,7 @@ test('requests are retained up to retainedRequests; the oldest settled one makes
   const a = world.addSession('Alpha');
   /** @type {any[]} */
   const handles = [];
-  for (let i = 0; i < mailLimits.retainedRequests; i += 1) {
+  for (let i = 0; i < limits.retainedRequests; i += 1) {
     handles.push(
       // eslint-disable-next-line no-await-in-loop
       await E(world.mailbox).request(
@@ -432,7 +432,7 @@ test('requests are retained up to retainedRequests; the oldest settled one makes
   }
   const extra = harden({ to: a.session, description: 'one more' });
   await t.throwsAsync(E(world.mailbox).request(extra), {
-    message: postOfficeTextOf.postOfficeBusy(mailLimits.retainedRequests),
+    message: postOfficeTextOf.postOfficeBusy(limits.retainedRequests),
   });
   await E(a.envelopes[5].ticket).answer(harden({ json: 'true' }));
   await E(a.envelopes[9].ticket).answer(harden({ json: 'true' }));
@@ -444,7 +444,7 @@ test('requests are retained up to retainedRequests; the oldest settled one makes
     ),
     handles[9],
   );
-  t.is(world.mail.status().requests, mailLimits.retainedRequests);
+  t.is(world.mail.status().requests, limits.retainedRequests);
   // The evicted request's key is free again: a new request is made.
   const again = await E(world.mailbox).request(
     harden({ to: a.session, description: 'q5', responseKey: 'k5' }),

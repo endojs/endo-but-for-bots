@@ -291,7 +291,6 @@
   "toolArgumentNames"
  ],
  "added": {
-  "shapes.SplitArgs": "WX.1 for M9 (m9-interfaces.md 6.2) S10: the exec vat's splitArgs answer (moved from guards/mail.js to guards/base.js)",
   "shapes.ExecutionState": "WX.1 for M6 (m6-interfaces.md 15).1: the sandbox execution state",
   "shapes.CompactionAsk": "WX.1 for M8 (m8-interfaces.md 10) G-1: RoundRequest.compaction",
   "shapes.CompactionStarted": "WX.1 for M8 (m8-interfaces.md 10) G-1: record kind compaction-started",

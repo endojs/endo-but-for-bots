@@ -1,39 +1,5 @@
 // @ts-check
-/**
- * Mail through a real daemon (designs/m9-interfaces.md 3.1, 4.1, 4.5, 8.1),
- * on the m1a state template with the real factory and session programs:
- * the operator's mailbox (`Operator.getMail()`), the post office in the
- * factory vat, and deliveries into real session vats.
- *
- * What the tree serves today: the factory's half of mail (post office,
- * operator mailbox, subagent tree) is wired; the session's `inbox` and
- * `subagents` runtime parts and their tool entries are built but not
- * registered (the session program would be over its limit with them,
- * m9-interfaces.md D-M9-19), so `SessionInternal.deliverMail` answers the
- * not-built text. This file proves the delivery path up to that answer:
- *
- * - addresses: `addressOf(session)` describes the session; the operator
- *   reaches a session by its Session object or its address;
- * - a package reaches the session vat's `deliverMail` (two recipients, one
- *   answer each), and the vat's answer comes back in the receipt;
- * - a request whose delivery is refused settles its handle `failed`, and
- *   its `responseKey` is free again (R3-216);
- * - a recipient the post office did not mint is refused without a call
- *   (acceptance 6, the stranger counts calls); a daemon object that is not
- *   an address likewise;
- * - a form of 32 maximal fields is refused at the mailbox with
- *   `envelopeTooLarge` (acceptance 13, probe "a form of 32 maximal
- *   fields");
- * - a deleted session's address answers `recipientLost` (acceptance 18);
- * - the gateway: a signed-in CapTP client calls `getMail().send` with an
- *   attachment, and a draft with an unexpected field is refused before
- *   decode (acceptance 17).
- *
- * Acceptance items that need the registered parts (1-3, 5-7 in full, 8-10,
- * 12-14, 18's blob release) are listed in milestones.md under M9's outcome.
- *
- *   THIX_AGENT=<lane> corepack yarn test:integration test/integration/mail.test.js
- */
+/** Operator mail, package replies and request settlement through the served factory. */
 import '../unit/_m1a-prelude.js';
 
 import { performance } from 'node:perf_hooks';
@@ -45,10 +11,10 @@ import { E, Far } from '@endo/far';
 /* eslint-disable import/no-relative-packages */
 import { texts } from '../../guest/lib/guards/session.js';
 import {
-  postOfficeTextOf,
-  postOfficeTexts,
-} from '../../guest/lib/guards/post-office.js';
-import { mailLimits } from '../../guest/lib/mail-limits.js';
+  textOf as postOfficeTextOf,
+  texts as postOfficeTexts,
+} from '../../guest/lib/guards/factory.js';
+import { limits } from '../../guest/lib/limits.js';
 import { gatewayTexts } from '../../resources/agent-host/impl/gateway/protocol.js';
 /* eslint-enable import/no-relative-packages */
 import { emit } from '../../perf/_harness.mjs';
@@ -58,7 +24,7 @@ import {
   startFromTemplate,
   takeIntegrationLock,
 } from '../template/index.js';
-import { makeSlice, round1, sliceTemplate } from './_m1a-slice.js';
+import { makeSlice, round1, sliceTemplate, waitFor } from './_m1a-slice.js';
 import { serveGateway, useTestWrappingKey } from './_m3-gateway.js';
 
 takeIntegrationLock(test, 'mail test');
@@ -81,9 +47,6 @@ test.after.always(async () => {
   wrappingKey?.remove();
 });
 
-/** The not-built answer a session vat without its inbox part gives. */
-const notBuilt = harden({ refused: texts.notBuiltYet });
-
 /**
  * A text function's output as a pattern, with every number as `\d+`.
  * @param {string} sample
@@ -96,6 +59,7 @@ const shapeOf = sample =>
   );
 
 run('setup: served state, two sessions, the operator mailbox', async t => {
+  t.timeout(4 * 60_000);
   const t0 = performance.now();
   wrappingKey = useTestWrappingKey('mail');
   const template = await sliceTemplate();
@@ -150,33 +114,51 @@ run(
       harden({ to: [a, address], body: 'hello', attachments: [] }),
     );
     const ms = performance.now() - t0;
-    // One answer per recipient, each the session vat's own: the inbox part
-    // is not registered in the session program yet.
-    t.deepEqual(receipt.results, [notBuilt, notBuilt]);
+    const marks = receipt.results.map(
+      (/** @type {any} */ result) => result.postmark,
+    );
+    t.true(marks.every(Number.isSafeInteger));
+    t.not(marks[0], marks[1]);
+    await waitFor(
+      async () => {
+        const { messages } = await E(mailbox).list();
+        return marks.every((/** @type {number} */ mark) =>
+          messages.some(
+            (/** @type {any} */ m) => m.inReplyTo === mark && m.body === 'ok.',
+          ),
+        );
+      },
+      30_000,
+      'both package replies',
+    );
     // The same recipient named twice is one delivery with one answer each.
     const twice = await E(mailbox).send(
       harden({ to: [a, a], body: 'twice', attachments: [] }),
     );
-    t.deepEqual(twice.results, [notBuilt, notBuilt]);
+    t.true(Number.isSafeInteger(twice.results[0].postmark));
+    t.deepEqual(twice.results[0], twice.results[1]);
     emit({ metric: 'mail.integration.send2', ms: round1(ms) });
   },
 );
 
-run('a refused request fails its handle and frees its responseKey', async t => {
-  const [a] = sessions;
-  const handle = await E(mailbox).request(
-    harden({ to: a, description: 'Which colour?', responseKey: 'colour' }),
-  );
-  const settled = await E(handle).whenSettled();
-  t.like(settled, { state: 'failed', reason: texts.notBuiltYet });
-  t.like(await E(handle).describe(), { state: 'failed' });
-  // R3-216: a failed request does not hold its key; a new one is made.
-  const again = await E(mailbox).request(
-    harden({ to: a, description: 'Which colour?', responseKey: 'colour' }),
-  );
-  t.not(again, handle);
-  t.like(await E(again).whenSettled(), { state: 'failed' });
-});
+run(
+  'an unanswered request is rejected and its key recovers the same handle',
+  async t => {
+    const [a] = sessions;
+    const handle = await E(mailbox).request(
+      harden({ to: a, description: 'Which colour?', responseKey: 'colour' }),
+    );
+    const settled = await E(handle).whenSettled();
+    t.like(settled, { state: 'rejected', reason: texts.unansweredRequest });
+    t.like(await E(handle).describe(), { state: 'rejected' });
+    // A settled rejection is idempotent under its response key.
+    const again = await E(mailbox).request(
+      harden({ to: a, description: 'Which colour?', responseKey: 'colour' }),
+    );
+    t.is(again, handle);
+    t.like(await E(again).whenSettled(), { state: 'rejected' });
+  },
+);
 
 run('a recipient the post office did not mint is refused uncalled', async t => {
   let calls = 0;
@@ -203,12 +185,12 @@ run('a recipient the post office did not mint is refused uncalled', async t => {
 
 run('a form of 32 maximal fields is refused at the mailbox', async t => {
   const [a] = sessions;
-  const fields = Array.from({ length: mailLimits.formFields }, (_, i) =>
+  const fields = Array.from({ length: limits.formFields }, (_, i) =>
     harden({
-      name: `f${i}`.padEnd(mailLimits.formFieldNameUnits, 'x'),
+      name: `f${i}`.padEnd(limits.formFieldNameUnits, 'x'),
       kind: 'string',
-      description: 'd'.repeat(mailLimits.formFieldDescriptionUnits),
-      default: JSON.stringify('v'.repeat(mailLimits.formDefaultUnits - 2)),
+      description: 'd'.repeat(limits.formFieldDescriptionUnits),
+      default: JSON.stringify('v'.repeat(limits.formDefaultUnits - 2)),
     }),
   );
   await t.throwsAsync(
@@ -259,7 +241,7 @@ run(
         attachments: [harden({ label: 'preset', value: preset })],
       }),
     );
-    t.deepEqual(receipt.results, [notBuilt]);
+    t.true(Number.isSafeInteger(receipt.results[0].postmark));
     await t.throwsAsync(
       () =>
         E(pageMail).send(
@@ -273,13 +255,14 @@ run(
       { message: gatewayTexts.unexpectedField },
     );
     // Still served after the refusal.
-    t.deepEqual(
-      (
-        await E(pageMail).send(
-          harden({ to: [session], body: 'again', attachments: [] }),
-        )
-      ).results,
-      [notBuilt],
+    t.true(
+      Number.isSafeInteger(
+        (
+          await E(pageMail).send(
+            harden({ to: [session], body: 'again', attachments: [] }),
+          )
+        ).results[0].postmark,
+      ),
     );
   },
 );

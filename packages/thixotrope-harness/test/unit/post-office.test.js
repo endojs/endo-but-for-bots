@@ -13,12 +13,11 @@ import {
 } from './_post-office-fakes.js';
 
 /* eslint-disable import/no-relative-packages */
-import { mailLimits } from '../../guest/lib/mail-limits.js';
 import { limits } from '../../guest/lib/limits.js';
 import {
-  postOfficeTexts,
-  postOfficeTextOf,
-} from '../../guest/lib/guards/post-office.js';
+  texts as postOfficeTexts,
+  textOf as postOfficeTextOf,
+} from '../../guest/lib/guards/factory.js';
 import { REDRIVE_WINDOW } from '../../guest/factory/post-office.js';
 import { texts } from '../../guest/lib/guards/session.js';
 /* eslint-enable import/no-relative-packages */
@@ -115,7 +114,8 @@ test('a staged package body is copied once per recipient; the sender keeps its b
   );
   t.is(world.copies.length, 2);
   t.true(world.copies.every(({ source }) => source === body.blob));
-  t.deepEqual(world.copies[0].options, {});
+  t.deepEqual(world.copies[0].options, { from: a.session, to: b.session });
+  t.deepEqual(world.copies[1].options, { from: a.session, to: c.session });
   t.is(b.envelopes[0].body, world.copies[0].copied);
   t.not(b.envelopes[0].body, c.envelopes[0].body);
   t.deepEqual(world.released, []);
@@ -300,12 +300,12 @@ test('an envelope over envelopeBytes is refused before any delivery', async t =>
   const world = makeMailWorld();
   const b = world.addSession('Beta');
   const fields = harden(
-    Array.from({ length: mailLimits.formFields }, (_, i) =>
+    Array.from({ length: limits.formFields }, (_, i) =>
       harden({
         name: `field${i}`,
         kind: 'string',
-        description: 'd'.repeat(mailLimits.formFieldDescriptionUnits),
-        default: `"${'x'.repeat(mailLimits.formDefaultUnits - 2)}"`,
+        description: 'd'.repeat(limits.formFieldDescriptionUnits),
+        default: `"${'x'.repeat(limits.formDefaultUnits - 2)}"`,
       }),
     ),
   );
@@ -392,7 +392,7 @@ test('the in-flight bound holds in bytes and in rows; posts are accepted again o
   b.stall();
   const body = 'x'.repeat(limits.inlineBytes);
   const busy = {
-    refused: postOfficeTextOf.postOfficeBusy(mailLimits.postInFlight),
+    refused: postOfficeTextOf.postOfficeBusy(limits.postInFlight),
   };
   /** @type {Promise<any>[]} */
   const accepted = [];
@@ -414,8 +414,8 @@ test('the in-flight bound holds in bytes and in rows; posts are accepted again o
   t.deepEqual(refused?.results[0], busy);
   const { keptBytes, inFlight } = world.postOffice.status();
   t.is(inFlight, accepted.length);
-  t.true(keptBytes <= mailLimits.postInFlightBytes);
-  t.true(keptBytes + limits.inlineBytes > mailLimits.postInFlightBytes);
+  t.true(keptBytes <= limits.postInFlightBytes);
+  t.true(keptBytes + limits.inlineBytes > limits.postInFlightBytes);
   t.log(
     `${inFlight} envelopes of ${limits.inlineBytes} bytes, ${keptBytes} kept bytes`,
   );
@@ -432,7 +432,7 @@ test('the in-flight bound holds in bytes and in rows; posts are accepted again o
   b.stall();
   /** @type {Promise<any>[]} */
   const small = [];
-  for (let i = 0; i < mailLimits.postInFlight; i += 1) {
+  for (let i = 0; i < limits.postInFlight; i += 1) {
     small.push(
       world.postOffice.post({
         from: { row: a.row },
@@ -441,7 +441,7 @@ test('the in-flight bound holds in bytes and in rows; posts are accepted again o
     );
   }
   await settle();
-  t.is(world.postOffice.status().inFlight, mailLimits.postInFlight);
+  t.is(world.postOffice.status().inFlight, limits.postInFlight);
   const over = await world.postOffice.post({
     from: { row: a.row },
     draft: harden({ to: [b.address], body: 's', attachments: none }),

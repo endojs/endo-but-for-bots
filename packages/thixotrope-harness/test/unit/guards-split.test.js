@@ -74,7 +74,16 @@ const foldMap = JSON.parse(
 test('every guard, shape, method list and text equals its snapshot from before the split and the fold, re-keyed by the fold map', t => {
   const after = guardSnapshot();
   /** @type {Record<string, string>} */
-  const old = { ...before.entries, ...beforeFold.entries };
+  const old = {
+    ...before.entries,
+    ...beforeFold.entries,
+    ...JSON.parse(
+      readFileSync(
+        path.join(harness, 'test/fixtures/guard-snapshot-mail.json'),
+        'utf8',
+      ),
+    ).entries,
+  };
   const carried = new Set();
   for (const [key, digest] of Object.entries(after.entries)) {
     const from = foldMap.renamed[key] ?? key;

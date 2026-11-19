@@ -17,12 +17,11 @@ import test from '@endo/ses-ava/test.js';
 /* eslint-disable import/no-relative-packages */
 import { shapes, textOf } from '../../guest/lib/guards/session.js';
 import {
-  mailTables,
-  mailTexts,
-  mailTextOf,
-} from '../../guest/lib/guards/mail.js';
-import { postOfficeTables } from '../../guest/lib/guards/post-office.js';
-import { mailLimits } from '../../guest/lib/mail-limits.js';
+  shapes as mailShapes,
+  texts as mailTexts,
+  textOf as mailTextOf,
+} from '../../guest/lib/guards/session.js';
+import { interfaces as factoryInterfaces } from '../../guest/lib/guards/factory.js';
 import { limits } from '../../guest/lib/limits.js';
 import { messageBytes } from '../../guest/lib/bounded.js';
 import { makeLabels } from '../../guest/session/labels.js';
@@ -30,7 +29,6 @@ import {
   makeRuntime,
   runtimeParts,
 } from '../../guest/session/runtime-parts.js';
-import { inboxPart } from '../../guest/session/inbox.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -39,7 +37,7 @@ const { Far, M, makeExo, matches } = /** @type {GuestGlobals} */ (globalThis);
 const AT = 1_700_000_000_000;
 const drain = () => new Promise(resolve => setImmediate(resolve));
 
-const { interfaces } = postOfficeTables();
+const interfaces = factoryInterfaces;
 
 /** @param {string} title */
 const address = title =>
@@ -79,14 +77,17 @@ const makeInboxRuntime = (services = {}) => {
       labels: makeLabels(),
       services: harden(services),
       config: harden({}),
-      parts: harden([...runtimeParts, inboxPart]),
+      parts: runtimeParts,
     })
   );
   const { inbox } = runtime;
   // The guard `SessionInternal.deliverMail` crosses (seam S5's caller).
   const internal = makeExo(
     'SessionInternal',
-    M.interface('SessionInternal', mailTables().sessionInternalMethods()),
+    M.interface('SessionInternal', {
+      deliverMail: M.call(mailShapes.Envelope).returns(mailShapes.MailDelivery),
+      cancelMail: M.call(M.and(M.number(), M.gte(0))).returns(M.undefined()),
+    }),
     {
       deliverMail: (/** @type {any} */ envelope) => inbox.deliver(envelope),
       cancelMail: () => {},
@@ -186,7 +187,7 @@ test('a re-drive answers the remembered outcome as a duplicate; older than the r
     duplicate: true,
   });
   t.is(inbox.views().length, 1);
-  for (let seq = 2; seq <= mailLimits.deliveryOutcomesKept + 1; seq += 1) {
+  for (let seq = 2; seq <= limits.deliveryOutcomesKept + 1; seq += 1) {
     internal.deliverMail(envelope(seq, { type: 'reply' }));
   }
   // seq 1 fell out of the 64-outcome ring.
@@ -195,16 +196,16 @@ test('a re-drive answers the remembered outcome as a duplicate; older than the r
     number: 2,
     duplicate: true,
   });
-  t.is(inbox.views({ limit: 1000 }).length, mailLimits.listMessagesPage);
+  t.is(inbox.views({ limit: 1000 }).length, limits.listMessagesPage);
 });
 
 test('the inbox holds 256 messages: the 257th is refused (and remembered), nothing dropped', t => {
   const { inbox, internal } = makeInboxRuntime();
-  for (let seq = 1; seq <= mailLimits.inboxMessages; seq += 1) {
+  for (let seq = 1; seq <= limits.inboxMessages; seq += 1) {
     t.is(internal.deliverMail(envelope(seq, { type: 'reply' })).number, seq);
   }
-  const refused = { refused: mailTextOf.inboxFull(mailLimits.inboxMessages) };
-  const seq = mailLimits.inboxMessages + 1;
+  const refused = { refused: mailTextOf.inboxFull(limits.inboxMessages) };
+  const seq = limits.inboxMessages + 1;
   t.deepEqual(internal.deliverMail(envelope(seq)), refused);
   t.deepEqual(internal.deliverMail(envelope(seq)), {
     ...refused,
@@ -608,7 +609,7 @@ test('importPage refuses an unknown type or state, more than 256 messages, a pag
     { message: /not an inbox message/ },
   );
   const { inbox } = makeInboxRuntime();
-  for (let n = 1; n <= mailLimits.inboxMessages; n += 1) {
+  for (let n = 1; n <= limits.inboxMessages; n += 1) {
     inbox.importPage(page([{ ...item, number: n }]));
   }
   t.throws(() => inbox.importPage(page([{ ...item, number: 1000 }])), {

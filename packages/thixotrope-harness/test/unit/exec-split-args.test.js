@@ -18,7 +18,6 @@ import { harnessRoot } from '../_helpers.js';
 /* eslint-disable import/no-relative-packages */
 import { shapes, textOf } from '../../guest/lib/guards/base.js';
 import { limits } from '../../guest/lib/limits.js';
-import { mailLimits } from '../../guest/lib/mail-limits.js';
 import { previewText, utf8Bytes } from '../../guest/lib/bounded.js';
 import {
   SPLIT_NO_ARGS_TEXT,
@@ -148,12 +147,12 @@ test('short arguments come back unchanged with nothing staged', async t => {
 });
 
 test('long string values are staged in order; keys, numbers and white space keep their source', async t => {
-  const long = 'x'.repeat(mailLimits.splitStringUnits + 1);
+  const long = 'x'.repeat(limits.splitStringUnits + 1);
   const other = `é中"q"\\${'y'.repeat(3000)}`;
   const key = 'k'.repeat(2000);
   const argsText = `{"name":"scout",\n  "task": ${JSON.stringify(long)}, "n": 1.0, "big": 12345678901234567890,
   "list": ["short", ${JSON.stringify(other)}], ${JSON.stringify(key)}: "v",
-  "edge": ${JSON.stringify('z'.repeat(mailLimits.splitStringUnits))}}`;
+  "edge": ${JSON.stringify('z'.repeat(limits.splitStringUnits))}}`;
   const { outcome, store } = await split(argsText);
   t.is(outcome.status, 'split');
   t.true(matchesOutcome(outcome));
@@ -198,7 +197,7 @@ test('a residual over inlineBytes stages more values, longest first, until it fi
   const { json, staged } = outcome.split;
   t.true(utf8Bytes(json) <= limits.inlineBytes, `${utf8Bytes(json)}`);
   const count = /** @type {number} */ (staged.length);
-  t.true(count <= mailLimits.splitStagedStrings, `${count}`);
+  t.true(count <= limits.splitStagedStrings, `${count}`);
   // The longest (latest) strings went first; placeholders in text order.
   t.is(store.read(staged.at(-1)), strings[19]);
   t.true(json.includes(JSON.stringify(strings[0])));
@@ -206,7 +205,7 @@ test('a residual over inlineBytes stages more values, longest first, until it fi
 });
 
 test('refusals: too many long strings, a residual that cannot fit, a string over mailBodyUnits; nothing staged', async t => {
-  const limit = mailLimits.splitStagedStrings;
+  const limit = limits.splitStagedStrings;
   const many = JSON.stringify({
     strings: Array.from({ length: limit + 1 }, () => 'm'.repeat(1100)),
   });
@@ -218,9 +217,7 @@ test('refusals: too many long strings, a residual that cannot fit, a string over
   t.is(store.counts.opens, 0);
 
   const wide = JSON.stringify({
-    strings: Array.from({ length: mailLimits.mailParts }, () =>
-      'w'.repeat(1000),
-    ),
+    strings: Array.from({ length: limits.mailParts }, () => 'w'.repeat(1000)),
   });
   ({ outcome, store } = await split(wide));
   t.deepEqual(outcome, {
@@ -230,14 +227,14 @@ test('refusals: too many long strings, a residual that cannot fit, a string over
   t.is(store.counts.opens, 0);
 
   const tooLong = JSON.stringify({
-    strings: 'b'.repeat(mailLimits.mailBodyUnits + 1),
+    strings: 'b'.repeat(limits.mailBodyUnits + 1),
   });
   ({ outcome, store } = await split(tooLong));
   t.deepEqual(outcome, {
     status: 'failed',
     text: splitStringTooLongText(
-      mailLimits.mailBodyUnits + 1,
-      mailLimits.mailBodyUnits,
+      limits.mailBodyUnits + 1,
+      limits.mailBodyUnits,
     ),
   });
   t.is(store.counts.opens, 0);
@@ -245,7 +242,7 @@ test('refusals: too many long strings, a residual that cannot fit, a string over
 });
 
 test('a 1 MiB task is read in pages and staged again in pieces', async t => {
-  const task = 't'.repeat(mailLimits.taskUnits);
+  const task = 't'.repeat(limits.taskUnits);
   const argsText = JSON.stringify({ name: 'scout', task, timeoutSeconds: 60 });
   const { outcome, store } = await split(argsText);
   t.true(matchesOutcome(outcome));

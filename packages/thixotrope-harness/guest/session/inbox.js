@@ -446,6 +446,7 @@ const makeInbox = runtime => {
     dismiss,
     settleRequest,
     blobs,
+    hasMessages: () => messages.size > 0,
     exportPage,
     importPage,
     hooks: harden({ nextTurn, onClaim, onSettle }),

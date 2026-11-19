@@ -12,12 +12,11 @@ import test from '@endo/ses-ava/test.js';
 /* eslint-disable import/no-relative-packages */
 import { textOf } from '../../guest/lib/interfaces.js';
 import {
-  mailTexts,
-  mailTextOf,
+  texts as mailTexts,
+  textOf as mailTextOf,
   mailToolNames,
-} from '../../guest/lib/guards/mail.js';
+} from '../../guest/lib/guards/session.js';
 import { limits } from '../../guest/lib/limits.js';
-import { mailLimits } from '../../guest/lib/mail-limits.js';
 import { notCapabilityText } from '../../guest/session/tools/inspection.js';
 import { mailToolEntries } from '../../guest/session/tools/mail.js';
 /* eslint-enable import/no-relative-packages */
@@ -163,7 +162,7 @@ test('send: refusals before any post (section 11 probes)', async t => {
   const cases = [
     [
       { recipient: nine, strings: ['x'] },
-      mailTextOf.tooManyRecipients(9, mailLimits.recipientsPerSend),
+      mailTextOf.tooManyRecipients(9, limits.recipientsPerSend),
     ],
     [
       { recipient: 'nobody', strings: ['x'] },
@@ -256,7 +255,7 @@ test('send: argument shape refused by the closed parser (unknown key, wrong kind
   t.regex(numbers.text, /argument "strings" must be a string or an array/);
   const many = await run(context, 'send', {
     recipient: 'ann',
-    strings: Array.from({ length: mailLimits.mailParts + 1 }, () => 'x'),
+    strings: Array.from({ length: limits.mailParts + 1 }, () => 'x'),
   });
   t.regex(many.text, /at most 64 strings/);
   const none = await run(context, 'send', { recipient: [], strings: ['x'] });
@@ -334,7 +333,7 @@ test('dismiss and listMessages read the inbox part', async t => {
     { number: 2, type: 'reply', state: 'kept', ...row },
     { number: 1, type: 'package', state: 'waiting', ...row, text: 'big' },
   ]);
-  t.deepEqual(fakeInbox.log, [['views', mailLimits.listMessagesPage]]);
+  t.deepEqual(fakeInbox.log, [['views', limits.listMessagesPage]]);
   t.deepEqual(await run(context, 'dismiss', { messageNumber: 2 }), {
     status: 'ok',
     text: mailTextOf.dismissed(2),
@@ -371,14 +370,14 @@ test('staged arguments: too long refused before splitArgs; split strings become 
   const tooLong = await run(
     context,
     'send',
-    makeStaged(mailLimits.mailBodyUnits + 1),
+    makeStaged(limits.mailBodyUnits + 1),
     ports,
   );
   t.deepEqual(tooLong, {
     status: 'failed',
     text: mailTextOf.bodyTooLong(
-      mailLimits.mailBodyUnits + 1,
-      mailLimits.mailBodyUnits,
+      limits.mailBodyUnits + 1,
+      limits.mailBodyUnits,
     ),
   });
   t.is(inspects.length, 0);

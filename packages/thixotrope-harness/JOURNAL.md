@@ -17177,3 +17177,32 @@ table includes the shell pair, viewImage, mail, requests and subagents after the
 The original per-lane environment size experiment is J-12041; the combined test checks the
 environment and call-table modules in the bundle manifest and measures the whole installed
 session against the shared limit. The seven selected regression files passed 67 tests.
+
+### J-12900 2026-11-19 M9 review repairs and production wiring
+
+The M9 fix tip already repairs the deleted-parent spawn race, inherits the resolved parent preset,
+quotes attachment labels in the system note, and permits retry after a refused ticket answer.
+The session now registers inbox and subagents in the production runtime and all ten tools in the
+round table. The settle crank supplies its final text (including a staged body) to the inbox.
+Factory relay copies check the sending session’s ownership and allocate the new handle against
+the recipient’s quota, including cut replies. The adapter’s restart rule for all session blobs
+remains first presentation after re-resolving a handle (M1b 17.3). No address, ticket or
+attachment crosses a session export. The Node exporter serializes inbox pages, restages bodies
+in the importing session and rolls back a rejected inbox page.
+
+### J-12540 2026-11-19 M9 fold, bundle and restart evidence
+
+The session and factory guards and fixed texts are folded into their respective vat tables.
+RelayWriters and its copy options are Node guards. The extra gateway table registrations are
+removed and the vocabulary test retains the original keys and methods. A mailing session exports
+its inbox after the queue. Empty inboxes use the previous queue-to-end cursor, preserving the
+turn-runner golden trace. A late inbox import fails.
+
+The isolated folded program measured 275,806 bytes before compact emission. With compact
+emission (61242acb45) and the empty-inbox cursor optimization it measured 240,935 bytes,
+7,809 above the historical 233,126-byte post-WX.1 base and below the 270,336-byte gate.
+The representation also changes the cost of the base; the combined integration measures all
+four lanes on the same build. The standalone session-program tests exercised the installed
+program, its prelude and its byte gate. The supervisor SIGKILL restart test passed (192.1 s
+file wall, including template wait). The first mail smoke timed out during cold setup after
+123 s. Further live results are recorded separately.

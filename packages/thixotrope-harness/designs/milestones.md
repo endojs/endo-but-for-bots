@@ -2020,37 +2020,15 @@ Cross-lane (WX.F): a shell-preset subagent's own environment
 File times: about 7 and 5.5 minutes; restart files 3-3.75 minutes each. Probes: contract
 section 11.
 
-**Outcome of the lane's integration unit (W9.10, J-12520..J-12524; not done).** The factory's
-half (post office, operator mailbox, subagent tree, relay copy) is wired and runs in a real
-daemon. The session's half (`inbox` and `subagents` parts, the ten tool entries) is built and
-unit-tested but **not registered**: with it the session program is 280,209 bytes, 9,873 over the
-270,336 limit and +47,083 over the post-WX.1 base against M9's 21,500 (per module: `tools/mail.js`
-10,556, `tools/subagents.js` 9,954, `inbox.js` 8,070, `tools/requests.js` 4,979, `subagents.js`
-3,432, `mail-text.js` 1,650, `tools/call-table.js` 1,518; string literals are under 15 % of them).
-Every session therefore answers `deliverMail` with `notBuiltYet`. A second defect blocks
-acceptance 5 and 9 once registered: the settle hook has no final text (`HookTurn.final` is not in
-the part API), so a reply's body would be empty.
-
-| item | state | proof |
-|---|---|---|
-| 1, 4, 5, 7-12, 14-16 | blocked: parts not registered | unit tests only (`session-inbox`, `mail-tools`, `request-tools`, `subagent-tools`, `subagent-tree`, `post-office`) |
-| 2 | partial: a request reaches the session vat and a refused delivery settles the handle `failed`, freeing its `responseKey` | `mail.test.js` |
-| 3, 13 | partial: the form of 32 maximal fields refused at the mailbox (`envelopeTooLarge`) | `mail.test.js`; the rest unit |
-| 6 | partial: an object the post office did not mint (a client-made remotable, the factory) refused with no call | `mail.test.js`; `mailFraud` unit |
-| 17 | passes: gateway `getMail().send` with an attachment; an invented draft key refused "unexpected field" | `mail.test.js` |
-| 18 | partial: a deleted session's address answers `recipientLost`; blob release blocked | `mail.test.js` |
-| 19, 20 | pass (adapter) | `blob-copy.test.js` |
-| 21 | unit only (`session-mail-export`); `scripts/export.mjs` drops `inbox` pages | - |
-| 22 | passes (unit) | `post-office.test.js` |
-| restart | the factory's mail start steps end after a SIGKILL; mailbox, addresses and request handles replayed; a post after the restart delivered | `mail-restart-delivery.test.js` |
-| `mail.post.operator` | passes: median 71.5 ms, p95 279 ms, 3 deliveries per post, 460 samples in 60 s, exclusive (J-12522) | `perf/mail.perf.mjs` |
-| `mail.sessionToSession`, `.throughput`, `.inboxCrank`, `.hubGrowth`, every `subagent.*` row, `restart.mailIdle` | not measured: need the registered parts | `perf/mail.perf.mjs` prints them `measured: false` |
-| `session.program` | fails: see above | `bundle-guest.mjs` |
-
-Files: `mail.test.js` 100 s, `mail-restart-delivery.test.js` 86 s; both in `test:regression:mail`;
-`perf:pass mail` lists `mail`. Not written: `mail-restart-turn`, `subagents`, `subagents-restart`,
-`perf/subagents.perf.mjs` (nothing they test is reachable in a daemon yet). Cross-lane items stay
-WX.F's.
+**Integration outcome (W9.F, J-12900 and J-12540).** The factory post office, operator mailbox
+and subagent tree deliver to the production inbox. Package settlement posts the assistant’s
+final text. The session registers all ten mail, request and subagent tools. Copied blobs are
+charged to their receiving session. The data-only export includes inbox pages. The unit suite
+covers guarded deliveries, reply correlation, requests and forms, queue holds, child lifecycles,
+relay refusal and import. `test:regression:mail` lists the mail, interrupted mail turn, mailbox
+restart, subagent tool and child restart daemon tests. The cross-lane stop/resume test uses
+the M6 environment template. J-12540 records the standalone bundle gate and restart measurement.
+The original W9.10 count of 280,209 bytes and its post-to-refusal timing describe the pre-fold build.
 
 **Fit risk:** good (contacts are objects; Thixotrope mail showed the pattern); spare-pool sizing
 under subagent bursts and asks into a child given up at startup (core C-10, worked around) are
