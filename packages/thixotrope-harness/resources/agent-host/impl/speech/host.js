@@ -52,7 +52,7 @@ import { clearTimeout, setTimeout } from 'node:timers';
 import { limits as guestLimits } from '../../../../guest/lib/limits.js';
 import {
   speechGuardLimits,
-  speechGuards,
+  speechInterfaces,
 } from '../../../../guest/lib/speech-guards.js';
 import {
   ttsDefaults,
@@ -160,7 +160,6 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
   const limits = harden({ ...audioLimits, ...options.limits });
   const maxAgeMs = options.settingsMaxAgeMs ?? settingsMaxAgeMs;
   const { log } = context;
-  const guards = speechGuards();
 
   let stopped = false;
 
@@ -682,7 +681,7 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
       playback: undefined,
       closed: false,
     };
-    const exo = makeExo('AudioPort', guards.interfaces.AudioPort, {
+    const exo = makeExo('AudioPort', speechInterfaces.AudioPort, {
       transcribe: async () => {
         portForStream(exo, 'utterance');
         const { slot, engine } = await engineFor('speechIn');
@@ -779,7 +778,7 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
 
   // ------------------------------------------------------------ Speech
 
-  const speech = makeExo('Speech', guards.interfaces.Speech, {
+  const speech = makeExo('Speech', speechInterfaces.Speech, {
     openAudio: () => {
       if (stopped) throw Error(speechTexts.serviceStopped);
       if (ports.size >= limits.ports) throw Error(speechTexts.tooManyPorts);

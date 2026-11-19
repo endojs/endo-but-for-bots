@@ -17105,3 +17105,14 @@ get no final text (known). (6) The session half does not fit the program cap (kn
 Fit: the factory-held post office suits Thixotrope: amplification through a WeakMap refuses a
 foreign recipient without a call (seen in a daemon); the session program limit does not suit
 per-tool argument code in the session vat.
+### J-12720 2026-11-19 M11 merge fold — guard exports and bundle verification
+
+The gateway and UI state tests now consume the exported speech interface table.
+The M3 gateway contract and architecture describe the binary HELLO token,
+factory-owned Voice and the speech extension's readGrant power. Rebuilding the
+three programs at a88083f75e with the fold gives session 233,126 bytes
+(06aceb9a1412), exec 64,500 (6f1d6d607b6b), and factory 199,356
+(1b259c97e0fb). The session and exec digests match the pre-M11 digests in
+J-12661, which also records install.factory at 7,833 ms. Duplicate lines
+measure 1.61% against the 2.05% ceiling. The feature-context migration awaits
+step 5(a), M13 owns export/import, and WX.F owns the M6 built-in preset rerun.

@@ -60,7 +60,7 @@ sections 2, 3, 6 and 8, item by item.
 | `AH/speech/engine-protocol.js` | engine kinds, the speech-in process protocol (Endo's Moonshine JSON lines), Piper flags, the voice files, the `openai-audio` paths and constants, the engine environment allowlist, restart pacing, log events | W11.1, W11.2, W11.4, W11.5 |
 | `AH/speech/engine-types.js` | JSDoc types of the adapter-internal objects: `SttEngine`, `Utterance`, `UtteranceSink`, `TtsEngine`, `Synthesis`, `PlaybackSink`, `TtsCatalogue`, `CheckedTtsOptions`, `SpeechText`, `TurnTextSink`, `TurnSpeechView` | W11.1-W11.5 |
 | `guest/lib/voice-preferences.js` | preference fields, `ttsRanges`, `ttsDefaults`, `voiceLimits`, the shortcut's default preset label, `voiceTexts`, `voiceTextOf` (plain data: vats, adapter and browser import it) | W11.2, W11.5, W11.7, W11.8 |
-| `guest/lib/speech-guards.js` | Node-only guards of the gateway-local `Speech` and `AudioPort` and their shapes (`speechGuards()`, `speechMethodNames`, `vocabularyShapes()`) | W11.5, W11.8 |
+| `guest/lib/speech-guards.js` | Node-only guards of the gateway-local `Speech` and `AudioPort` and their shapes (`speechShapes`, `speechInterfaces`, `speechMethodNames`, `vocabularyShapes()`) | W11.5, W11.8 |
 | `UI/src/voice/endpointing-defaults.js` | R5-19..R5-33 constants, the junk list, capture block and constraints | W11.6, W11.8 |
 | `UI/src/voice/texts.js` | browser texts of the voice feature | W11.8 |
 

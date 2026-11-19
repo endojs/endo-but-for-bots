@@ -400,6 +400,7 @@ make({ host, workspace, containers, vats }) -> HarnessRoot
 
 HarnessRoot            // inventory label 'harness'; operator-only via control socket
   getOperator() -> Operator
+  configureSpeech(settings)                   // provisions speech engines through the factory
   configure(settingsRecord) -> settings       // workload limits, pool size, defaults (section 9)
   status() -> { sessions, pool: { spareSessions, spareExec, refilling }, version }
   exportState() / importState(data)           // data-only, M2 (A-2): session records, queue, presets
@@ -408,7 +409,7 @@ Operator               // the ONE object the gateway publishes (F.1 #10)
   getFactory() -> SessionFactory
   getSecrets() -> SecretsAdmin                // agent-host manager facet; never returns values
   getAccounts() -> Accounts                   // M4
-  getVoice() -> VoiceServices                 // M11
+  getVoice() -> Voice                         // M11
   getHome() -> Home                           // M12: operator inbox, inventory view (minimal inventory in M5)
 
 SessionFactory
@@ -492,7 +493,6 @@ AgentHostAdmin (facet installed as 'agentHostAdmin'; held only by the factory)
   listPublisher() -> ChannelPublisher          // session list, accounts, home (adapter-side, D-8)
   onStart(listener) -> Registration            // the factory registers; called from lifecycle.started()
   getSecrets() -> SecretsAdmin
-  speech() -> VoiceServices (M11)
 
 Backend          describe() ; listModels() ; open(host) -> TurnPorts     // { endpoint, publisher, tools, since };
                                                                          //   Endpoint is adapter-side (transient)
@@ -1161,7 +1161,8 @@ caches rebuild lazily per session (journal: blast radius).
   exports of the same process, so their traffic never leaves the adapter; a returned own export
   resolves to the local object (`pkg/src/net/hub.js:804-812`).
 - Audio uses a second WebSocket route `/audio` authenticated by a short-lived capability token minted
-  by `VoiceServices.openAudio()` (binary frames, never CapTP JSON), with inactivity timeouts (M11).
+  by the gateway-local `Speech.openAudio()`. The socket sends its one-time token in the binary HELLO frame.
+  The speech extension alone receives `readGrant` through its entry in the agent host’s extension powers table.
 - UI: copy and adapt `space-floot` (presentational Preact) and `chat/floot-component.js` +
   `floot-*.js` helpers from 1315bef86, replacing pet-name lookups with `Operator` methods and
   `watch()` pulls with `Live` subscriptions; extract client audio (l.2019-2774) into `ui/src/voice/`.
@@ -1403,6 +1404,9 @@ milestone by itself.
 | Container `runCommand(['true'])` harness overhead over runtime | <= 150 ms | |
 | git `status` on 10 k-file repo through the capability | <= 1 s | |
 | Asset request first byte | <= 20 ms; 0 deliveries | |
+| Audio forwarding | median <= 1 ms, p99 <= 3 ms (<= 5 ms with 16 utterances) | M11 contract §14.1 |
+| Partial relay / first fake-engine audio / engine respawn | median <= 2 / 20 / 100 ms, first audio p99 <= 50 ms | M11 contract §14.1 |
+| Open playback / preferences / session start / duplicate launch / settings read | median <= 10 / 50 / 950 / 50 / 100 ms | M11 contract §14.1 |
 | Audio frame path | 0 deliveries; STT partial <= 300 ms after 0.5 s of new audio (real engine) | |
 | TTS first audio after first sentence (warm) | <= 1 s (real engine) | |
 | Factory install of the bundled program, up to 300 k characters | <= 15 s (was 30 s) | 11.6 s ASCII, 14.0 s for 478 KB of mixed text (J-0193) |

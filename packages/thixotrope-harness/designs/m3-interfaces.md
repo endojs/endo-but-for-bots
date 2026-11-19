@@ -462,7 +462,7 @@ adapter loads ES modules synchronously with `require`, so no top-level await) an
 - `csp: { directive: [sources] }`: added, never removed.
 
 The `GatewayContext` an extension receives (`contract-m3.js`): `live`, `composer`, `content`,
-`history()`, `whenAttached(callback)`, `secretWriter()`, `stateDir` and `log`. **As built (XA,
+`history()`, `whenAttached(callback)`, `secretWriter()`, `stateDir`, `log` and `operator()`. The speech extension also receives `readGrant(grant)` through the agent host’s per-extension powers table, keyed by extension object identity. **As built (XA,
 J-10005; X-FIX, J-10054):** `secretWriter()` answers the gateway's own in-process writer
 (`GatewaySecretWriter`, A-11), one per incarnation, made by `GW/index.js` over the secrets
 module's `replaceLocal` and `publicKeyLocal`; it is not the hub's `SecretWriter` that
@@ -475,7 +475,7 @@ agent host is attached. The writer is marked never to leave the gateway (4.4 rul
 is `{ name: 'm4-secrets', largeCalls: [{ target: context => context.secretWriter(), methods:
 ['replace'] }] }`.
 
-A file is owned by the milestone that adds it (`m4-secrets.js`, `m11-audio.js`, ...). A file that
+A file is owned by the milestone that adds it (`m4-secrets.js`, `speech.js`, ...). A file that
 throws while loading is logged and skipped; the gateway still serves.
 
 ### 6.2 UI features (files `UI/src/<dir>/feature.js`)
@@ -543,7 +543,7 @@ merges M3 first (its group A as early as possible), then M4, then M5.
 ### 6.5 Later milestones
 
 M6 `session.settings` (emergency stop); M7 `header.chip` (Network) and `newSession.field`
-(internet toggle); M9 `message.renderer` (mail captions); M11 `GW/extensions/m11-audio.js`
+(internet toggle); M9 `message.renderer` (mail captions); M11 `GW/extensions/speech.js`
 (upgrade route), `composer.addon` and `UI/src/voice/feature.js`; M12 `app.panel` (Home, spaces),
 `message.renderer` (widgets, with its CSP addition for the isolated frame).
 
@@ -754,11 +754,11 @@ Not hotspots (directory registries; each lane adds its own new files, nobody edi
 | registry | collector (M3 only) | what another lane adds |
 |---|---|---|
 | `UI/src/<dir>/` | `UI/build.mjs`, `UI/src/features.js` | one directory with a `feature.js` per lane feature group: M3 `sessions`, `conversation`, `shell`, `net`, `controller`, `styles`; M4 `secrets`, `accounts` (and `account-chip` if needed); M5 `presets`, `mentions` |
-| `GW/extensions/` | `GW/extensions.js` (and its `README.md`) | M4 `m4-secrets.js`; M11 `m11-audio.js` |
+| `GW/extensions/` | `GW/extensions.js` (and its `README.md`) | M4 `m4-secrets.js`; M11 `speech.js` |
 | `guest/lib/interfaces-m*.js` `vocabularyShapes()` | `GW/vocabulary.js` | the one export line in each lane's own contract file (M4: `interfaces-m4.js`; M5: `interfaces-m5.js`, `interfaces-m5-factory.js`) |
 | `test/browser/` | M3 owns `_harness.mjs` and `m3-*.mjs` | M4 `m4-*.mjs`, M5 `m5-*.mjs`, written against `startBrowserGateway` (17) |
 
-The milestones conventions' "hook tables `AH/gateway/routes.js` and `H/ui/src/features.js`" are
+The milestones conventions' "hook tables `the gateway route table` and `H/ui/src/features.js`" are
 these directory registries (the PM updates the conventions list).
 
 ---
