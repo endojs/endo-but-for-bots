@@ -18579,3 +18579,47 @@ remains 145,957 bytes (SHA-256
 `9611cc3ef25d553fa10c0a92479a2619ababcb94a1857fa79431cdbb2925c193`).
 The isolated M9 session increase remains 21,430 bytes against its 21,500-byte
 allocation (J-1460).
+### J-12552 2026-11-20 WX.F exact sizing comparisons and full factory result
+
+A disposable attempt returned the exact UTF-8 byte count for up to 32
+ASCII code units without creating an encoded byte array. All ten bounded
+unit tests passed including empty/ASCII, NUL, DEL, multibyte BMP, paired
+and lone surrogate values at the short cutoff and frame limit. With
+the same production emitter the fixed WX.1 tree (6493d955c7) was
+115,502 B, original M9 (d552fb5675) 136,932 B, M9 with just the
+experiment 136,979 B (21,477 above fixed WX.1). The experimental
+combined session was 146,004 B, SHA-256
+c8d50d77e66977ff5b906f02899ac9eb024ab99196928f3d66077632985d5904.
+Control handled 179 posts in 62.141 s (2.881/s) and treatment 165 in
+61.592 s (2.679/s). Across the whole factory, native worker JS and
+collection were 64.69/174.01 and 88.43/169.79 ms per completion.
+One-minute host load rose from 8.76 to 22.36. The experiment did not land.
+
+Both sides of a second 60 s comparison included c776110c58, which counts
+delivered envelope keys and copied body metadata. Factory-only 69997bd0c5
+avoids measuring a singleton list-feed event for page splitting and
+counts the freshly assembled plain base before hardening the outgoing
+envelope. Compound list batches retain the exact size calculation. All
+77 focused tests passed and typecheck passed. Control handled 172 posts
+in 62.310 s (2.760/s); treatment 193 in 61.359 s (3.145/s). Factory
+wall/native JS/native collection per completed reply changed from
+358.18/84.70/168.04 ms to 314.89/62.61/160.81 ms. The factory spent
+98.9/99.0% of elapsed time in its durable cranks. One-minute host load
+fell from 34.39 to 9.29. These diagnostic throughput windows prepared
+only the eight recipient sessions. The full driver also retains the
+factory and daemon state of preceding ACK, session mail and kept-inbox
+windows, including the imported 255-message inbox.
+
+The unmodified full file on 69997bd0c5 completed with exit 1. Operator
+ACK was 216.441 ms (98 samples), session send 328 ms (75 samples).
+Both missed strict medians of 200/300 ms and passed wrappers of 250/375.
+Causal delivery attribution at four per send remains unverified.
+The all-deliveries upper p95 for the inbox window was 500 ms, median
+30 ms (59 samples, p95 budget 550). Four senders posted and dismissed
+168 replies in 61.282 s (2.741411/s, minimum 3), with eight active
+recipients and eight acknowledged replies at peak, largest inbox seven.
+The independently fresh attachment window posted 319 in 121.943 s.
+Image plus log grew from 288,614 to 880,575 B, 3.051047 times fresh
+against the 1.25 limit, after 32 idle cranks. Image went 178,403 to
+230,534 B; log 110,211 to 650,041 B, nine to 61 records after 33
+compactions. Raw rows are in `/private/tmp/thix-qc-mail-factory-final.log`.
