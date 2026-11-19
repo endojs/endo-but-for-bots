@@ -1529,6 +1529,80 @@ about 400), M9 32,768 (D-M9-19, derived from its measured guards and peer-sized 
 W9.8 wait for the owner's ruling (question G-1) and the PM's per-lane caps, which sum to the ruled
 limit.
 
+**Caps as set (WX.1, J-1427; G-1's default until the owner rules).** `sessionProgramBytes` is
+270,336 everywhere it lives (`guest/lib/limits.js`, `scripts/provision-steps.js`, the factory's
+program store `guest/factory/root.js` `maxProgramBytes`, which was the 262,144-byte
+`execSourceBytes`; README, `architecture.md` D-4, 11, 12.9): every cap on the path is the
+harness's own, none an engine or core limit. The caps are over the step-3 base, 212,484 bytes
+measured at `ea4e2c1c11`: **environments (M6) 9,000, context window (M8) 9,000, mail and subagents
+(M9) 32,768, voice (M11) 0**, sum 50,768, spare 7,084. WX.1 itself brought the base to **233,126**
+(+20,642: the lanes' shared guard lines, `guards/context.js`, `guards/mail.js` with
+`mail-limits.js`, the part API), counted against the caps. By line (a keyword attribution of the
+bundle diff, about +/- 1 KB): environments about 2,600, context window about 5,400, mail about
+11,200, the shared part API about 1,300. So each lane may add over the base after WX.1 (233,126):
+**environments 6,400, context window 3,500, mail and subagents 21,500, voice 0** (rounded down;
+spare about 5,800 for the group fold). `test/unit/m1a-session-program.test.js` prints the base and
+the caps; each lane reports its own growth from `node scripts/bundle-guest.mjs session` against
+its line here.
+
+**Journal numbers of the group's units** (WX.1; twenty a unit, from each milestone's own hundred,
+then its overflow block, so no two units can write the same number):
+
+| lane | units | numbers |
+|---|---|---|
+| environments (M6) | W6.1, W6.2, W6.3a | J-0830..J-0849, J-0850..J-0869, J-0870..J-0889 |
+| | W6.3b, W6.3c, W6.4, W6.5, W6.6, W6.7, W6.8 | J-12000..J-12019, J-12020..J-12039, J-12040..J-12059, J-12060..J-12079, J-12080..J-12099, J-12100..J-12119, J-12120..J-12139 |
+| | PM spare | J-0890..J-0899, J-12140..J-12199 |
+| context window (M8) | W8.1, W8.2, W8.3 | J-1030..J-1049, J-1050..J-1069, J-1070..J-1089 |
+| | W8.4, W8.5, W8.6, W8.7 | J-12200..J-12219, J-12220..J-12239, J-12240..J-12259, J-12260..J-12279 |
+| | PM spare | J-1090..J-1099, J-12280..J-12399 |
+| mail and subagents (M9) | W9.1, W9.2, W9.3 | J-1130..J-1149, J-1150..J-1169, J-1170..J-1189 |
+| | W9.4, W9.5, W9.6, W9.7, W9.8, W9.9, W9.10, W9.F | J-12400..J-12419, J-12420..J-12439, J-12440..J-12459, J-12460..J-12479, J-12480..J-12499, J-12500..J-12519, J-12520..J-12539, J-12540..J-12559 |
+| | PM spare | J-1190..J-1199, J-12560..J-12599 |
+| voice (M11) | W11.1, W11.2, W11.3 | J-1330..J-1349, J-1350..J-1369, J-1370..J-1389 |
+| | W11.4, W11.5, W11.6, W11.7, W11.8, W11.9 | J-12600..J-12619, J-12620..J-12639, J-12640..J-12659, J-12660..J-12679, J-12680..J-12699, J-12700..J-12719 |
+| | PM spare | J-1390..J-1399, J-12720..J-12799 |
+| group | WX.1 / WX.F | J-1425..J-1439 / J-1440..J-1479 |
+| lane review and fix | environments review, fix | J-12800..J-12819, J-12820..J-12839 |
+| | context window review, fix | J-12840..J-12859, J-12860..J-12879 |
+| | mail review, fix | J-12880..J-12899, J-12900..J-12919 |
+| | voice review, fix | J-12920..J-12939, J-12940..J-12959 |
+| | PM spare | J-12960..J-12999 |
+
+The contracts' own blocks stay theirs (M6 J-0810..J-0829, M8 J-1010..J-1029, M9 J-1110..J-1129,
+M11 J-1310..J-1329). A unit that runs out asks the PM for twenty from its lane's spare.
+
+**What WX.1 applied (J-1425..J-1439)** and how a lane continues from it:
+
+- Guard entries, in the shared modules, exactly as the contracts list them (M6 15.1-15.4; M8 G-1 to
+  G-4, T-1, T-2, S-10c; M9 S2, S2b, S9, S9b, S10, F6, V1, G1, L1, C1; M11 appendix A, H1, H3, H4),
+  with the pins re-based once (`guard-fold-map.json` `added`, `changed`, `vocabularyAdded`: 25 new
+  entries, 35 changed, 70 keys and 33 methods; the vocabulary is 328 keys and 174 methods).
+- An exo must implement every method of its guard, so each new method of an existing interface
+  has a "not built here" body: `Session.emergencyStop`/`resume` refuse with
+  `noEnvironmentToStop` and `getExecutionState` answers `{ running, supported: false }`
+  (`session.js`; the environments lane replaces them, R-3); `SessionInternal.deliverMail` answers
+  `{ refused: notBuiltYet }` and `cancelMail` does nothing (mail lane, S5); `TurnSink.compacted`
+  answers `{ go: false }` (`turn.js` `makeSink`; context lane, S-5d; also the TurnSink fakes of six
+  adapter test files and `perf/provider.perf.mjs`); `Operator.getMail` and `getVoice` refuse with
+  `notBuiltYet` (`factory.js`; mail F1, voice H2); `HarnessRoot.configureSpeech` refuses with
+  `voiceTexts.speechNotWired` (`root.js`; voice H2b). `standin-session.js` refuses all five.
+- The part API: `PartHooks.admit` and `RuntimeHooks.admit` (first refusal in table order),
+  `NextTurn.take`, the `restart` hold in `claimNext` (S2), `makeRuntime({ contextWindow })` and
+  `Runtime.contextWindow`, `HookTurn.reading`, `ActiveTurn.startIndex` and `compactionAsk`
+  (optional until the context lane sets them). Not applied: the claim-path calls of `admit` (M6
+  R-2 in `claimNext`, R-4 in `queue.js`, R-3 in `session.js`): the environments lane's.
+- Orders: `PartName` names all nine parts and `Runtime` the four to come; each lane adds four
+  lines in `runtime-parts.js` (import, `requiredParts`, `runtimeParts`, getter) and two in
+  `tool-table.js` (import, spread), each directly below its own `// slot: <name>` comment, so no
+  two lanes' lines touch. `requiredParts` gains a part in the lane commit that adds it.
+- Shared exports: `guest/session/tools/call-table.js` `makeCallTable` (C1, S-6); `tools/objects.js`
+  `readArgs` and `labelsOf` (S-10c, L1).
+- Reserved: `scripts/provision-steps/60-environments.js` and `70-voice.js` (no files); the
+  regression and perf lists `environments`, `context`, `mail`, `voice` (empty).
+- `CORE-CHANGES.md`: CC-090 (with CC-091), CC-092, CC-100, CC-101, CC-110, CC-111, CC-112,
+  CC-120, all requested, not built.
+
 **Owner questions of the group** (the default is what the lanes build until the owner rules).
 
 | id | question | default |
@@ -1629,7 +1703,7 @@ J-0817..J-0829 kept for the PM's notes)
 | W6.3a OCI runtime | `EVI/runtime-oci.js`, `EVI/images.js`, `test/fixtures/fake-bin/oci-cli.mjs` | argv of start, exec, stop, remove, sweep for podman and docker; pin form and presence; timeout kills by process group | `environments-runtime-oci` (fake CLI everywhere; `[real-runtime]` gated) | WX.1 |
 | W6.3b fake runtime and runner | `EVI/runtime-fake.js`, `EVI/runner.js` | lazy start, idle stop, stop, release, sweep from `run/`, timeout then kill after 2 s, scrubbed env, allowlist | `environments-runner`, `environments-fake-runtime` | WX.1 |
 | W6.3c shell port and output | `EVI/shell-port.js`, `EVI/command-args.js`, `EVI/command-output.js`, `EVI/blob-access.js` | model-JSON parsing with Fae's texts, the tool-path output budget, staging through `BlobWriters`, staged args through `Content`, refusal of a withdrawn key | `environments-shell-port`, `environments-command-output` (property test: valid JSON, at most 32,768 units) | WX.1 |
-| W6.4 session part and tools | `guest/session/environment.js`, `guest/session/tools/shell.js`; seams R-1 (`runtime-parts.js`), R-2 (`turn.js` `claimNext`), R-3 (`session.js`), R-4 (`queue.js`), X-E (`export.js`), T-1 (`tool-table.js`), L-1 (`label-seeds.js`) | the `environment` part, `runCommand` and `inspectShell`, cancel, recovery, emergency stop and resume, admission refusals, export and import of the execution state | `session-environment`, `session-shell-tool`, `session-environment-export` (unit, crank order; bundle within M6's cap) | WX.1; the PM's caps |
+| W6.4 session part and tools | `guest/session/environment.js`, `guest/session/tools/shell.js`; seams R-1 (`runtime-parts.js`), R-2 (`turn.js` `claimNext`), R-3 (`session.js`), R-4 (`queue.js`), X-E (`export.js`), T-1 (`tool-table.js`), L-1 (`label-seeds.js`) | the `environment` part, `runCommand` and `inspectShell`, cancel (`hooks.onCancel`), recovery (`hooks.onRecover`), emergency stop and resume, admission refusals (`hooks.admit`), export and import of the execution state | `session-environment`, `session-shell-tool`, `session-environment-export` (unit, crank order; bundle within M6's cap) | WX.1; the PM's caps |
 | W6.5 factory and prompt | `guest/factory/environments.js`, `guest/lib/environment-prompt.js`; seams F-1 (`preset-templates.js`), F-2 (`services.js`), F-3, F-4 (`factory.js`), F-5 (`root.js`), P-1 (`prompt-sections.js`) | availability by setting, provide on creation, binder after make, releaser on rollback, the delete hook (children first), prompt part 6 | `factory-environments`, `environment-prompt` (unit) | WX.1 |
 | W6.6 UI and composer | `ui/src/environment/{feature,ExecutionPanel,texts}.js`; seam C-1 (`AH/composer.js`) | Settings "Sandbox execution": state, Emergency stop, Resume; hidden when unsupported; a refused submission's staged file deleted | `ui-environment` (unit), `test/browser/environment-ui.test.mjs` | WX.1 |
 | W6.7 integration (last) | `test/integration/{_environments,_adapter-processes}.js`, `environments-{shell,restart,stop,presets}.test.js`, `perf/environments{,-git,-restart}.perf.mjs`; seam K-2 | acceptance and perf on the combination; the `environments` template and regression list | each integration file under 5 min; each perf file under its time | W6.1-W6.6 |
@@ -1762,7 +1836,7 @@ M8's cap; disjoint files; journal ranges PM assigns, at least 20 each)
 
 | id | files owned | behaviour | tests | depends on |
 |---|---|---|---|---|
-| W8.1 session compaction | `guest/session/compaction.js`; seams S-5 (`turn.js`), S-6 (`session.js`), S-7 (`runtime-parts.js`), S-8 (`turn-import.js`), S-9 (`archive.js`) | the decision (crank X), the ask, the adapter's answer (crank Y), the context window object, export and import | `context-guards`, `compaction-decision`, `compaction-sink`, `compaction-import` (unit); step 3's crank-order suites unchanged | WX.1; ruling and cap |
+| W8.1 session compaction | `guest/session/compaction.js`; seams S-5 (`turn.js`), S-6 (`session.js`), S-7 (`runtime-parts.js`), S-8 (`turn-import.js`), S-9 (`archive.js`) | the decision (crank X, `hooks.beforeRound`), the ask, the adapter's answer (crank Y), the context window object, export and import | `context-guards`, `compaction-decision`, `compaction-sink`, `compaction-import` (unit); step 3's crank-order suites unchanged | WX.1; ruling and cap |
 | W8.2 plan and summary | `AH/providers/compaction.js` (pure) | the plan, the summary request and its checks, the projection hook | `compaction-plan`, `compaction-summary`, `compaction-hook` (adapter) | WX.1; `imageReceiptText` (W8.6 first commit) |
 | W8.3 adapter wiring | `AH/providers/compaction-round.js`; seams S-10 (`projection.js`), S-11 (`projection-hooks.js`), S-12 (`archive/store.js`), S-13 (`context-cache.js`), S-14 and S-18 (`endpoint.js`, `AH/index.js`), S-15 (`round.js`, `api.js`, `subscriptions/provider.js`), S-16 (`scripted.js`), S-17 (`transcript-records.js`) | round step 2b, cache rebase, projection, the `viewImage` adapter-tool registration | `compaction-round`, `context-cache-compaction`, `compaction-scripted`, `image-tool-offered` (adapter) | WX.1; W8.2 functions (stubs); W8.5 first commit |
 | W8.4 viewImage entry | `guest/session/tools/view-image.js`; seams S-10b (`tool-table.js`), S-10d (`tool-args.js`) | the session's `viewImage` entry: argument checks before any send, the request carries the object | `view-image-entry` (unit) | WX.1; ruling and cap; W8.1's part API (fake) |
