@@ -18123,3 +18123,33 @@ measurements were 2,379.1 and 1,876.4 ms, ratio 1.27. The first
 scenario reported 151.6 s wall including the fresh 104.1 s environment
 fixture build. The second reported 44.0 s. These two samples keep both
 outcomes; the files were running beside other host work.
+
+### J-1467 2026-11-19 M9 mail driver and recipient crank review
+
+Reviewed the four-client window on c8d57059bd against the M9 §10
+throughput row. Each client rotates through its own pair of sessions,
+and each session's next post waits for the preceding reply's dismissal.
+Across clients, progress is asynchronous. The driver counts a post
+after dismissal succeeds. Its elapsed denominator includes draining.
+The operator list uses increasing message numbers, so deletion does
+not shift the next cursor. Each scan restarts from zero, allowing a
+reply seen before its post acknowledgement to be matched on a later
+scan. The active high-water mark counts distinct reserved recipients
+including posts awaiting acknowledgement. The largest inbox figure
+counts rows observed during one scan. With multiple pages under
+concurrent arrivals and dismissals that figure can span several inbox
+revisions. The ordinary window has at most eight replies outstanding
+and the default page holds up to 32 rows subject to its byte budget.
+
+In the existing method trace (thix-qc-mail-methods.jsonl), session s1
+held eight deliverMail cranks for a median 90.5 ms and eight roundFinal
+cranks for a median 86 ms. These measurements include the worker's
+whole crank. The normal attachment-free claim already skips package
+opening and reuses the Turn and TurnSink class definitions. Spreading
+the turn hook object at settlement evaluates its context reading even
+when no settle hook reads it. This costs a bounded local calculation
+and the trace does not establish a material contribution. The automatic
+package reply discards its receipt, but M9's Outbox interface explicitly
+specifies an answered call for this hook. Preserved that call and the
+existing guest implementation. This review did not rerun the exclusive
+benchmark or change its gate.
