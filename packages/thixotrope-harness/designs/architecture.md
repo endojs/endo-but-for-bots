@@ -171,8 +171,9 @@ packages/thixotrope-harness/
     exec/                    # the per-session exec-scope vat program
   resources/                 # Thixotrope native resources
     agent-host/              # durable.js (thin) + ephemeral.js (thin loader) + impl/ (loaded at run time, D-14)
-    workspace/               # per-session directories, git, publishing / asset server
-    containers/              # rootless Podman runner, egress proxy (fake runtime for tests)
+    environments/            # manager, loader, git workspaces and shell runtimes
+    native-layout.js         # shared adapter state and package location
+  guest/lib/guards/environments.js  # environment facets, shapes, limits and messages
   ui/                        # browser client (Preact), built with esbuild into impl/ assets
   bin/harness.js             # admin CLI (attach-only, control socket)
   scripts/                   # bundle-guest.mjs, provision.mjs + provision-steps.js, serve.mjs, run-lock.mjs
@@ -246,8 +247,8 @@ goldens in the same commit: run the ignored `regenerate_persistence_identities` 
  browser (UI, CapTP over WebSocket, audio over a second WS route)
     |  https origin (reverse proxy out of scope; adapter binds loopback, trusts configured proxies)
     v
- agent-host ADAPTER (Node, unconfined, one process)          workspace ADAPTER      containers ADAPTER
-   gateway: HTTP shell + WS CapTP + auth + CSP + frame guard   dirs, git, asset HTTP   podman / fake, egress
+ agent-host ADAPTER (Node, unconfined, one process)          environments ADAPTER
+   gateway: HTTP shell + WS CapTP + auth + CSP + frame guard   session directories, git, shell runtime
    gateway-local services: Live, Content, Composer
    providers: HTTP+SSE, parsing, context projection cache, pools, timers
    secrets backend (encrypted file), sign-in secret
@@ -255,7 +256,7 @@ goldens in the same commit: run the ignored `regenerate_persistence_identities` 
    blob store (staged large text, partial text, native context), speech engines (child processes)
     |  OCapN through the hub (each arrow into a vat = 1 durable crank)
     v
- agent-host MANAGER vat     workspace MANAGER vat     containers MANAGER vat
+ agent-host MANAGER vat     environments MANAGER vat
    (registrations, Secret/Backend/Blob exos, last-served records, refusal marks, start listener)
     ^
  factory VAT (harness root, operator object, session index, presets, settings, vat pool, operator inbox)
@@ -450,7 +451,7 @@ SessionServices        // per-session, attenuated; built by the factory, never c
   backend: Backend                 // this session's backend only; open(host) -> TurnPorts (D-5)
   host: SessionHostFacet           // manager-minted for this session: liveChannel() -> LivePublisher,
                                    //   content() (Blob reads by handle only)
-  workspace?: Workspace, shell?: Shell, envControl?: EnvironmentControl   // M6, per session
+  workspace?: Git, shell?: Shell, environment?: EnvironmentControl   // M6, per session
   execVat: ExecHandle              // from the factory pool: scope() -> { scope: ExecScope, deadlineMs },
                                    //   retire(scope); ExecScope: run, abandon, inspect; no evaluate,
                                    //   no notifyOnStart
@@ -577,26 +578,20 @@ handle presence to file in a WeakMap; after a restart it resolves handles in bat
 (`E(sink).resolveBlobs([blob])`, one manager crank per batch). Handles never bound to a file are
 discarded by the manager at the next start. Blobs are deleted when their session is deleted (M2).
 
-### 3.4 Workspace and containers native resources (M6, M10)
+### 3.4 Environments native resource (M6)
 
-```js
-WorkspaceService   createWorkspace({ session-scoped options }) -> Workspace
-Workspace          git() -> Git ; readOnlyGit() -> Git ; files() -> Dir ; publish() -> Route ; release()
-Git                listBranches(), createBranch(name), switch(name), rename, delete, status(), diff(opts),
-                   log(opts), stage(paths), commit(message), merge(name, {ffOnly}), stash(), trackingStatus()
-Route              url() ; revoke() ; describe()
-ContainerService   createEnvironment(recipe, { workspace }) -> { shell: Shell, control: EnvironmentControl }
-Shell              runCommand(argv, { timeoutMs, cwd, stdin?: Blob }) -> ToolResult ; inspect()
-EnvironmentControl stop() ; emergencyStop() ; resume() ; setNetworkPolicy(policy) ; retire()
-```
+The factory calls `EnvironmentsAdmin.provide({ workspace, shell })` to obtain a control and the
+selected Git and Shell facets. It binds the resulting environment to the session so deletion can
+release its files. A session opens a transient ShellPort through its control once per adapter
+incarnation. Exec code uses the durable Git and Shell facets. The adapter maps each environment
+key to its workspace and home on disk. The public methods and guards are in
+`guest/lib/guards/environments.js`. M7 owns egress and M10 owns publishing in this resource.
 
-**D-16. Containers are lazy desired state.** A container registration means "this environment may
-run", not "keep it running". The containers adapter's `restore` re-binds registrations without
-starting containers (`restore` re-binds every desired registration at every start,
-`pkg/src/native/manager-kit.js:148-160`; native.md section 1 gap (c)); a container starts on the first
-`runCommand` and stops after `envIdleStopMs` (default 15 min) without commands. A stop that fails is
-retried by the manager at the next adapter start instead of quarantining the session (improves on
-G-31 / R4-81). Restart cost is therefore independent of how many sessions have environments.
+**D-16. Workspaces and containers are lazy.** Providing an environment creates its manager record.
+The first git operation or command initializes the workspace repository. The first command starts
+the runtime, which stops after the configured idle interval. The manager restores one service
+registration at startup. The adapter sweeps surviving processes and resumes pending stops and
+releases while idle sessions stay asleep.
 
 **D-7. One-shot and streaming operations use the attach pattern, no kit change.** Each native
 resource registers one service key whose spec carries a manager-owned `attach` sink. The adapter's
@@ -1242,7 +1237,7 @@ too. The other rows below are design settings, kept in the module that enforces 
 | Message string (submission, through the Composer) | 200,000 characters (staged as a Blob; the limit is WS message size and context, not frame cost) | | 100,000,000 (R4-97) - lower; open decision 1 |
 | Tool output into the model | 32,768 UTF-16 units with the R4-46 marker, per-field for structured results; staged as a Blob when over `inlineBytes` | | same (R4-100) |
 | Tool arguments into a vat | the model's JSON arguments travel as one string (inline or Blob), never as a record (`vatKeyNames`) | J-0191 | n/a |
-| Container output per stream (adapter) | 64 KiB, then per-field budget | | same (R3-47) |
+| Container output per stream (adapter) | 65,536 bytes per stream, then the tool result is cut to its 32,768-unit JSON budget | | same (R3-47) |
 | Tool calls per round / in flight | 64 / 16 | | none - open decision 11 |
 | Live publish batch from a vat | 64 events and `frameBytes` | | n/a |
 | History page | 32 turns and `frameBytes` | | 32 turns |
@@ -1265,9 +1260,9 @@ too. The other rows below are design settings, kept in the module that enforces 
   is a local HTTP server that speaks the four wire formats (Anthropic Messages SSE, OpenRouter chat
   completions streamed, OpenAI Responses SSE, Claude subscription Messages SSE) from recorded fixtures,
   including 429 with rate-limit headers, 401, 5xx, overload and mid-stream disconnect.
-- **Fake container runtime** (`resources/containers/runtime-fake.js`): runs allowlisted argv as
+- **Fake container runtime** (`resources/environments/impl/runtime-fake.js`): runs allowlisted argv as
   child processes in the session directory under a scratch HOME with the same result shape, timeouts
-  and output caps. Real Podman steps are tagged `[real-podman]`.
+  and output caps. Real runtime checks are tagged `[real-runtime]`.
 - **Fake speech** (`fake-stt`, `fake-tts`, plus hanging variants for timeout tests). `[real-moonshine]`,
   `[real-piper]` steps are tagged.
 - **Layers.**

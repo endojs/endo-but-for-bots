@@ -52,16 +52,19 @@ import {
   stat,
   unlink,
 } from 'node:fs/promises';
-import { dirname, basename, join } from 'node:path';
+import { join } from 'node:path';
 import { argv as processArgv, pid } from 'node:process';
 
 import { interfaces, textOf, texts } from '../../../guest/lib/interfaces.js';
 import { limits } from '../../../guest/lib/limits.js';
 import { previewText } from '../../../guest/lib/bounded.js';
 import { blobLimits } from '../../../config/defaults.js';
+import { findStateDir } from '../../native-layout.js';
 import { makeTimers } from './timers.js';
 import { syncDirectory } from './files.js';
 /* eslint-enable import/no-relative-packages */
+
+export { findStateDir };
 
 const { makeExo } = /** @type {any} */ (globalThis);
 
@@ -149,29 +152,6 @@ const isContinuation = byte => byte >= 0x80 && byte < 0xc0;
  *
  * @typedef {'write' | 'fsync' | 'rename' | 'fsync-dir' | 'bind'} Step
  */
-
-/**
- * The daemon's state directory, from the adapter process's bundle path:
- * `argv[3]` is `<state>/bundles/<digest>.cjs` (pkg store-fs.js `bundlePath`,
- * adapter-process-entry.js), so state copies and templates carry their
- * files. The core gives an adapter no state directory (AR-SYN-28); this is
- * the one place that reads it from argv (HR-SYN-22).
- * @param {readonly string[]} [argv]
- */
-export const findStateDir = (argv = processArgv) => {
-  const bundle = argv[3];
-  if (
-    typeof bundle !== 'string' ||
-    !bundle.endsWith('.cjs') ||
-    basename(dirname(bundle)) !== 'bundles'
-  ) {
-    throw Error(
-      'agent host: no state directory (argv[3] is not <state>/bundles/<digest>.cjs)',
-    );
-  }
-  return dirname(dirname(bundle));
-};
-harden(findStateDir);
 
 /**
  * The blob directory in a state directory.

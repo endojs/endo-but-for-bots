@@ -15473,3 +15473,11 @@ once) and a failed removal is retried at the next attach, rather than holding th
 step 1 as contract 4.6 says. Commands over 60 s: none (the longest: `tsc` about 3 s, the perf
 script about 35 s).
 Fit: neutral.
+
+### J-12100 2026-11-19 W6.7 checkpoint recovery
+
+The seven interrupted acceptance and performance files in `c7c0571d6a` match their checkpoint
+SHA-256 digests byte for byte. Its parent is the original M6 tip `5437fe19f2`. Running the five
+environment regression files from a deeper checkout hit the macOS 103-byte socket path limit
+before the daemon served. Commit `f3f6bd97e3` lets the test helper take a short private state
+directory through `THIX_HARNESS_TMP`. Run-lock slots remain shared across checkouts.

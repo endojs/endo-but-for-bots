@@ -133,6 +133,10 @@ Commands from the package, one batch each (S2, HR-SYN-18): `corepack yarn test:r
 and the batch's wall time. The lists live in `scripts/test-integration.mjs` `regressionLists`, and
 a unit test keeps every integration, template and browser file in exactly one list.
 
+M6 uses `corepack yarn test:integration --list environments` for the preset, shell, restart,
+stop/export and browser settings files. In a deep checkout, set `THIX_HARNESS_TMP` to a short,
+private directory dedicated to this checkout so its Unix socket paths fit the host limit.
+
 Last run: the step 3 close-out (T3-CLOSE, J-10251), 2026-11-19 00:09-00:37 UTC, at
 `804398c4d9` (lane `endo-thix-clean`, after the review's step 3, documents edited), 6 jobs in
 shared slots, load 2.0-4.3, with the long-session template chain (section 3.2) holding one slot

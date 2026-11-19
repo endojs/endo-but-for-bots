@@ -377,7 +377,8 @@ await runPerf('environments', async ({ provision }) => {
   );
   const installMs = performance.now() - tInstall;
   const growth = sessionBytes - SESSION_BASE_BYTES;
-  await single('environments.bundles.session', growth, {
+  const laneOwnBytes = growth - CALL_TABLE_BYTES;
+  await single('environments.bundles.session', laneOwnBytes, {
     budget: { value: SESSION_CAP_BYTES / 1.25 },
     extra: {
       unit: 'bytes',
@@ -385,7 +386,8 @@ await runPerf('environments', async ({ provision }) => {
       base: SESSION_BASE_BYTES,
       cap: SESSION_CAP_BYTES,
       sharedCallTableBytes: CALL_TABLE_BYTES,
-      laneOwnBytes: growth - CALL_TABLE_BYTES,
+      growth,
+      laneOwnBytes,
     },
   });
   await single('environments.bundles.manager', managerBytes, {

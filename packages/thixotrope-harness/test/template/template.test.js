@@ -113,6 +113,7 @@ test('a provisioned template is keyed by the guest bundles, the manager part, pr
     `${harness}/resources/agent-host/durable.js`,
     `${harness}/resources/agent-host/durable-subscriptions.js`,
     `${harness}/resources/agent-host/ephemeral.js`,
+    `${harness}/resources/native-layout.js`,
     `${harness}/scripts/provision-steps.js`,
     `${harness}/scripts/bundle-guest.mjs`,
     `${harness}/config/defaults.js`,
