@@ -75,6 +75,7 @@ import { parseSseBatches } from './sse.js';
 import { ProviderFailure } from './round.js';
 import { isDelivery, openRouterDelay } from './retry.js';
 import { makeApiProvider } from './api.js';
+import { chatImageMessages, toolResultImages } from './images.js';
 import {
   CATALOG_BODY_BYTES,
   CATALOG_MAX_MODELS,
@@ -172,7 +173,9 @@ const retryableStatus = status =>
  * The OpenAI-compatible messages of a projection (transcript records,
  * projection.js): an assistant message and the tool calls that follow it
  * become one message with `tool_calls` (lal openai-compatible-messages.js);
- * a tool result becomes a `tool` message.
+ * a tool result becomes a `tool` message (a `viewImage` result: its
+ * receipt, and the image in one user message after the round's tool
+ * messages, `images.js`).
  * @param {readonly any[]} transcript
  * @param {string | undefined} system
  */
@@ -181,9 +184,18 @@ export const openRouterMessages = (transcript, system) => {
   const messages = [];
   if (system !== undefined && system !== '')
     messages.push({ role: 'system', content: system });
+  // M8: viewImage results as one user message after the round's tool
+  // messages (images.js, seam S-19).
+  const images = toolResultImages(transcript);
+  /** @type {{ id: string, image: any }[]} */
+  let pending = [];
   /** @type {any} */
   let assistant;
   for (const record of transcript) {
+    if (record.kind !== 'tool-result' && pending.length > 0) {
+      messages.push(...chatImageMessages(pending));
+      pending = [];
+    }
     if (record.kind === 'message' && record.role === 'assistant') {
       assistant = { role: 'assistant', content: record.content ?? '' };
       messages.push(assistant);
@@ -202,16 +214,15 @@ export const openRouterMessages = (transcript, system) => {
         function: { name: record.name, arguments: record.args },
       });
     } else if (record.kind === 'tool-result') {
-      messages.push({
-        role: 'tool',
-        tool_call_id: record.id,
-        content: record.content ?? '',
-      });
+      const { text, image } = images(record);
+      if (image !== undefined) pending.push({ id: record.id, image });
+      messages.push({ role: 'tool', tool_call_id: record.id, content: text });
     } else if (record.kind === 'message') {
       assistant = undefined;
       messages.push({ role: record.role, content: record.content ?? '' });
     }
   }
+  messages.push(...chatImageMessages(pending));
   return messages;
 };
 harden(openRouterMessages);

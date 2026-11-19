@@ -73,6 +73,7 @@ import {
 import { ProviderFailure } from '../providers/round.js';
 import { parseSseBatches } from '../providers/sse.js';
 import { NATIVE_CONTEXT_FORMAT } from '../projection.js';
+import { responsesToolOutput, toolResultImages } from '../providers/images.js';
 import { observingFetch, wireFailure } from './wire.js';
 
 /** The ChatGPT origin (a pool spec's `baseUrl` replaces it). */
@@ -255,7 +256,8 @@ const replayedReasoning = (providerContext, model, text) => {
 /**
  * The Responses `input` of a projection (transcript records): user and
  * assistant messages, the replayed reasoning items before an assistant's
- * text, `function_call` items and their `function_call_output`s. A call
+ * text, `function_call` items and their `function_call_output`s (a
+ * `viewImage` result as an `input_image` output, `images.js`). A call
  * whose result is missing gets `texts.toolOutcomeUnknown` (the API refuses
  * a call without its output, R4-32). Call ids are the op ids, mapped into
  * the tool id alphabet as the Claude client does.
@@ -265,6 +267,8 @@ const replayedReasoning = (providerContext, model, text) => {
 export const codexInput = (transcript, model) => {
   /** @type {any[]} */
   const input = [];
+  // M8: viewImage results as input_image outputs (images.js, seam S-19).
+  const images = toolResultImages(transcript);
   /** @type {string[]} */
   let waiting = [];
   const answerWaiting = () => {
@@ -301,7 +305,7 @@ export const codexInput = (transcript, model) => {
         input.push({
           type: 'function_call_output',
           call_id: id,
-          output: String(record.content ?? ''),
+          output: responsesToolOutput(images(record)),
         });
       }
     } else if (record.kind === 'message') {
