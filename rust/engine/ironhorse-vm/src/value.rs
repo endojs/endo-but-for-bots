@@ -3462,3 +3462,112 @@ mod dirty_tests {
         assert!(!authority.authorizes(&SlotArena::new(), &ChunkArena::new()));
     }
 }
+
+/// STR-1 and STR-2 beyond the Kani bounds: exhaustive over small images,
+/// PRNG-driven chunk chains.
+#[cfg(test)]
+mod structure_properties {
+    use super::*;
+
+    /// The acceptance rule of the free-list image: entries distinct and in
+    /// range, and `free.len() + live == count`.
+    fn image_is_coherent(count: usize, free: &[u32], live: u32) -> bool {
+        free.iter().all(|&f| (f as usize) < count)
+            && free.iter().enumerate().all(|(i, f)| !free[..i].contains(f))
+            && free.len() as u64 + u64::from(live) == count as u64
+    }
+
+    /// STR-1(a), exhaustive: every free list of up to 4 entries over values
+    /// `0..=5`, every `live` in `0..=6`, every count `0..=5`.
+    #[test]
+    fn image_free_marks_accepts_exactly_coherent_images() {
+        let mut free = Vec::new();
+        let mut accepted = 0;
+        fn lists(depth: usize, free: &mut Vec<u32>, visit: &mut dyn FnMut(&[u32])) {
+            visit(free);
+            if depth == 0 {
+                return;
+            }
+            for v in 0..=5 {
+                free.push(v);
+                lists(depth - 1, free, visit);
+                free.pop();
+            }
+        }
+        lists(4, &mut free, &mut |free| {
+            for count in 0..=5 {
+                for live in 0..=6 {
+                    let result = SlotArena::image_free_marks(count, free, live);
+                    assert_eq!(result.is_ok(), image_is_coherent(count, free, live));
+                    if let Ok(marks) = result {
+                        accepted += 1;
+                        assert_eq!(marks.len(), count);
+                        for (i, &m) in marks.iter().enumerate() {
+                            assert_eq!(m, free.contains(&(i as u32)));
+                        }
+                        let slots = vec![Slot::undefined(); count];
+                        let arena = SlotArena::try_from_image(slots, free.to_vec(), live).unwrap();
+                        assert_eq!(arena.live_count(), live);
+                        for i in 0..count as u32 {
+                            assert_eq!(arena.is_free_index(SlotIndex(i)), free.contains(&i));
+                        }
+                    } else {
+                        let slots = vec![Slot::undefined(); count];
+                        assert!(SlotArena::try_from_image(slots, free.to_vec(), live).is_err());
+                    }
+                }
+            }
+        });
+        assert!(accepted > 100);
+    }
+
+    /// STR-2 on PRNG-driven byte spaces of up to 200 bytes, every header
+    /// position: `checked_block_at` never panics, and `Ok((end, _))` implies
+    /// `header < end <= total`, so walking a chain always terminates.
+    #[test]
+    fn checked_block_at_always_progresses() {
+        let mut state = 0x000C_4A1B_u64;
+        let mut next = move || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+        let mut progressed = 0;
+        for _ in 0..2_000 {
+            let len = (next() % 201) as usize;
+            let mut bytes: Vec<u8> = (0..len)
+                .map(|_| {
+                    if next().is_multiple_of(3) {
+                        next() as u8
+                    } else {
+                        0
+                    }
+                })
+                .collect();
+            // Plant plausible headers: small lengths and free-chunk markers.
+            for at in (0..len.saturating_sub(4)).step_by(4) {
+                match next() % 4 {
+                    0 => bytes[at..at + 4].copy_from_slice(&((next() % 24) as u32).to_le_bytes()),
+                    1 => bytes[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes()),
+                    _ => {}
+                }
+            }
+            let plain = ChunkBytes::Plain(bytes);
+            let mut reader = ChunkReader {
+                bytes: &plain,
+                cached: None,
+            };
+            for total in [len, len / 2] {
+                for header in 0..=len + 1 {
+                    if let Ok((end, _)) = reader.checked_block_at(header, total) {
+                        progressed += 1;
+                        assert!(header < end && end <= total);
+                    }
+                }
+            }
+        }
+        assert!(progressed > 10_000, "only {progressed} blocks");
+    }
+}
