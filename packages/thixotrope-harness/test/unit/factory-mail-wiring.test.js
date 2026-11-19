@@ -13,13 +13,11 @@ import test from '@endo/ses-ava/test.js';
 import { createHash } from 'node:crypto';
 
 /* eslint-disable import/no-relative-packages */
+import { interfaces as relayInterfaces } from '../../guest/lib/interfaces.js';
 import { interfaces, methodNames, shapes } from '../../guest/lib/interfaces.js';
-import { mailTables } from '../../guest/lib/guards/mail.js';
-import {
-  postOfficeTables,
-  postOfficeTextOf,
-} from '../../guest/lib/guards/post-office.js';
-import { mailLimits } from '../../guest/lib/mail-limits.js';
+import { shapes as mailShapes } from '../../guest/lib/guards/session.js';
+import { textOf as postOfficeTextOf } from '../../guest/lib/guards/factory.js';
+import { limits } from '../../guest/lib/limits.js';
 import { makeFactoryKit, stagingSources } from '../../guest/factory/factory.js';
 import { makeStartCount } from '../../guest/factory/starts.js';
 import {
@@ -68,7 +66,10 @@ const setup = ({ holdTitle } = {}) => {
   const stall = { mail: false };
   const internalGuard = M.interface(
     'SessionInternal',
-    mailTables().sessionInternalMethods(),
+    {
+      deliverMail: M.call(mailShapes.Envelope).returns(mailShapes.MailDelivery),
+      cancelMail: M.call(M.and(M.number(), M.gte(0))).returns(M.undefined()),
+    },
     { defaultGuards: 'passable' },
   );
 
@@ -144,7 +145,7 @@ const setup = ({ holdTitle } = {}) => {
     archives.push(session);
   };
   adminMethods.writersFor = () =>
-    makeExo('RelayWriters', postOfficeTables().interfaces.RelayWriters, {
+    makeExo('RelayWriters', relayInterfaces.RelayWriters, {
       open: async () => Far('BlobWriter', {}),
       copy: async () =>
         harden({ blob: Far('Blob', {}), preview: 'c', bytes: 1 }),
@@ -350,7 +351,7 @@ test('a spawn makes a hidden child row that inherits and holds only the listed a
 });
 
 test('depth: a child below maxDepth gets a delegation, a grandchild none; no attachments is an empty list', async t => {
-  t.is(mailLimits.maxDepth, 2);
+  t.is(limits.maxDepth, 2);
   const { rows, create, madeOf } = setup();
   const parent = madeOf(await create());
   await spawn(parent.services.subagents, 'child');

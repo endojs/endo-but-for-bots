@@ -408,6 +408,7 @@ Operator               // the ONE object the gateway publishes (F.1 #10)
   getFactory() -> SessionFactory
   getSecrets() -> SecretsAdmin                // agent-host manager facet; never returns values
   getAccounts() -> Accounts                   // M4
+  getMail() -> OperatorMailbox                 // addresses, packages, requests, forms and replies
   getVoice() -> VoiceServices                 // M11
   getHome() -> Home                           // M12: operator inbox, inventory view (minimal inventory in M5)
 
@@ -478,7 +479,8 @@ Turn         getStatus() ; cancel() ; whenFinished() ; resolve(note)  // acknowl
 ```
 
 `SessionInternal` (held only by the factory): `rowSnapshot()`, `deleteSelf()`, `deliverMail(package)`
-(M9), `exportState()`, `importState(chunk)`.
+(M9), `cancelMail(postmark)`, `exportState()`, `importState(chunk)`. A session receives its own
+`SessionServices.mail` outbox, the operator address and its subagent delegation facet.
 
 ### 3.3 Agent-host native resource (manager vat facets)
 
@@ -491,6 +493,8 @@ AgentHostAdmin (facet installed as 'agentHostAdmin'; held only by the factory)
   forSession(session) -> SessionHostFacet     // minted per session; given only to that session's vat
   listPublisher() -> ChannelPublisher          // session list, accounts, home (adapter-side, D-8)
   onStart(listener) -> Registration            // the factory registers; called from lifecycle.started()
+  writersFor() -> RelayWriters               // factory-only copy(blob, { from?, to?, maxUnits?, suffix? })
+  writersFor(session) -> BlobWriters         // owned staging for one session
   getSecrets() -> SecretsAdmin
   speech() -> VoiceServices (M11)
 

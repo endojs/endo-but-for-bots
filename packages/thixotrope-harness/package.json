@@ -40,6 +40,7 @@
     "test:xs": "exit 0",
     "build:ui": "node ui/build.mjs",
     "test:browser": "THIX_HARNESS_BROWSER=1 THIX_HARNESS_INTEGRATION=1 node scripts/test-integration.mjs --dir test/browser",
+    "test:regression:mail": "node scripts/test-integration.mjs --list mail",
     "test:regression:core": "node scripts/test-integration.mjs --list core",
     "test:regression:milestones": "node scripts/test-integration.mjs --list milestones"
   },

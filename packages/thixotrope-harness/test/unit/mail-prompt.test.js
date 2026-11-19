@@ -18,7 +18,7 @@ import {
   mailToolNames,
   requestToolNames,
   subagentToolNames,
-} from '../../guest/lib/guards/mail.js';
+} from '../../guest/lib/guards/session.js';
 import {
   guestSection,
   flootIntroduction,

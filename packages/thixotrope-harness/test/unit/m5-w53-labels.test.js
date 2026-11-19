@@ -323,6 +323,16 @@ test('object tool sites and descriptions', t => {
       'readSources',
       'adopt',
       'adoptTool',
+      'listMessages',
+      'send',
+      'reply',
+      'dismiss',
+      'resolveRequest',
+      'rejectRequest',
+      'submitForm',
+      'spawnSubagent',
+      'askSubagent',
+      'stopSubagent',
     ],
   );
 });
@@ -363,7 +373,12 @@ test('toolSetFor: dynamic sources after the table; built-in and duplicate names 
       dynamic('t', log),
       dynamic('t', log),
     ]);
-  const set = toolSetFor(portsWith, toolTable, {}, harden({ toolSources: [source] }));
+  const set = toolSetFor(
+    portsWith,
+    toolTable,
+    {},
+    harden({ toolSources: [source] }),
+  );
   t.deepEqual(
     set.descriptions.map((/** @type {any} */ d) => d.name),
     ['list', 'lookup', 'store', 'remove', 'adopt', 'echo2'],
@@ -406,6 +421,16 @@ test('toolSetFor: dynamic sources after the table; built-in and duplicate names 
       'readSources',
       'adopt',
       'adoptTool',
+      'listMessages',
+      'send',
+      'reply',
+      'dismiss',
+      'resolveRequest',
+      'rejectRequest',
+      'submitForm',
+      'spawnSubagent',
+      'askSubagent',
+      'stopSubagent',
       'accountStatus',
     ],
   );
@@ -416,7 +441,12 @@ test('toolSetFor: dynamic sources after the table; built-in and duplicate names 
   let names;
   const runtime = harden({
     toolSources: [
-      (/** @type {any} */ _p, /** @type {any} */ _s, /** @type {any} */ r, /** @type {Set<string>} */ b) => {
+      (
+        /** @type {any} */ _p,
+        /** @type {any} */ _s,
+        /** @type {any} */ r,
+        /** @type {Set<string>} */ b,
+      ) => {
         seen = r;
         names = b;
         return [];

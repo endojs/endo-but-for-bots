@@ -219,7 +219,7 @@ export const makeSessionExport = ({
     const page = {
       part: 'queue',
       entries,
-      next: i < items.length ? `q${i}` : inbox ? 'm0' : 'e',
+      next: i < items.length ? `q${i}` : inbox?.hasMessages() ? 'm0' : 'e',
     };
     const hold = queue.currentHold();
     if (hold !== undefined) page.hold = hold;

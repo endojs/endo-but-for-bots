@@ -8,9 +8,9 @@
 import './_m1a-prelude.js';
 
 /* eslint-disable import/no-relative-packages */
+import { interfaces as relayInterfaces } from '../../guest/lib/interfaces.js';
 import { interfaces, methodNames } from '../../guest/lib/interfaces.js';
-import { mailTables } from '../../guest/lib/guards/mail.js';
-import { postOfficeTables } from '../../guest/lib/guards/post-office.js';
+import { shapes as mailShapes } from '../../guest/lib/guards/session.js';
 import { makeRowTable } from '../../guest/factory/rows.js';
 import { makeStartCount } from '../../guest/factory/starts.js';
 import { makePostOffice } from '../../guest/factory/post-office.js';
@@ -57,7 +57,7 @@ export const makeMailWorld = ({ inboxLimit = 256 } = {}) => {
   /** @type {{ promise?: Promise<unknown>, resolve?: (value: unknown) => void }} */
   const copyGate = {};
   const makeRelay = () =>
-    makeExo('RelayWriters', postOfficeTables().interfaces.RelayWriters, {
+    makeExo('RelayWriters', relayInterfaces.RelayWriters, {
       open: async () => Far('BlobWriter', {}),
       /**
        * @param {any} source
@@ -103,10 +103,10 @@ export const makeMailWorld = ({ inboxLimit = 256 } = {}) => {
     lastKnownTime: () => at,
   });
 
-  const internalGuard = M.interface(
-    'SessionInternal',
-    mailTables().sessionInternalMethods(),
-  );
+  const internalGuard = M.interface('SessionInternal', {
+    deliverMail: M.call(mailShapes.Envelope).returns(mailShapes.MailDelivery),
+    cancelMail: M.call(M.and(M.number(), M.gte(0))).returns(M.undefined()),
+  });
 
   /**
    * A session row with a fake inbox. `gate` stalls deliveries: each call

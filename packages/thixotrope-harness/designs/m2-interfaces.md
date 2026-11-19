@@ -818,6 +818,11 @@ an import still open at a daemon start is deleted (7.1) by the start listener.
 
 ### 7.3 Export and import (data only)
 
+After the queue, each `inbox` page carries message data and attachment labels. A staged body
+is exported as text and staged for the importing session. The importer marks every message
+kept and read-only, omits addresses, tickets and attachment references, and resumes numbering
+above the imported maximum. An inbox page outside an open import is refused.
+
 `scripts/export.mjs export <state> <file>` / `import <state> <file>` (operator CLI; W2.7). The file
 is JSON lines: `{ type: 'factory', settings }` (backends by label, default model), then per
 session `{ type: 'session', head }`, `{ type: 'records', records }` (every staged field replaced by

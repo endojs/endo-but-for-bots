@@ -22,9 +22,13 @@ import { fileURLToPath } from 'node:url';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { shapes, textOf, texts } from '../../guest/lib/interfaces.js';
+import {
+  methodNames,
+  shapes,
+  textOf,
+  texts,
+} from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
-import { postOfficeMethodNames } from '../../guest/lib/guards/post-office.js';
 /* eslint-enable import/no-relative-packages */
 import { makeBlobStore } from '../../resources/agent-host/impl/blobs.js';
 import {
@@ -277,14 +281,20 @@ test("writersFor(): the relay writers (open, copy) through their guard; a sessio
   const relay = blobs.store.writersFor(undefined);
   t.is(blobs.store.writersFor(undefined), relay, 'one relay exo');
   t.is(tagOf(relay), 'Alleged: RelayWriters');
-  t.deepEqual([...postOfficeMethodNames.RelayWriters], ['open', 'copy']);
+  t.deepEqual([...methodNames.RelayWriters], ['open', 'copy']);
   const own = blobs.store.writersFor(b);
   t.is(tagOf(own), 'Alleged: BlobWriters');
   t.is(/** @type {any} */ (own).copy, undefined);
   t.is(tagOf(blobs.store.writers), 'Alleged: BlobWriters');
 
   const source = await blobs.store.stage('r'.repeat(9000), { owner: b });
-  const copied = await E(relay).copy(source.blob, {});
+  await t.throwsAsync(() => E(relay).copy(source.blob, { from: a, to: b }), {
+    message: texts.blobNotOwned,
+  });
+  const copied = await E(relay).copy(source.blob, { from: b, to: a });
+  await t.throwsAsync(() => blobs.store.read(copied.blob, b), {
+    message: texts.blobNotOwned,
+  });
   t.is(await blobs.store.read(copied.blob, a), 'r'.repeat(9000));
   const cut = await E(relay).copy(source.blob, { maxUnits: 300 });
   t.is((await blobs.store.read(cut.blob, a)).length, 300);

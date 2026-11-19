@@ -3,7 +3,7 @@
 // D-M9-10, D-M9-16, D-M9-22): the `subagents` runtime part and the
 // `spawnSubagent`, `askSubagent`, `stopSubagent` tools over fake
 // `Delegation` and `SubagentHandle` exos made from the real guards
-// (`postOfficeTables().interfaces`), a fake Endpoint and exec vat from the
+// (`factoryInterfaces`), a fake Endpoint and exec vat from the
 // product's interface table. Covers the name rule and uniqueness, the
 // inline systemPrompt, attachments by label (and `subagents/<name>`), one
 // ask per child, the deadline (armed, disarmed, fired), timeout and task
@@ -16,13 +16,12 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { interfaces, texts, textOf } from '../../guest/lib/interfaces.js';
-import { postOfficeTables } from '../../guest/lib/guards/post-office.js';
+import { interfaces as factoryInterfaces } from '../../guest/lib/guards/factory.js';
 import {
-  mailTexts,
-  mailTextOf,
+  texts as mailTexts,
+  textOf as mailTextOf,
   subagentToolNames,
-} from '../../guest/lib/guards/mail.js';
-import { mailLimits } from '../../guest/lib/mail-limits.js';
+} from '../../guest/lib/guards/session.js';
 import { limits } from '../../guest/lib/limits.js';
 import { makeLabels } from '../../guest/session/labels.js';
 import {
@@ -41,7 +40,7 @@ const { Far, makeExo, makePromiseKit } = /** @type {GuestGlobals} */ (
   globalThis
 );
 
-const PO = postOfficeTables().interfaces;
+const PO = factoryInterfaces;
 const [spawnTool, askTool, stopTool] = subagentToolEntries;
 
 /** Let the vat's queued sends and reactions run. */
@@ -344,7 +343,7 @@ test('spawnSubagent: systemPrompt inline only; attachment refusals before any se
     seeds: [{ label: 'tool', value: Far('Tool', {}), source: 'endowment' }],
   });
   labels.bindJson('note', '"text"');
-  const long = 'x'.repeat(mailLimits.systemPromptBytes + 1);
+  const long = 'x'.repeat(limits.systemPromptBytes + 1);
   // Arguments within inlineBytes: 8,193 bytes of prompt make them staged
   // in a real round; inline here, the byte bound refuses them all the same.
   t.deepEqual(
@@ -352,8 +351,8 @@ test('spawnSubagent: systemPrompt inline only; attachment refusals before any se
     [
       'failed',
       mailTextOf.systemPromptTooLong(
-        mailLimits.systemPromptBytes + 1,
-        mailLimits.systemPromptBytes,
+        limits.systemPromptBytes + 1,
+        limits.systemPromptBytes,
       ),
     ],
   );
@@ -452,7 +451,7 @@ test('askSubagent: timeout and task bounds; the default timeout', async t => {
   const fake = makeDelegation();
   const { call, endpointLog } = setup({ delegation: fake.delegation });
   await call(spawnTool, { name: 'kid' }).result;
-  const { minAskTimeoutSeconds: min, maxAskTimeoutSeconds: max } = mailLimits;
+  const { minAskTimeoutSeconds: min, maxAskTimeoutSeconds: max } = limits;
   for (const timeoutSeconds of [0, max + 1]) {
     t.deepEqual(
       // eslint-disable-next-line no-await-in-loop
@@ -464,7 +463,7 @@ test('askSubagent: timeout and task bounds; the default timeout', async t => {
   }
   t.deepEqual(await outcome(call(askTool, { name: 'kid', task: '' }).result), [
     'failed',
-    mailTextOf.taskInvalid(mailLimits.taskUnits),
+    mailTextOf.taskInvalid(limits.taskUnits),
   ]);
   t.regex(
     (
@@ -479,9 +478,7 @@ test('askSubagent: timeout and task bounds; the default timeout', async t => {
   );
   const { opId } = call(askTool, { name: 'kid', task: 'x' });
   await settle();
-  t.deepEqual(endpointLog, [
-    ['arm', opId, mailLimits.askTimeoutSeconds * 1000],
-  ]);
+  t.deepEqual(endpointLog, [['arm', opId, limits.askTimeoutSeconds * 1000]]);
 });
 
 test('askSubagent: the deadline answers askTimeout, tells the child, and a late answer is ignored', async t => {
@@ -670,7 +667,7 @@ test('staged arguments are split by the exec vat; the staged task reaches the ch
   // A staged task whose bytes prove it over the bound is refused.
   const huge = harden({
     json: JSON.stringify({ name: 'kid', task: '\u0000s0' }),
-    staged: [stagedText('x', 3 * mailLimits.taskUnits + 1)],
+    staged: [stagedText('x', 3 * limits.taskUnits + 1)],
   });
   const other = setup({
     delegation: fake.delegation,
@@ -679,7 +676,7 @@ test('staged arguments are split by the exec vat; the staged task reaches the ch
   other.part.spawned('kid', kid.handle);
   t.deepEqual(await outcome(other.call(askTool, args).result), [
     'failed',
-    mailTextOf.taskInvalid(mailLimits.taskUnits),
+    mailTextOf.taskInvalid(limits.taskUnits),
   ]);
 });
 

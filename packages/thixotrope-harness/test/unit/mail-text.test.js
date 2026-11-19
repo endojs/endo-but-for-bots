@@ -9,9 +9,8 @@ import './_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { mailTextOf } from '../../guest/lib/guards/mail.js';
+import { textOf as mailTextOf } from '../../guest/lib/guards/session.js';
 import { textOf } from '../../guest/lib/guards/session.js';
-import { mailLimits } from '../../guest/lib/mail-limits.js';
 import { limits } from '../../guest/lib/limits.js';
 import {
   bodyText,
@@ -73,14 +72,14 @@ test('a listing is Fae rows plus state, in the order given', t => {
 test('a full page of maximal bodies stays within the tool limit, each row cut', t => {
   const long = 'w'.repeat(limits.inlineBytes);
   const views = [];
-  for (let n = 1; n <= mailLimits.listMessagesPage; n += 1) {
+  for (let n = 1; n <= limits.listMessagesPage; n += 1) {
     views.push(view(n, { body: long }));
   }
   const listing = listingText(views);
   t.true(listing.length <= limits.toolOutputUnits);
   /** @type {{ text: string }[]} */
   const rows = JSON.parse(listing);
-  t.is(rows.length, mailLimits.listMessagesPage);
+  t.is(rows.length, limits.listMessagesPage);
   t.true(rows[0].text.length < long.length);
   t.true(rows[0].text.length > 512);
 });

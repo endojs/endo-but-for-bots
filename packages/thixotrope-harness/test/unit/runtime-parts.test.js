@@ -32,11 +32,11 @@ const runtimeOf = parts =>
 test('the table: powers, inspector, grants, exec, packages; all required', t => {
   t.deepEqual(
     runtimeParts.map(part => part.name),
-    ['powers', 'inspector', 'grants', 'exec', 'packages'],
+    ['powers', 'inspector', 'grants', 'exec', 'packages', 'inbox', 'subagents'],
   );
   t.deepEqual(
     [...requiredParts],
-    ['powers', 'inspector', 'grants', 'exec', 'packages'],
+    ['powers', 'inspector', 'grants', 'exec', 'packages', 'inbox', 'subagents'],
   );
   const runtime = /** @type {any} */ (runtimeOf(runtimeParts));
   for (const name of requiredParts) t.truthy(runtime[name]);
@@ -223,7 +223,7 @@ test('the context window option is the runtime member, undefined by default (WX.
     t.false(name in runtime, name);
   }
   for (const name of ['inbox', 'subagents']) {
-    t.is(/** @type {any} */ (runtime)[name], undefined, name);
+    t.truthy(/** @type {any} */ (runtime)[name], name);
   }
 });
 

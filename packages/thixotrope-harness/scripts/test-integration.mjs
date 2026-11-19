@@ -147,7 +147,7 @@ export const regressionLists = Object.freeze({
   environments: Object.freeze(/** @type {string[]} */ ([])),
   context: Object.freeze(/** @type {string[]} */ ([])),
   mail: Object.freeze(
-    ['mail', 'mail-restart-delivery'].map(
+    ['mail', 'mail-restart-delivery', 'mail-restart-turn', 'subagents', 'subagents-restart'].map(
       name => `test/integration/${name}.test.js`,
     ),
   ),

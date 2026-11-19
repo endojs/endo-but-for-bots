@@ -794,7 +794,7 @@ test('recovery steps run in order with the context; a failing one is skipped', a
   await null;
 });
 
-test('the recovery steps are the exec and packages parts, in that order', t => {
+test('the recovery steps run exec, packages and subagents in order', t => {
   // M1b W1b.4's exec step, then M5 W5.7's closing of the turn's package.
   const runtime = /** @type {any} */ (
     makeRuntime({
@@ -806,5 +806,5 @@ test('the recovery steps are the exec and packages parts, in that order', t => {
   const withRecovery = runtimeParts
     .filter(part => runtime[part.name].hooks?.onRecover !== undefined)
     .map(part => part.name);
-  t.deepEqual(withRecovery, ['exec', 'packages']);
+  t.deepEqual(withRecovery, ['exec', 'packages', 'subagents']);
 });

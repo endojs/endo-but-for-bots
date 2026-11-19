@@ -157,7 +157,7 @@ asks the adapter, through `RelayWriters.copy(blob, options)` (the object `AgentH
 writersFor()` answers without a session, which only the factory holds), for a copy: the adapter
 hard-links the file (or writes a cut copy with an optional suffix, for answers), binds a stock
 handle to it (D-15: file and directory fsynced before the handle leaves) and answers a StagedText
-with no owner. The copy is handed only to the recipient, whose first read or context build claims
+with the receiving session as owner when addressed to a session. The sender is checked at copy time. The recipient holds
 it (17.3 item 4). Bytes never enter a vat; the sender's file is untouched; each session's delete
 releases its own copy (hard links keep the other). Rejected: *multi-owner handles* (the owner map
 is per adapter incarnation, so a second owner would be refused after a restart); *reading through

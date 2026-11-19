@@ -11,13 +11,13 @@ import test from '@endo/ses-ava/test.js';
 import { makeMailWorld, settle, stagedText } from './_post-office-fakes.js';
 
 /* eslint-disable import/no-relative-packages */
-import { mailLimits } from '../../guest/lib/mail-limits.js';
+import { interfaces as relayInterfaces } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
-import { mailTexts, mailTextOf } from '../../guest/lib/guards/mail.js';
 import {
-  postOfficeTables,
-  postOfficeTextOf,
-} from '../../guest/lib/guards/post-office.js';
+  texts as mailTexts,
+  textOf as mailTextOf,
+} from '../../guest/lib/guards/session.js';
+import { textOf as postOfficeTextOf } from '../../guest/lib/guards/factory.js';
 import { interfaces } from '../../guest/lib/interfaces.js';
 import { ANSWER_UNITS, makeSubagents } from '../../guest/factory/subagents.js';
 /* eslint-enable import/no-relative-packages */
@@ -72,35 +72,31 @@ const makeTree = ({ settings } = {}) => {
   };
   // An admin whose relay writers (built from their real guards) stage
   // text into a counted fake blob.
-  const relayWriters = makeExo(
-    'RelayWriters',
-    postOfficeTables().interfaces.RelayWriters,
-    {
-      open: async () => {
-        /** @type {string[]} */
-        const pieces = [];
-        return makeExo('BlobWriter', interfaces.BlobWriter, {
-          /** @param {string} piece */
-          append: async piece => {
-            pieces.push(piece);
-          },
-          close: async () => {
-            const text = pieces.join('');
-            staged.push(text);
-            return harden({
-              blob: Far('Blob', {}),
-              preview: text.slice(0, 16),
-              bytes: text.length,
-            });
-          },
-          abort: () => undefined,
-        });
-      },
-      copy: async () => {
-        throw Error('not used by the tree tests');
-      },
+  const relayWriters = makeExo('RelayWriters', relayInterfaces.RelayWriters, {
+    open: async () => {
+      /** @type {string[]} */
+      const pieces = [];
+      return makeExo('BlobWriter', interfaces.BlobWriter, {
+        /** @param {string} piece */
+        append: async piece => {
+          pieces.push(piece);
+        },
+        close: async () => {
+          const text = pieces.join('');
+          staged.push(text);
+          return harden({
+            blob: Far('Blob', {}),
+            preview: text.slice(0, 16),
+            bytes: text.length,
+          });
+        },
+        abort: () => undefined,
+      });
     },
-  );
+    copy: async () => {
+      throw Error('not used by the tree tests');
+    },
+  });
   const admin = Far('AgentHostAdmin', { writersFor: () => relayWriters });
   tree = makeSubagents({
     create,
@@ -359,6 +355,8 @@ test('a staged reply is copied cut to the tool limit with the attachment note; a
   const copy = tree.world.copies[tree.world.copies.length - 1];
   t.is(copy.source, report.blob);
   t.deepEqual(copy.options, {
+    from: child.session,
+    to: parent.session,
     maxUnits: ANSWER_UNITS,
     suffix: postOfficeTextOf.answerAttachments(['chart']),
   });
@@ -543,7 +541,7 @@ test('restart closes an ask stamped with an earlier start; the late reply is con
   await settle();
   await replyFrom(child, 'done');
   t.is((await fresh).text, 'done');
-  t.is(mailLimits.asksPerSubagent, 1);
+  t.is(limits.asksPerSubagent, 1);
 });
 
 // A spawn in flight while its parent is deleted: the parent's delete hook

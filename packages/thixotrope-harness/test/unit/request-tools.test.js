@@ -13,11 +13,11 @@ import test from '@endo/ses-ava/test.js';
 /* eslint-disable import/no-relative-packages */
 import { textOf } from '../../guest/lib/interfaces.js';
 import {
-  mailTexts,
-  mailTextOf,
+  texts as mailTexts,
+  textOf as mailTextOf,
   requestToolNames,
-} from '../../guest/lib/guards/mail.js';
-import { mailLimits } from '../../guest/lib/mail-limits.js';
+} from '../../guest/lib/guards/session.js';
+import { limits } from '../../guest/lib/limits.js';
 import { requestToolEntries } from '../../guest/session/tools/requests.js';
 /* eslint-enable import/no-relative-packages */
 import {
@@ -156,10 +156,10 @@ test('resolveRequest and rejectRequest refusals before any ticket call', async t
     [{ messageNumber: '2', value: 1 }, mailTexts.expectedRequest],
     [{ messageNumber: '4', value: 1 }, mailTexts.imported],
     [
-      { messageNumber: '1', value: 'x'.repeat(mailLimits.requestAnswerBytes) },
+      { messageNumber: '1', value: 'x'.repeat(limits.requestAnswerBytes) },
       mailTextOf.answerTooLarge(
-        mailLimits.requestAnswerBytes + 2,
-        mailLimits.requestAnswerBytes,
+        limits.requestAnswerBytes + 2,
+        limits.requestAnswerBytes,
       ),
     ],
     [

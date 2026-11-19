@@ -11,7 +11,7 @@ import './_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { postOfficeTables } from '../../guest/lib/guards/post-office.js';
+import { interfaces as factoryInterfaces } from '../../guest/lib/guards/factory.js';
 import { holdTexts } from '../../guest/session/holds.js';
 import { inboxPart } from '../../guest/session/inbox.js';
 import { makeQueue as realMakeQueue } from '../../guest/session/queue.js';
@@ -24,7 +24,7 @@ import { stagedText } from './_m2-w25-session.js';
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { makeExo } = /** @type {GuestGlobals} */ (globalThis);
 
-const { interfaces } = postOfficeTables();
+const interfaces = factoryInterfaces;
 const sender = makeExo('MailAddress', interfaces.MailAddress, {
   describe: () => harden({ title: 'Bea', kind: 'session' }),
 });
@@ -63,7 +63,9 @@ const makeMailSession = async () => {
   let inbox;
   const s = await makeQueueSession({
     parts: harden([
-      ...runtimeParts,
+      ...runtimeParts.filter(
+        part => part.name !== 'inbox' && part.name !== 'subagents',
+      ),
       harden({
         name: inboxPart.name,
         make: (/** @type {any} */ runtime) => {
@@ -186,7 +188,7 @@ test('the inbox is exported after the queue and imported kept and read-only', as
   t.is(inbox.get(1), undefined);
 });
 
-test('an inbox page after end is ignored; before head it is refused', async t => {
+test('an inbox page after end is refused; before head it is refused', async t => {
   const s = await makeMailSession();
   const page = harden({ part: 'inbox', messages: harden([]) });
   t.throws(() => s.internal.importState(page), {
@@ -194,13 +196,12 @@ test('an inbox page after end is ignored; before head it is refused', async t =>
   });
   s.internal.importState(harden({ part: 'head' }));
   s.internal.importState(harden({ part: 'end' }));
-  t.deepEqual(s.internal.importState(page), {
-    records: 0,
-    complete: true,
+  t.throws(() => s.internal.importState(page), {
+    message: /no import is open/,
   });
 });
 
-test('a session without the inbox part exports no inbox page', async t => {
+test('a new session needs no inbox page', async t => {
   const s = await makeQueueSession();
   t.deepEqual(
     exportPages(s.internal).map(p => p.part),
