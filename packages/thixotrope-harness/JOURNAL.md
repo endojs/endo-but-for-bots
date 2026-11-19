@@ -15204,3 +15204,105 @@ Reading: no command over 60 s (the longest: the scratch measurement, 15 s; `tsc`
 integration test, supervisor or browser started. Commits `c0829ad19e`, `2f59b3b8a8`, `fff3920736`
 and this journal commit; nothing pushed; no change to `packages/thixotrope` or `rust/**`.
 Fit: neutral.
+
+### J-0850 2026-11-19 W6.2 workspace git and workspace image sources - built
+Evidence: `resources/environments/impl/git.js`, `resources/environments/impl/image-source.js`,
+`test/adapter/_environments-git.js` (scaffolding), `test/adapter/environments-git.test.js` (12
+tests), `test/adapter/environments-git-hostile.test.js` (8), `test/adapter/environments-image-source.test.js`
+(5), commits `7ded984527` (K-1: `@endo/git` dependency, `yarn.lock` one line) and `0a19ab7b58`;
+the 25 tests pass in about 8 s (wall) against the installed git 2.54 [real-git].
+Reading: `makeWorkspaceGit({ dirsOf, ensureWorkspace, makeBackend? })` answers `{ run(key, { op,
+args }, { readOnly }), removeStaleLock(key), forget(key) }`: every `gitOps` operation, one at a
+time per key (a queue tail per key, deleted when it settles), arguments checked again against the
+`environmentShapes` of the op, a reader's write refused with `gitReadOnly` before any process,
+every answer a closed record cut to `answerBytes` by `fitsFrame` (entry, line and commit counts
+found by binary search). Before every op, reads too: `.git` must be a real directory with no
+`commondir` or `objects/info/alternates` (else `gitConfigRefused`), then `@endo/git`'s backend
+`assertNoExecutableRepoConfig` (filter and merge drivers, includes: `gitConfigRefused`; a repository
+whose `.git/config` the container changed is an identity change to the backend, so the backend is
+made again once over the same directory, which re-checks the worktree root; `core.worktree`
+pointing elsewhere then fails that check). Writes (`add`, `restore`, `commit`, branch ops, `merge`,
+stash) go through the backend; reads whose answers the backend does not shape (porcelain v2
+letters, per-branch oids, capped subjects, `--stat`) and `merge-commit` with a message run git
+directly with the backend's own `GIT_BASE_ARGS` and `makeGitEnv` (imported from its
+`internalHelpers`), stdout capped while read (4 MiB; a diff 64 KiB; `%<(200,trunc)%s` keeps a
+1 MiB subject out of every buffer). `log` pages by `next` = the oid of the first commit left out;
+a conflicting merge answers `conflicts` instead of rejecting. Branch names follow git's ref-name
+rules in process (no spawn); revisions are `HEAD`, a branch name or an oid with `~n`/`^n`; paths
+are relative, never `..` or `.git` in any letter case. Rejections carry git's first stderr line
+with the workspace path replaced by `/workspace` (its parent by `/environment`), no `cause`.
+`openWorkspaceFile` (one way to read a worktree file): `lstat` of every directory component, open
+with `O_NOFOLLOW | O_NONBLOCK`, regular file only, real path and inode re-checked after the open.
+`read` is M5's `SourceReader` with Fae's rules (1 MiB scanned, lines, 8,000 characters, literal
+search); a missing file rejects (exec's `readSources` then answers its unreadable text).
+`openImage({ key, segments, dirsOf, isWithdrawn })` checks the path (M8's `ImagePath` guard, then
+the workspace rules) and the file, then answers `makeImageSource(...)`: an exo with M8's
+`ImageSource` guard (`image-guards.js` builders over the base table) whose `size()` and
+`readBase64` open and check the file again at every call, pages clamped to `readPageBytes`, refused
+with `environmentTexts.stopped` (or the text `isWithdrawn` answers) once withdrawn. Session
+program: 233,126 bytes after WX.1; W6.2 adds 0 (adapter files under `resources/`; the session
+bundle's module list, 241,283 bytes now with W6.4's uncommitted part, names none of them).
+Fit: good.
+
+### J-0851 2026-11-19 W6.2 adapter-level costs of git and image pages - measured
+Evidence: `0a19ab7b58`; a scratch script (not committed) over `perf/_window.mjs` `runWindow`,
+10 s windows, in process, no vat and no hub, load 4.5-6.5 (other lanes running).
+Reading: `status` on a 10,000-file repository (30 modified, 2 untracked): median 70.6 ms, p95
+78.8 ms (n 140). `log` 50 of 1,000 commits: median 52.8 ms, p95 57.8 ms (n 189). `currentBranch`
+(the floor of one op): median 49.6 ms, p95 56.0 ms (n 205). A 2 MiB image read through an
+`ImageSource` in 196,608-byte pages (11 pages, open and check per page): median 2.8 ms, p95 5.8 ms
+(n 3,071). The floor is the checks, not the op: the backend's `assertNoExecutableRepoConfig`
+verifies the repository identity (`rev-parse`, `rev-list`, the config read) and lists the local
+config (one more `git`): about four processes before every op, 40-45 ms at this load. Against
+section 10, `environments.gitStatus` (median <= 1 s, the hops 2 x 75 ms + 53 ms + about 330 ms of
+inbound bytes) keeps about 0.4 s of room; `environments.gitLog` (<= 500 ms) about 0.05-0.1 s once
+the same hops are added, the tight one. The rows themselves are W6.7's.
+Fit: neutral.
+
+### J-0852 2026-11-19 W6.2 departures from the contract text - finding
+Evidence: the files of J-0850.
+Reading: (1) K-1 adds `@endo/git` only: nothing here imports `@endo/exo-git` (its
+`makeGitOperations` shapes exo-git's records, not this resource's closed ones; `@endo/git` depends
+on it anyway). (2) `makeWorkspaceGit` answers two methods beyond 5.2's `{ run }`:
+`removeStaleLock(key)` (4.7's sweep calls it per swept key) and `forget(key)` (release drops the
+key's backend); and `git.js` exports `initWorkspaceRepository(workspace)` (`git init
+--initial-branch=main` and the empty "Initialize workspace" commit with the backend's arguments)
+for W6.1's `ensureWorkspace`, and `openWorkspaceFile`/`checkSegments` for `image-source.js`.
+(3) 5.2 gives `image-source.js` only `makeImageSource`; it also exports `openImage(...)`, the check
+`EnvironmentsOps.openImage` answers with (3.3: path rules, `lstat`, then mint), so W6.1's `ops.js`
+calls one function. `isWithdrawn(key)` may answer a string, the refusal text (W6.1 can answer
+`environmentTexts.released` for a released key). (4) Reads are refused with `gitConfigRefused`
+while an executable config is present, not only writes (section 11 says "writes refused; reads do
+not run any of them"): the backend's arguments cannot neutralise a filter driver named in
+`.git/config` plus an in-tree `.gitattributes` (`git status` and `diff` run clean filters), and it
+takes no extra `-c` for reads, so refusing is the only way reads never run one. The text says
+"before writing"; the words are EVG's. (5) The 100,000-untracked-files probe runs with 3,000
+files of 120-character names (over the 1,000-entry page and the 16 KB answer, 0.6 s instead of
+about 15 s); the 1 GB file is sparse.
+Fit: neutral.
+
+### J-0853 2026-11-19 W6.2 fit of host-side git over a container-written .git - finding
+Evidence: `environments-git-hostile.test.js`; `packages/git/src/native-git-backend.js`
+`GIT_BASE_ARGS`, `makeGitEnv`, `assertNoExecutableRepoConfig`, `verifyRepositoryIdentity`.
+Reading: suits: keeping git in the adapter behind a key the vats never see means a vat holds only
+`Git`/`GitReader` and every byte of a workspace stays in Node; the hostile cases (filter, include,
+merge driver, hooks, fsmonitor, `core.worktree`, alternates, a `gitdir:` file, a symlinked `.git`,
+symlinked files and directories) all end in a fixed refusal with no side-effect file and no host
+path. Does not suit as well: (a) the config check and the git run are two processes, and the
+container runs at the same time: a container that writes a filter driver between them could make
+the host run it (the same window the backend has for its own writes). Closing it needs `@endo/git`
+to accept per-call config overrides (`GIT_CONFIG_COUNT`) or to read a config snapshot, a change to
+another package (rule 7): listed for the PM. (b) The backend's identity check costs about four
+processes per op (J-0851) and treats every container `git config` as a new repository; this
+module re-derives it once, which is correct for a workspace that is the session's own, but the
+check is mostly paid for nothing here. (c) `internalHelpers` is "exported for tests, not public":
+reads depend on it to run with the same arguments; a public `runGit`-style export would remove
+that dependency. Fit: neutral.
+
+### J-0854 2026-11-19 W6.2 time record - process
+Evidence: first command 2026-11-19T02:23:29Z.
+Reading: no command over 60 s (the longest: the scratch measurement, 51 s for four 10 s windows
+and the fixture; `yarn install` 5 s; `tsc` about 3 s; the tests about 8 s). No integration test,
+supervisor or browser started. Commits `7ded984527`, `0a19ab7b58` and this journal commit;
+nothing pushed; no change to `packages/thixotrope`, `rust/**` or other packages.
+Fit: neutral.
