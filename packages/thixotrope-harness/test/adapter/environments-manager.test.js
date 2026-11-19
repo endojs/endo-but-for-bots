@@ -43,6 +43,11 @@ import {
 } from '../../resources/environments/durable.js';
 import { makeEnvironmentsBinding } from '../../resources/environments/impl/attach.js';
 import { boundCommandRecord } from '../../resources/environments/impl/command-output.js';
+import {
+  defaultRuntimes,
+  makeBindingParts,
+} from '../../resources/environments/impl/index.js';
+import { loadEnvironments } from '../../resources/environments/ephemeral.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E, Far, makeExo } = /** @type {GuestGlobals} */ (globalThis);
@@ -216,9 +221,10 @@ const makeParts = () => {
  * for the same registration; `restart()` retires the live incarnation as a
  * SIGKILL does; `lifecycle.started()` builds the next one.
  * @param {import('ava').ExecutionContext} t
- * @param {{ checkOk?: boolean }} [options]
+ * @param {{ checkOk?: boolean, real?: boolean }} [options] `real`: the
+ *   composition `impl/index.js` makes (real parts, the real fake runtime)
  */
-const makeKit = (t, { checkOk = true } = {}) => {
+const makeKit = (t, { checkOk = true, real = false } = {}) => {
   mkdirSync(join(harnessRoot, 'tmp'), { recursive: true });
   const stateDir = mkdtempSync(join(harnessRoot, 'tmp', 'envm-'));
   t.teardown(() => rmSync(stateDir, { recursive: true, force: true }));
@@ -301,8 +307,8 @@ const makeKit = (t, { checkOk = true } = {}) => {
       spec: undefined,
       binding: makeEnvironmentsBinding({
         incarnation: `i${incarnations}`,
-        parts: fake.parts,
-        runtimes,
+        parts: real ? makeBindingParts : fake.parts,
+        runtimes: real ? defaultRuntimes : runtimes,
         stateDir,
       }),
     };
@@ -819,4 +825,58 @@ test('records are bounded by maxEnvironments; a release makes room once answered
     status => status.environments < L.maxEnvironments,
   );
   t.truthy(kit.admin.provide({ workspace: true, shell: false }).control);
+});
+
+test('the composition: real git, the fake runtime, a real ShellPort; emergency stop refuses the port the session holds', async t => {
+  const kit = makeKit(t, { real: true });
+  const status = await E(kit.admin).configure(
+    harden({ runtime: 'fake', allowedCommands: ['sh', 'git'] }),
+  );
+  t.like(status, { state: 'ready', runtime: 'fake', running: 0 });
+  const { workspace, shell, control } = kit.admin.provide({
+    workspace: true,
+    shell: true,
+  });
+  t.is(await E(workspace).currentBranch(), 'main');
+  const result = await E(shell).runCommand('sh', [
+    '-c',
+    'printf hi > a.txt && git add a.txt && printf done',
+  ]);
+  t.like(result, { stdout: 'done', exitCode: 0, truncated: false });
+  const after = await E(workspace).status();
+  t.deepEqual(
+    after.entries.map((/** @type {any} */ entry) => [entry.path, entry.index]),
+    [['a.txt', 'A']],
+  );
+  await t.throwsAsync(E(shell).runCommand('python3', []), {
+    message: /is not in the allowlist/,
+  });
+  const info = await E(shell).inspect();
+  t.deepEqual(info.allowedCommands, ['sh', 'git']);
+  t.false(JSON.stringify(info).includes(kit.stateDir), 'no host path');
+
+  const port = await E(control).port();
+  t.is(await E(control).port(), port, 'one port per key per incarnation');
+  await E(control).emergencyStop();
+  t.deepEqual(
+    await E(port).runCommand(
+      harden({
+        opId: 'op1',
+        args: JSON.stringify({ command: 'sh', args: ['-c', 'true'] }),
+        writers: Far('BlobWriters', {}),
+      }),
+    ),
+    { status: 'failed', text: T.stopped },
+  );
+  await E(control).stop();
+  t.like(await E(kit.admin).status(), { running: 0 });
+});
+
+test('the loader builds the adapter root from impl/index.js', t => {
+  const adapter = loadEnvironments({
+    harnessRoot,
+    implOptions: { stateDir: harnessRoot },
+  });
+  t.is(typeof adapter.bind, 'function');
+  t.is(typeof adapter.restore, 'function');
 });
