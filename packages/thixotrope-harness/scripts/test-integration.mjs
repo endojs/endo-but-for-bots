@@ -147,7 +147,10 @@ export const regressionLists = Object.freeze({
   environments: Object.freeze(/** @type {string[]} */ ([])),
   context: Object.freeze(/** @type {string[]} */ ([])),
   mail: Object.freeze(/** @type {string[]} */ ([])),
-  voice: Object.freeze(/** @type {string[]} */ ([])),
+  voice: Object.freeze([
+    'test/integration/voice-session.test.js',
+    'test/integration/voice-restart.test.js',
+  ]),
 });
 
 /**
