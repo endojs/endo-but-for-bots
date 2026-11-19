@@ -17270,3 +17270,14 @@ passed. A child reply cancelled during a relay copy releases the new handle, and
 that fails after staging a body releases it before dropping the half-imported session. Those two
 cleanup regressions passed. In the combined checkout the real environment stop fixed the setup
 of both queue/stop unit cases, and all ten tests in the mail wiring and export files passed.
+
+### J-12121 2026-11-19 W6.8 manager below its 80,000-byte install budget
+
+The core installs the environment manager with `makeBundle` on `resources/environments/durable.js`.
+Its base guard table was importing the complete collection of mail, session and UI limits. The
+manager only needs the 19 shared guard bounds and two image path bounds. Those definitions now
+live in `guest/lib/guard-limits.js`. The complete exported limit tables retain all 161 and nine
+entries respectively, in the original order with the original values. The ordinary native
+installer's bundler now produces 75,511 bytes. The production session program is 257,142 bytes
+against 270,336. All 24 guard snapshot, guest interface, execution export and bundle tests passed
+on the combined checkout. The worker, native installer and budgets are unchanged.

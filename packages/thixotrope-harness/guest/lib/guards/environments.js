@@ -33,7 +33,7 @@
  * `contract(thixotrope-harness): ...`, `m6-interfaces.md` in the same
  * commit).
  */
-import { limits, imageLimits } from '../limits.js';
+import { guardLimits as limits, imagePathLimits } from '../guard-limits.js';
 import {
   text,
   list,
@@ -545,7 +545,7 @@ const shapeBuilders = {
    * workspace path rules again (worktree only, never `.git`).
    */
   ImagePath: () =>
-    list(text(imageLimits.segmentUnits), imageLimits.pathSegments),
+    list(text(imagePathLimits.segmentUnits), imagePathLimits.pathSegments),
   /** `EnvironmentsOps.stop` options: `withdraw` for an emergency stop. */
   StopOptions: () => record({}, { withdraw: M.boolean() }),
 };

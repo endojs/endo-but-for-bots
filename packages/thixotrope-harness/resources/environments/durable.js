@@ -38,7 +38,7 @@ import {
   gitOps,
   gitReaderMethodNames,
 } from '../../guest/lib/guards/environments.js';
-import { limits } from '../../guest/lib/limits.js';
+import { guardLimits as limits } from '../../guest/lib/guard-limits.js';
 import { isRetiredBreak } from '../../guest/lib/retired.js';
 /* eslint-enable import/no-relative-packages */
 import { makeAttachedOps } from '../native-attach.js';
