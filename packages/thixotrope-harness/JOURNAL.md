@@ -17506,3 +17506,19 @@ Its total slot usage was 805.7 s; elapsed time was 4,610.6 s, above the
 20-minute list target. The speak and browser files waited 3,683.3 s and
 2,711.4 s respectively before acquiring shared slots. This pass does not
 establish the list wall-time target.
+
+### J-1447 2026-11-19 WX.F canonical checkout and regression checkpoint
+
+The local harness branch fast-forwarded from `9adecb9b94` to `181ed8112d` after
+the four combined acceptance files passed. An immutable install completed in that checkout.
+The unit and adapter lanes passed 1,997 tests, with 167 skipped and three TODOs. A clean
+TypeScript build followed by package lint passed. ESLint reported 924 warnings and zero
+errors. The duplication check found 584 of 38,409 normalised lines (1.52%) in 29 clusters
+against a 1.77% ceiling.
+
+The 200-turn context-restart test passed after the fixture change, as did snapshot and crash
+recovery, gateway extension discovery, session reconnect, browser history and browser restart
+on their corrected reruns. The two wider regression lists and combined-head exclusive
+performance checks continue. J-12104 gives the verified twenty-session fixture and all five
+shared restart observations. J-12726 and J-12727 give the exclusive voice transport and
+Chromium results.

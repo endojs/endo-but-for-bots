@@ -1476,7 +1476,7 @@ drops most of Endo's name plumbing.
 
 ## The group {M6, M8, M9, M11}: shared units, owner questions, core requests
 
-**Integrated locally (2026-11-19, J-1440..J-1446).** The first-parent merges are M11, M6, M8
+**Integrated locally (2026-11-19, J-1440..J-1447).** The first-parent merges are M11, M6, M8
 and M9. All four cross-lane tests passed on the combined daemon. Session and native manager
 sizes met their whole-program limits. The individual outcomes and journal retain the missed
 performance gates, per-lane growth overage and remaining verification. The four contracts are the reference:
@@ -1677,8 +1677,9 @@ naming M6 and M8, CC-101 as spike step 2, CC-110 as C-10.
 
 **Status: integrated with open performance and acceptance items.** Stopped-session import,
 workspace isolation, runner and supervisor recovery, and both Chromium settings cases passed.
-The native manager measures 75,511 bytes against its 80,000-byte limit. J-12100..J-12103
-and J-12121 record the measurements and the deferred guest-level checks. Reference: `m6-interfaces.md` (work units 8, acceptance
+The native manager measures 75,511 bytes against its 80,000-byte limit. J-12100..J-12104
+and J-12121 record the measurements and the deferred guest-level checks. Five shared restarts
+started zero process groups and woke zero session vats. One exceeded 15 s. Reference: `m6-interfaces.md` (work units 8, acceptance
 9, perf 10, probes 11, fold 14); guards and texts `guest/lib/guards/environments.js`.
 
 **Goal.** Development sessions: a per-session rootless container with `/workspace` backed by the
