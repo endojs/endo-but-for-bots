@@ -17346,6 +17346,96 @@ shortcut launches made one description and one model lookup each. The factory, v
 and subagent tree suites passed 41 tests and the package TypeScript check passed.
 The exclusive startup timing remained pending while unrelated work saturated the host.
 
+### J-12109 2026-11-19 exclusive creation and Git checkpoints
+
+The normal exclusive wrappers ran the complete unscaled Git, voice-session, session and
+environments files on `ff4b360a3d`. The factory installed 248,602 bytes at `c15000ad69e8`,
+the seven-piece session 145,957 at `9611cc3ef25d`. Later rows included a dirty suffix for
+an untracked diagnostic script; the tracked guest sources were unchanged. These were the
+creation lane's programs before the subsequent integrated list-feed change.
+
+| Public operation | Median | Samples | Strict cap | One-minute host load |
+| --- | ---: | ---: | ---: | ---: |
+| Cold createSession | 5,663.632 ms | 6 | 6,000 ms | 31.14 |
+| Voice launch with a pinned model | 1,517.349 ms | 12 | 950 ms | 35.44 |
+| Development minus chat-only createSession | 576.505 ms | 6 per preset | 175 ms | 35.68 |
+| Git status, 32 changed paths | 632 ms | 40 | 1,000 ms | 35.37 |
+| Git log, 50 commits | 827 ms | 44 | 500 ms | 36.74 |
+
+All six cold sessions were listed and the slowest took 5,938 ms. Cold creation used
+ordinary sequential staging. Development and chat-only creation medians were 1,796.904 and
+1,220.399 ms. The three rows above their caps also missed the wrapper's 25% allowance.
+Voice duplicate launch took 31.988 ms across 1,030 samples. The typed delivery counts
+were 6, 5 and 7. Of 67 spoken samples, 65 matched the typed median, one was lower by one
+and one higher by one. The strict per-sample delivery gate failed.
+
+### J-12110 2026-11-19 workspace manager facet provisioning
+
+The environment manager previously defined each guarded Git, read-only Git, Shell and
+EnvironmentControl class anew with each facet. `5323964245` defines each class once per
+manager. Every instance holds its own record, retains its declared public interface and
+goes through the same adapter call, stop and release checks. All 18 adapter manager
+tests passed, including the real Git and shell-port composition.
+
+A shared diagnostic compared 10 direct manager provisions per version. Their median
+fell from 216.533 to 37.478 ms, at one-minute host loads 24.90 and 19.96. With six
+complete sessions of each preset per version, the development-minus-chat median fell
+from 547.501 to 73.643 ms, at loads 20.89 and 22.39.
+
+The complete exclusive environments file at `5323964245` measured **256.228 ms** for
+development minus chat-only at load 32.73. Its 60-second window contained seven
+development creations (median 1,461.358 ms) and six chat-only creations (1,205.130 ms).
+This improved the earlier exclusive difference by 320.277 ms and still exceeded both
+175 ms and the wrapper allowance. The first command took 159 ms median across 13
+sessions (limit 500 ms). The manager bundle occupied 76,258 of 80,000 bytes, and native
+install took 4,801.270 ms (limit 5,000 ms). The optional pinned-OCI measurement is still
+unimplemented.
+
+### J-12111 2026-11-19 latency experiments set aside
+
+In shared runs on the same 10,000-file, 1,000-commit fixture, eight samples of each
+checkout and operation were taken in alternating order. All pages returned the expected
+number of commits. Times below are medians in milliseconds.
+
+| Git exec path | Trivial exec | Lookup | One commit | Fifty commits | One-minute load |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Original | 85 | 143 | 446 | 849 | 20.89 |
+| Skip redundant classification before the full defensive record copy | 92 | 164 | 441 | 828 | 24.99 |
+| Compact private adapter-to-manager pages with the same public GitLog guard | 74 | 118 | 385 | 832 | 34.70 |
+
+The 50-commit charge persisted across both experiments. Neither was promoted. In a
+separate shared run, deferring spare replacement until bind took 1,595.067 ms median
+for six fresh pinned voice launches at load 25.59, against 950 ms. This also stayed
+on its experimental branch.
+
+### J-12112 2026-11-19 candidate creation and environment confirmation
+
+The isolated candidate `fd836d7993` combines integrated `c8d57059bd`, the guarded
+environment facets and `f24931560b`, which constructs seven fixed session interface
+guards at module evaluation. The integrated release tree has its own benchmark record.
+Type checking and 41 focused tests passed on this candidate. The normal exclusive
+voice-session, environments and session files ran sequentially with default windows.
+
+| Operation | Samples | Median or difference (ms) | Strict limit (ms) | One-minute load | Wrapper |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Pinned voice start | 13 | 977.342 | 950 | 18.62 | Passed |
+| Development minus chat-only creation | 6 development, 5 chat-only | 707.113 | 175 | 12.82 | Failed |
+| Cold creation without a pool | 6 | 5,755.553 | 6,000 | 15.63 | Passed |
+
+Only cold creation met its strict median limit. Development took 1,519.007 ms and
+chat-only took 811.894 ms. The creation difference caused the environments file's exit 1.
+Its first command took 200 ms across 12 samples and its manager occupied 76,258 of
+80,000 bytes. The optional pinned-image OCI workload remains unimplemented and unmeasured.
+The voice and session files both exited 0. All 77 spoken turns incurred zero extra
+deliveries. The session program occupied 146,003 bytes.
+
+Separate shared diagnostics on the integrated source found an eight-sample median of
+829 ms for a 50-commit Git log at load 20.22 against 500 ms. The one-commit median
+was 348 ms. The return crank took 389.5 ms for fifty versus 21 ms for one.
+The public GitCommit guard stayed unchanged. In separate five-sample native traces,
+preparing session guards reduced the median session initialization crank from 699 to
+313 ms. This local reduction did not establish a strict pinned-start pass.
+
 ### J-12120 2026-11-19 W6.8 shared layout and guarded bundle boundaries
 
 `32fccde460` shares the package and state path resolvers between the two native resources and

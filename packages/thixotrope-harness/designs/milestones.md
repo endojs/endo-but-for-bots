@@ -1690,7 +1690,10 @@ and J-12121 record the measurements and the deferred guest-level checks. Five ex
 took 5.95–8.00 s, started zero process groups and woke zero session vats. Development creation
 and Git log missed their latency budgets. On the reviewed creation code at
 `ff4b360a3d`, Git status took 632 ms median (40 samples, target 1,000 ms) and the
-50-commit log took 827 ms median (44 samples, target 500 ms). Reference:
+50-commit log took 827 ms median (44 samples, target 500 ms). The isolated
+environment candidate at `fd836d7993` completed six cold creations at 5,756 ms
+median against 6,000 ms. Development creation exceeded chat-only creation by
+707 ms against 175 ms on that candidate (J-12112). Reference:
 `m6-interfaces.md` (work units 8, acceptance
 9, perf 10, probes 11, fold 14); guards and texts `guest/lib/guards/environments.js`.
 
@@ -2120,7 +2123,10 @@ read-only static site (P-64).
 with and without the environments runner (J-12725). The spoken-turn delivery gate passed
 on all 66 lane turns and all 75 combined turns. On the combined checkout, all five
 transport targets passed and 475 settings reads used exactly 950 deliveries. Pinned voice
-session startup took 1,456 ms median against 950 ms (J-1452). The transport, browser
+session startup took 1,456 ms median against 950 ms (J-1452). Preparing the same
+guards before taking a spare reduced the isolated candidate's median to 977 ms
+over 13 warm launches. The 950 ms target remains open. All 77 spoken turns
+added zero deliveries on that build (J-12112). The transport, browser
 and restart evidence is in the group journal. Reference:
 `m11-interfaces.md` (seams 11, work units 12,
 acceptance 13, perf and probes 14, fold 17, appendix A for WX.1, appendix C item by item); fixed
