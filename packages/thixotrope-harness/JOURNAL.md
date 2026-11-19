@@ -17238,3 +17238,13 @@ SIGKILL cases passed independently. The first killed the supervisor while a post
 and verified mailbox recovery, a settled request and a subsequent post. The second interrupted
 a stalled package turn and recovered one error reply. The first test does not pin the crank
 where the in-flight post was interrupted.
+
+### J-12543 2026-11-19 M9 repeated address delivery
+
+The served operator tests passed seven of eight cases, including real final-text replies,
+request settlement and the gateway. The remaining assertion posted to the same address twice
+in one draft and received distinct postmarks (5 and 6). The pre-fold test only observed two
+identical stub refusals. Commit f574398d1d starts one delivery per distinct address and returns
+its result at every original position. All twenty post-office unit tests passed, including the
+three-position, two-address case. The combined daemon also passed the child workspace/shell
+case while its parent was stopped.
