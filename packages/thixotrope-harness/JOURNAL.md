@@ -14805,7 +14805,7 @@ own one-at-a-time queue (not this table's shape). `readArgs` and `labelsOf` expo
 Fit: neutral.
 
 ### J-1433 2026-11-19 WX.1 the session program limit is the harness's own everywhere - decision
-Evidence: `432bb9a0c3`; `guest/lib/limits.js:136`, `scripts/provision-steps.js:131`,
+Evidence: `432bb9a0c3`; `guest/lib/limits.js:132`, `scripts/provision-steps.js:129`,
 `guest/factory/root.js:50` (`maxProgramBytes`, was `execSourceBytes` 262,144);
 `packages/thixotrope/src/core/evaluate-source.js:14` (`STAGING_FRAME_BYTES` bounds one message,
 never a total); J-0195 (400 k evaluated in one crank).
