@@ -17116,3 +17116,17 @@ three programs at a88083f75e with the fold gives session 233,126 bytes
 J-12661, which also records install.factory at 7,833 ms. Duplicate lines
 measure 1.61% against the 2.05% ceiling. The feature-context migration awaits
 step 5(a), M13 owns export/import, and WX.F owns the M6 built-in preset rerun.
+
+### J-1440 2026-11-19 WX.F integration inputs and first merges - verified
+
+Evidence: the first-parent merges `c6d55bb7f4` (M11), `880905a520` (M6),
+`64feb517fb` (M8), and `8dc6a8011f` (M9), on a separate integration checkout of
+`9adecb9b94`. M6's four modified files and three untracked performance scripts were
+copied before merging. Their seven SHA-256 digests match the blobs in `c7c0571d6a`,
+whose parent is the unchanged M6 tip `5437fe19f2`. Its source worktree still has those edits.
+
+Reading: the combined factory exposes both operator services, deletes descendants before
+releasing an environment, and passes both execution state and inbox state to session export.
+Both optional provisioning steps and all four regression/performance lists survive the merges.
+The lane review fixes, session tool registration, bundle measurement and combined acceptance
+runs are still open at this point.

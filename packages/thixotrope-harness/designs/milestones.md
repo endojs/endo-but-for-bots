@@ -1475,7 +1475,7 @@ drops most of Endo's name plumbing.
 
 ## The group {M6, M8, M9, M11}: shared units, owner questions, core requests
 
-**Status: contracts settled, not built** (2026-11-18). The four contracts are the reference:
+**Integration in progress (2026-11-19, J-1440).** The four implementation branches have been combined on the integration branch. The individual outcome tables and journal distinguish completed acceptance runs from outstanding checks. The four contracts are the reference:
 `m6-interfaces.md`, `m8-interfaces.md`, `m9-interfaces.md`, `m11-interfaces.md`, settled against
 the cross-check WX.0 (journal J-1410..J-1417, issues X-01..X-17) and against cleanup step 3
 (`arch-review/step3-plan.md` and the step-3 code as built in the cleanup lane). No seam is
