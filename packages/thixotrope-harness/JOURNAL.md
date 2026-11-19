@@ -15209,3 +15209,71 @@ Reading: over 60 s: `voice-session.test.js` 151.0 s and `voice-restart.test.js` 
 Unit tests about 2-5 s, `lint:types` about 3 s (no error in this unit's files; errors remain in
 other units' files), `lint:duplicates` 1.67 %. Nothing pushed.
 Fit: neutral.
+
+### J-1350 2026-11-19 W11.2 speech out, process kind - built
+Evidence: `8ac806f435` (`AH/speech/voice-catalogue.js`, `test/fixtures/fake-tts.mjs`,
+`test/fixtures/voices/`), `e13f02f75e` (`AH/speech/tts-process.js`); tests
+`test/unit/speech-voice-catalogue.test.js` (6) and `test/adapter/speech-tts-process.test.js` (11,
+plus one `[real-piper]` case skipped unless `THIX_HARNESS_REAL_SPEECH=piper`), 17 passing, three
+runs in a row.
+Reading: `voice-catalogue.js` exports `readVoiceCatalogue(dir)` (`<id>.onnx` beside an
+`<id>.onnx.json` whose `audio.sample_rate` is a positive integer; broken voices skipped and
+counted; metadata over `metadataBytes` skipped; at most `maxVoices` in name order; an unreadable
+directory lists none), `checkTtsOptions(options, catalogue)` (the five fields only, defaults from
+the catalogue, R5-41 texts) and `voiceDisplayName` (Endo's). `tts-process.js` exports
+`makeProcessTtsEngine(settings, options)`: catalogue read once per engine, defaults
+`defaultVoice`/`defaultSpeed` over `ttsDefaults`; an unusable default voice or speed turns
+speech out `off` with a warning and every synthesis aborts `speechOutOff`; one Piper per playback
+started at the first sentence with `piperFlags` (`--length-scale` = 1 / speed); sentences
+written in lock step with the output (the next is written at the previous one's first PCM);
+whole samples forwarded at the voice's rate; one quiet timer (`synthTimeoutMs`: a sentence with
+no PCM is reported `sentenceFailed(index)`, its process killed, the next sentence on a new
+process; after the input is closed a lingering process is ended), never running while the output
+is paused; two failed sentences in a row or an unspawnable command abort `synthFailed`;
+backpressure by pausing stdout until `PlaybackSink.drained()`; unwritten sentences bounded by
+`sentenceBacklogUnits` (`textBacklog`); a warm spare (`spareSynth`, default on) for the latest
+playback's options, `warm(options?)` to start it.
+Fit: good. Piper's per-sentence burst output suits a lock-step writer; nothing touches a vat.
+
+### J-1351 2026-11-19 W11.2 speech-out engine costs - measured
+Evidence: `e13f02f75e`; a scratch script through `perf/_window.mjs` `runWindow`/`windowMs` and
+`perf/_harness.mjs` `summarize`, `PERF_WINDOW_SCALE=0.25` (15 s windows), under `run-lock.mjs
+--shared`, the fake Piper (`fake-tts.mjs`), no supervisor, load average 2.2-4.6.
+Reading: `tts.process.firstPcm.cold` (open, one 26-character sentence, end; spare off; sentence
+written to its first PCM at the sink, including the Node child's spawn) median 26.3 ms, p95 28.1,
+p99 29.4, n 542, 0 failures. `tts.process.firstPcm.spare` (the same with the warm spare, 60 ms
+between replies for the renewed spare to start) median 5.0 ms, p95 5.4, p99 5.7, n 219, 0
+failures. The spare removes the spawn (about 21 ms with the fake; with real Piper it also removes
+the model load, the owner row `tts.firstAudio`). W11.9's `speech.firstAudio` (median 20 ms)
+needs the spare or an already running process: a cold start alone is over it with the fake.
+Fit: good.
+
+### J-1352 2026-11-19 W11.2 contract gaps found while building - finding
+Evidence: contract 6.2, D-M11-12, 3.3; `engine-types.js` `TtsEngine`, `Synthesis`,
+`PlaybackSink`; `AH/speech/host.js` (W11.5, uncommitted when read).
+Reading: (1) Piper's raw output has no sentence boundary, so "a sentence with no PCM within
+`synthTimeoutMs`" needs a known start per sentence: sentences are written in lock step (the next
+at the previous one's first PCM), which keeps the pipelining (Piper writes a sentence's audio
+after synthesizing it) and gives each written sentence a start. With paused output the tail of
+sentence k can arrive after k+1 was written and credit k+1 early, so a reported failed index can
+be one later than the sentence that hung, never earlier. (2) `TtsEngine` has no way to learn the
+shared preferences, so the warm spare follows the latest playback's options (at first the
+catalogue defaults) and `warm(options?)` is an extra method (type `ProcessTtsEngine`) the host
+may call with `Voice.getPreferences()`; a playback with other options drops the spare. (3) There
+is no fixed text for "the default voice is unusable": the warning joins `unknownVoice(id)` (or
+`outOfRange('speed', ...)`) and `speechOutOff`. (4) A process that keeps failing is bounded per
+playback (two failed sentences in a row abort `synthFailed`), not by `engineRestart` pacing,
+which is a rate across utterances of a resident engine. (5) `fake-tts.mjs`'s `hang-on=<index>`
+counts sentences across every process logging to the same `--log` file, so it names one sentence
+of a playback even across a respawn. (6) `host.js` carries its own `checkTtsOptions`; the
+contract puts it in `voice-catalogue.js`.
+Fit: neutral.
+
+### J-1353 2026-11-19 W11.2 time record - process
+Evidence: first command 2026-11-19T02:36:05Z.
+Reading: no command over 60 s (the perf smoke 31 s under `run-lock --shared`, both test files
+under 3 s, package tsc about 4 s). Commits `8ac806f435`, `e13f02f75e` and this journal commit;
+nothing pushed; session bundle 233,126 bytes before and after (digest `06aceb9a14...`; M11's cap 0:
+this unit adds no guest code); no change to `packages/thixotrope` or `rust/**`;
+`lint:duplicates` 1.66 % (ceiling 2.05 %).
+Fit: neutral.
