@@ -34,8 +34,8 @@ import { makeProcessSttEngine } from './stt-process.js';
  *   speech extension's key reader (D-M11-22)
  * @property {string | undefined} cwd the state directory's `agent-host/`
  *   (a process engine's working directory)
- * @property {Partial<typeof import('./audio-protocol.js').audioTimeouts>} timeouts
- * @property {Partial<typeof import('./audio-protocol.js').audioLimits>} limits
+ * @property {any} timeouts the host's `audioTimeouts` (with its options)
+ * @property {any} limits the host's `audioLimits` (with its options)
  */
 
 /**

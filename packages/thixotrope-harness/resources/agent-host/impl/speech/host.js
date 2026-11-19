@@ -29,9 +29,11 @@
  * within `tokenMs` forgets its port. Stream numbers are server-chosen, odd
  * for utterances and even for playbacks, wrapping before
  * `streamNumbers.max` and skipping numbers still open or recently ended.
- * Frames for a stream the server ended a moment ago (the page's frames
- * crossing the server's `end` or `abort`) are ignored; any other unknown
- * stream is a protocol error.
+ * Frames crossing the server's end of a stream are not errors: after the
+ * server aborted a stream, its late frames are ignored; after it ended one
+ * normally (the final after the page's END, a playback's `end`), only a
+ * late ABORT is. Any other frame for a stream that is not open is a
+ * protocol error.
  *
  * Every rejection answers a fixed text of `audio-protocol.js` and opens no
  * stream. Nothing here logs a text, a transcript, a token, a key or a path:
@@ -141,6 +143,12 @@ const checkTtsOptions = (options, catalogue) => {
  */
 
 /**
+ * A playback's text source: `close` releases it; `begin`, when present,
+ * starts it once the playback has started.
+ * @typedef {{ close: () => void, begin?: () => void }} PlaybackSource
+ */
+
+/**
  * One stream of a port.
  * @typedef {object} Stream
  * @property {'utterance' | 'playback'} kind
@@ -155,7 +163,8 @@ const checkTtsOptions = (options, catalogue) => {
  * @property {ReturnType<typeof setTimeout> | undefined} tokenTimer
  * @property {AudioConnection | undefined} connection
  * @property {Map<number, Stream>} streams
- * @property {number[]} recent stream numbers the server ended lately
+ * @property {{ number: number, aborted: boolean }[]} recent streams the
+ *   server ended lately (at most `RECENT_STREAMS`)
  * @property {number} nextOdd
  * @property {number} nextEven
  * @property {any} playback the current playback (R5-44)
@@ -168,7 +177,7 @@ const checkTtsOptions = (options, catalogue) => {
  *   (with `readGrant`, D-M11-22)
  * @param {Readonly<Record<string, SpeechKind>>} options.kinds
  * @param {SpeechPipeline} options.pipeline
- * @param {{ timeouts?: Partial<typeof audioTimeouts>, limits?: Partial<typeof audioLimits>, settingsMaxAgeMs?: number }} [options.options]
+ * @param {{ timeouts?: Partial<Record<keyof typeof audioTimeouts, number>>, limits?: Partial<Record<keyof typeof audioLimits, number>>, settingsMaxAgeMs?: number }} [options.options]
  */
 export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
   const timeouts = harden({ ...audioTimeouts, ...options.timeouts });
@@ -457,7 +466,9 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
     const first = odd ? streamNumbers.first : streamNumbers.first + 1;
     for (;;) {
       if (n >= streamNumbers.max) n = first;
-      if (!state.streams.has(n) && !state.recent.includes(n)) break;
+      if (!state.streams.has(n) && !state.recent.some(r => r.number === n)) {
+        break;
+      }
       n += 2;
     }
     if (odd) state.nextOdd = n + 2;
@@ -466,15 +477,17 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
   };
 
   /**
-   * The stream `number` is over; `byServer`: its late frames are ignored.
+   * The stream `number` is over. `by`: `page` (its END or ABORT: nothing
+   * kept), `abort` (the server aborted it: late frames ignored) or `end`
+   * (the server ended it: a late ABORT ignored).
    * @param {PortState} state
    * @param {number} number
-   * @param {boolean} byServer
+   * @param {'page' | 'abort' | 'end'} by
    */
-  const forgetStream = (state, number, byServer) => {
+  const forgetStream = (state, number, by) => {
     if (!state.streams.delete(number)) return;
-    if (byServer) {
-      state.recent.push(number);
+    if (by !== 'page') {
+      state.recent.push({ number, aborted: by === 'abort' });
       if (state.recent.length > RECENT_STREAMS) state.recent.shift();
     }
   };
@@ -525,11 +538,11 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
     const release = takeEngine(slot);
     /** @type {Utterance & { tooLong?: () => boolean }} */
     let utterance;
-    /** @param {boolean} byServer */
-    const done = byServer => {
+    /** @param {'page' | 'abort' | 'end'} by */
+    const done = by => {
       over = true;
       release();
-      forgetStream(state, number, byServer);
+      forgetStream(state, number, by);
     };
     /** @type {import('./engine-types.js').UtteranceSink} */
     const sink = harden({
@@ -541,7 +554,7 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
       },
       final: text => {
         if (over) return;
-        done(true);
+        done('end');
         connection.event(number, harden({ type: 'final', text }));
         connection.event(
           number,
@@ -554,7 +567,7 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
       },
       abort: reason => {
         if (over) return;
-        done(true);
+        done('abort');
         connection.event(number, harden({ type: 'abort', reason }));
         log({ event: 'speech-stream-abort', direction: 'in' });
       },
@@ -565,7 +578,7 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
       frame: (kind, payload) => {
         if (kind === frameKinds.abort) {
           if (!over) {
-            done(false);
+            done('page');
             utterance.abort();
           }
           return true;
@@ -587,7 +600,7 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
       },
       stop: () => {
         if (over) return;
-        done(false);
+        done('page');
         utterance.abort();
       },
     };
@@ -599,20 +612,22 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
   /**
    * Open a playback on `state`'s socket. Its number is taken at once (it
    * counts against `streamsPerPort` while the source opens); `source`
-   * starts feeding the playback's sink and answers the source's release.
+   * opens the source over the playback's sink (`begin`, if any, is
+   * called once the playback started).
    * The page learns the number from the answer, so no frame of it can
    * arrive before.
    * @param {PortState} state
    * @param {Slot} slot
    * @param {TtsEngine} engine
    * @param {CheckedTtsOptions} checked
-   * @param {(sink: import('./engine-types.js').TurnTextSink) => Promise<() => void>} source
+   * @param {(sink: import('./engine-types.js').TurnTextSink) => Promise<PlaybackSource>} source
    */
   const openPlayback = async (state, slot, engine, checked, source) => {
     await null;
     const release = takeEngine(slot);
     const number = nextNumber(state, 'playback');
-    let byServer = true;
+    /** @type {'page' | 'end'} a playback takes only ABORT from the page */
+    let by = 'end';
     const playback = makePlayback({
       stream: number,
       connection: /** @type {AudioConnection} */ (state.connection),
@@ -625,7 +640,7 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
       log,
       onOver: () => {
         release();
-        forgetStream(state, number, byServer);
+        forgetStream(state, number, by);
         if (state.playback === playback) state.playback = undefined;
       },
     });
@@ -633,36 +648,37 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
       kind: 'playback',
       frame: kind => {
         if (kind !== frameKinds.abort) return false;
-        byServer = false;
+        by = 'page';
         playback.stop();
         return true;
       },
       stop: () => {
-        byServer = false;
+        by = 'page';
         playback.stop();
       },
     });
-    /** @type {() => void} */
-    let closeSource;
+    /** @type {PlaybackSource} */
+    let opened;
     try {
-      closeSource = await source(playback.sink);
+      opened = await source(playback.sink);
     } catch (error) {
-      byServer = false;
+      by = 'page';
       playback.stop();
       throw error;
     }
     if (playback.isOver()) {
       // The port closed, or the source failed, while it opened.
-      closeSource();
+      opened.close();
       throw Error(
         state.closed ? speechTexts.portClosed : speechTexts.turnNotFound,
       );
     }
-    playback.setSource(closeSource);
+    playback.setSource(opened.close);
     const previous = state.playback;
     state.playback = playback;
     previous?.replace();
     playback.start();
+    opened.begin?.();
     return number;
   };
 
@@ -724,7 +740,7 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
                 sentenceBacklogUnits: limits.sentenceBacklogUnits,
               },
             });
-            return () => view.close();
+            return harden({ close: () => view.close() });
           },
         );
         return harden({ stream });
@@ -772,15 +788,17 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
       }
       if (!cancelled) sink.end();
     };
-    // Started after the stream exists (a microtask later).
-    void Promise.resolve()
-      .then(run)
-      .catch(() => {
-        if (!cancelled) sink.abort(speechTexts.synthFailed);
-      });
-    return () => {
-      cancelled = true;
-    };
+    return harden({
+      close: () => {
+        cancelled = true;
+      },
+      // After the playback started: nothing waits in its early buffer.
+      begin: () => {
+        void run().catch(() => {
+          if (!cancelled) sink.abort(speechTexts.synthFailed);
+        });
+      },
+    });
   };
 
   // ------------------------------------------------------------ Speech
@@ -935,7 +953,11 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
       }),
       frame: (kind, number, payload) => {
         const stream = state.streams.get(number);
-        if (stream === undefined) return state.recent.includes(number);
+        if (stream === undefined) {
+          const recent = state.recent.find(r => r.number === number);
+          if (recent === undefined) return false;
+          return kind === frameKinds.abort || recent.aborted;
+        }
         return stream.frame(kind, payload);
       },
       closed: () => {

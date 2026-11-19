@@ -8,7 +8,7 @@
  *   `speechSettings()` answers the current record (`set` replaces it);
  * - `makeInTestKinds()`: in-test engines of `engine-types.js` for the
  *   `process` kind (speech in reports `"<bytes> bytes"` partials and a
- *   `"final <bytes>"` final; speech out writes 2 bytes of PCM per text unit
+ *   `"final <bytes>"` final; speech out writes 2 bytes of PCM per text unit (`pcmPerUnit`)
  *   at 22,050 Hz), with what they saw;
  * - `makeHostContext(...)`: a `GatewayContext` for the host;
  * - `serveAudio(t, host)`: a gateway server with the `/audio` route and
@@ -109,7 +109,7 @@ export const makeVoiceStub = settings => {
 
 /**
  * In-test engines of the `process` kind.
- * @param {{ hangFinal?: boolean, voices?: any[], startFails?: boolean }} [modes]
+ * @param {{ hangFinal?: boolean, voices?: any[], startFails?: boolean, pcmPerUnit?: number }} [modes]
  */
 export const makeInTestKinds = (modes = {}) => {
   const seen = {
@@ -122,6 +122,7 @@ export const makeInTestKinds = (modes = {}) => {
     /** @type {string[]} */
     utteranceLog: [],
     synthesisAborts: 0,
+    pcmBytes: 0,
     /** @type {any[]} */
     sinks: [],
   };
@@ -204,7 +205,10 @@ export const makeInTestKinds = (modes = {}) => {
             queue = queue.then(async () => {
               if (!live) return;
               await sink.drained();
-              if (live) sink.pcm(new Uint8Array(sentence.length * 2), 22_050);
+              if (!live) return;
+              const bytes = sentence.length * (modes.pcmPerUnit ?? 2);
+              seen.pcmBytes += bytes;
+              sink.pcm(new Uint8Array(bytes), 22_050);
             });
           },
           end: () => {
