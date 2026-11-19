@@ -172,7 +172,8 @@ const OVERLOADED_ERROR = 'overloaded_error';
  * member's.
  * @param {object} options
  * @param {import('./types.js').Credential} options.credential
- * @param {any} [options.projection] `{ transcript }` of the round
+ * @param {any} options.projection `{ transcript }` of the round (always
+ *   given: a pool round needs its projection, `PREPARE_REQUIRED`)
  * @param {{ modelId: string, reasoningEffort?: string, maxOutputTokens?: number, system?: string, tools: readonly any[] }} options.request
  * @param {any} [options.spec] the `PoolSpec` (`baseUrl`, `timeoutMs`,
  *   `maxOutputTokens`)
@@ -207,7 +208,7 @@ export async function* claudeAttempt({
     maxOutputTokens: request.maxOutputTokens ?? spec.maxOutputTokens,
     ...(request.system === undefined ? {} : { system: request.system }),
     tools: request.tools ?? [],
-    transcript: projection?.transcript ?? [],
+    transcript: projection.transcript,
     client,
   });
   // INT-M4: the M2 review's base URL rule (https, or http to loopback)

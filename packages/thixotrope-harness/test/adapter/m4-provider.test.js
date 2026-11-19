@@ -31,7 +31,10 @@ import {
   codexPoolKind,
   makePoolProvider,
 } from '../../resources/agent-host/impl/subscriptions/provider.js';
-import { backendKinds } from '../../resources/agent-host/impl/providers/kinds.js';
+import {
+  backendKinds,
+  kindOf,
+} from '../../resources/agent-host/impl/providers/kinds.js';
 import { PREPARE_REQUIRED } from '../../resources/agent-host/impl/providers/api.js';
 import {
   BODY_MARKER,
@@ -231,6 +234,12 @@ test('the pool kinds are in backendKinds and offer accountStatus', t => {
   );
   t.deepEqual(claudePoolKind.tools, ['accountStatus']);
   t.deepEqual(codexPoolKind.tools, ['accountStatus']);
+});
+
+test('a pool spec is routed by kindOf alone: subscriptions has no handles', async t => {
+  const s = await setup(t, { kind: 'codex-pool' });
+  t.false('handles' in s.subscriptions, 'the dead spec router is gone');
+  t.is(kindOf(s.spec), codexPoolKind);
 });
 
 test('claude: a 429 exhausted before delivery hands the same request to the next member once; the mark reaches the sink', async t => {

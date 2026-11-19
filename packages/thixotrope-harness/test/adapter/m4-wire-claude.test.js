@@ -475,3 +475,22 @@ test('a refused token and a provider body never reach the failure; transport fai
   t.true(cut.error.delivered);
   for (const result of [timedOut, cut]) clean(t, result);
 });
+
+test('a round without its projection sends nothing: no empty-transcript fallback', async t => {
+  // The pool shell refuses a round with no prepare (PREPARE_REQUIRED), so
+  // the wire builder always has the projection and reads its transcript
+  // directly; a missing one fails before any request.
+  const server = await serverFor(t);
+  server.setPlan([{ sse: 'claude-text.sse' }]);
+  const result = await drain(
+    claudeAttempt({
+      credential,
+      projection: /** @type {any} */ (undefined),
+      request: { modelId: MODEL, tools: [] },
+      spec: { baseUrl: server.url },
+      signal: new AbortController().signal,
+    }),
+  );
+  t.true(result.error instanceof TypeError);
+  t.is(server.requests().length, 0, 'nothing sent');
+});
