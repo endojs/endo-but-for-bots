@@ -501,7 +501,48 @@ test('Anthropic: x-api-key and version headers, pages by after_id, no descriptio
       readKey: async () => KEY,
       modelId: 'claude-haiku-4-5',
     }),
-    { modelId: 'claude-haiku-4-5' },
+    // M8 (D-M8-12): the API lists no context length; the default window.
+    { modelId: 'claude-haiku-4-5', contextLength: 200_000 },
+  );
+});
+
+test('an Anthropic row without a context length gets the 200,000-token window (R4-37, open decision 13)', async t => {
+  const server = await withServer(t, [
+    { match: AN_MODELS, file: 'anthropic-models.json' },
+  ]);
+  const catalog = makeCatalog();
+  const backend = Far('Backend', {});
+  const spec = harden({
+    kind: 'anthropic',
+    label: 'claude-api',
+    keyGrant: Far('ReadGrant', {}),
+    baseUrl: server.anthropicBaseUrl,
+    modelId: 'claude-sonnet-4-6',
+  });
+  const readKey = async () => KEY;
+  const page = await catalog.listModels({
+    backend,
+    spec,
+    readKey,
+    request: { defaultBackend: backend },
+  });
+  t.true(matches(page, shapes.ModelPage));
+  t.deepEqual(
+    page.rows.map(row => [row.modelId, row.contextLength]),
+    [
+      ['claude-sonnet-4-6', 200_000],
+      ['claude-haiku-4-5', 200_000],
+    ],
+  );
+  // What a creation stores as the session's contextLength.
+  t.deepEqual(
+    await catalog.resolveModel({
+      backend,
+      spec,
+      readKey,
+      modelId: 'claude-sonnet-4-6',
+    }),
+    { modelId: 'claude-sonnet-4-6', contextLength: 200_000 },
   );
 });
 
