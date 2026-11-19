@@ -17657,3 +17657,22 @@ failed on its intermediate checkout. The canonical unit and adapter run passed i
 Core held slots for 6,188.7 s and took 8,230.1 s elapsed including units. The milestone
 list held slots for 7,579.4 s and took 7,945.1 s elapsed. Both exceeded the 20-minute
 list target. Shared wait and exclusive performance measurements overlapped these batches.
+
+### J-1452 2026-11-19 WX.F final combined voice pass and local handoff
+
+The two voice files ran in exclusive slots after the wider regression lists ended. The
+transport file passed all five targets in 240.5 s. At 16 streams it forwarded 11,296
+frames with a gateway p99 of 0.204 ms. First audio had a 13.19 ms median and engine
+respawn a 30.86 ms median. The session file held its slot for 338.7 s. All 75 spoken
+turns matched the typed baseline of six deliveries. All 475 settings reads used precisely
+two deliveries each. Ten pinned voice starts took 1,455.8 ms median against 950 ms, the
+file's one failed budget. The measurement used the local scripted provider. Five optional
+real-engine and live-provider measurements were skipped.
+
+The four original lane tips and the seven-file M6 checkpoint are reachable on the local
+harness branch. Reading all seven original files, the backup copies and their checkpoint
+blobs again produced the same SHA-256 digests. The final canonical lint run at
+`c9307ce5ca` passed TypeScript, ESLint with zero errors, and duplication at 1.52%
+against 1.77%. Changes after that verification update the results and documentation.
+The per-file regression and performance times are in `designs/process.md`. J-1451
+records the older core file whose updated observation lacks a standalone pass.

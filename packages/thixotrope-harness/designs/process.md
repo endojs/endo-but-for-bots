@@ -303,6 +303,8 @@ and took 1,322.8 s elapsed after template preparation.
 | images | 52.1 | 0 | Both request builders stayed below 10 ms median. |
 | mail | 440.9 | 1 | Both delivery medians and throughput missed. Inbox crank and hub growth passed. |
 | subagents | 255.1 | 1 | Ask took 715 ms against 300 ms. Three bursts and three subtree stops passed. |
+| voice | 240.5 | 0 | All five speech transport targets passed. At 16 streams, gateway forwarding p99 was 0.204 ms. |
+| voice-session | 338.7 | 1 | All 75 spoken turns matched six typed deliveries. Pinned session creation took 1,456 ms against 950 ms. |
 | session | 221.5 | 1 | Cold creation median 8,946 ms against 6,000 ms. Program size and factory install passed. |
 | turn | 144.7 | 0 | Start median 180 ms. |
 | exec | 142.7 | 0 | First call median 576 ms, trivial call median 153 ms. |

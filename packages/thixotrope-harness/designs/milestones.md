@@ -1476,7 +1476,7 @@ drops most of Endo's name plumbing.
 
 ## The group {M6, M8, M9, M11}: shared units, owner questions, core requests
 
-**Integrated locally (2026-11-19, J-1440..J-1451).** The first-parent merges are M11, M6, M8
+**Integrated locally (2026-11-19, J-1440..J-1452).** The first-parent merges are M11, M6, M8
 and M9. All four cross-lane tests passed on the combined daemon, and all 54 milestone
 regression files passed across the wide run and reruns. J-1451 records the remaining
 core verification gap and elapsed-time misses. Session and native manager
@@ -2097,8 +2097,10 @@ read-only static site (P-64).
 
 **Status: integrated with open performance gates.** Talk and the pinned voice preset passed
 with and without the environments runner (J-12725). The spoken-turn delivery gate passed
-on all 66 turns. Pooled startup and the exact cold-settings delivery count missed their
-targets. The transport, browser and restart evidence is in the group journal. Reference:
+on all 66 lane turns and all 75 combined turns. On the combined checkout, all five
+transport targets passed and 475 settings reads used exactly 950 deliveries. Pinned voice
+session startup took 1,456 ms median against 950 ms (J-1452). The transport, browser
+and restart evidence is in the group journal. Reference:
 `m11-interfaces.md` (seams 11, work units 12,
 acceptance 13, perf and probes 14, fold 17, appendix A for WX.1, appendix C item by item); fixed
 files `AH/speech/{audio-protocol,engine-protocol,engine-types}.js`,

@@ -610,14 +610,14 @@ section.
 
 ## Four-milestone integration run
 
-Run-lock checkpoint through 2026-11-19 09:47 UTC. Each row sums
+Run-lock checkpoint through 2026-11-19 09:56 UTC. Each row sums
 finished shared and exclusive acquisitions in the named checkout. Concurrent waits and
 holds can overlap. The group tests in temporary checkouts and the standalone unit, adapter
 and lint jobs are outside this table. The preceding generated block covers Claude's workflows.
 
 | checkout | finished acquisitions | summed wait (s) | summed hold (s) | nonzero exits | releases without exit code |
 |---|---:|---:|---:|---:|---:|
-| PM combined checkout | 125 | 121715 | 22026 | 24 | 0 |
+| PM combined checkout | 127 | 121715 | 22606 | 25 | 0 |
 | M11 short-path checkout | 13 | 13303 | 2470 | 4 | 0 |
 | M11 checkout | 10 | 3016 | 1078 | 8 | 0 |
 | M6 checkout | 21 | 12545 | 3991 | 10 | 6 |
