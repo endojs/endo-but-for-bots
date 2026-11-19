@@ -20,6 +20,7 @@ import '../unit/_m1a-prelude.js';
 
 import { Buffer } from 'node:buffer';
 import { setTimeout as delay } from 'node:timers/promises';
+import WebSocket from 'ws';
 
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
 import { interfaces as factoryInterfaces } from '../../guest/lib/guards/factory.js';
@@ -308,7 +309,6 @@ export const serveAudio = async (t, { hostNow, limits }) => {
  */
 export const openAudioSocket = async ({ port, origin }) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}${AUDIO_PATH}`, {
-    // @ts-expect-error undici's WebSocketInit accepts headers
     headers: { Origin: origin },
   });
   ws.binaryType = 'arraybuffer';

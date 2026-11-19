@@ -17284,3 +17284,46 @@ SIGKILL cases passed independently. The first killed the supervisor while a post
 and verified mailbox recovery, a settled request and a subsequent post. The second interrupted
 a stalled package turn and recovered one error reply. The first test does not pin the crank
 where the in-flight post was interrupted.
+### J-12722 2026-11-19 W11.9 — full voice-session windows
+
+Exclusive run of `perf/voice-session.perf.mjs` on Node 24.22.1,
+92a2d0e334, worker 367e78ad1db3. A pool-backed factory and local scripted
+provider were used. Preferences took 26.991 ms median and exactly one delivery.
+Duplicate launch took 28.220 ms (1,108 calls, every result a duplicate).
+All 66 spoken turns had six deliveries, exactly matching each of the three
+typed turns. Playback open took 4.819 ms median.
+
+Two rows missed. Pooled pinned launch took 1,433.650 ms median over 11
+launches, above 950 ms. Settings reads took 58.896 ms median (budget 100)
+but recorded 957 deliveries over 478 reads against the exact budget of 956.
+The counter is supervisor-wide. One extra delivery remains unattributed.
+
+### J-12723 2026-11-19 W11.9 — audio forwarding measurement boundaries
+
+At 80841488ff, Node 24.22.1, 16 streams over eight loopback connections
+delivered all 11,296 frames. Client send to child engine read had median
+0.207 ms, p99 354.528 ms. The one-stream median/p99 were 0.296/1.209 ms.
+The original metric includes the client transport queue and engine scheduling.
+Contract §14.1 starts at gateway receipt and ends at the engine line write.
+The benchmark now times the synchronous gateway callback around the actual
+route, checks every frame against the child engine log, and retains the
+client-to-engine distribution next to it. The respawn row now runs the
+full window (the 600-sample cap previously ended it at 33.5 seconds).
+
+### J-12724 2026-11-19 W11.9 — restart drivers and transport verification
+
+Four voice speech-restart tests pass on Node 22.23.4 and 24.22.1 with the
+unpooled WebSocket test drivers, including SIGKILL during recognition and
+synthesis. Node 24 previously passed the four assertions but exited 1 on
+26 unhandled `ClientDestroyedError` cleanup rejections. The WebSocket
+library and types are development dependencies.
+
+The revised full transport run exited 0 on Node 22.23.4 (eaf1af1a6d).
+All 11,296 frames were received during the 60-second, 16-utterance window.
+Gateway forwarding p99 was 0.071 ms in that window and 0.115 ms with one
+utterance. Under load, client send to engine read p99 was 24.802 ms.
+First audio took 13.898 ms median, 26.364 ms p99. Respawn took 44.718 ms
+median (1,260 samples in 60.036 s). Real Moonshine, Piper and remote speech
+provider timings are owner-run rows. The sub-millisecond partial-relay
+measure showed a negative minimum using separately calibrated time origins;
+the parent and fixture now timestamp with the machine monotonic clock.

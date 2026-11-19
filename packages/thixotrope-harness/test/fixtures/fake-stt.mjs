@@ -17,9 +17,8 @@
  *   respawn adds a line).
  * - `--log`: appends one JSON line per message received:
  *   `{ type, stream, pcmBytes? }` (decoded byte lengths only, never audio).
- * - `--clock` (with `--log`): each line also carries `at`, the wall time in
- *   ms (`performance.timeOrigin + performance.now()`, comparable across
- *   processes of one machine) when its input chunk arrived, and each
+ * - `--clock` (with `--log`): each line also carries `at`, the monotonic time
+ *   in ms (comparable across processes on one machine) when its input chunk arrived, and each
  *   partial written adds `{ type: 'partial', stream, at }` (perf rows
  *   `speech.audioForward` and `speech.partialRelay`).
  * - Exits at end of standard input (D-M11-15), except in `hang-after`.
@@ -34,7 +33,6 @@
  * Plain Node (no SES): it is a stand-in for an external program.
  */
 import { appendFileSync } from 'node:fs';
-import { performance } from 'node:perf_hooks';
 import process from 'node:process';
 import { Buffer } from 'node:buffer';
 
@@ -50,8 +48,8 @@ const mode = argOf('--mode') ?? 'normal';
 const pidFile = argOf('--pid-file');
 const logFile = argOf('--log');
 const clock = process.argv.includes('--clock');
-/** Wall time in ms with a sub-millisecond fraction. */
-const wallNow = () => performance.timeOrigin + performance.now();
+/** Machine monotonic time in milliseconds. */
+const monotonicMs = () => Number(process.hrtime.bigint()) / 1e6;
 const numberAfter = (/** @type {string} */ prefix) =>
   mode.startsWith(prefix) ? Number(mode.slice(prefix.length)) : undefined;
 const hangAfter = numberAfter('hang-after=');
@@ -96,7 +94,7 @@ const handle = (req, at) => {
     state.bytes += bytes;
     if (state.bytes - state.reported >= PARTIAL_BYTES) {
       state.reported = state.bytes;
-      if (clock) logEntry({ type: 'partial', stream, at: wallNow() });
+      if (clock) logEntry({ type: 'partial', stream, at: monotonicMs() });
       send({ stream, partial: `${state.bytes} bytes` });
     }
     return;
@@ -123,7 +121,7 @@ let pending = '';
 /** @param {string} chunk */
 const onData = chunk => {
   if (hung) return;
-  const at = clock ? wallNow() : undefined;
+  const at = clock ? monotonicMs() : undefined;
   pending += chunk;
   let nl = pending.indexOf('\n');
   while (nl !== -1) {
