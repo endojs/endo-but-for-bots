@@ -17971,3 +17971,21 @@ a full-file pass. The dedicated retirement test (J-1473) brings the current
 list to 25 of 26. These counts span multiple invocations. The original mixed
 `m1b-qc` file still lacks a full-file pass on the fold, and the complete
 core list's 20-minute budget still needs its own measurement.
+
+### J-1457 2026-11-19 WX.F integrated preset, voice and benchmark verification
+
+The two private creation inputs and the full-turn ask and eight-recipient mail
+benchmarks were brought together. The first package check found two inline
+type imports in factory guest comments that the SES source lint rejects and an
+untyped promise resolver in the throughput benchmark. Named JSDoc type imports
+and an explicit void promise type fixed those checks. The emitted factory was
+byte-compared with the reviewed implementation: 248,655 bytes, SHA-256
+`bac711890f0792ad9861c0661e6ff48c1e981ee61089be67c2a00ca9f58cfa90`.
+The 145,957-byte session retained its J-1460 digest.
+
+The package suite's default parallel run had two timeouts: a run-lock contention
+fixture and speech subprocess cleanup. The full lockdown suite passed with AVA
+limited to four concurrent files (2,004 passed, 168 skipped and three TODOs).
+Type checking and ESLint passed with zero errors and 924 warnings. Duplication
+was 584 of 38,420 normalized lines (1.52%, ceiling 1.77%). J-12547 records
+the eight-recipient measurement; J-12108 records creation and voice validation.

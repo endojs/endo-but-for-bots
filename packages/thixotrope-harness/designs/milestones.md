@@ -1955,9 +1955,15 @@ at `1881601aab`, load 1.9-3.2, 690.9 s held, 786 s of wall for the files; J-1226
 
 **Status: integrated with open performance gates.** The five daemon regression files passed
 12 tests across the recorded runs (J-12544). The combined branch also passed the stopped-mail
-and child-environment cases. The exclusive mail pass met the inbox and hub-growth limits
-and missed both delivery latency targets and throughput (J-1448). All three eight-child
-bursts and subtree stops passed. Ask overhead was 715 ms against 300 ms (J-1449).
+and child-environment cases. On the linked build, all eight mail daemon tests passed
+(J-1461). The four-sender, eight-recipient benchmark measured 388 ms for operator
+acknowledgment (target 200 ms), 390 ms for session delivery (target 300 ms) and
+1.30 completed and dismissed posts/s (target 3). Inbox p95 met its 550 ms limit at
+500 ms. Persisted hub bytes grew 1.419× against 1.25× after 215 completed posts
+(J-12547). J-1448 records the earlier workload, which met the growth limit.
+All three eight-child bursts and subtree stops passed. On the linked build, ask
+overhead was 393 ms against 300 ms, measured from parent tool call to result
+less the child's full turn on one observer clock (J-1474).
 The ten mail, request and subagent tools are registered. With the production session
 linker, M9 adds 21,430 bytes to the WX.1 base of 115,502, within its 21,500-byte
 allocation. J-1460 gives both Git inputs, the exact command and the earlier J-12541 miss.

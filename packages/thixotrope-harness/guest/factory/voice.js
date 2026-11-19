@@ -28,12 +28,12 @@ import {
   voiceTextOf,
   voiceTexts,
 } from '../lib/voice-preferences.js';
-
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { PresetCatalogKit } from './presets.js' */
 /** @import { RowTable } from './rows.js' */
 /** @import { HarnessSettings } from './root.js' */
 /** @import { StartCount } from './starts.js' */
+/** @import { PinnedBackend } from './session-options.js' */
 const { E, makeExo } = /** @type {GuestGlobals} */ (globalThis);
 
 /**
@@ -94,7 +94,7 @@ const directionValid = direction => {
 /**
  * @param {object} powers
  * @param {PresetCatalogKit} powers.catalog M5's preset catalogue kit
- * @param {(options: Record<string, any>, pinned?: import('./session-options.js').PinnedBackend) => Promise<any>} powers.create the
+ * @param {(options: Record<string, any>, pinned?: PinnedBackend) => Promise<any>} powers.create the
  *   kit's local `createSession` (a local call: answers the `Session`)
  * @param {RowTable} powers.rows `ofSession(session).key`
  * @param {HarnessSettings} [powers.settings] the default backend and model

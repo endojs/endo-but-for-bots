@@ -57,12 +57,12 @@ import { makeSubagents } from './subagents.js';
 import { composeSystemPrompt } from '../lib/system-prompt-base.js';
 
 /** @import { StartCount } from './starts.js' */
+/** @import { PinnedBackend } from './session-options.js' */
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { RowTable, Row } from './rows.js' */
-/** @import { ProgramStore, SessionProgram } from './root.js' */
+/** @import { ProgramStore, SessionProgram, HarnessSettings } from './root.js' */
 /** @import { Pool, PoolSettings } from './pool.js' */
 /** @import { ListFeed } from './list-feed.js' */
-/** @import { HarnessSettings } from './root.js' */
 const { E, makeExo, matches } = /** @type {GuestGlobals} */ (globalThis);
 /** @type {GuestGlobals['mustMatch']} */
 const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
@@ -262,7 +262,7 @@ export const makeFactoryKit = ({
    * session's snapshot: its prompt and config come from it, not from a new
    * snapshot of the live preset (m9-interfaces.md D-M9-10, 4.4).
    * @param {Record<string, any>} options
-   * @param {{ importing?: boolean, parent?: Row, endowments?: readonly { label: string, value: any }[], link?: (row: Row) => void, presetSnapshot?: any, pinned?: import('./session-options.js').PinnedBackend }} how
+   * @param {{ importing?: boolean, parent?: Row, endowments?: readonly { label: string, value: any }[], link?: (row: Row) => void, presetSnapshot?: any, pinned?: PinnedBackend }} how
    */
   const create = async (
     options,

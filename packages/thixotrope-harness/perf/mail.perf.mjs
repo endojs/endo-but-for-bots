@@ -262,6 +262,7 @@ await runPerf('mail', async ({ provision }) => {
       // Each client issues just one send at a time, but can use its second
       // recipient while the first recipient is processing its turn.
       const senders = clients.map(async c => {
+        /** @type {Promise<void>[]} */
         const credits = c.sessions.map(() => Promise.resolve());
         let n = 0;
         while (!stopped) {
