@@ -80,6 +80,7 @@ export const regressionLists = Object.freeze({
       'm1a-slice-restart',
       'm1b-content',
       'm1b-context-restart',
+      'exec-retirement',
       'm1b-exec-tool',
       'm1b-exec-tool-restart',
       'm1b-followups',

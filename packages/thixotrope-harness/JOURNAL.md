@@ -17637,6 +17637,23 @@ exclusion of the never-dispatched turn. Recovery took 21.818 s. The test
 held its shared slot 199.8 s and waited 1,006.0 s. All 20 projection/cache
 and 11 provider image-wire tests passed.
 
+### J-1473 2026-11-19 WX.F real-worker retirement after a finite sleep
+
+The new core file `exec-retirement` passed in a shared slot on the combined
+tree at `53ce64395a` (one test, 31.1 s). With zero exec spares and a 5 s
+deadline set before the first lease, a session stored a value, then its
+finite 30 s sleep reported the documented timeout. The public worker table
+lost its only exec worker (235c36158ba694322416326d45bc70e7). The next
+task on the same session completed with an unset binding; the only exec
+worker was then 8eec9e8dc4bc7c618628c59472a5379b. An initial test setup
+changed the deadline after leasing; the existing lease retained its prior
+deadline and its finite 4 s sleep completed. The original stress file was
+not run in this follow-up.
+
+The unchanged full `m1b-pool` file also passed (one test, 176 s). Its
+informational pooled and cold creation medians were 1,885 and 12,776 ms;
+both exceeded the performance budgets, 750 and 6,000 ms respectively.
+
 ### J-1451 2026-11-19 WX.F wider regression lists and reruns
 
 Both original batches ran on the integration checkout as fixes landed. The milestone list
