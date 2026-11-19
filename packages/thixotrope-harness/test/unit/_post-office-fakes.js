@@ -76,6 +76,7 @@ export const makeMailWorld = ({ inboxLimit = 256 } = {}) => {
           blob: blob('copy'),
           preview: 'copy',
           bytes: 9,
+          digest: 'a'.repeat(64),
         });
         copies.push({ source, options, copied });
         return copied;

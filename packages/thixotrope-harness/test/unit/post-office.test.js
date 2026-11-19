@@ -13,6 +13,7 @@ import {
 } from './_post-office-fakes.js';
 
 /* eslint-disable import/no-relative-packages */
+import { messageBytes } from '../../guest/lib/bounded.js';
 import { limits } from '../../guest/lib/limits.js';
 import {
   texts as postOfficeTexts,
@@ -295,6 +296,29 @@ test('cancelDelivery closes the postmark and tells the recipient to cancel', asy
     }),
   );
   t.is(p.envelopes.length, 0);
+});
+
+test('in-flight bytes match the delivered inline and relay-copied envelopes', async t => {
+  const world = makeMailWorld();
+  const a = world.addSession('Alpha');
+  const b = world.addSession('Beta');
+  b.stall();
+  const posts = ['hello', stagedText(4000, 'source preview')].map(body =>
+    E(a.outbox).post(harden({ to: [b.address], body, attachments: none })),
+  );
+  await settle();
+  t.is(b.state.calls, 2);
+  const { keptBytes } = world.postOffice.status();
+  b.release();
+  await Promise.all(posts);
+  t.is(b.envelopes.length, 2);
+  t.is(b.envelopes[1].body, world.copies[0].copied);
+  t.is(b.envelopes[1].body.digest.length, 64);
+  t.is(
+    keptBytes,
+    b.envelopes.reduce((sum, envelope) => sum + messageBytes(envelope), 0),
+  );
+  t.is(world.postOffice.status().keptBytes, 0);
 });
 
 test('an envelope over envelopeBytes is refused before any delivery', async t => {
