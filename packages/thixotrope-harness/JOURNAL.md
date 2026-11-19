@@ -15489,3 +15489,15 @@ client-send to child-read p99 22.056 ms. Partial relay median was 0.420 ms
 engine respawn 38.879 ms (n=1,464). A six-second shared-slot smoke had
 partial relay median 5.376 ms. All five gated rows passed in the exclusive
 pass. The daemon voice-speak file also passed all five tests.
+
+### J-12727 2026-11-19 W11.9 — six-file voice regression and Chromium
+
+Headless Chromium passed the synthetic-microphone case for dictation, grace
+send, meter movement, auto-speak on the submitting page, barge-in and wake
+lock release (70.6 s test, 125.3 s slot). All five daemon files have passing
+runs, including the two successful reruns of the speech-restart file in
+J-12724. The original two-job list exited 1 before that restart-driver fix.
+Its total slot usage was 805.7 s; elapsed time was 4,610.6 s, above the
+20-minute list target. The speak and browser files waited 3,683.3 s and
+2,711.4 s respectively before acquiring shared slots. This pass does not
+establish the list wall-time target.
