@@ -110,6 +110,40 @@ test('mail to the operator is listed, taken, replied to and dismissed; a staged 
   t.is(world.released.length, 1);
 });
 
+test('two operator message handles retain their own attachments and reply routes after dismissal', async t => {
+  const world = makeOperatorWorld();
+  const a = world.addSession('Alpha');
+  const b = world.addSession('Beta');
+  const operator = world.postOffice.operatorAddress();
+  /** @param {typeof a} sender */
+  const post = sender =>
+    E(sender.outbox).post(
+      harden({
+        to: [operator],
+        body: 'report',
+        attachments: [{ label: 'source', value: sender.address }],
+      }),
+    );
+  const first = await post(a);
+  const second = await post(b);
+  const { messages } = await E(world.mailbox).list();
+  const [one, two] = messages.map(view => view.message);
+  t.not(one, two);
+  await E(one).dismiss();
+  t.deepEqual((await E(world.mailbox).list()).messages, [messages[1]]);
+  t.is((await E(one).describe()).message, one);
+  t.is((await E(two).describe()).message, two);
+  t.is(await E(one).take('source'), a.address);
+  t.is(await E(two).take('source'), b.address);
+  const reply = harden({ body: 'thanks', attachments: none });
+  await E(one).reply(reply);
+  await E(two).reply(reply);
+  t.is(a.envelopes.length, 1);
+  t.is(b.envelopes.length, 1);
+  t.is(a.envelopes[0].inReplyTo, first.results[0].postmark);
+  t.is(b.envelopes[0].inReplyTo, second.results[0].postmark);
+});
+
 test('the operator inbox refuses the 257th message (acceptance 13)', async t => {
   const world = makeOperatorWorld();
   const a = world.addSession('Alpha');
