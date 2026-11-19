@@ -17379,3 +17379,16 @@ two-minute default while provisioning. The reusable template is now prepared in 
 Reading: the manager and staged session meet their respective whole-program limits. The duplicate
 check measured 584 of 38,406 source lines (1.52 %), with the ceiling lowered to 1.77 %. ESLint
 and the duplicate finder now skip the generated gateway UI bundle after a browser build.
+### J-12725 2026-11-19 WX.F — built-in voice preset with and without its runner
+
+On the combined harness, the production voice step pins the built-in preset.
+Talk refuses without a runner and creates no session. After the environment
+provisioning steps attach a fake runner to the same state, retrying that
+invocation starts one session on the pinned model, and repeating it returns
+that session. Its scripted turn runs `printf` through the shell and receives
+the expected output. The combined regression passed on the M1a template
+(281.3 s held including setup/cleanup); an independent run on a state with
+the exec program and pool also passed (159.7 s held). Two earlier clone runs
+resolved the supervisor dependency to the adjacent M11-only checkout, which
+made its native adapter lookup miss the environments implementation. Using
+the combined checkout’s own supervisor resolved the setup failure.
