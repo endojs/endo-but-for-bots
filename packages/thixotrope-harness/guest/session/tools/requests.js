@@ -19,6 +19,7 @@
  *
  * Guest rules: model JSON never becomes a record; no `JSON.parse`.
  */
+import { failed, ok } from './outcomes.js';
 import {
   textOf as mailTextOf,
   texts as mailTexts,
@@ -27,14 +28,7 @@ import { limits } from '../../lib/limits.js';
 import { parseClosedArgs } from '../../lib/tool-args.js';
 import { messageOf, utf8Bytes } from '../../lib/bounded.js';
 import { readArgs } from './objects.js';
-import {
-  failed,
-  inboxMessageOf,
-  mailAvailable,
-  mailSpec,
-  ok,
-  params,
-} from './mail.js';
+import { inboxMessageOf, mailAvailable, mailSpec, params } from './mail.js';
 
 /** @import { ToolTableEntry } from '../tool-table.js' */
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */

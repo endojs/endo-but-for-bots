@@ -37,6 +37,7 @@
  * (D-M9-19). No method of a held object is called: a handle is a factory
  * exo (D-M9-3). Guest rules.
  */
+import { failed, ok } from './outcomes.js';
 import {
   mailToolArgumentNames,
   textOf as mailTextOf,
@@ -63,11 +64,6 @@ const NAME = RegExp(subagentNameSource);
 const PLACEHOLDER = '\u0000s';
 /** A `splitArgs` answer that is neither a split nor a failed result. */
 const SPLIT_FAILED = 'The staged arguments could not be read';
-
-/** @param {any} text */
-const ok = text => harden({ status: 'ok', text });
-/** @param {any} text */
-const failed = text => harden({ status: 'failed', text });
 
 /**
  * Per argument name: its kind for the closed reader and its schema for the

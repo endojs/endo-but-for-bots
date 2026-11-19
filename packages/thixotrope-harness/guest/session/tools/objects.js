@@ -23,6 +23,7 @@
  * Guest rules.
  */
 
+import { failed, ok } from './outcomes.js';
 import { textOf } from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
 import { argSpecs, parseClosedArgs } from '../../lib/tool-args.js';
@@ -32,11 +33,6 @@ import { messageOf } from '../../lib/bounded.js';
 /** @import { ToolTableEntry } from '../tool-table.js' */
 /** @import { ArgSpec } from '../../lib/tool-args.js' */
 /** @import { Labels } from '../labels.js' */
-
-/** @param {string} text */
-const ok = text => harden({ status: 'ok', text });
-/** @param {string} text */
-const failed = text => harden({ status: 'failed', text });
 
 /**
  * The tool descriptions (Fae `src/tool-makers.js`, adapted wording noted
