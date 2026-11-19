@@ -32,15 +32,12 @@
  * Guest rules: prelude globals only; pending rows in a `Map` keyed by the
  * row object; sendOnly only; events are fixed-key records.
  */
-import { shapes } from '../lib/guards/factory.js';
 import { limits } from '../lib/limits.js';
 import { messageBytes } from '../lib/bounded.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { Row } from './rows.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
-/** @type {GuestGlobals['mustMatch']} */
-const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
 
 /** Batches one flush sends at most (well under `sendsPerCrank`). */
 export const MAX_BATCHES_PER_FLUSH = 16;
@@ -81,11 +78,11 @@ export const makeListFeed = ({ admin, listed, isListed }) => {
     rev += 1;
     counts.batches += 1;
     counts.events += events.length;
-    const batch = harden({ rev, events });
-    mustMatch(batch, shapes.ListPublishBatch);
     if (publisher !== undefined) {
       counts.sent += 1;
-      E.sendOnly(publisher).publish(batch);
+      // eventOf constructs these records and flush bounds each batch.
+      // The adapter's ListPublisher guard checks the complete wire shape.
+      E.sendOnly(publisher).publish(harden({ rev, events }));
     }
   };
 
