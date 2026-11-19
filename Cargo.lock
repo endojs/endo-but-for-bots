@@ -315,19 +315,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cap-tempfile"
-version = "3.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68d8ad5cfac469e58e632590f033d45c66415ef7a8aa801409884818036706f5"
-dependencies = [
- "cap-std",
- "rand 0.8.8",
- "rustix",
- "rustix-linux-procfs",
- "uuid",
-]
-
-[[package]]
 name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6078,7 +6065,6 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "cap-std",
- "cap-tempfile",
  "cc",
  "criterion",
  "ed25519-dalek 2.2.0",
