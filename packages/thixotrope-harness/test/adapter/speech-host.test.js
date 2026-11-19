@@ -14,7 +14,11 @@ import '../unit/_m1a-prelude.js';
 
 import test from '@endo/ses-ava/test.js';
 
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { execPath } from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
 import { ttsRanges } from '../../guest/lib/voice-preferences.js';
@@ -26,8 +30,12 @@ import {
   speechTexts,
 } from '../../resources/agent-host/impl/speech/audio-protocol.js';
 import { makeSpeechHost } from '../../resources/agent-host/impl/speech/host.js';
-import { makeSpeechKinds } from '../../resources/agent-host/impl/speech/kinds.js';
+import {
+  makeSpeechKinds,
+  speechKinds,
+} from '../../resources/agent-host/impl/speech/kinds.js';
 import { makeSpeechText } from '../../resources/agent-host/impl/speech/speech-text.js';
+import { scratch } from '../_helpers.js';
 import {
   TEST_VOICE,
   makeHostContext,
@@ -54,11 +62,15 @@ const pipeline = harden({
  * @param {any} [options.kinds]
  * @param {Parameters<typeof makeInTestKinds>[0]} [options.modes]
  * @param {number} [options.settingsMaxAgeMs]
+ * @param {string} [options.stateDir]
  */
 const world = async (t, options = {}) => {
   const stub = makeVoiceStub(options.settings ?? processSettings());
   const inTest = makeInTestKinds(options.modes);
-  const made = makeHostContext({ voice: stub.voice });
+  const made = makeHostContext({
+    voice: stub.voice,
+    ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }),
+  });
   const host = makeSpeechHost({
     context: made.context,
     kinds: options.kinds ?? inTest.kinds,
@@ -288,4 +300,45 @@ test('stop closes every port with serviceStopped and stops the engines', async t
   t.throws(() => host.speech.openAudio(), {
     message: speechTexts.serviceStopped,
   });
+});
+
+test("the incarnation's kinds run the process engines (the fake engines of their tests)", async t => {
+  const stateDir = await scratch(t, 'spk-');
+  mkdirSync(join(stateDir, 'agent-host'));
+  const fixture = (/** @type {string} */ name) =>
+    fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url));
+  const settings = harden({
+    speechIn: {
+      kind: 'process',
+      command: [execPath, fixture('fake-stt.mjs')],
+      language: 'en',
+    },
+    speechOut: {
+      kind: 'process',
+      command: [execPath, fixture('fake-tts.mjs')],
+      voicesDir: fixture('voices'),
+      defaultVoice: TEST_VOICE,
+      spareSynth: false,
+    },
+    revision: 1,
+  });
+  const { host, open } = await world(t, {
+    settings,
+    kinds: speechKinds,
+    stateDir,
+  });
+  const { port, socket, ready } = await open();
+  t.true(ready.speechIn);
+  t.true(ready.speechOut);
+  const { stream } = await E(port).transcribe();
+  socket.send(frameKinds.audio, stream, new Uint8Array(32_000));
+  socket.send(frameKinds.end, stream);
+  const final = await socket.event(stream, 'final');
+  t.regex(final.text, /^final \d+$/);
+  await socket.event(stream, 'end');
+  const replay = await E(host.speech).replay(port, [
+    'The fake engine speaks this sentence.',
+  ]);
+  await socket.event(replay.stream, 'end');
+  t.true(socket.pcmBytes(replay.stream) > 0);
 });

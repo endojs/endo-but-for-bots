@@ -239,6 +239,7 @@ export const makeInTestKinds = (modes = {}) => {
  * @param {any} [options.content]
  * @param {Record<string, unknown>[]} [options.logs]
  * @param {(grant: any) => Promise<string>} [options.readGrant]
+ * @param {string} [options.stateDir] a real one when process engines run
  */
 export const makeHostContext = ({
   voice,
@@ -246,6 +247,7 @@ export const makeHostContext = ({
   content = Far('Content', {}),
   logs = [],
   readGrant = undefined,
+  stateDir = 'no-state-dir',
 }) => {
   let operatorReads = 0;
   const operator = Far('Operator', {
@@ -263,7 +265,7 @@ export const makeHostContext = ({
         history: () => undefined,
         whenAttached: (/** @type {() => void} */ callback) => callback(),
         secretWriter: async () => Far('GatewaySecretWriter', {}),
-        stateDir: '/nonexistent-state',
+        stateDir,
         log: (/** @type {Record<string, unknown>} */ event) => logs.push(event),
         operator: () => operator,
         ...(readGrant === undefined ? {} : { readGrant }),

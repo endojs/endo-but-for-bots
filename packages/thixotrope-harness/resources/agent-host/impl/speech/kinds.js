@@ -23,6 +23,7 @@
 import { speechEngineKinds } from './engine-protocol.js';
 import { openAiAudioKind } from './openai-audio.js';
 import { makeProcessSttEngine } from './stt-process.js';
+import { makeProcessTtsEngine } from './tts-process.js';
 
 /** @import { SttEngine, TtsEngine } from './engine-types.js' */
 
@@ -100,24 +101,26 @@ async function notGiven(_grant) {
 
 /**
  * `process`: the makers take the settings and their own options
- * (`stt-process.js` `ProcessSttOptions`).
- * @type {SpeechKind}
+ * (`stt-process.js` `ProcessSttOptions`, `tts-process.js`
+ * `ProcessTtsOptions`, the same fields).
+ * @param {EngineContext} context
  */
-const processKind = harden({
-  speechIn: (settings, { log, cwd, timeouts, limits }) =>
-    makeProcessSttEngine(settings, {
-      log,
-      timeouts,
-      limits,
-      ...(cwd === undefined ? {} : { cwd }),
-    }),
+const processOptions = ({ log, cwd, timeouts, limits }) => ({
+  log,
+  timeouts,
+  limits,
+  ...(cwd === undefined ? {} : { cwd }),
 });
 
-/**
- * The incarnation's kinds. The `process` speech-out maker
- * (`tts-process.js`) joins `processKind` when it is committed (contract
- * 12: the wiring of the last engine is the integration unit's).
- */
+/** @type {SpeechKind} */
+const processKind = harden({
+  speechIn: (settings, context) =>
+    makeProcessSttEngine(settings, processOptions(context)),
+  speechOut: (settings, context) =>
+    makeProcessTtsEngine(settings, processOptions(context)),
+});
+
+/** The incarnation's kinds. */
 export const speechKinds = makeSpeechKinds({
   off: {},
   process: processKind,
