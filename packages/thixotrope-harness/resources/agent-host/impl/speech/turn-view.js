@@ -12,9 +12,11 @@
  *    rejects `speechTexts.turnNotLive`. A session already spoken by
  *    `speakViewsPerSession` open views rejects `speechTexts.tooManyViews`
  *    before subscribing.
- * 2. From the snapshot: the text of every `assistant` message, each ended by
- *    a newline (no sentence straddles two), then the streaming text; a
- *    settled turn then ends (a finished last turn replays to the end).
+ * 2. From the snapshot: the text of every `assistant` message (a staged one
+ *    read through `Content`), each followed by a line break, as a
+ *    `tool_call` delivery gives (no sentence straddles two, a short last
+ *    sentence included), then the streaming text; a settled turn then ends
+ *    (a finished last turn replays to the end).
  * 3. Then, for deliveries of this `turnId`: `delta` -> its text;
  *    `tool_call` -> a line break; `final` -> the part of the final text the
  *    round has not spoken (whitespace-insensitive; nothing when the final
@@ -112,22 +114,6 @@ const finalTextOf = async (content, text, units) => {
     if (page.done || read.length >= units) return read.slice(0, units);
     offset = page.next;
   }
-};
-
-/**
- * The text a snapshot holds: the completed assistant messages, each ended by
- * a newline, then the streaming text.
- * @param {any} status a FoldableStatus
- */
-const saidSoFar = status => {
-  const completed = status.messages
-    .filter(
-      (/** @type {any} */ message) =>
-        message.role === 'assistant' && message.text,
-    )
-    .map((/** @type {any} */ message) => `${message.text}\n`)
-    .join('');
-  return `${completed}${status.streamingText}`;
 };
 
 /**
@@ -235,8 +221,19 @@ export const openTurnView = async ({
   };
 
   const { status, settled } = snapshot.turn;
-  say(saidSoFar(status));
-  addToRound(status.streamingText);
+  /** @param {any} text inline or staged; '' when it cannot be read */
+  const textOf = text =>
+    finalTextOf(content, text ?? '', roundUnits).catch(() => '');
+  for (const message of status.messages) {
+    if (message.role === 'assistant' && message.text) {
+      // eslint-disable-next-line no-await-in-loop
+      say(await textOf(message.text));
+      if (!over) sink.lineBreak();
+    }
+  }
+  const streaming = await textOf(status.streamingText);
+  say(streaming);
+  addToRound(streaming);
   if (settled) end();
 
   /** @param {any} event a final of this turn */

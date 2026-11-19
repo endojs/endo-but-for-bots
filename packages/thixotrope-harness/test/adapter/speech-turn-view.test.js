@@ -210,7 +210,44 @@ test('a view opened mid-turn speaks the snapshot, then the deltas', async t => {
   world.publish([{ type: 'final', turnId: 't1', text: 'Hello there.' }]);
   world.publish([{ type: 'end', turnId: 't1', status: 'completed' }]);
   t.is(await sink.over, 'end');
-  t.deepEqual(sink.heard, ['Earlier answer.\nHel', 'lo there.', '<end>']);
+  t.deepEqual(sink.heard, [
+    'Earlier answer.',
+    '<br>',
+    'Hel',
+    'lo there.',
+    '<end>',
+  ]);
+});
+
+test('a snapshot breaks the sentence at each finished message, a short one and a staged one too (its preview)', async t => {
+  const world = makeWorld();
+  t.teardown(world.blobs.cleanup);
+  const staged = await world.blobs.store.stage(
+    `${'Staged words here. '.repeat(600)}Last staged.`,
+  );
+  world.publish([{ type: 'turn-start', turnId: 't1', input: 'hi', at: 1 }]);
+  world.delta('t1', 'Let me check the file. One');
+  world.publish([
+    { type: 'tool_call', turnId: 't1', id: 'c0', name: 'echo', args: '{}' },
+  ]);
+  world.publish([{ type: 'final', turnId: 't1', text: staged }]);
+  world.publish([
+    { type: 'tool_call', turnId: 't1', id: 'c1', name: 'echo', args: '{}' },
+  ]);
+  await settle();
+  const sink = makeSink();
+  await open(world, 't1', sink);
+  world.delta('t1', 'Done: all good.', 2);
+  world.publish([{ type: 'end', turnId: 't1', status: 'completed' }]);
+  t.is(await sink.over, 'end');
+  t.deepEqual(sink.sentences.slice(0, 2), ['Let me check the file.', 'One']);
+  // The channel's fold keeps a staged message as its preview.
+  t.is(sink.sentences[2], 'Staged words here.');
+  t.is(sink.sentences.at(-1), 'Done: all good.');
+  t.false(
+    sink.heard.some(text => text.includes('[object')),
+    'a staged message is read, not printed',
+  );
 });
 
 test('the last finished turn replays to the end; an older or unstarted turn is not live', async t => {
@@ -238,7 +275,7 @@ test('the last finished turn replays to the end; an older or unstarted turn is n
   await open(world, 't2', last);
   t.is(await last.over, 'end', 'a closing abort counts as the end');
   // The fold closed the aborted turn's text into a message.
-  t.deepEqual(last.heard, ['Second reply, all of it.\n', '<end>']);
+  t.deepEqual(last.heard, ['Second reply, all of it.', '<br>', '<end>']);
   await settle();
   t.is(world.channel.subscriberCount(), 0);
 });
