@@ -14936,3 +14936,51 @@ Evidence: first command 2026-11-19T02:23:29Z.
 Reading: no command over 60 s; no supervisor, browser or run lock used; nothing pushed; no
 change to `packages/thixotrope` or `rust/**`.
 Fit: neutral.
+
+### J-12440 2026-11-19 W9.6 relay copy - built
+Evidence: `270e573ae8`; `resources/agent-host/impl/blobs.js` (seam A1); tests
+`test/adapter/blob-copy.test.js` (8 tests, about 2 s), kill child
+`test/adapter/_blob-copy-kill-child.mjs`, timing row `test/adapter/blob-copy.bench.mjs`.
+Reading: `BlobStore.copy(blob, { maxUnits?, suffix? })` beside `stage` and `discard`, and the one
+`RelayWriters` exo (`open`, `copy`, guard `postOfficeTables().interfaces.RelayWriters`) answered
+by `writersFor(undefined)`; `writersFor(session)` and `store.writers` stay `BlobWriters` without
+`copy`. Plain: the source's file is read once for its SHA-256 and preview (the copy carries the
+source's digest, so the same-submission rule still holds), then `link(2)` to `<key>.part`, rename,
+`syncDirectory` from `files.js`, bind; trace steps `link`, `rename`, `fsync-dir`, `bind`. Cut
+(`maxUnits` or a non-empty `suffix`): the source decoded as it is read in `blobPieceBytes`
+pieces; with `maxUnits` at most that many units are kept and bounded as `boundToolOutput` bounds
+a text (marker of the source's full length), without it every piece goes straight to the writer;
+the suffix after; written through an ownerless writer (piece quotas, fsync, rename, directory
+fsync). The source is located without an owner, so it is neither claimed nor checked and keeps
+its owner; the copy has no owner until the first session presents it; it counts against the
+daemon quota only. Unknown, discarded and uncommitted handles are refused with
+`texts.blobUnknown`. KM12 (SIGKILL before `link`, at `rename`, at `fsync-dir`, at `bind`, after
+the answer, both modes): the source reads whole, the next sweep removes the one `.part`, at most
+one named file nothing refers to is left. Fixed on the way: a writer whose directory fsync failed
+after its rename left the named file on disk while `abort` refunded its bytes (the file now goes
+with the failure); a failed cut copy awaits the writer's drop so the refund precedes the
+rejection.
+Fit: good; the adapter owns the files, so a cross-session copy is a link and never a byte
+through a vat.
+
+### J-12441 2026-11-19 W9.6 mail.copy - measured
+Evidence: `270e573ae8`; `node test/adapter/blob-copy.bench.mjs` (perf/_window.mjs `runWindow`,
+`perf/_harness.mjs` `stats`), 1 MiB ASCII source, each copy released outside its sample; machine
+shared with three other lanes.
+Reading: 10 s windows, load 8.8: plain median 8.89 ms, p95 16.4 (981 samples): **miss** of the
+5 ms budget; cut to `toolOutputUnits - 1280` with a suffix median 9.94 ms, p95 21.9 (779
+samples): pass (20 ms). 5 s windows (PERF_WINDOW_SCALE 0.5), load 7.7: plain 4.97 ms (913), cut
+9.81 ms (457). Probe on the same disk: hash of 1 MiB 0.73 ms, link plus rename 0.58 ms, directory
+fsync alone 4.33 ms. Likely cause of the miss: the directory fsync D-15 requires before the
+handle leaves is most of the copy and grows with the shared load; the budget's basis took it as
+cheap. Not loosened. A post to n recipients pays n fsyncs; a `copyMany` naming n links under one
+directory fsync (as `commit` does) would pay one, if `mail.throughput` shows it. Session program
+233,126 before and after (adapter code only).
+Fit: neutral: fsync cost is the disk's, not Thixotrope's.
+
+### J-12442 2026-11-19 W9.6 time record - process
+Evidence: first command 2026-11-19T02:23:30Z.
+Reading: no command over 60 s (the regression set of 16 blob and agent-host files took 63 s
+wall in one `yarn test` call); no supervisor, browser or run lock used; nothing pushed; no
+change to `packages/thixotrope` or `rust/**`.
+Fit: neutral.
