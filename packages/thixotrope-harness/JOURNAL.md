@@ -15312,3 +15312,87 @@ Reading: commands over 60 s: the affected adapter suites (17 files, 62 s; 26 fil
 integration file, supervisor or run lock; no exclusive mode. Commits `546ad9fab5`, `f419a604f6`
 and this journal commit; nothing pushed.
 Fit: neutral.
+
+### J-12260 2026-11-19 W8.7 compaction through the daemon - built
+Evidence: `544da7f5e0`, `c0e2b185d6`; new `test/integration/_compaction.js` (fake provider
+server, a Secret read by an Anthropic API backend, turns through the Composer, the server's view
+of each model request), `compaction.test.js` (2 tests, 101 s held), `compaction-restart.test.js`
+(1 test, 126 s), `compaction-archive.test.js` (2 tests, 184.5 s); all in the regression list
+`context`; `test/integration-runner.test.js` now expects the group lanes' lists in `milestones`.
+Reading: acceptance 1 (Anthropic fake server at 150,000 of 200,000 and scripted at 80 of 100),
+2, 7, 8, 9, 10, 15 and 17 pass end to end, and kill points K1, K2 and K7 (with K5's outcome)
+through SIGKILL of the supervisor. The 300-turn session is imported (`writeSyntheticExport`);
+no test replays turns. One kill serves two sessions at once (K1 scripted and K2 Anthropic). The
+summary call reaches the server with no tools and the R4-36 instruction; the next round's first
+message is the summary as an assistant message; `getUsage()` charges 3,000 + 2,000 input tokens
+and reads the real round's 2,010.
+Fit: good. The vat records and the adapter computes; nothing in the tests needed a vat call
+beyond the public objects.
+
+### J-12261 2026-11-19 W8.7 behaviour found while testing - finding
+Evidence: `compaction-restart.test.js`, `compaction.test.js` at `c0e2b185d6`.
+Reading: (1) After a kill, the session's reading is still the last real round's, so the next
+turn asks again: after K2 it plans again from boundary 0 (the test refuses that summary with an
+empty answer, `invalidSummary`, and checks the round is uncompacted); after K7 the only work
+between the boundary and the new turn is the unanswered turn, and the plan refuses with
+`headroomExceeded` before any summary call (step 5 is checked before step 8's
+`nothingToSummarize`). Correct per contract 4.1 and 5.2, but every turn after a crash at 70 %
+spends one plan. (2) A short history at 75 % (one short turn) also refuses `headroomExceeded`
+with no call: the fixed parts (system prompt and tools) are most of the bytes. (3) No defect was
+found in W8.1-W8.6's code by these runs. Fixed in passing: a type error in
+`test/spikes/byte-array-passing.test.js` (W8.5) that failed the package `tsc`.
+Fit: neutral.
+
+### J-12262 2026-11-19 W8.7 recorded perf pass `context` - measured
+Evidence: `corepack yarn perf:pass context` at `1881601aab`, exclusive, crank budget 50,000,000,
+load 1.9-3.2; templates first in shared slots (m1a 595 s, of it waiting on another lane's
+exclusive `perf-mail`; exec 118, pool 113, m4 112, m5o 117, m3-300 166 s, all rebuilt); files
+790 s of wall, 690.9 s held: compaction 308 s (exit 1), images 52, session 179, turn 131, exec
+116.
+Reading: `compaction.plan` median 8.7 ms, p95 12.4, n 2,002, 400 turns, 679,123 bytes (budget
+50). `compaction.overhead` median 116 ms, p95 290, n 89 compacting turns in 60 s (budget 300;
+plain round-start to request 39 ms). `compaction.record` gate: 89 `compacted` deliveries for 89
+compactions; per turn every other delivery kind equal to a plain turn's (enqueueOnce,
+dispatching, getStatus, roundFinal, fulfill, 1 each); 3.1 extra frames per compacting turn of
+which 1 is `compacted` and about 2.1 GC frames (gc-answers 2.63 against 1.52, gc-exports 1.96
+against 0.93). `compaction.replyToRequest` median 85 ms (crank Y's round trip and the
+re-prepare; the prepare alone 2.16 ms adapter-level, J-12201). `compaction.rebuild` median
+564 ms, n 8, budget 359 x 1.25: miss (J-12263). `images.requestBuild` Messages 8.7 ms,
+Responses 9.1 ms per new 2 MiB image (budget 15). `images.manyInOneRound` 64 image results: 20
+native, 44 receipts, 294 ms, a 56 MB body. Cross-check: `session.program` 239,354 bytes (limit
+270,336), `session.createCold` 7,220 ms (T3-CLOSE 6,379; the group's base grew 20,642 bytes in
+WX.1 and this lane 6,228), `turn.start` 116 ms with 2, 3 and 1 deliveries (start, round,
+lease: unchanged, so a turn that does not compact gains nothing), exec rows pass.
+Fit: good for the plan and the gate; the extra GC frames are a cost of the answered call, not of
+compaction's design.
+
+### J-12263 2026-11-19 W8.7 `compaction.rebuild` miss - finding
+Evidence: J-12262's row; smokes under load 553 and 586 ms.
+Reading: the first prepare after a clean restart of a compacted 300-turn session: 52 ms in the
+first cycle, then 564-587 ms in each later cycle (every cycle adds one plain 6 KB turn).
+Likely cause (not proven): after an accepted compaction the cache's sealed part is empty and
+`context.jsonl` holds nothing past the boundary, so a rebuild pages every kept record from the
+boundary out of the session vat; M2's 200-turn budget assumed the sealed part comes from the
+file. Why the first cycle is fast is not explained. Budget kept; the lane's review should trace
+one rebuild (`timing` of the context line) before the merge.
+Fit: poor here, until traced.
+
+### J-12264 2026-11-19 W8.7 what was not built - finding
+Evidence: J-1071 (W8.4), `guest/session/tool-table.js` slot `viewImage` empty.
+Reading: `view-image.test.js` (acceptance 3, 14's "the turn continues", 16, I4 and "kill while
+reading") and the rows `images.view`, `images.viewFromVat`, `images.frameIntoVat` and
+`images.contextPrepare` need the session's `viewImage` entry in `toolTable`; registering it
+puts the session program at 244,311 bytes (+4,957, the lane at +11,185 of its 7,000). Not
+written: a test gated on a registration that does not exist cannot be checked. `compaction.flat`
+is not measured: it needs the 5,000-turn long-session template, rebuilt after this lane's guest
+change (about 8 minutes in a shared slot).
+Fit: poor for the budget, as J-1071 found.
+
+### J-12265 2026-11-19 W8.7 time record - process
+Evidence: first command 2026-11-19T03:07:04Z.
+Reading: commands over 60 s: integration runs 141 s (first try), 115 s (two files at once),
+112 s, 185 s, 126 s; perf smokes 113 s and about 120 s (shared, PERF_WINDOW_SCALE 0.25); the
+recorded pass 2,008 s with templates (1,218 s of it the templates, most waiting for another
+lane's exclusive run). Commits `544da7f5e0`, `c0e2b185d6`, `1881601aab`, `b894394568` and this
+journal commit; nothing pushed.
+Fit: neutral.
