@@ -1480,9 +1480,12 @@ drops most of Endo's name plumbing.
 and M9. All four cross-lane tests passed on the combined daemon, and all 54 milestone
 regression files passed across the wide run and reruns. J-1451 records the remaining
 core verification gap and elapsed-time misses. Performance and lifecycle follow-up started
-at `53ce64395a` (J-1453). Session and native manager
-sizes met their whole-program limits. The individual outcomes and journal retain the missed
-performance gates, per-lane growth overage and remaining verification. The four contracts are the reference:
+at `53ce64395a` (J-1453). The full pool lifecycle and the dedicated real-daemon
+exec-retirement test passed. A deadline removed the old worker and the next task in the
+same session saw a fresh scope (J-1473). M8 cold context rebuild met its 359 ms target
+(J-1454). M9 added 21,430 bytes against its 21,500-byte allocation with the same
+emitter on both inputs (J-1460). The individual sections record the other performance
+results. The four contracts are the reference:
 `m6-interfaces.md`, `m8-interfaces.md`, `m9-interfaces.md`, `m11-interfaces.md`, settled against
 the cross-check WX.0 (journal J-1410..J-1417, issues X-01..X-17) and against cleanup step 3
 (`arch-review/step3-plan.md` and the step-3 code as built in the cleanup lane). No seam is
