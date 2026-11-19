@@ -192,9 +192,13 @@ harden(loadGatewayExtensions);
  * first: the page's secret writer, `GW/index.js`), then the extensions' in
  * file then array order, at most `m3Limits.extras` in all. A `make` that
  * throws, or a label already used, is logged and skipped.
+ * Each `make` receives `contextFor(extension)` (`GW/index.js`: the
+ * extension's own context, with its `ExtensionPowers` if it has any);
+ * without `contextFor`, `context`.
  * @param {object} options
  * @param {GatewayExtension[]} options.extensions
- * @param {GatewayContext} options.context
+ * @param {GatewayContext} [options.context]
+ * @param {(extension: GatewayExtension) => GatewayContext} [options.contextFor]
  * @param {(event: Record<string, unknown>) => void} options.log
  * @param {{ label: string, service: any }[]} [options.builtIn]
  * @returns {{ label: string, service: any }[]}
@@ -202,6 +206,7 @@ harden(loadGatewayExtensions);
 export const makeExtensionServices = ({
   extensions,
   context,
+  contextFor = () => /** @type {GatewayContext} */ (context),
   log,
   builtIn = [],
 }) => {
@@ -221,7 +226,7 @@ export const makeExtensionServices = ({
         error = 'too many services';
       } else {
         try {
-          extras.push(harden({ label, service: make(context) }));
+          extras.push(harden({ label, service: make(contextFor(extension)) }));
           labels.add(label);
         } catch (failure) {
           error = messageOf(failure);
@@ -278,15 +283,24 @@ harden(extensionCsp);
  * The bridge's `isLargeCall` (m3-interfaces.md 4.4 rule 3, 6.1): the
  * built-in exemptions (the Composer's `submit` and `edit`) at once, each
  * extension's `target(context)` awaited once after `whenAttached`. A target
- * that rejects is logged and has no exemption.
+ * that rejects is logged and has no exemption. Each `target` receives
+ * `contextFor(extension)` (default: `context`, whose `whenAttached` is
+ * used either way).
  * @param {object} options
  * @param {GatewayExtension[]} options.extensions
  * @param {GatewayContext} options.context
+ * @param {(extension: GatewayExtension) => GatewayContext} [options.contextFor]
  * @param {{ target: unknown, methods: string[] }[]} [options.builtIn]
  * @param {(event: Record<string, unknown>) => void} options.log
  * @returns {{ isLargeCall: (target: unknown, method: string) => boolean, ready: Promise<void> }}
  */
-export const makeLargeCalls = ({ extensions, context, builtIn = [], log }) => {
+export const makeLargeCalls = ({
+  extensions,
+  context,
+  contextFor = () => context,
+  builtIn = [],
+  log,
+}) => {
   /** @type {Map<unknown, Set<string>>} */
   const exempt = new Map();
   /**
@@ -305,6 +319,7 @@ export const makeLargeCalls = ({ extensions, context, builtIn = [], log }) => {
   const pending = extensions.flatMap(extension =>
     (extension.largeCalls ?? []).map(largeCall => ({
       name: extension.name,
+      extension,
       largeCall,
     })),
   );
@@ -315,9 +330,9 @@ export const makeLargeCalls = ({ extensions, context, builtIn = [], log }) => {
       return;
     }
     context.whenAttached(() => {
-      const resolving = pending.map(({ name, largeCall }) =>
+      const resolving = pending.map(({ name, extension, largeCall }) =>
         Promise.resolve()
-          .then(() => largeCall.target(context))
+          .then(() => largeCall.target(contextFor(extension)))
           .then(
             target => add(target, largeCall.methods),
             error =>
