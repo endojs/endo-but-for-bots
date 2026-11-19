@@ -18406,3 +18406,22 @@ repeat collection time 21.6–23.4% in the existing optimized heap benchmark.
 The opt-in worker timing prototype (`3646bd8307`, CC-131) reports individual
 rounds and preserved the ordinary outbound frames in its bounded checks.
 The release mail measurements continue to use the original pinned worker.
+
+### J-1477 2026-11-19 WX.F guarded operator message instances
+
+Commit `ecc7171aa2` shares the guarded class and retains one independent
+message instance per reply. The retained-facet regression and both real
+restart files passed (J-1468). The candidate passed 2,005 package unit and
+adapter tests with 168 skipped and three TODOs, typecheck, ESLint (zero
+errors, 924 warnings) and duplication (1.52%). The installed session
+bundle kept its 145,957-byte digest and the M9 size allocation.
+
+Full exclusive mail measured 205.186 ms median ACK (104 sends) and
+2.994131492 completed posts/s (182 in 60.786 s, including final drain).
+The targets are 200 ms and 3 posts/s. The displayed rate rounds to 3.0.
+An independent GC microbenchmark overlapped part of the first acknowledgment
+window. This run does not isolate its effect. Session-to-session median
+was 335 ms, inbox crank p95 500 ms and fresh hub growth was 1.100780×
+(996,081 to 1,096,466 bytes, 353 attachment posts, 36 natural compactions).
+The file exited 1. The next paired trial retains the same mail and reply
+semantics while avoiding multicast bookkeeping for a single destination.

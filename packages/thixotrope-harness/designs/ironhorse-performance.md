@@ -26,7 +26,7 @@ In the 19 collecting reply cranks the factory had a median of 83,242 allocated s
 
 **Reuse mark traversal storage.** In `collect_full`, a visited slot's outgoing edges are gathered before the mutable mark step. Local commit `59dabaf09a` reuses one vector and drains it in the same order. The buffer stays alive until collection returns, so a wide node can determine its peak capacity. The change leaves the collection schedule, finalizer order and slot sweep order intact. The branch `codex/mail-gc-edge-scratch` is available in the harness Git repository. [Collector source](../../../rust/engine/ironhorse-vm/src/gc.rs) · [Existing heap benchmark](../../../rust/engine/ironhorse-snapshot/tests/gc_bench.rs)
 
-The optimized benchmark ran baseline, candidate, candidate, baseline, with 21 independently rebuilt object graphs per heap size per run. Each graph retains a collection of two-property objects and drops an equally large collection. Values are the mean of the two within-run medians for each side.
+The optimized benchmark ran baseline, candidate, candidate, baseline, with 21 independently rebuilt object graphs per heap size per run. Each graph retains a collection of two-property objects and drops an equally large collection. Values are the mean of the two within-run medians for each side. These microbenchmarks shared the host. They overlapped part of the later class-only release benchmark’s acknowledgment window, which limits cross-run attribution.
 
 | Slot capacity | First full collection, baseline → candidate | Immediate repeat, baseline → candidate |
 |---:|---:|---:|
