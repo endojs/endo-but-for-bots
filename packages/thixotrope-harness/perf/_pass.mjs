@@ -76,7 +76,7 @@ export const perfLists = Object.freeze({
   // lane adds its perf checks to its own list (empty until then).
   environments: Object.freeze(/** @type {string[]} */ ([])),
   context: Object.freeze(/** @type {string[]} */ ([])),
-  mail: Object.freeze(/** @type {string[]} */ ([])),
+  mail: Object.freeze(['mail']),
   voice: Object.freeze(/** @type {string[]} */ ([])),
 });
 

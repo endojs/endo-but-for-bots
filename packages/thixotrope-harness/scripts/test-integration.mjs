@@ -146,7 +146,11 @@ export const regressionLists = Object.freeze({
   // concept; each lane adds its files to its own list (empty until then).
   environments: Object.freeze(/** @type {string[]} */ ([])),
   context: Object.freeze(/** @type {string[]} */ ([])),
-  mail: Object.freeze(/** @type {string[]} */ ([])),
+  mail: Object.freeze(
+    ['mail', 'mail-restart-delivery'].map(
+      name => `test/integration/${name}.test.js`,
+    ),
+  ),
   voice: Object.freeze(/** @type {string[]} */ ([])),
 });
 
