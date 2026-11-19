@@ -44,11 +44,29 @@ pub const DEFAULT_CREATION: XsCreation = XsCreation {
 /// creating any machines, and `terminate_shared_cluster` must be
 /// called on shutdown.
 pub fn initialize_shared_cluster() {
+    // SAFETY: UNVERIFIED — the Rust declaration in ffi.rs takes no
+    // arguments, but xsAtomics.c defines `fxInitializeSharedCluster(txMachine* the)`,
+    // so the callee reads an indeterminate `the` register. `fxInitialize...`
+    // ignores it; `fxTerminate...` compares it against waiter records without
+    // dereferencing it. Declaring the parameter and passing null would make
+    // the call well-defined.
+    // The C function also increments a process-global usage count without a
+    // lock, so concurrent callers race; `ensure_shared_cluster` is the
+    // serialised entry point.
     unsafe { fxInitializeSharedCluster() }
 }
 
 /// Tear down the XS shared cluster.
 pub fn terminate_shared_cluster() {
+    // SAFETY: UNVERIFIED — the Rust declaration in ffi.rs takes no
+    // arguments, but xsAtomics.c defines `fxTerminateSharedCluster(txMachine* the)`,
+    // so the callee reads an indeterminate `the` register. `fxInitialize...`
+    // ignores it; `fxTerminate...` compares it against waiter records without
+    // dereferencing it. Declaring the parameter and passing null would make
+    // the call well-defined.
+    // This is a safe fn, yet tearing the cluster down (the last use frees
+    // it) while machines still use its shared chunks or timers is not
+    // guarded against here.
     unsafe { fxTerminateSharedCluster() }
 }
 
@@ -60,6 +78,9 @@ pub fn terminate_shared_cluster() {
 pub fn ensure_shared_cluster() {
     use std::sync::Once;
     static CLUSTER_INIT: Once = Once::new();
+    // SAFETY: `Once` serialises the one call, so the C function's unlocked
+    // usage counter is not raced. The prototype mismatch noted on
+    // `initialize_shared_cluster` (UNVERIFIED) applies here too.
     CLUSTER_INIT.call_once(|| unsafe { fxInitializeSharedCluster() });
 }
 
@@ -91,6 +112,10 @@ impl Machine {
     /// Create a new XS machine with the given creation parameters.
     pub fn new(creation: &XsCreation, name: &str) -> Option<Machine> {
         let c_name = CString::new(name).ok()?;
+        // SAFETY: `creation` is a live, fully initialised `XsCreation` that
+        // XS only reads; `c_name` is NUL-terminated and outlives the call (XS
+        // copies the name); a null context and `XS_NO_ID` archive are the
+        // documented "none" values. A null return is handled below.
         let raw = unsafe {
             fxCreateMachine(
                 creation as *const XsCreation,
@@ -116,6 +141,12 @@ impl Machine {
 
     /// Set the host context pointer (retrievable from host functions).
     pub fn set_context<T>(&self, ctx: *mut T) {
+        // SAFETY: the write itself is sound: `self.raw` is the live machine
+        // this `Machine` owns, and nothing reads `context` concurrently
+        // (`Machine` is `!Send`). UNVERIFIED as an API: this safe fn accepts
+        // any pointer of any type, and the powers callbacks later dereference
+        // `context` as a `HostPowers` (see `powers::fs::get_powers`), so safe
+        // code can set up a type confusion or a dangling pointer.
         unsafe { (*self.raw).context = ctx as *mut c_void };
     }
 
@@ -124,7 +155,10 @@ impl Machine {
     /// # Safety
     /// Caller must ensure T matches the type that was set.
     pub unsafe fn context<T>(&self) -> *mut T {
-        (*self.raw).context as *mut T
+        // SAFETY: `self.raw` is the live machine this `Machine` owns; reading
+        // the field is a plain load. What the pointer may be used for is the
+        // caller's obligation, per this fn's contract.
+        unsafe { (*self.raw).context as *mut T }
     }
 
     /// Evaluate a JavaScript expression.
@@ -136,6 +170,17 @@ impl Machine {
     pub fn eval(&self, source: &str) -> Option<JsValue> {
         let c_source = CString::new(source).ok()?;
 
+        // SAFETY: UNVERIFIED — `fxBeginHost` installs no `try`, so a script
+        // that throws (or a `toString` that throws in `slot_to_value`), or a
+        // recoverable `fxAbort` (xsnap-platform.c's `fxExitToHost`), longjmps
+        // to a jump record whose C frame may already have returned, skipping
+        // `fxEndHost` and `c_source`'s drop; CI's build-xsnap comments record
+        // the resulting SIGSEGV, and the doc above ("Returns `None` if the
+        // evaluation throws") is not what happens. On the non-throwing path:
+        // `self.raw` is the live machine owned by this `Machine`, used on its
+        // own thread; `fxOverflow` reserves the frame plus one argument
+        // before the two pushes; the pops balance the pushes; `c_source`
+        // outlives `fxString`, which copies it.
         unsafe {
             let the = fxBeginHost(self.raw);
             if the.is_null() {
@@ -199,6 +244,11 @@ impl Machine {
     /// Look up or create an identifier (symbol) for the given name.
     pub fn id(&self, name: &str) -> i32 {
         let c_name = CString::new(name).unwrap();
+        // SAFETY: `self.raw` is the live machine this `Machine` owns;
+        // `c_name` is NUL-terminated and outlives `fxID`, which copies it into
+        // the key table. The one way out other than returning is key-table
+        // exhaustion, whose `fxAbort` longjmps to the outermost XS jump
+        // (`fxExitToHost`), past this frame, as described under `eval`.
         unsafe {
             let the = fxBeginHost(self.raw);
             let id = fxID(the, c_name.as_ptr());
@@ -223,6 +273,13 @@ impl Machine {
             }
         }
         let c_name = CString::new(name).unwrap();
+        // SAFETY: `self.raw` is the live machine this `Machine` owns. The
+        // sequence is xs.h's `xsDefine` expanded: `fxOverflow` reserves 8
+        // slots before the one push `fxNewHostFunction` makes and the one
+        // `fx_push` below; `fxDefineID` consumes the value and the explicit
+        // `stack.add(1)` pops the target, leaving the stack as found.
+        // `callback` is an `extern "C"` fn the caller promises honours the
+        // host-callback contract; it is also recorded for the snapshot table.
         unsafe {
             let the = fxBeginHost(self.raw);
             let id = fxID(the, c_name.as_ptr());
@@ -266,6 +323,12 @@ impl Machine {
     /// reads messages, dispatches them to JS, then processes all
     /// resulting async work before reading the next message.
     pub fn run_promise_jobs(&self) {
+        // SAFETY: UNVERIFIED — a promise job that exhausts the meter
+        // `fxAbort`s, which longjmps across this Rust frame when metering is
+        // on; `run_promise_jobs_metered` exists to keep that jump in C, and
+        // nothing stops a caller using this one on a metered machine.
+        // Otherwise `self.raw` is the live machine this `Machine` owns, and
+        // XS runs each job under its own `try`.
         unsafe { fxRunPromiseJobs(self.raw) }
     }
 
@@ -279,6 +342,8 @@ impl Machine {
     /// other threads cannot steal this machine's pending signal and
     /// leave its queue undrained.
     pub fn quiesce(&self) {
+        // SAFETY: as `run_promise_jobs` (UNVERIFIED on a metered machine);
+        // `fxMachineHasPendingJobs` only reads the machine's queue.
         unsafe {
             loop {
                 fxRunPromiseJobs(self.raw);
@@ -298,11 +363,16 @@ impl Machine {
     /// promises drain to completion, and programs with setTimeout run
     /// until all timers fire.
     pub fn run_loop(&self) {
+        // SAFETY: as `run_promise_jobs` (UNVERIFIED on a metered machine);
+        // `self.raw` is the live machine this `Machine` owns.
         unsafe { ffi::fxRunLoop(self.raw) }
     }
 
     /// Run garbage collection.
     pub fn collect_garbage(&self) {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns. Called
+        // through `&self` outside any host callback, no Rust code holds a
+        // pointer into the XS heap that a moving collection could invalidate.
         unsafe { fxCollectGarbage(self.raw) };
     }
 
@@ -318,6 +388,9 @@ impl Machine {
     /// Use [`set_crank_limit`] to set the per-crank hard limit that
     /// the default [`metering_callback`] checks against.
     pub fn begin_metering(&self, interval: u64) {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns;
+        // `metering_callback` matches the C callback type and is guarded
+        // against unwinding into C.
         unsafe {
             ffi::fxBeginMetering(self.raw, Some(metering_callback), interval);
         }
@@ -325,12 +398,16 @@ impl Machine {
 
     /// Disable metering and clear meter state.
     pub fn end_metering(&self) {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns; this
+        // reads or writes its meter fields and runs no JS.
         unsafe { ffi::fxEndMetering(self.raw) }
     }
 
     /// Read the current raw meterIndex.
     /// Computrons = value >> 16.
     pub fn current_meter(&self) -> u64 {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns; this
+        // reads or writes its meter fields and runs no JS.
         unsafe { ffi::fxGetCurrentMeter(self.raw) }
     }
 
@@ -342,6 +419,8 @@ impl Machine {
     /// Reset the meter to a given raw value (typically 0 at crank
     /// start).
     pub fn set_meter(&self, value: u64) {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns; this
+        // reads or writes its meter fields and runs no JS.
         unsafe { ffi::fxSetCurrentMeter(self.raw, value) }
     }
 
@@ -354,6 +433,9 @@ impl Machine {
     /// Returns `Ok(())` on normal completion, or `Err(status)` if
     /// XS aborted (e.g., `XS_TOO_MUCH_COMPUTATION_EXIT`).
     pub fn run_promise_jobs_metered(&self) -> Result<(), i32> {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns. The C
+        // wrapper runs the jobs inside `mxTry`, so a metering abort's longjmp
+        // ends in C and returns a status here instead of crossing this frame.
         let status = unsafe { ffi::fxRunPromiseJobsMetered(self.raw) };
         if status == 0 {
             Ok(())
@@ -392,6 +474,12 @@ impl Machine {
             slot_size: 0,
             slots: ptr::null_mut(),
         };
+        // SAFETY: `self.raw` is the live machine this `Machine` owns, which
+        // the caller keeps quiescent (no JS running). `snapshot` and the
+        // `MemWriteStream` stream it points at are locals that outlive the call, and
+        // nothing else touches the stream until it returns; `signature`
+        // (read-only, despite the `*mut` C field) and `callbacks` are live
+        // slices of the given lengths. XS calls `mem_write` only during this call.
         let ok = unsafe { ffi::fxWriteSnapshot(self.raw, &mut snapshot) };
         if ok == 1 {
             Ok(stream.data)
@@ -427,6 +515,12 @@ impl Machine {
             slot_size: 0,
             slots: ptr::null_mut(),
         };
+        // SAFETY: UNVERIFIED — `fxReadSnapshot` rebuilds the heap from the
+        // bytes it is given and is not hardened against a crafted snapshot;
+        // this safe fn accepts any bytes, so its soundness rests on them being
+        // a snapshot this host wrote (the daemon's own CAS). The call itself:
+        // `snapshot`, its `MemReadStream` stream, `signature`, `callbacks` and `c_name`
+        // are live for the call and only read through `mem_read`.
         let raw = unsafe { ffi::fxReadSnapshot(&mut snapshot, c_name.as_ptr(), ptr::null_mut()) };
         if raw.is_null() {
             Err(SnapshotError::Read(snapshot.error))
@@ -546,6 +640,10 @@ struct MemReadStream<'a> {
 // closed rather than unwinding past the C frame (design
 // `designs/ironhorse-panic.md` § Scope: "The already-live FFI abort hazard").
 unsafe extern "C" fn mem_write(stream: *mut c_void, ptr: *mut c_void, size: usize) -> c_int {
+    // SAFETY: XS passes back the `stream` pointer the snapshot record was
+    // given, which the calling `write_snapshot` set to a live, otherwise untouched
+    // `MemWriteStream`; `ptr` and `size` describe a buffer XS owns for the duration of
+    // this call (read here).
     worker_io::guard_ffi_ret(1, || unsafe {
         let s = &mut *(stream as *mut MemWriteStream);
         let bytes = std::slice::from_raw_parts(ptr as *const u8, size);
@@ -555,6 +653,10 @@ unsafe extern "C" fn mem_write(stream: *mut c_void, ptr: *mut c_void, size: usiz
 }
 
 unsafe extern "C" fn mem_read(stream: *mut c_void, ptr: *mut c_void, size: usize) -> c_int {
+    // SAFETY: XS passes back the `stream` pointer the snapshot record was
+    // given, which the calling `from_snapshot` set to a live, otherwise untouched
+    // `MemReadStream`; `ptr` and `size` describe a buffer XS owns for the duration of
+    // this call (written here only after the bounds check).
     worker_io::guard_ffi_ret(1, || unsafe {
         let s = &mut *(stream as *mut MemReadStream);
         // `checked_add`: a corrupted `size` from a bad snapshot must not wrap
@@ -594,6 +696,10 @@ struct FileReadStream {
 }
 
 unsafe extern "C" fn file_write(stream: *mut c_void, ptr: *mut c_void, size: usize) -> c_int {
+    // SAFETY: XS passes back the `stream` pointer the snapshot record was
+    // given, which the calling `write_snapshot_to_file` set to a live, otherwise untouched
+    // `FileWriteStream`; `ptr` and `size` describe a buffer XS owns for the duration of
+    // this call (read here).
     worker_io::guard_ffi_ret(1, || unsafe {
         let s = &mut *(stream as *mut FileWriteStream);
         if s.err.is_some() {
@@ -612,6 +718,10 @@ unsafe extern "C" fn file_write(stream: *mut c_void, ptr: *mut c_void, size: usi
 }
 
 unsafe extern "C" fn file_read(stream: *mut c_void, ptr: *mut c_void, size: usize) -> c_int {
+    // SAFETY: XS passes back the `stream` pointer the snapshot record was
+    // given, which the calling `from_snapshot_file` set to a live, otherwise untouched
+    // `FileReadStream`; `ptr` and `size` describe a buffer XS owns for the duration of
+    // this call (filled here).
     worker_io::guard_ffi_ret(1, || unsafe {
         use std::io::Read;
         let s = &mut *(stream as *mut FileReadStream);
@@ -662,6 +772,12 @@ impl Machine {
             slot_size: 0,
             slots: ptr::null_mut(),
         };
+        // SAFETY: `self.raw` is the live machine this `Machine` owns, which
+        // the caller keeps quiescent (no JS running). `snapshot` and the
+        // `FileWriteStream` stream it points at are locals that outlive the call, and
+        // nothing else touches the stream until it returns; `signature`
+        // (read-only, despite the `*mut` C field) and `callbacks` are live
+        // slices of the given lengths. XS calls `file_write` only during this call.
         let ok = unsafe { ffi::fxWriteSnapshot(self.raw, &mut snapshot) };
         if ok != 1 {
             return Err(SnapshotError::Write(snapshot.error));
@@ -701,6 +817,12 @@ impl Machine {
             slot_size: 0,
             slots: ptr::null_mut(),
         };
+        // SAFETY: UNVERIFIED — `fxReadSnapshot` rebuilds the heap from the
+        // bytes it is given and is not hardened against a crafted snapshot;
+        // this safe fn accepts any bytes, so its soundness rests on them being
+        // a snapshot this host wrote (the daemon's own CAS). The call itself:
+        // `snapshot`, its `FileReadStream` stream, `signature`, `callbacks` and `c_name`
+        // are live for the call and only read through `file_read`.
         let raw = unsafe { ffi::fxReadSnapshot(&mut snapshot, c_name.as_ptr(), ptr::null_mut()) };
         if raw.is_null() {
             Err(SnapshotError::Read(snapshot.error))
@@ -757,28 +879,37 @@ impl Machine {
 }
 
 /// Convert an XS slot to a Rust JsValue based on its type tag.
+///
+/// # Safety
+/// `the` must be a live machine inside a host entry and `slot` one of its
+/// slots whose type tag is `ty`.
 unsafe fn slot_to_value(the: *mut XsMachine, slot: *mut XsSlot, ty: i8) -> JsValue {
-    match ty {
-        XS_UNDEFINED_TYPE => JsValue::Undefined,
-        XS_NULL_TYPE => JsValue::Null,
-        XS_BOOLEAN_TYPE => JsValue::Boolean(fxToBoolean(the, slot) != 0),
-        XS_INTEGER_TYPE => JsValue::Integer(fxToInteger(the, slot)),
-        XS_NUMBER_TYPE => JsValue::Number(fxToNumber(the, slot)),
-        XS_STRING_TYPE | XS_STRING_X_TYPE => {
-            let s = fxToString(the, slot);
-            if s.is_null() {
-                JsValue::Undefined
-            } else {
-                JsValue::String(worker_io::xs_string_to_utf8(s))
+    // SAFETY: per the contract above; each string pointer is copied out by
+    // `xs_string_to_utf8` before XS runs again. Coercing a reference calls
+    // its `toString`, which can throw (see the UNVERIFIED note in `eval`).
+    unsafe {
+        match ty {
+            XS_UNDEFINED_TYPE => JsValue::Undefined,
+            XS_NULL_TYPE => JsValue::Null,
+            XS_BOOLEAN_TYPE => JsValue::Boolean(fxToBoolean(the, slot) != 0),
+            XS_INTEGER_TYPE => JsValue::Integer(fxToInteger(the, slot)),
+            XS_NUMBER_TYPE => JsValue::Number(fxToNumber(the, slot)),
+            XS_STRING_TYPE | XS_STRING_X_TYPE => {
+                let s = fxToString(the, slot);
+                if s.is_null() {
+                    JsValue::Undefined
+                } else {
+                    JsValue::String(worker_io::xs_string_to_utf8(s))
+                }
             }
-        }
-        // For references and other types, coerce to string
-        _ => {
-            let s = fxToString(the, slot);
-            if s.is_null() {
-                JsValue::Undefined
-            } else {
-                JsValue::String(worker_io::xs_string_to_utf8(s))
+            // For references and other types, coerce to string
+            _ => {
+                let s = fxToString(the, slot);
+                if s.is_null() {
+                    JsValue::Undefined
+                } else {
+                    JsValue::String(worker_io::xs_string_to_utf8(s))
+                }
             }
         }
     }
@@ -791,6 +922,12 @@ impl Machine {
     /// Registers filesystem, crypto, and module loading host functions.
     pub fn register_powers(&self, powers: *mut powers::HostPowers) {
         self.set_context(powers);
+        // SAFETY: the `register` fns only call `define_function` on this
+        // live machine. UNVERIFIED as an API: this safe fn takes a raw
+        // pointer that every powers callback later dereferences as a live
+        // `HostPowers` (`get_powers`), with nothing tying its lifetime to the
+        // machine's; the "must outlive the Machine" rule above is enforced
+        // only by callers.
         unsafe {
             powers::fs::register(self);
             powers::crypto::register(self);
@@ -805,6 +942,9 @@ impl Machine {
     /// Call this after `worker_io::install_transport()` has been
     /// called on the active thread.
     pub fn register_worker_io(&self) {
+        // SAFETY: `worker_io::register` only calls `define_function` on this
+        // live machine; its callbacks fail closed (a caught panic) if no
+        // transport is installed on the thread.
         unsafe {
             worker_io::register(self);
         }
@@ -821,6 +961,8 @@ impl Machine {
     /// When `mxDebug` is not enabled (default build), this is a
     /// no-op.
     pub fn run_debugger(&self) {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns, on its
+        // own thread; without `mxDebug` the C function is empty.
         unsafe { ffi::fxRunDebugger(self.raw) };
     }
 
@@ -837,6 +979,11 @@ impl Machine {
 impl Drop for Machine {
     fn drop(&mut self) {
         if !self.raw.is_null() {
+            // SAFETY: a `Machine` that is dropped owns `raw` (the borrowed
+            // views the host callbacks build are `ManuallyDrop`), so this is
+            // the one delete; `raw` is nulled straight after. No host object
+            // destructors read the context pointer, so it does not matter that
+            // `run_xs_program` frees the `HostPowers` first.
             unsafe { fxDeleteMachine(self.raw) };
             self.raw = ptr::null_mut();
         }
@@ -1935,6 +2082,8 @@ pub fn run_xs_program(
                             break;
                         }
                     }
+                    // SAFETY: `machine` is the live machine this thread owns;
+                    // the call only reads its job queue.
                     if unsafe { ffi::fxMachineHasPendingJobs(machine.raw) } == 0 {
                         break;
                     }
@@ -2024,6 +2173,7 @@ pub fn run_xs_program(
                 // No envelopes and no ready promise jobs. Check if
                 // any new jobs were queued during envelope handling
                 // (e.g., by sendRawFrame callbacks).
+                // SAFETY: as above, a read of the live machine's job queue.
                 if unsafe { ffi::fxMachineHasPendingJobs(machine.raw) } != 0 {
                     continue;
                 }
@@ -2087,6 +2237,10 @@ pub fn run_xs_program(
         ffi_death = worker_io::take_ffi_panic();
     }
 
+    // SAFETY: `powers_ptr` came from `Box::into_raw` in
+    // `register_host_powers` and is freed only here. The machine's context
+    // still points at it, but `machine` is dropped on the next line with no
+    // JS run in between, and its teardown reads no context.
     unsafe { drop(Box::from_raw(powers_ptr)) };
     drop(machine);
 
@@ -2109,7 +2263,9 @@ pub fn run_xs_program(
 ///
 /// Must only be called once per process (acquires fds 3/4).
 pub unsafe fn run_xs_worker() -> Result<(), XsnapError> {
-    let t = worker_io::PipeTransport::from_fds()
+    // SAFETY: the caller guarantees fds 3/4 are this process's worker pipes
+    // and that this runs once, which is `from_fds`'s contract.
+    let t = unsafe { worker_io::PipeTransport::from_fds() }
         .map_err(|e| XsnapError::Io(format!("failed to open worker pipes: {e}")))?;
     run_xs_program(
         XsProgram::Bundle(WORKER_BOOTSTRAP),
@@ -2462,8 +2618,12 @@ mod tests {
         let machine = new_machine();
 
         unsafe extern "C" fn return_42(the: *mut XsMachine) {
-            fxInteger(the, &mut (*the).scratch, 42);
-            *(*the).frame.add(1) = (*the).scratch;
+            // SAFETY: test host callback; XS calls it under the host-callback
+            // contract (`worker_io`), and it only writes `xsResult`.
+            unsafe {
+                fxInteger(the, &mut (*the).scratch, 42);
+                *(*the).frame.add(1) = (*the).scratch;
+            }
         }
 
         machine.define_function("hostReturn42", return_42, 0);
@@ -2480,12 +2640,16 @@ mod tests {
 
         // Host function that adds two numbers
         unsafe extern "C" fn add(the: *mut XsMachine) {
-            // mxArgv(0) = frame - 1, mxArgv(1) = frame - 2
-            let a = fxToInteger(the, (*the).frame.sub(1));
-            let b = fxToInteger(the, (*the).frame.sub(2));
-            fxInteger(the, &mut (*the).scratch, a + b);
-            // xsResult = the->frame[1]
-            *(*the).frame.add(1) = (*the).scratch;
+            // SAFETY: test host callback under the host-callback contract;
+            // the script always passes the two arguments read here.
+            unsafe {
+                // mxArgv(0) = frame - 1, mxArgv(1) = frame - 2
+                let a = fxToInteger(the, (*the).frame.sub(1));
+                let b = fxToInteger(the, (*the).frame.sub(2));
+                fxInteger(the, &mut (*the).scratch, a + b);
+                // xsResult = the->frame[1]
+                *(*the).frame.add(1) = (*the).scratch;
+            }
         }
 
         machine.define_function("hostAdd", add, 2);
@@ -2502,10 +2666,15 @@ mod tests {
 
         // Host function that returns the length of a string
         unsafe extern "C" fn strlen(the: *mut XsMachine) {
-            let s = fxToString(the, (*the).frame.sub(1));
-            let len = std::ffi::CStr::from_ptr(s).to_bytes().len() as i32;
-            fxInteger(the, &mut (*the).scratch, len);
-            *(*the).frame.add(1) = (*the).scratch;
+            // SAFETY: test host callback under the host-callback contract;
+            // the script passes the one argument read, and the string is
+            // measured before the next XS call.
+            unsafe {
+                let s = fxToString(the, (*the).frame.sub(1));
+                let len = std::ffi::CStr::from_ptr(s).to_bytes().len() as i32;
+                fxInteger(the, &mut (*the).scratch, len);
+                *(*the).frame.add(1) = (*the).scratch;
+            }
         }
 
         machine.define_function("hostStrlen", strlen, 1);
@@ -4721,8 +4890,12 @@ mod tests {
         let machine = new_machine();
 
         unsafe extern "C" fn return_99(the: *mut XsMachine) {
-            fxInteger(the, &mut (*the).scratch, 99);
-            *(*the).frame.add(1) = (*the).scratch;
+            // SAFETY: test host callback; XS calls it under the host-callback
+            // contract (`worker_io`), and it only writes `xsResult`.
+            unsafe {
+                fxInteger(the, &mut (*the).scratch, 99);
+                *(*the).frame.add(1) = (*the).scratch;
+            }
         }
 
         machine.define_function("hostReturn99", return_99, 0);
@@ -4783,8 +4956,12 @@ mod tests {
         let machine = new_machine();
 
         unsafe extern "C" fn return_7(the: *mut XsMachine) {
-            fxInteger(the, &mut (*the).scratch, 7);
-            *(*the).frame.add(1) = (*the).scratch;
+            // SAFETY: test host callback; XS calls it under the host-callback
+            // contract (`worker_io`), and it only writes `xsResult`.
+            unsafe {
+                fxInteger(the, &mut (*the).scratch, 7);
+                *(*the).frame.add(1) = (*the).scratch;
+            }
         }
 
         machine.define_function("hostSeven", return_7, 0);
@@ -4883,8 +5060,12 @@ mod tests {
         let machine = new_machine();
 
         unsafe extern "C" fn return_11(the: *mut XsMachine) {
-            fxInteger(the, &mut (*the).scratch, 11);
-            *(*the).frame.add(1) = (*the).scratch;
+            // SAFETY: test host callback; XS calls it under the host-callback
+            // contract (`worker_io`), and it only writes `xsResult`.
+            unsafe {
+                fxInteger(the, &mut (*the).scratch, 11);
+                *(*the).frame.add(1) = (*the).scratch;
+            }
         }
 
         machine.define_function("hostEleven", return_11, 0);
@@ -5188,6 +5369,9 @@ mod tests {
             pos: usize::MAX,
         };
         let mut dst = [0u8; 1];
+        // SAFETY: `stream` points at the live `MemReadStream` `s` and `dst`
+        // is a writable one-byte buffer, which is `mem_read`'s contract with
+        // a `size` of 1.
         let rc = unsafe {
             mem_read(
                 &mut s as *mut _ as *mut c_void,

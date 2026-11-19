@@ -296,31 +296,48 @@ pub const XS_NATIVE_STACK_OVERFLOW_EXIT: c_int = 9;
 /// Equivalent to the C macro: `xsGlobal` = `the->stackTop[-1]`
 ///
 /// # Safety
-/// Caller must ensure `the` is valid.
+/// Caller must ensure `the` is a live machine whose stack the caller may
+/// read (inside `fxBeginHost`/`fxEndHost`, or a host callback).
 #[inline]
 pub unsafe fn xs_global(the: *mut XsMachine) -> XsSlot {
-    *(*the).stack_top.offset(-1)
+    // SAFETY: per the caller's contract `the` is live; XS keeps the global
+    // object in the slot just below `stack_top` for the machine's lifetime
+    // (`xsGlobal` in xs.h is this same read).
+    unsafe { *(*the).stack_top.offset(-1) }
 }
 
 /// Push a slot onto the XS stack.
 /// Equivalent to the C macro: `fxPush(_SLOT)` = `*(--the->stack) = _SLOT`
 ///
 /// # Safety
-/// Caller must ensure `the` is valid and stack has room.
+/// Caller must ensure `the` is a live machine and that the stack has room
+/// for one more slot, which in XS terms means a preceding `fxOverflow` (the
+/// C API's `xsOverflow`) for at least this push.
 #[inline]
 pub unsafe fn fx_push(the: *mut XsMachine, slot: XsSlot) {
-    (*the).stack = (*the).stack.offset(-1);
-    *(*the).stack = slot;
+    // SAFETY: the caller guarantees a live machine and a free slot below
+    // `stack`, so the decremented pointer stays inside the stack allocation
+    // and the write lands in it.
+    unsafe {
+        (*the).stack = (*the).stack.offset(-1);
+        *(*the).stack = slot;
+    }
 }
 
 /// Pop a slot from the XS stack.
 /// Equivalent to the C macro: `fxPop()` = `*(the->stack++)`
 ///
 /// # Safety
-/// Caller must ensure `the` is valid and stack is not empty.
+/// Caller must ensure `the` is a live machine and that the top slot is one
+/// the caller pushed (or otherwise owns), so popping it does not unbalance
+/// a frame XS is using.
 #[inline]
 pub unsafe fn fx_pop(the: *mut XsMachine) -> XsSlot {
-    let slot = *(*the).stack;
-    (*the).stack = (*the).stack.offset(1);
-    slot
+    // SAFETY: per the caller's contract the top slot is in bounds and the
+    // caller's to remove.
+    unsafe {
+        let slot = *(*the).stack;
+        (*the).stack = (*the).stack.offset(1);
+        slot
+    }
 }
