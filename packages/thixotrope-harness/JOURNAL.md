@@ -15012,3 +15012,59 @@ Reading: no command over 60 s (the longest, a 25 s measurement window). Commits 
 and this journal commit; nothing pushed; no change to `packages/thixotrope`, `rust/**` or a
 shared file.
 Fit: neutral.
+
+### J-1030 2026-11-19 W8.1 session compaction built - built
+Evidence: `334d31ae56`, `d329e76af3`; `guest/session/compaction.js`; seams S-5 (`turn.js`), S-6
+(`session.js`), S-7 (`runtime-parts.js` slot lines), S-8 (`turn-import.js`), S-9 (`archive.js`).
+Reading: the `compaction` part decides in `beforeRound` (rules 1-6 of m8-interfaces 4.1),
+appends `compaction-started`, writes `active.compactionAsk` and emits `compacting context`; the
+runner puts the ask into the round request, carries `window.baseFields()` in every `base`, and
+answers `TurnSink.compacted` (crank Y) with the cache's next `{ base, append }` through one
+`sendSince` shared with `roundRequest` (no copy). The part checks the boundary (D-M8-4) and
+records `compaction` (with the turn input as directive when the cut lies inside the turn) or
+`compaction-skipped`. The context window is made in `makeSession` over the record log and
+reaches the runtime (`contextWindow`), the archive (`epoch`), the context source (`boundary`) and
+the import (`observe`). Tests: `context-guards`, `compaction-decision`, `compaction-sink`,
+`compaction-import` (21 tests); the session suites (570 tests over m1a, m1b, m2, m5, turn,
+session, runtime-parts, guards-split) pass unchanged except the two pinned part lists.
+Fit: good. A part writing the ask field of the runner's mutable turn record and the runner
+reading it when it builds the request is enough for D-M8-1: the summary round needs no part-API
+change and no extra crank (crank X sends the ask inside `startRound`; crank Y is the only new
+session delivery).
+
+### J-1031 2026-11-19 W8.1 session program bytes - measured
+Evidence: `node scripts/bundle-guest.mjs` at `6493d955c7` and at `d329e76af3`.
+Reading: session program 233,126 -> 239,354 bytes (+6,228 of M8's 7,000; 776 left for W8.4).
+Per module, comments stripped: `compaction.js` 4,171 (new; the window about 950, the part about
+3,200), `turn.js` +1,375 (crank Y about 600, the `reading` getter about 200, `sendSince`/`baseOf`
+about 150 net, the rest one-line seams), `session.js` +294, `runtime-parts.js` +151,
+`turn-import.js` +59, `archive.js` +27. A first version was 6,602; hoisting the part's functions
+out of the nested `make` (two spaces of indentation per line), inlining `countsOnly` and moving
+the stale-ask clear into the runner saved 374 (later type casts in comments added back 104 line breaks and bytes). The contract's estimate (about 3,800 for W8.1)
+was low: the part's state machine is about 3 KB of plain code after stripping.
+Fit: poor for the budget, neutral otherwise: whitespace and newlines left by stripped comments
+count (about 980 bytes of indentation and 100 of comment line breaks in `compaction.js`).
+
+### J-1032 2026-11-19 W8.1 differences from the contract - finding
+Evidence: `334d31ae56`; `test/unit/m1a-recovery.test.js` "the recovery steps are the exec and
+packages parts, in that order".
+Reading: (1) the part has no `onRecover` (4.6 lists one): recovery settles the turn, so
+`onSettle` clears the state, and the existing recovery-step test pins `['exec', 'packages']`;
+state left by a recovery that settles nothing belongs to a turn no longer current and is dropped
+by the turn-id check. (2) `ContextWindow` gains `seenAt()` (the runner's `lastKnownTime`, wired
+lazily in `makeSession`) because the part needs `CompactionStarted.at` at round r > 0 and may hold
+neither the runner nor the record log. (3) The runner clears `active.compactionAsk` in `invoke`
+before `beforeRound`: an ask is for one round; an ask the adapter left unanswered (an adapter
+without W8.3 streams the round) ends the turn's asks instead of riding on every later request.
+(4) `makeTurnRunner` and `makeTurnImport` take `window` as an option with a default (a window over
+the runner's records; none for the import), so tests that make them alone are unchanged.
+(5) `runtime-parts.test.js`'s WX.1 test listed `compaction` among the parts without a getter;
+the commit that registers the part removes it from that list.
+Fit: neutral.
+
+### J-1033 2026-11-19 W8.1 time record - process
+Evidence: first command 2026-11-19T02:23:29Z.
+Reading: no command over 60 s (the longest, the 570-test session run, about 6 s). No
+integration file, no supervisor, no perf run (W8.1 has no perf row). Commits `334d31ae56`,
+`d329e76af3` and this journal commit; nothing pushed.
+Fit: neutral.
