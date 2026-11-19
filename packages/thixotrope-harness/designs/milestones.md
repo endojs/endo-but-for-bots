@@ -1476,7 +1476,7 @@ drops most of Endo's name plumbing.
 
 ## The group {M6, M8, M9, M11}: shared units, owner questions, core requests
 
-**Integrated locally (2026-11-19, J-1440..J-1448).** The first-parent merges are M11, M6, M8
+**Integrated locally (2026-11-19, J-1440..J-1449).** The first-parent merges are M11, M6, M8
 and M9. All four cross-lane tests passed on the combined daemon. Session and native manager
 sizes met their whole-program limits. The individual outcomes and journal retain the missed
 performance gates, per-lane growth overage and remaining verification. The four contracts are the reference:
@@ -1945,8 +1945,9 @@ at `1881601aab`, load 1.9-3.2, 690.9 s held, 786 s of wall for the files; J-1226
 **Status: integrated with open performance gates.** The five daemon regression files passed
 12 tests across the recorded runs (J-12544). The combined branch also passed the stopped-mail
 and child-environment cases. The exclusive mail pass met the inbox and hub-growth limits
-and missed both delivery latency targets and throughput (J-1448). The ten mail, request
-and subagent tools are registered. The
+and missed both delivery latency targets and throughput (J-1448). All three eight-child
+bursts and subtree stops passed. Ask overhead was 715 ms against 300 ms (J-1449).
+The ten mail, request and subagent tools are registered. The
 like-for-like M9 byte growth exceeded its lane allocation (J-12541). The session and factory
 guard tables now own the corresponding mail interfaces; the limits are in `guest/lib/limits.js`.
 The contract is `m9-interfaces.md` (seams 6, work units 7, acceptance 8, restart files 9,

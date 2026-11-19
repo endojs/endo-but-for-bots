@@ -17535,3 +17535,13 @@ the hub used 0.925 times its initial bytes against a maximum of 1.25.
 The five-file daemon regression and two cross-lane mail integration tests remain
 green in J-12544, J-1444 and J-1445. The exclusive storage result supersedes
 the short shared-slot growth observation in J-12542.
+
+### J-1449 2026-11-19 WX.F exclusive subagent pass
+
+The model exercised all four subagent workloads at `9c1a0cc702`. Median spawn was
+1,681 ms over nine samples, within the benchmark's 25% tolerance of 1,500 ms.
+Median ask overhead was 715 ms over 53 samples against 300 ms, giving the file
+exit 1. Eight-child bursts completed in 18.54, 18.42 and 19.57 seconds against a
+30 s maximum. All three subtree stops removed the expected three sessions, in
+2.01, 1.88 and 2.02 seconds. The measured bursts and cleanup are faster than the
+shared smoke in J-12545. The budget for ask remains open.
