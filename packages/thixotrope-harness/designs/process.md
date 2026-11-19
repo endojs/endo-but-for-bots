@@ -137,7 +137,19 @@ M6 uses `corepack yarn test:integration --list environments` for the preset, she
 stop/export and browser settings files. In a deep checkout, set `THIX_HARNESS_TMP` to a short,
 private directory dedicated to this checkout so its Unix socket paths fit the host limit.
 
-Last run: the step 3 close-out (T3-CLOSE, J-10251), 2026-11-19 00:09-00:37 UTC, at
+Four-milestone group fold, 2026-11-19. All four cross-lane files passed on the combined
+daemon, using two runner invocations (J-1445, J-1446). The three-file invocation took
+1,752.0 s elapsed and the separate image run took 1,289.4 s. The final local checkout
+passed the 1,997 unit and adapter tests, with 167 skipped and three TODOs.
+
+| owner list | cross-lane file | slot held (s) | waited (s) |
+|---|---|---:|---:|
+| voice | `voice-preset.test.js` | 281.3 | 827.5 |
+| context | `view-image-workspace.test.js` | 98.0 | 1,191.4 |
+| mail | `subagents-environment.test.js` | 117.5 | 246.6 |
+| mail | `mail-stopped-session.test.js` | 107.9 | 1,643.7 |
+
+Earlier full-list baseline: the step 3 close-out (T3-CLOSE, J-10251), 2026-11-19 00:09-00:37 UTC, at
 `804398c4d9` (lane `endo-thix-clean`, after the review's step 3, documents edited), 6 jobs in
 shared slots, load 2.0-4.3, with the long-session template chain (section 3.2) holding one slot
 beside it. **Core list: 25 files, 4,344 s held, 922 s wall (989 s with the unit lane, 16.5 min);
