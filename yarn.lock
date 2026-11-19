@@ -3706,6 +3706,7 @@ __metadata:
     "@endo/captp": "workspace:^"
     "@endo/compartment-mapper": "workspace:^"
     "@endo/far": "workspace:^"
+    "@endo/git": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/marshal": "workspace:^"

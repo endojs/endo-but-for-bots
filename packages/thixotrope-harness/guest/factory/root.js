@@ -143,12 +143,15 @@ const programInfo = program =>
  * @param {{ pool?: () => Record<string, number> }} [powers]
  */
 export const makeHarnessSettings = ({ pool } = {}) => {
-  /** @type {{ backends: any[], defaultBackend: any, defaultModelId: string | undefined, turnDeadlineMs: number }} */
+  /** @type {{ backends: any[], defaultBackend: any, defaultModelId: string | undefined, turnDeadlineMs: number, environments: any }} */
   const current = {
     backends: [],
     defaultBackend: undefined,
     defaultModelId: undefined,
     turnDeadlineMs: 0,
+    // The attached EnvironmentsAdmin (m6-interfaces.md 3.9, F-5): once
+    // set, presets with a workspace or shell become available.
+    environments: undefined,
   };
   return harden({
     /** @param {any} changes `shapes.HarnessSettings` */
@@ -162,11 +165,15 @@ export const makeHarnessSettings = ({ pool } = {}) => {
         current.defaultModelId = changes.defaultModelId;
       if (changes.turnDeadlineMs !== undefined)
         current.turnDeadlineMs = changes.turnDeadlineMs;
+      if (changes.environments !== undefined)
+        current.environments = changes.environments;
     },
     backends: () => harden([...current.backends]),
     defaultBackend: () => current.defaultBackend,
     defaultModelId: () => current.defaultModelId,
     turnDeadlineMs: () => current.turnDeadlineMs,
+    /** The attached EnvironmentsAdmin, or undefined. */
+    environments: () => current.environments,
     /** Every setting as one `shapes.HarnessSettings`. */
     current: () => {
       /** @type {Record<string, any>} */
@@ -176,6 +183,8 @@ export const makeHarnessSettings = ({ pool } = {}) => {
       if (current.defaultModelId !== undefined)
         all.defaultModelId = current.defaultModelId;
       all.turnDeadlineMs = current.turnDeadlineMs;
+      if (current.environments !== undefined)
+        all.environments = current.environments;
       return harden(all);
     },
   });

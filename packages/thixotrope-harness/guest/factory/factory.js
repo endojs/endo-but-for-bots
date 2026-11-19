@@ -43,7 +43,12 @@ import { defaultTemplates } from './preset-templates.js';
 import { makeDeletions } from './delete.js';
 import { makeFactoryExport } from './export.js';
 import { makeExecHandle } from './pool.js';
-import { buildSessionServices } from './services.js';
+import {
+  buildSessionServices,
+  serviceBinders,
+  serviceReleasers,
+} from './services.js';
+import { releaseEnvironment } from './environments.js';
 import { resolveCreateOptions } from './session-options.js';
 import { makeVoice } from './voice.js';
 
@@ -130,14 +135,37 @@ export const makeFactoryKit = ({
   let latestAt = 0;
   const knownTime = lastKnownTime ?? (() => latestAt);
   // M5 W5.1 (seam H-1): the preset catalogue and the operator inventory.
-  const catalog = makePresetCatalog({ templates: defaultTemplates });
+  const catalog = makePresetCatalog({
+    templates: defaultTemplates,
+    defaultsContext: harden({ settings: harnessSettings }),
+  });
   const chatOnly = catalog.builtIn(CHAT_ONLY);
   const inventory = makeInventory();
 
   /** @type {Set<Creation>} creations not yet finished or rolled back */
   const creations = new Set();
   // M2 W2.7 (m2-interfaces.md 7.1): delete records, completed after restarts.
-  const deletions = makeDeletions({ admin, rows, starts });
+  // Delete hooks run before step 1's fence: the subagents' own first when
+  // they exist, then the environment's release (D-M6-16).
+  const deletions = makeDeletions({
+    admin,
+    rows,
+    starts,
+    hooks: harden([
+      ({ session }) =>
+        releaseEnvironment({ session, settings: harnessSettings }),
+    ]),
+  });
+
+  /**
+   * The releasers of a rolled-back creation's services (sendOnly).
+   * @param {Record<string, any>} services
+   */
+  const releaseServices = services => {
+    for (const release of serviceReleasers) {
+      release({ services, settings: harnessSettings });
+    }
+  };
 
   /** @param {Creation} creation */
   const ensureLive = creation => {
@@ -153,6 +181,7 @@ export const makeFactoryKit = ({
     creation.abandoned = true;
     creations.delete(creation);
     rows.drop(creation.row);
+    if (creation.services !== undefined) releaseServices(creation.services);
     if (creation.facade !== undefined) {
       await E(creation.facade)
         .retire()
@@ -293,7 +322,10 @@ export const makeFactoryKit = ({
           pool === undefined || settings === undefined
             ? undefined
             : () => makeExecHandle({ pool, settings }),
+        settings: harnessSettings,
       });
+      // Rolled back while the services were built: release them here.
+      if (creation.abandoned) releaseServices(services);
       ensureLive(creation);
       creation.services = services;
       /** @type {Record<string, any>} */
@@ -348,6 +380,9 @@ export const makeFactoryKit = ({
       }
       mustMatch(made, shapes.MadeSession);
       ensureLive(creation);
+      for (const bind of serviceBinders) {
+        bind({ services, session: made.session, settings: harnessSettings });
+      }
       creation.made = /** @type {{ session: any, internal: any }} */ (made);
       await finish(creation);
       ensureLive(creation);

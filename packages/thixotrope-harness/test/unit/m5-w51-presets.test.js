@@ -60,10 +60,11 @@ test('built-ins: listed with chat-only first, availability by template objects',
     views.map(v => [v.label, v.available, v.unavailableReason]),
     [
       ['chat-only', true, undefined],
-      ['development', false, textOf.presetNeeds('git-workspace')],
+      // No environments admin attached (guest/factory/environments.js).
+      ['development', false, texts.runnerRequired],
       ['general', true, undefined],
-      ['new-project', false, textOf.presetNeeds('git-workspace')],
-      ['voice', false, textOf.presetNeeds('git-workspace')],
+      ['new-project', false, texts.runnerRequired],
+      ['voice', false, texts.runnerRequired],
     ],
   );
   for (const view of views) t.true(matches(view, shapes.PresetView));
@@ -466,7 +467,7 @@ test('withDefaults: amplification refuses foreign, deleted and unavailable prese
   );
   t.throws(
     () => kit.withDefaults(harden({ preset: kit.builtIn('development') })),
-    { message: textOf.presetNeeds('git-workspace') },
+    { message: texts.runnerRequired },
   );
   t.is(kit.withDefaults(harden({})).preset, kit.builtIn('chat-only'));
 

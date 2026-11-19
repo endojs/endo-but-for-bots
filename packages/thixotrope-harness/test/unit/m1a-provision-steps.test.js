@@ -111,9 +111,9 @@ test('the provisioning steps install, load the program, and re-run as a no-op', 
       // M5's registered step (scripts/provision-steps/50-m5-fixtures.js),
       // a no-op without options.m5Fixtures.
       ['m5 fixtures', true],
-      // Reserved (WX.1), each line added with its file and skipped without
-      // its option: 60-environments.js (options.environments), then
-      // 70-voice.js.
+      ['install-native environments', true],
+      ['configure environments', true],
+      ['attach environments', true],
       ['voice', true],
     ],
   );
@@ -199,6 +199,9 @@ test('the steps table is the M1a list, then M1b W1b.5 appends', async t => {
       'gateway',
       'subscriptions',
       'm5 fixtures',
+      'install-native environments',
+      'configure environments',
+      'attach environments',
       'voice',
     ],
   );

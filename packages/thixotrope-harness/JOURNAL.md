@@ -15421,4 +15421,575 @@ Evidence: first command 2026-11-19T02:39:37Z.
 Reading: no command over 60 s (the longest, the UI unit lane, 1.7 s; `lint:types` 2.7 s). Commits
 `541034968f`, `ccb6ce177b`, `ae18dd5922`, `6433ad7140` and this journal commit; nothing pushed;
 no change to `packages/thixotrope`, `rust/**` or a guest file; no integration or browser run.
+### J-12060 2026-11-19 W6.5 factory wiring and prompt - built
+Evidence: `6fe72ae125`, `6eb43b9ced`; `test/unit/factory-environments.test.js` (9),
+`test/unit/environment-prompt.test.js` (6).
+Reading: `guest/factory/environments.js` holds the five entries of contract 3.9:
+`environmentProviders` (both kinds answer `runnerRequired` until `HarnessSettings.environments()`
+is set; F-1, `ObjectProvider.build` gone from the typedef), `environmentServices` (one answered
+`provide({ workspace, shell })` when the snapshot selects either kind, appended to
+`serviceBuilders`), `environmentBinder` / `environmentReleaser` (sendOnly, the new append-only
+tables `serviceBinders` / `serviceReleasers`, F-2) and `releaseEnvironment` (the delete hook,
+handed to `makeDeletions` by the factory kit, F-4). `factory.js` (F-3): the catalogue's
+`defaultsContext` is `{ settings }`, the services context carries `settings`, binders run in the
+crank `make` answered (after `mustMatch`), releasers in `rollBack` when services were built and
+also when the creation was rolled back while its services were being built (the start listener's
+rollback during `provide`: otherwise that record would leak). `root.js` (F-5) keeps, answers and
+reports `environments`. Part 6 (P-1) is `guest/lib/environment-prompt.js`: Fae's workspace section
+without `worktree()` and publishing; the shell variant names `/workspace`, `runCommand`,
+`inspectShell` and the `shell` petname; a workspace alone gets a read-only variant.
+Fit: good.
+
+### J-12061 2026-11-19 W6.5 bundles - measured
+Evidence: `node scripts/bundle-guest.mjs session factory` at `6eb43b9ced` (working tree with other
+units' uncommitted session edits).
+Reading: the session program does not bundle `factory/environments.js` or
+`lib/environment-prompt.js` (the prompt is composed in the factory vat, `session/prompt.js` is a
+factory module): W6.5 adds 0 bytes of M6's 6,400 (base 233,126). Factory program 192,892 ->
+202,712 (+9,820, comments included; no factory program cap exists). No new message or crank on a
+creation without an environment object: `environmentServices` answers `{}` before any send, the
+binder and releaser return before any send without `services.environment`; one answered manager
+call per delete while an admin is attached (`releaseSession`, also for sessions without an
+environment).
+Fit: neutral.
+
+### J-12062 2026-11-19 W6.5 fit - finding
+Reading: the factory keeps no per-environment state: availability, provide, bind and release all
+read one heap object (the settings record) at call time, so attaching the admin needs no factory
+reinstall and a restart re-binds nothing (orthogonal persistence keeps the settings and the
+creation records; a creation rolled back by the start listener releases from the record's
+`services`). What does not suit: the delete hook cannot tell a session with an environment from
+one without (rows keep no services), so every delete pays one manager round trip once an admin is
+attached; and a `new-project` session (workspace, no shell) cannot write files, because the `Git`
+facet has no `worktree()` (O-7) - the prompt says so rather than promising Fae's mount.
+Fit: awkward.
+
+### J-12063 2026-11-19 W6.5 time record - process
+Evidence: first command 2026-11-19T02:23:30Z.
+Reading: no command over 60 s (the longest, the related unit tests, 4 s; tsc 7 s). Commits
+`6fe72ae125`, `6eb43b9ced` and this journal commit; nothing pushed; no change to
+`packages/thixotrope` or `rust/**`.
+Fit: neutral.
+
+### J-12000 2026-11-19 W6.3b fake runtime and runner - built
+Evidence: `resources/environments/impl/runtime-fake.js`, `resources/environments/impl/runner.js`,
+`test/adapter/environments-fake-runtime.test.js` (10 tests), `test/adapter/environments-runner.test.js`
+(12 tests), commits `5499dd9974`, `3bffeb6bd5`; 22 tests pass, three runs in a row, about 3 s a run.
+Reading: the fake runtime (contract 5.3) spawns each command as a host child in its own process
+group (`detached`), in the workspace directory, stdin closed, with exactly A.3's six variables
+(`HOME` the session's home, `CARGO_HOME`, `RUSTUP_HOME`, `CARGO_TARGET_DIR`, `PATH` the home's
+`.cargo/bin` then `/usr/local/bin:/usr/bin:/bin`, `LANG=C.UTF-8`); keeps the first `streamBytes` of
+each stream and drains the rest; on `timeoutMs` SIGTERM to the group, SIGKILL `killGraceMs` later;
+answers `RawResult` 200 ms after the leader exits even when a background process still holds the
+pipes (R3-46: it dies at the next stop). Each live group is one file `run/<pgid>`, written
+synchronously after the spawn and removed once the group has no live member, so `run/` holds live
+groups only; `stop`/`remove` SIGKILL every recorded and held group and wait (at most 2 s) until
+they are gone; `sweep(tag, { runDirs })` does the same for the records an earlier incarnation left,
+and removes without a signal a record older than the host's boot (its number may be anyone's now).
+Spawn failures reject with `runtimeFailed('<program>: <code>')`, never a host path. The runner
+(5.2) checks the allowlist (exact names) and the timeout (exo-shell's rule) before anything runs;
+starts a key lazily (owed stop, `layout.ensureWorkspace`, home 0700, `runtime.start`, shared by
+concurrent first commands); passes the 2 s grace and the 64 KiB cap from `environmentLimits`;
+schedules the idle stop on the adapter timers' `after` when a key's last command ends (cancelled by
+the next command); `stop` kills and stops and forgets the key; a failed stop leaves the key owed and
+the stop is retried before the key runs again (D-16; no quarantine); `release` is stop then
+`runtime.remove`; `sweep` lists `sessions/e<n>` and hands the run directories to the runtime.
+Retained state: one entry per started key and the owed keys, both bounded by `maxEnvironments`.
+Fit: good.
+
+### J-12001 2026-11-19 W6.3b fake runtime rates - measured
+Evidence: a scratch probe through `perf/_window.mjs` `runWindow` and `perf/_harness.mjs` `stats`,
+`node scripts/run-lock.mjs --shared`, three 10 s windows, at `6eb43b9ced` (dirty tree: other units'
+files), load 8.8-9.3.
+Reading: `runner.exec(['true'])` on a started key median 1.56 ms, p95 4.77 ms (n 5,203);
+a key's first command plus its stop (start, spawn, record, kill probe) median 1.92 ms, p95 5.65 ms
+(n 3,916); a command writing 10 MiB to stdout, drained with 64 KiB kept, median 29.0 ms, p95
+39.8 ms (n 325) - against 329 ms for J-0811's drain that kept everything. The runtime's own cost is
+two orders under `environments.runTrue`'s 150 ms budget, which is the vat and hub path's.
+Kill grace measured in the test: a script ignoring SIGTERM with `timeoutMs` 300 ends `SIGKILL`
+after 2.3 s; `stop` of a running `sleep 30` returns with the group gone in under 1 s (160-390 ms
+in the test runs).
+Fit: good.
+
+### J-12002 2026-11-19 W6.3b contract differences - finding
+Reading: (1) the fake's `sweep(tag)` cannot find its records from the tag alone (they live under
+each `sessions/e<n>/run/`, 5.1), and the layout of 5.2 has no listing: `Runtime.sweep` takes a
+second, optional argument `{ runDirs }` (the OCI runtimes ignore it), and the runner finds the
+sessions directory as two levels above `layout.dirsOf('e0').run` (5.1's shape, read from the layout
+rather than rebuilt). A layout method listing the keys would remove that derivation. (2)
+`makeFakeRuntime` takes two more optional options, `hostPath` and `bootTime`. (3) The runner's
+`release` stops and removes the container only: renaming the directory to `trash/` is
+`layout.release`, which the ops facet calls after it (4.6). (4) The runner's start-phase and stop
+errors are rewritten to `runtimeFailed(<code>)` with no `cause`: marshal would carry a cause, and
+its path, to the vat (D-M6-14). (5) A.3's variable list holds for the program run directly; `sh -c
+env` adds the shell's own `PWD`, `SHLVL` and `_`, so acceptance 18's integration check must allow
+those three.
+Fit: neutral.
+
+### J-12003 2026-11-19 W6.3b fit - finding
+Reading: what suits Thixotrope here: the runner is per incarnation and keeps nothing that must
+survive one: the next bind's `sweep` stops everything the last incarnation left, from records on
+disk, so a SIGKILL of the adapter or the supervisor loses nothing that matters, and no vat or crank
+takes part (idle stop is an adapter timer, as architecture 8 puts interactive timers). What does
+not suit: process groups are host state the object system cannot see or bound; the fake proves the
+lifecycle but not the isolation, a group number in a record can be reused within one boot after its
+group died (the boot-time check covers only an earlier boot), and between the spawn and the record
+write a SIGKILL can leave one unrecorded group (a window of one synchronous write).
+Fit: awkward.
+
+### J-12004 2026-11-19 W6.3b bundles and time record - process
+Evidence: `node scripts/bundle-guest.mjs session`; first command 2026-11-19T02:23:29Z.
+Reading: W6.3b adds no guest code (both modules are adapter modules): 0 of M6's 6,400 bytes (base
+233,126). The session program measured 242,048 in the shared working tree, all of it other units'
+uncommitted session edits. `lint:duplicates` 1.86 % (ceiling 2.05 %). No command over 60 s (the
+longest, the perf probe, 33 s). Nothing pushed; no change to `packages/thixotrope` or `rust/**`.
+Fit: neutral.
+
+### J-12080 2026-11-19 W6.6 Sandbox execution section and composer refusal - built
+Evidence: `0142a2963f`, `f26eda0a01`; `test/unit/ui-environment.test.js` (9),
+`test/browser/environment-ui.test.mjs` (2 cases; the first run, the second not yet runnable).
+Reading: `ui/src/environment/` (seam U-1) fills `session.settings` with "Sandbox execution"
+(R6-57): the status line, Fae's explanation, Emergency stop (Retry emergency stop while
+`stopping`) or Resume session, the session's rejection text shown as an alert, the buttons disabled
+while an action runs, and a note while the queue stays held `stopped` after resume. The state comes
+from `Session.getExecutionState()` and then from the live `execution` event: the controller hands
+no vat event to features, so the section holds its own `Live.subscribe` while it is shown and reads
+only `execution` deliveries from it. A session without an environment is read once
+(`supported: false` cannot change: services are fixed at creation) and gets no subscription; the
+section renders nothing. Order: read, subscribe, read again (events are in order, so the last one
+is the newest state); a closed subscription is reopened and re-read, at most 3 times in a row with
+nothing but snapshots between. The session is found with the accounts feature's
+`activeSessionOf` (imported, not copied). Seam C-1: `SUBMIT_REFUSALS` gains
+`texts.sessionStopped`, so a staged submission a stopped session refuses has its file deleted.
+Fit: good.
+
+### J-12081 2026-11-19 W6.6 measured - measured
+Evidence: `corepack yarn test test/unit/ui-environment.test.js` and the UI suites beside it (45
+tests, 1.1 s); the browser case "a session without an environment" through `run-lock.mjs
+--shared` at `0142a2963f` (65.3 s in the test, 2 min 4 s with the slot and the template start);
+`m3-ui-build` at `0142a2963f`.
+Reading: UI bundle 311,224 bytes, 102,463 gzipped, within its budget, with the feature collected.
+Session program: W6.6 adds no guest code (0 of M6's 6,400 bytes; the composer is an adapter
+module). No vat message on a turn: the section's calls are user actions and Settings reads.
+Cost: while Settings is open on a shell session, every delivery of that session's channel (deltas
+included) goes to the page twice, and each open costs two `getExecutionState` deliveries to the
+session vat.
+Fit: neutral.
+
+### J-12082 2026-11-19 W6.6 fit and gaps - finding
+Reading: what suits Thixotrope here: the execution state is a session heap value published in the
+crank that changes it, so a page needs no polling and every device sees a stop made elsewhere
+(R6-59). What does not: the UI controller drops vat events it does not know, so a feature that
+wants one opens a second channel subscription (a `FeatureContext` event tap in the controller would
+remove it; M3's file). Acceptance 19 cannot run before the lane's environments template exists
+(`test/integration/_environments.js`); and the new browser file is not yet in a regression list,
+so `test/integration-runner.test.js` fails until the `environments` list (K-2) names it.
+Fit: awkward.
+
+### J-12083 2026-11-19 W6.6 time record - process
+Evidence: first command 2026-11-19T02:23:30Z, last 2026-11-19T02:34:03Z.
+Reading: one command over 60 s (the browser case, 2 min 4 s under a shared slot). Commits
+`0142a2963f`, `f26eda0a01` and this journal commit; nothing pushed; no change to
+`packages/thixotrope` or `rust/**`.
+Fit: neutral.
+
+### J-0870 2026-11-19 W6.3a OCI runtime and image pin - built
+Evidence: `resources/environments/impl/runtime-oci.js`, `resources/environments/impl/images.js`,
+`test/fixtures/fake-bin/oci-cli.mjs`, `test/adapter/environments-runtime-oci.test.js` (31 tests
+against the fake CLI, 3 `[real-runtime]` tests skipped), commit `52621c77e4`; four runs in a row
+pass, about 2 s a run (wall).
+Reading: `makeOciRuntime({ binary: 'podman' | 'docker', exec?, controlTimeoutMs? })` answers the
+5.3 `Runtime` (`kind`, `check`, `start`, `exec`, `stop`, `remove`, `sweep`; the typedefs are
+imported from `runtime-fake.js`, A.3's variables from its `fakeCommandEnv('/home/node', ...)`, so
+the two runtimes cannot drift). `start` builds 5.3's `run` argv (`--detach --pull never`, label
+`thix.state=<tag>`, uid 1000, `--cap-drop ALL --read-only --tmpfs /tmp --security-opt
+no-new-privileges --network none`, the configured or default pids, memory and CPUs, `--log-driver
+none`, the two `--volume` mounts, `--workdir /workspace`, exactly the six A.3 variables, the pin,
+`sleep infinity`); a name already in use is kept when running, else removed and run again. `exec`
+runs `exec <name> setsid sh -c <wrapper> /tmp/thix-c<n>.pid <argv...>`: the wrapper records its
+pid (the group id), runs argv as positional parameters (never parsed by a shell) and removes the
+record; a timeout runs `exec <name> sh -c <signaller> <pidfile> TERM`, `KILL` after `killGraceMs`,
+and stops waiting on the CLI one grace later. `stop`/`remove` are `rm --force` (podman adds `--time
+0 --ignore`). `sweep(tag)` lists `ps --all --filter label=thix.state=<tag>` and removes in batches
+of 32, relisting while a listing was cut. `isDigestPin` is the distribution grammar restricted to
+`<name>@sha256:<64 lowercase hex>` (no tag; a registry only with a dot, a port or `localhost`);
+`checkImagePin({ runtime, image })` refuses a non-digest pin before any CLI call, then asks the
+runtime (`image exists` / `image inspect`; `fake` decides alone). The fake CLI plays an engine in
+a directory (containers, labels, images, an unreachable engine, scripted answers), refuses flags
+the named binary lacks (docker has no `--userns keep-id`, no `rm --time/--ignore`), and runs exec
+argv as host processes in the workspace with the container's `--env` only.
+Fit: neutral.
+
+### J-0871 2026-11-19 W6.3a departures from the contract text - finding
+Reading: (1) podman's user namespace is `--userns keep-id:uid=1000,gid=1000`, not bare `keep-id`:
+bare keep-id maps the daemon user's own uid, so with `--user 1000:1000` the files a command writes
+would belong to a subordinate uid on the host, not the daemon user (5.3's stated intent; podman
+4.3+; `[real-runtime: podman]`). (2) The wrapper is `sh -c`, not `sh -lc`: a login shell sources
+the image's profile, which can reset `PATH` and add variables, against R3-45/A.3's exact list. (3)
+`stop` removes the container (`rm --force`) instead of keeping a stopped one: with `sleep infinity`
+as PID 1 a `stop` would wait out its timeout (PID 1 ignores SIGTERM), the root is read-only and
+`/tmp` a tmpfs, so a kept container holds nothing; the next `start` runs a fresh one. So `stop` and
+`remove` are the same call, and a command running at `stop` gets SIGKILL with no grace (the grace
+is the timeout path's). (4) A signal inside the container reaches the CLI as exit `128 + n`; only
+the runtime's own timeout kill is reported as `signal` (with `exitCode: null`), so an OOM kill reads
+`exitCode: 137`. (5) `exec` into a container that is gone or stopped throws `runtimeFailed('the
+container is not running')`, recognised by the CLI's own error line on an empty stdout; the runner
+does not yet restart on it.
+Fit: neutral.
+
+### J-0872 2026-11-19 W6.3a no CLI text crosses - finding
+Reading: the runtime CLI's messages name host paths (mount sources, the socket), so every failure
+is classified into a fixed text (`imageRefused`; `runtimeFailed` with "the <binary> engine is not
+reachable", "<binary> run failed (exit N)", "<binary> is not installed", "the state directory
+cannot be mounted", "invalid container name"); the CLI's stderr is read for classification only and
+no `cause` is kept. A state path containing `:` or `,` is refused, not escaped (the `-v` syntax
+cannot carry it). The CLI process gets only the host variables an engine needs (`PATH`, `HOME`,
+`XDG_RUNTIME_DIR`, `DOCKER_HOST`, ...), never the adapter's whole environment; the container gets
+A.3's six. A test scripts a `run` failure whose stderr holds the workspace path and checks the
+error does not.
+Fit: suits (D-M6-14 is a property of one module's error paths, checkable without a vat).
+
+### J-0873 2026-11-19 W6.3a what the fake CLI cannot show - finding
+Reading: everything isolation-shaped is `[real-runtime]`, gated in the same test file by
+`THIX_HARNESS_REAL_RUNTIME=podman|docker` with `THIX_HARNESS_REAL_IMAGE` a digest pin present
+locally: uid/gid 1000, `CapEff` 0, a read-only root with writable `/workspace`, `/home/node` and
+`/tmp`, only `lo`, the environment list, a trapping timeout killed by SIGKILL, stop, and a sweep of
+two containers. Expected at the owner run: the runtimes add `HOSTNAME` (podman also `container`)
+to the environment (the test allows both, neither is a host variable); an image loaded rather
+than pulled has no repository digest, so `image exists <name>@sha256:` refuses it and the operator
+must tag it by digest; the image must have `setsid` (util-linux or busybox). Docker was installed
+with its daemon stopped and podman absent: no real-runtime test ran here.
+Fit: awkward (the boundary that matters most is the one this machine cannot exercise).
+
+### J-0874 2026-11-19 W6.3a bundles and time record - process
+Evidence: `node scripts/bundle-guest.mjs`; first command 2026-11-19T02:23:28Z.
+Reading: W6.3a adds no guest code (adapter modules only): 0 of M6's 6,400 bytes (base 233,126; the
+shared tree measured 241,270, all other units' uncommitted session edits). `lint:duplicates` 1.84 %
+(ceiling 2.05 %), none in this unit's files. No perf row is this unit's (the container rows are
+W6.7's, `[real-runtime]`). No command over 60 s. Nothing pushed; no change to
+`packages/thixotrope` or `rust/**`; no container runtime started or installed.
+Fit: neutral.
+
+### J-12020 2026-11-19 W6.3c shell port, command args, output budget, blob access - built
+Evidence: `c0829ad19e`, `2f59b3b8a8`, `fff3920736`; `test/adapter/environments-shell-port.test.js`
+(20 tests), `test/adapter/environments-command-output.test.js` (10 tests), both under 2 s.
+Reading: `EVI/command-output.js` `boundCommandResult` (5.5: streams decoded with replacement, a
+runtime-cut stream drops its partial character by a streaming decode, each field cut by its
+escaped length with a binary search at code point boundaries, the R4-46 marker inside the field,
+stderr at least 2,048 units) and `boundCommandRecord` (exec path, `boundToolOutput` per stream to
+2,560 units). `EVI/command-args.js` `parseCommandArgs` / `parseInspectArgs`: `JSON.parse` in the
+adapter, closed keys by name (`unexpectedArgument`), allowlist by name (`notAllowed`), argv count,
+total bytes (`argsTooLarge`), per-entry units and NUL, `timeoutInvalid`. `EVI/blob-access.js`
+`stageText` (pieces of `blobPieceBytes`, abort on failure) and `readStaged` (pages of
+`blobPageBytes`, size bound before and during the read). `EVI/shell-port.js` `makeShellPort({ key,
+runner, settings, blobs?, isWithdrawn?, redact?, log? })`: refusals are `failed` outcomes, a
+withdrawn key is asked before and after the command, results over `inlineBytes` are staged,
+failures over it staged as `Error: ...`, the runner's own environment texts passed on unwrapped.
+The property test runs 120 random cases (0-80 KiB per stream, ten character classes including
+6-unit control escapes and surrogate pairs): every text parses, is at most 32,768 units, each
+field whole or a marked prefix, no lone surrogate. Staging and staged arguments run against the
+agent host's real blob store, `BlobWriters` and `Content`; one case runs the port over W6.3b's
+real runner and fake runtime (1 MiB per stream kept to 64 KiB, cut, staged; a 200 ms timeout).
+Fit: good.
+
+### J-12021 2026-11-19 W6.3c costs of the output budget and the port - measured
+Evidence: `2f59b3b8a8`; a scratch script (not committed) over `perf/_window.mjs` `runWindow`,
+5 s windows each, in process, load 8.8 / 6.5 / 4.8 (other lanes running).
+Reading: `boundCommandResult` worst case (stdout 65,536 control characters, 393 K units escaped;
+stderr 16,384 surrogate pairs): median 4.28 ms, p95 4.98 ms (n 1,152). The port end to end on that
+result, staged into a local blob store (no hub hop): median 20.6 ms, p95 38.2 ms (n 212). A
+staged 260 KB argument list (13 pages) read, parsed and run, result staged: median 21.5 ms, p95
+32.7 ms (n 218). So the adapter's own work is small beside the hops the contract budgets
+(vat -> adapter -> vat 70-76 ms, adapter pieces 20-25 ms each, J-9043); the perf rows of section
+10 are W6.7's. Session program: 233,126 bytes before; W6.3c adds 0 (its files are under
+`resources/`, which no guest bundle can import; the bundle's module list names none of them).
+Fit: good.
+
+### J-12022 2026-11-19 W6.3c fit - finding
+Evidence: the three commits above; `lint:duplicates` 1.84 % (ceiling 2.05 %).
+Reading: suits Thixotrope: parsing model JSON in the adapter keeps a 20,000-key record out of
+every vat (it is refused by name in Node, rule 12.10), and the closed `ShellPortRequest` guard
+refuses an extra key before the port runs. Staging through the session's `BlobWriters` makes the
+result an agent-host blob with no vat on the byte path. Does not suit as well: every staged piece
+and page is an adapter-to-adapter frame the hub persists (CC-100; at most 8 pieces of 12,288 bytes
+for a 98 KB result, 26 pages for the largest staged argument read, `argsReadBytes` 524,288). One
+8-line block of `stageText` equals `guest/session/prompt.js` `stagePrompt`'s writer loop (under the
+15-line rule): a shared `stageThroughWriters(text, writers)` in `guest/lib` would serve prompt,
+exec `finish` and this module (a fold item, not done here: `prompt.js` is not this unit's).
+Fit: neutral.
+
+### J-12023 2026-11-19 W6.3c time record - process
+Evidence: first command 2026-11-19T02:23:29Z.
+Reading: no command over 60 s (the longest: the scratch measurement, 15 s; `tsc` 2.3 s). No
+integration test, supervisor or browser started. Commits `c0829ad19e`, `2f59b3b8a8`, `fff3920736`
+and this journal commit; nothing pushed; no change to `packages/thixotrope` or `rust/**`.
+Fit: neutral.
+
+### J-0850 2026-11-19 W6.2 workspace git and workspace image sources - built
+Evidence: `resources/environments/impl/git.js`, `resources/environments/impl/image-source.js`,
+`test/adapter/_environments-git.js` (scaffolding), `test/adapter/environments-git.test.js` (12
+tests), `test/adapter/environments-git-hostile.test.js` (8), `test/adapter/environments-image-source.test.js`
+(5), commits `7ded984527` (K-1: `@endo/git` dependency, `yarn.lock` one line) and `0a19ab7b58`;
+the 25 tests pass in about 8 s (wall) against the installed git 2.54 [real-git].
+Reading: `makeWorkspaceGit({ dirsOf, ensureWorkspace, makeBackend? })` answers `{ run(key, { op,
+args }, { readOnly }), removeStaleLock(key), forget(key) }`: every `gitOps` operation, one at a
+time per key (a queue tail per key, deleted when it settles), arguments checked again against the
+`environmentShapes` of the op, a reader's write refused with `gitReadOnly` before any process,
+every answer a closed record cut to `answerBytes` by `fitsFrame` (entry, line and commit counts
+found by binary search). Before every op, reads too: `.git` must be a real directory with no
+`commondir` or `objects/info/alternates` (else `gitConfigRefused`), then `@endo/git`'s backend
+`assertNoExecutableRepoConfig` (filter and merge drivers, includes: `gitConfigRefused`; a repository
+whose `.git/config` the container changed is an identity change to the backend, so the backend is
+made again once over the same directory, which re-checks the worktree root; `core.worktree`
+pointing elsewhere then fails that check). Writes (`add`, `restore`, `commit`, branch ops, `merge`,
+stash) go through the backend; reads whose answers the backend does not shape (porcelain v2
+letters, per-branch oids, capped subjects, `--stat`) and `merge-commit` with a message run git
+directly with the backend's own `GIT_BASE_ARGS` and `makeGitEnv` (imported from its
+`internalHelpers`), stdout capped while read (4 MiB; a diff 64 KiB; `%<(200,trunc)%s` keeps a
+1 MiB subject out of every buffer). `log` pages by `next` = the oid of the first commit left out;
+a conflicting merge answers `conflicts` instead of rejecting. Branch names follow git's ref-name
+rules in process (no spawn); revisions are `HEAD`, a branch name or an oid with `~n`/`^n`; paths
+are relative, never `..` or `.git` in any letter case. Rejections carry git's first stderr line
+with the workspace path replaced by `/workspace` (its parent by `/environment`), no `cause`.
+`openWorkspaceFile` (one way to read a worktree file): `lstat` of every directory component, open
+with `O_NOFOLLOW | O_NONBLOCK`, regular file only, real path and inode re-checked after the open.
+`read` is M5's `SourceReader` with Fae's rules (1 MiB scanned, lines, 8,000 characters, literal
+search); a missing file rejects (exec's `readSources` then answers its unreadable text).
+`openImage({ key, segments, dirsOf, isWithdrawn })` checks the path (M8's `ImagePath` guard, then
+the workspace rules) and the file, then answers `makeImageSource(...)`: an exo with M8's
+`ImageSource` guard (`image-guards.js` builders over the base table) whose `size()` and
+`readBase64` open and check the file again at every call, pages clamped to `readPageBytes`, refused
+with `environmentTexts.stopped` (or the text `isWithdrawn` answers) once withdrawn. Session
+program: 233,126 bytes after WX.1; W6.2 adds 0 (adapter files under `resources/`; the session
+bundle's module list, 241,283 bytes now with W6.4's uncommitted part, names none of them).
+Fit: good.
+
+### J-0851 2026-11-19 W6.2 adapter-level costs of git and image pages - measured
+Evidence: `0a19ab7b58`; a scratch script (not committed) over `perf/_window.mjs` `runWindow`,
+10 s windows, in process, no vat and no hub, load 4.5-6.5 (other lanes running).
+Reading: `status` on a 10,000-file repository (30 modified, 2 untracked): median 70.6 ms, p95
+78.8 ms (n 140). `log` 50 of 1,000 commits: median 52.8 ms, p95 57.8 ms (n 189). `currentBranch`
+(the floor of one op): median 49.6 ms, p95 56.0 ms (n 205). A 2 MiB image read through an
+`ImageSource` in 196,608-byte pages (11 pages, open and check per page): median 2.8 ms, p95 5.8 ms
+(n 3,071). The floor is the checks, not the op: the backend's `assertNoExecutableRepoConfig`
+verifies the repository identity (`rev-parse`, `rev-list`, the config read) and lists the local
+config (one more `git`): about four processes before every op, 40-45 ms at this load. Against
+section 10, `environments.gitStatus` (median <= 1 s, the hops 2 x 75 ms + 53 ms + about 330 ms of
+inbound bytes) keeps about 0.4 s of room; `environments.gitLog` (<= 500 ms) about 0.05-0.1 s once
+the same hops are added, the tight one. The rows themselves are W6.7's.
+Fit: neutral.
+
+### J-0852 2026-11-19 W6.2 departures from the contract text - finding
+Evidence: the files of J-0850.
+Reading: (1) K-1 adds `@endo/git` only: nothing here imports `@endo/exo-git` (its
+`makeGitOperations` shapes exo-git's records, not this resource's closed ones; `@endo/git` depends
+on it anyway). (2) `makeWorkspaceGit` answers two methods beyond 5.2's `{ run }`:
+`removeStaleLock(key)` (4.7's sweep calls it per swept key) and `forget(key)` (release drops the
+key's backend); and `git.js` exports `initWorkspaceRepository(workspace)` (`git init
+--initial-branch=main` and the empty "Initialize workspace" commit with the backend's arguments)
+for W6.1's `ensureWorkspace`, and `openWorkspaceFile`/`checkSegments` for `image-source.js`.
+(3) 5.2 gives `image-source.js` only `makeImageSource`; it also exports `openImage(...)`, the check
+`EnvironmentsOps.openImage` answers with (3.3: path rules, `lstat`, then mint), so W6.1's `ops.js`
+calls one function. `isWithdrawn(key)` may answer a string, the refusal text (W6.1 can answer
+`environmentTexts.released` for a released key). (4) Reads are refused with `gitConfigRefused`
+while an executable config is present, not only writes (section 11 says "writes refused; reads do
+not run any of them"): the backend's arguments cannot neutralise a filter driver named in
+`.git/config` plus an in-tree `.gitattributes` (`git status` and `diff` run clean filters), and it
+takes no extra `-c` for reads, so refusing is the only way reads never run one. The text says
+"before writing"; the words are EVG's. (5) The 100,000-untracked-files probe runs with 3,000
+files of 120-character names (over the 1,000-entry page and the 16 KB answer, 0.6 s instead of
+about 15 s); the 1 GB file is sparse.
+Fit: neutral.
+
+### J-0853 2026-11-19 W6.2 fit of host-side git over a container-written .git - finding
+Evidence: `environments-git-hostile.test.js`; `packages/git/src/native-git-backend.js`
+`GIT_BASE_ARGS`, `makeGitEnv`, `assertNoExecutableRepoConfig`, `verifyRepositoryIdentity`.
+Reading: suits: keeping git in the adapter behind a key the vats never see means a vat holds only
+`Git`/`GitReader` and every byte of a workspace stays in Node; the hostile cases (filter, include,
+merge driver, hooks, fsmonitor, `core.worktree`, alternates, a `gitdir:` file, a symlinked `.git`,
+symlinked files and directories) all end in a fixed refusal with no side-effect file and no host
+path. Does not suit as well: (a) the config check and the git run are two processes, and the
+container runs at the same time: a container that writes a filter driver between them could make
+the host run it (the same window the backend has for its own writes). Closing it needs `@endo/git`
+to accept per-call config overrides (`GIT_CONFIG_COUNT`) or to read a config snapshot, a change to
+another package (rule 7): listed for the PM. (b) The backend's identity check costs about four
+processes per op (J-0851) and treats every container `git config` as a new repository; this
+module re-derives it once, which is correct for a workspace that is the session's own, but the
+check is mostly paid for nothing here. (c) `internalHelpers` is "exported for tests, not public":
+reads depend on it to run with the same arguments; a public `runGit`-style export would remove
+that dependency. Fit: neutral.
+
+### J-0854 2026-11-19 W6.2 time record - process
+Evidence: first command 2026-11-19T02:23:29Z.
+Reading: no command over 60 s (the longest: the scratch measurement, 51 s for four 10 s windows
+and the fixture; `yarn install` 5 s; `tsc` about 3 s; the tests about 8 s). No integration test,
+supervisor or browser started. Commits `7ded984527`, `0a19ab7b58` and this journal commit;
+nothing pushed; no change to `packages/thixotrope`, `rust/**` or other packages.
+Fit: neutral.
+
+### J-12040 2026-11-19 W6.4 the session's environment part, shell tools and emergency stop - built
+Evidence: `35ee60034b`, `8c9a12bbfd`; `guest/session/environment.js`; seams R-1
+(`runtime-parts.js`, four lines under `// slot: environment`), R-2 (`turn.js` `claimNext`, one
+line), R-3 (`session.js`), R-4 (`queue.js`), X-E (`export.js`), T-1 (`tool-table.js`), L-1
+(`label-seeds.js`); tests `session-environment` (12), `session-shell-tool` (6),
+`session-environment-export` (6), helper `test/unit/_session-environment.js` (fakes made with
+`environmentInterfaces.EnvironmentControl` and `.ShellPort`).
+Reading: the part holds `execution`, the promise of the last `port()` ask, the Turn of the last
+shell call and WX.1's call table (D-M6-17; first use in a vat program). A call is opened in the
+table and sent straight to the ShellPort (one session delivery per command after the first; the
+first adds one manager crank); a retired break answers `commandOutcomeUnknown` and drops the port,
+the turn goes on (D-M6-5); any other failure, a refused `port()` among them, is the call's error
+and drops the port too; a call cancelled while its port was asked is never sent. `onCancel` ends
+the turn's calls with `commandStopped` and sends `stop()` only when the turn used the shell and no
+emergency stop is under way (a turn without a command sends nothing); `onRecover` ends them
+quietly. `admit` refuses while stopping or stopped: `enqueueOnce`, `enqueueMessageOnce`,
+`startTurn` and `QueueEntry.sendNow` throw `sessionStopped` before writing, `claimNext` claims
+nothing and does not ask a turn source. `emergencyStop`: the part goes `stopping` and sends the
+control's `emergencyStop`, then (one crank) the queue holds `stopped` and the current turn is
+cancelled; the answer is `stopped`, or `stopIncomplete` with the state left `stopping`; a stopped
+session answers at once. `resume` refuses while stopping, else the control's `resume`, `running`,
+the hold kept. The `execution` event is published with `runner.publishOutside` after the crank's
+own flush (the runner exposes no outbox `emit` outside a hook, and a publish before the flush
+would number its rev below an in-turn batch sent after it). The head page carries `execution`
+(`stopped`) when the part is not running; the import's head chunk re-applies it, holds `stopped`
+whatever the queue holds and sends the new environment `emergencyStop`.
+Departures from the contract, all inside this lane's files: (1) the shell tool entries live in
+`environment.js` beside the part (as `tools/exec.js` holds the exec entry and part); no
+`tools/shell.js`, so T-1 imports `shellToolEntries` from `./environment.js` (J-12041: a module of
+its own costs about 570 bytes of session program); (2) the part's `runCommand`/`inspectShell`
+members are one `shell(inspect, request, ports, context)`; (3) a refused `port()` answers the
+manager's own text, not `environmentTextOf.runtimeFailed` (the session bundles no environments
+guard, D-M6-10), and a retired break from `port()` itself answers `commandOutcomeUnknown`; (4) a
+session stopped but unsupported (imported into a state without environments) still exports
+`stopped` (the contract's 3.8 says undefined when unsupported; exporting it keeps the hold).
+Pins outside the lane's files changed with the registration: `m5-w53-labels.test.js` (the static
+tool names), `m1a-recovery.test.js` (the parts with `onRecover`), `runtime-parts.test.js` (the
+table and "parts still to come").
+Fit: neutral.
+
+### J-12041 2026-11-19 W6.4 session program growth of the environments lane - measured
+Evidence: `node scripts/bundle-guest.mjs session` at `8c9a12bbfd` against `git archive` of
+`6493d955c7` (scratch per-module diff); `session-environment-export.test.js` B-1 row.
+Reading: before 233,126, after 241,283 bytes (+8,157; limit 270,336). By module: `environment.js`
+4,132, `tools/call-table.js` 1,520 (WX.1's shared table, first bundled here), the bundle head
+836 (two new modules, about 420 each), `session.js` +701, `export.js` +280, `runtime-parts.js`
++195, `tool-table.js` +132, `queue.js` +102, `label-seeds.js` +100, `turn.js` +51. The B-1 row:
+`{"metric":"environments.bundles.session","bytes":241283,"growth":8157,"callTableBytes":1857,
+"ownGrowth":6300,"cap":6400}` (the call table's section, head block and head lines). So the
+lane's own lines fit the 6,400 cap with 100 to spare; with the call table the lane is 1,757 over
+it. The call table is lane-agnostic (M9's asks use it, D-M9-22) and was not in WX.1's base because
+no program imported it; whichever lane merges first pays it (M6, merge step 2). Iterations to fit:
+a separate `tools/shell.js` +570; the contract's two part members +150; the `tooManyCalls` text
+for an unreachable refusal +150 (now a `Fail`).
+Fit: worse (the bundle head charges about 420 bytes per module, so the guest-rule split into
+small modules costs every spare vat; J-12042).
+
+### J-12042 2026-11-19 W6.4 fit of the environment part on Thixotrope - finding
+Evidence: `environment.js`, `session.js`; `session-environment.test.js`.
+Reading: suits: the execution state is plain heap state of the part, so stop and resume survive a
+daemon restart with no record kind and no read-back at start (D-M6-9), and the import carries it
+on the head page; the ShellPort is an adapter presence the part keeps across turns, so a command
+costs one session delivery (vat -> adapter -> vat) and no manager delivery; the call table makes
+cancel and recovery a few lines. Does not suit as well: (a) a Session method outside a turn has
+no outbox `emit`: the part's hooks get one through `HookTurn`, the session does not, so the
+`execution` event goes through an answered outside publish (one extra publish per state change,
+ordered by `live.js`'s rev counter); a runner `emit` for Session methods would put it in the
+crank's one publish. (b) `callWhen` defers the method body past the caller's crank, so a test (or
+the UI) sees `stopping` only after the guard's own microtasks. (c) If a restart finds the turn the
+stop cancelled still current (waiting on a non-shell call) with entries waiting, recovery's
+`restart` hold replaces `stopped`; `admit` still refuses every start, so nothing runs, but the
+hold shown is `restart` (released by the next message after resume, as `stopped` would be). (d) Bundle bytes per module (J-12041).
+Fit: neutral.
+
+### J-12043 2026-11-19 W6.4 time record - process
+Evidence: first command 2026-11-19T02:23:29Z.
+Reading: no command over 60 s (the longest: the unit directory, about 6 s; `tsc` about 2 s;
+prettier and eslint about 10 s each). No integration test, supervisor or browser started;
+`THIX_AGENT=W6.4` in every test shell. Commits `35ee60034b`, `8c9a12bbfd` and this journal
+commit; nothing pushed; no change to `packages/thixotrope`, `rust/**` or other packages.
+Fit: neutral.
+
+### J-0830 2026-11-19 W6.1 environments resource core - built
+Evidence: `resources/native-attach.js`, `resources/environments/durable.js`,
+`resources/environments/ephemeral.js`, `resources/environments/impl/{attach,ops,layout,index}.js`,
+`scripts/provision-steps/60-environments.js`; tests `test/unit/native-attach.test.js` (6),
+`test/adapter/environments-manager.test.js` (18), `test/adapter/environments-layout.test.js` (6),
+`test/adapter/environments-provision.test.js` (4), and the three step names added to
+`test/unit/m1a-provision-steps.test.js`; commits `48ca1ced89`, `cc1dfa5ce5`, `4dca082a73`,
+`952ded39e2`, `e974d14b1f`, `b3b20f1303`. All 39 tests pass in about 5 s (no supervisor).
+Reading: the manager keeps one record per environment (`e<n>` from a counter; `records` bounded
+by `maxEnvironments`; `recordOf` and `bySession` are `WeakMap`s), mints `Git` (reader on
+`readOnly()`), `Shell` and `EnvironmentControl` with the guards of `guards/environments.js`, and
+forwards through `makeAttachedOps` (`native-attach.js`): no ops facet, reconcile first (one
+reconcile shared by a burst); a retired break drops the facet; a read is sent once more, a write
+rejects with `outcomeUnknown` and is never sent twice. The read and write op lists are derived
+from `gitOps` and `gitReaderMethodNames` (no second list). Every answer passes the exo's return
+guard (a git answer with an extra key is refused in the manager). Released records refuse every
+call with `released` and are dropped when the adapter answers the release (directly or through
+`sink.released` after the next attach); a failed stop or release stays pending (both subsets of
+the records, so bounded) and is sent again by the next attach, and a pending stop is sent again
+before a key's next `port()` or `Shell.runCommand`. Emergency stop marks the record first (every
+manager call refused with `stopped`), then `ops.stop(key, { withdraw: true })`; a failure keeps it
+pending and rejects `stopIncomplete`. `attach` answers `PendingWork` with the withdrawn keys; the
+adapter's binding (`impl/attach.js`) fills its withdrawn set before the ops facet serves any call
+(`ready`), then performs the pending stops and releases after `bind` answers and reports them
+sendOnly. At an incarnation's first bind only: the runner's sweep, the trash, and
+`git.removeStaleLock` for every key on disk; a bind under new settings follows the unbind of the
+old binding, which sweeps its runner. The ops facet hides host paths in every failure (workspace
+to `/workspace`, home to `/home/node`, the state directory and its real path to `<state>`). The
+layout makes a workspace once behind its marker with W6.2's `initWorkspaceRepository` (a directory
+without the marker is wiped and made again, K5), releases through `trash/` with a directory fsync,
+and writes the tag (`sha256(realpath(state))[0:16]`) atomically. `impl/index.js` composes W6.2's
+git and image source, W6.3a's OCI runtimes, W6.3b's fake runtime and runner and W6.3c's shell
+port and exec-path record; the composition test runs real git and the fake runtime through the
+manager, and an emergency stop turns the `ShellPort` the session holds into `stopped`.
+Differences from the contract, kept compatible with the other units: (a) the bind and unbind live
+in a new module `impl/attach.js` (the agent host's name for the same job); `index.js` is only the
+composition, so the binding is tested with fakes; (b) `makeOps` takes `check` (the image check)
+instead of `status`, and `images`, `commandRecord`, `withdrawn`, `ready`, `hiddenPaths`; adapter-side
+makers receive `{ isWithdrawn(key), redact(text) }`, the shapes W6.2 and W6.3c built;
+(c) `makeLayout` takes an optional `incarnation` (trash names) and answers `keys()`; a key `e0` is
+accepted because the runner names the sessions directory through `dirsOf('e0')`;
+(d) `makeAttachedOps` takes an optional `writeBroken(error)` (the resource's own rejection text);
+(e) the provisioning file has three steps (install, configure, attach), each skipped without
+`options.environments`; a refused image is reported in the step's detail, not thrown.
+Fit: good.
+
+### J-0831 2026-11-19 W6.1 manager bundle and manager-path costs - measured
+Evidence: `b3b20f1303`; the manager bundle made as the supervisor makes it
+(`@endo/compartment-mapper` `makeBundle` of `durable.js`, as `m3-w33-bundles.test.js` does);
+a scratch script (not committed) over `perf/_window.mjs` `runWindow`, 10 s windows, the manager
+in Node over the real composition and the fake runtime, load average 2.61.
+Reading: `environments.bundles` manager bundle **179,555 bytes against the 80 KB budget: a
+miss**. Likely cause, measured per module: `guards/environments.js` alone bundles to 154,229 bytes
+because it imports `guards/session.js` (122,000 bytes alone) for the two `SourceReader` shapes;
+`durable.js` adds about 25 KB (its own code, help texts, `native-attach.js` 5,762). The fix is in
+the guard module (the contract's, not W6.1's): take `SourceReadRequest`/`SourceReadResult` from a
+small module both vats can import, which should bring the manager near 60 KB. Install time not
+measured here (W6.7's row). Node-level rows (no vat, no hub; they bound what the manager and
+adapter code cost, not the crank cost): `{"row":"environments.provide.node","median":0.636,"p95":1.22,
+"samples":12000}` (four exos and a record per provide, releases every 1,000);
+`{"row":"environments.firstGit.node","ms":134.4}` (workspace creation and the first status);
+`{"row":"environments.gitStatus.node","median":44.831,"p95":52.339,"samples":220}` (W6.2's checks
+and git spawns dominate; manager and ops add well under 1 ms);
+`{"row":"environments.runTrue.node","median":1.352,"p95":1.887,"samples":6855}` (exec path
+through the manager, fake runtime). Session program: W6.1 adds 0 bytes (no file under `guest/`;
+the session bundle, 241,283 bytes on the working tree at this time, names no W6.1 module).
+Fit: neutral.
+
+### J-0832 2026-11-19 W6.1 fit: one forwarding manager on Thixotrope's native kit
+Reading: what suits Thixotrope here: the manager kit's `same`/`replaces` give `configure` its
+meaning with no code of ours (equal settings: nothing happens; other settings: the adapter unbinds
+and rebinds under a new epoch); amplification by `WeakMap` keeps every key out of session and exec
+vats; one registration means restart cost does not grow with environments (the restore binds one
+key). What does not: (1) no install-time configuration (CC-090): settings ride in the service
+spec, and the loader finds its state directory from `argv[3]` through the agent host's
+`findStateDir`; (2) the author's `bind(key, spec)` gets no epoch and no "first bind of this
+process" signal, so the binding keeps a flag to sweep only once per incarnation; (3) a guard
+module's transitive imports, not the manager's code, decide the manager's bundle size (J-0831);
+(4) the shared guards make `releaseSession` and `resume` synchronous `M.call`s, so a delete cannot
+wait for the adapter's removal: the manager marks the record released (every call refused at
+once) and a failed removal is retried at the next attach, rather than holding the delete record at
+step 1 as contract 4.6 says. Commands over 60 s: none (the longest: `tsc` about 3 s, the perf
+script about 35 s).
 Fit: neutral.

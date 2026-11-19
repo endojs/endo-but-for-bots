@@ -6,9 +6,10 @@
  *   { label, from(services, config) -> object | undefined }
  *
  * and binds the object it answers under `label` (source `preset`) when the
- * session is made, after the preset's endowments. Empty in M5; M6 appends
- * `workspace` and `shell`. A seed whose label is taken fails `make` (the
- * preset catalogue's validation makes that unreachable).
+ * session is made, after the preset's endowments. M6 appends `workspace`
+ * and `shell` (the environment's objects, when the preset selects them).
+ * A seed whose label is taken fails `make` (the preset catalogue's
+ * validation makes that unreachable).
  */
 
 /** @import { LabelSeed } from './labels.js' */
@@ -20,7 +21,11 @@
  */
 
 /** @type {readonly LabelSeedEntry[]} */
-export const labelSeeds = harden([]);
+export const labelSeeds = harden([
+  // m6-interfaces.md 3.8 (seam L-1): the `Git` writer and the `Shell`.
+  { label: 'workspace', from: (/** @type {any} */ s) => s?.workspace },
+  { label: 'shell', from: (/** @type {any} */ s) => s?.shell },
+]);
 
 /**
  * The seeds of one session, in order: `services.endowments` (source

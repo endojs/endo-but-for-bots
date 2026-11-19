@@ -8,13 +8,16 @@
  * `full-control` and `machine-admin`): each with the objects a preset of
  * that template may select, by kind and label (Fae's `petName`).
  *
- * `objectProviders` is append-only for later milestones (M6: the git
- * workspace and the development environment). Each entry is `{ kind,
- * available(context) -> undefined | reason, build(context) -> Promise<{
- * label, value, services? }> }`. A preset whose selected objects include a
- * kind with no provider, or whose provider answers a reason, is listed with
- * `available: false` and refused at creation (`textOf.presetNeeds(kind)`).
- * M5 registers none, so only presets that select no object are available.
+ * `objectProviders` is append-only for later milestones. Each entry is
+ * `{ kind, available(context) -> undefined | reason }`, `context` being the
+ * catalogue's `defaultsContext` (`{ settings }`, the harness settings). A
+ * preset whose selected objects include a kind with no provider, or whose
+ * provider answers a reason, is listed with `available: false` and refused
+ * at creation (`textOf.presetNeeds(kind)`, or the provider's reason). The
+ * git workspace and the development environment
+ * (`environments.js` `environmentProviders`) answer `texts.runnerRequired`
+ * until an environments admin is attached; the objects themselves are
+ * made by the services builders (`services.js`), not here.
  *
  * `publicInternetProviders` is append-only too (M6/M7): `{ available(context)
  * -> boolean }`. The default preset is `general` once one of them answers
@@ -23,6 +26,7 @@
  *
  * Guest rules: plain data and functions; prelude globals only.
  */
+import { environmentProviders } from './environments.js';
 
 /**
  * @typedef {object} TemplateObject
@@ -46,7 +50,6 @@
  * @typedef {object} ObjectProvider
  * @property {string} kind
  * @property {(context: any) => string | undefined} available
- * @property {(context: any) => Promise<{ label: string, value: any, services?: any }>} build
  */
 
 /**
@@ -98,10 +101,10 @@ export const templateTable = harden([
 ]);
 
 /**
- * Hook table (append-only; M6).
+ * Hook table (append-only; M7 next).
  * @type {readonly ObjectProvider[]}
  */
-export const objectProviders = harden([]);
+export const objectProviders = harden([...environmentProviders]);
 
 /**
  * Hook table (append-only; M6/M7).

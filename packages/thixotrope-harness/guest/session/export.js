@@ -71,6 +71,10 @@ const cursorNumbers = (cursor, pattern) => {
  * @param {any} powers.config the SessionConfig
  * @param {() => any} powers.info the session's `SessionInfo`
  * @param {any} powers.rowReporter
+ * @param {{ exportExecution: () => any, importExecution: (state: any) => void }} [powers.execution]
+ *   the `environment` part (m6-interfaces.md X-E): the head page carries a
+ *   session's execution state when it is not running; an import feeds it
+ *   back and holds the queue `stopped`
  */
 export const makeSessionExport = ({
   records,
@@ -81,6 +85,7 @@ export const makeSessionExport = ({
   config,
   info,
   rowReporter,
+  execution = undefined,
 }) => {
   /** 0: never imported; 1: an import is open; 2: the import ended. */
   let importing = 0;
@@ -152,6 +157,8 @@ export const makeSessionExport = ({
     if (sealed) page.archive = state;
     const hold = queue.currentHold();
     if (hold !== undefined) page.hold = hold;
+    const stopped = execution?.exportExecution();
+    if (stopped !== undefined) page.execution = stopped;
     return harden(page);
   };
 
@@ -244,6 +251,10 @@ export const makeSessionExport = ({
           Fail`only a new session imports`;
         importing = 1;
         if (chunk.usage !== undefined) runner.importUsage(chunk.usage);
+        if (chunk.execution !== undefined && execution !== undefined) {
+          execution.importExecution(chunk.execution);
+          queue.hold('stopped', holdText('stopped'));
+        }
       }
       return progress();
     }

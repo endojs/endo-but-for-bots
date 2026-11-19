@@ -10,12 +10,7 @@ import test from '@endo/ses-ava/test.js';
 import { createHash } from 'node:crypto';
 
 /* eslint-disable import/no-relative-packages */
-import {
-  shapes,
-  methodNames,
-  textOf,
-  texts,
-} from '../../guest/lib/interfaces.js';
+import { shapes, methodNames, texts } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 import { makeFactoryKit, stagingSources } from '../../guest/factory/factory.js';
@@ -168,7 +163,7 @@ test('foreign, deleted and unavailable presets are refused before any row', asyn
     E(kit.factory).createSession(
       harden({ preset: kit.catalog.builtIn('development'), backend }),
     ),
-    { message: textOf.presetNeeds('git-workspace') },
+    { message: texts.runnerRequired },
   );
   const { preset, revision } = await E(kit.catalog.facet).create(custom(), 0);
   await E(preset).delete(revision);
