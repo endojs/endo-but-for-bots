@@ -269,8 +269,10 @@ files copy (`m1a`, `exec` and `m5o` through their helpers, `m4`, and `m3-300` wi
 run, load 2-5): long 200 / 1,000 / 5,000 held 89 / 158 / 473 s; busy 10..50 held 440, 391, 381,
 375, 357 s (one chain, 38 minutes of wall with waits); `exec` 58 s, `pool` 57 s, `m3-300` 94 s.
 
-The whole list is now 25 + 13 = 38 files (M0-M2 69.5 minutes, M3-M5 about 55 minutes; K2 split `gateway-restart` out of `gateway-session`), more
-than two hours of every lane stopped. **PM ruling (2026-11-18, recorded by K1,
+The four-milestone fold brings the complete list to 47 files. Environments adds three files.
+Context, mail and voice add two each. The preceding group had 38 files (25 in M0–M2
+and 13 in M3–M5), with exclusive runs totaling about 69.5 and 55 minutes respectively.
+K2 split `gateway-restart` out of `gateway-session`. **PM ruling (2026-11-18, recorded by K1,
 J-10075):** a milestone's recorded perf pass is its own files plus the cross-check `session`,
 `turn` and `exec` (the cross-check about 7 minutes); the whole list runs only when the PM asks
 for it (a core or worker change). One command runs it (S2): `corepack yarn perf:pass <M2|M3|M4|M5|environments|context|mail|voice|all>`
@@ -278,6 +280,24 @@ brings the templates up to date in shared slots, runs the files back to back in 
 and prints each file's held time; the lists are `perfLists` in `perf/_pass.mjs`, and a unit test
 keeps every perf check in exactly one of them. The context list runs `perf/compaction.perf.mjs`
 and `perf/images.perf.mjs` with the shared cross-check.
+
+**Four-milestone exclusive checks, 2026-11-19.** Times below are seconds holding
+the run lock. Every file stayed within the 600 s limit. The context command also ran
+the common session, turn and exec checks. Its five files held the lock for 792.1 s
+and took 1,322.8 s elapsed after template preparation.
+
+| File | Held (s) | Exit | Result |
+|---|---:|---:|---|
+| environments | 330.5 | 1 | Development creation overhead 513 ms against 175 ms. Historical size attribution in J-12105. |
+| environments-git | 167.0 | 1 | Status passed. Git log took 849 ms against 500 ms. |
+| environments-restart | 345.3 | 0 | All five restarts served within 8.01 s, with zero wakes or new groups. |
+| compaction | 231.2 | 1 | Rebuild median 615 ms against 359 ms. Planning, overhead and delivery count passed. |
+| images | 52.1 | 0 | Both request builders stayed below 10 ms median. |
+| mail | 440.9 | 1 | Both delivery medians and throughput missed. Inbox crank and hub growth passed. |
+| subagents | 255.1 | 1 | Ask took 715 ms against 300 ms. Three bursts and three subtree stops passed. |
+| session | 221.5 | 1 | Cold creation median 8,946 ms against 6,000 ms. Program size and factory install passed. |
+| turn | 144.7 | 0 | Start median 180 ms. |
+| exec | 142.7 | 0 | First call median 576 ms, trivial call median 153 ms. |
 
 **M3, M4, M5 and the cross-check** (X-CLOSE, 2026-11-18 16:12-17:19 UTC, at `404e60ea3a`, load
 1.0-2.8: 15 files, **4,004 s held (66.7 minutes), 66.8 minutes of wall**; exit 1 means a budget
