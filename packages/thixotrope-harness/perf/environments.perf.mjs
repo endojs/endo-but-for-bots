@@ -63,6 +63,7 @@ const {
   environmentProcesses,
   environmentsTemplate,
   startEnvironmentSession,
+  presetOfTemplate,
   toolResultsOf,
 } = await import('../test/integration/_environments.js');
 
@@ -221,13 +222,23 @@ await runPerf('environments', async ({ provision }) => {
   // ---- environments.sessionCreate (development minus chat-only)
   /** @type {Record<string, number[]>} */
   const created = { development: [], 'chat-only': [] };
+  const [development, chatOnly] = await Promise.all([
+    presetOfTemplate(slice.factory, 'development'),
+    presetOfTemplate(slice.factory, 'chat-only'),
+  ]);
   const createWindow = await runWindow(
     async i => {
       const kind = i % 2 === 0 ? 'development' : 'chat-only';
       // Each creation takes a spare from a full pool (refilled between).
       await E(slice.harness).whenSettled();
+      const options = harden({
+        title: kind,
+        preset: kind === 'development' ? development : chatOnly,
+        backend: made.backend,
+        at: Date.now(),
+      });
       const t = performance.now();
-      const session = await startEnvironmentSession(slice, made.backend, kind);
+      const session = await E(slice.factory).createSession(options);
       const ms = performance.now() - t;
       created[kind].push(ms);
       await E(slice.factory).deleteSession(session);
