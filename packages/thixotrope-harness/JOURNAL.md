@@ -17762,3 +17762,31 @@ THIX_HARNESS_INTEGRATION=1 corepack yarn exec node \
 
 The package typecheck passed. ESLint reported zero errors on the modified
 product and test files and three pre-existing warnings.
+
+### J-1462 2026-11-19 M9 factory admission work and receipt latency
+
+At 84229f408f the post office measures each distinct recipient envelope
+once, then charges that exact count to every admitted flight. A shortened
+session-only envelope has its own checked count. Previously each recipient
+repeated the UTF-8 traversal after draft validation. For eight distinct
+sessions, this reduces nine traversals of an unchanged envelope to one.
+An isolated Node 22.23.4 check of 10,000 warm calls to the production
+`messageBytes` measured 2.8 μs each for a 53-byte ping envelope and
+32.7 μs for an 8,051-byte envelope with 32 attachments. Those figures
+measure in-process traversal only. The factory bundle is 248,050 bytes
+(35 modules). The session program and M9 delta remain as in J-1460.
+
+The factory first admits and sequences each delivery, then awaits
+`SessionInternal.deliverMail` before settling the flight and publishing its
+receipt. A live idle receiver records the inbox entry and turn claim,
+starts opening or reusing turn ports, and flushes row and live updates in
+that delivery crank. J-12522's historical refusal-only receiver took a
+median 71.5 ms over three deliveries. The same historical run measured
+turn start at 123 ms (open 81, dispatch 36). The live two-recipient
+integration sample in J-1461 took 411 ms. Those workloads have different
+completion conditions and do not isolate the remaining latency. The
+200-ms operator and 300-ms session gates need their exclusive live rows.
+
+All 51 post-office, operator-mail and subagent-tree unit cases passed.
+They cover the exact in-flight byte bound, fresh admission after release,
+duplicate recipients, staged copies and re-drive. Typecheck passed.
