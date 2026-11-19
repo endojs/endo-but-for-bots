@@ -14951,3 +14951,57 @@ Reading: no command over 60 s (package tsc 7 s, the adapter test about 1 s). Com
 and this journal commit; nothing pushed; session bundle 233,126 bytes before and after (M11's
 cap 0: this unit adds no guest code); no change to `packages/thixotrope` or `rust/**`.
 Fit: neutral.
+
+### J-1370 2026-11-19 W11.3 speech text and the speech view of a turn - built
+Evidence: `c5b4f2eaa5`, `6fb874f701`; `AH/speech/code-filter.js` (`makeCodeFilter`,
+`INSPECTED_LINE_UNITS`), `AH/speech/speech-text.js` (`makeSpeechText`, `stripMarkdown`,
+`MIN_SENTENCE_UNITS`, `ABBREVIATIONS`), `AH/speech/turn-view.js` (`openTurnView`); tests
+`test/unit/speech-text.test.js` (14) and `test/adapter/speech-turn-view.test.js` (12), 26 passing.
+Reading: contract section 7 as written, with these choices. The code filter is Endo's,
+unchanged in behaviour, plus `held()`. The sentence split is incremental: each push scans only
+the units it added (Endo's chunker rescanned its buffer per push and looked back with a regex
+over everything before each period, quadratic on a long reply); the abbreviation and list-marker
+checks look back a bounded number of units; a run of `sentenceUnits` with no boundary is cut at
+its last whitespace, never inside a surrogate pair. `lineBreak()` starts a fresh code filter (an
+unclosed fence in one message does not silence the next) and releases a chunk under 10 units
+alone, so no sentence spans a tool call. The view reads `Live.subscribe(session)` in process,
+compares a final with the round's text only (whitespace collapsed; a revised final adds
+nothing), reads a staged final through `Content` a page at a time, treats every abort as the
+end, ends on another turn's `turn-start` (a channel gap) and aborts `turnNotFound` when the
+channel drops it. Views are counted per `Live` and per session in `WeakMap`s.
+Fit: good. The channel's snapshot-then-deliveries contract is exactly what a speech view needs;
+no session crank, no vat delivery.
+
+### J-1371 2026-11-19 W11.3 speech text and view latency - measured
+Evidence: `6591bd9408` (the lane head when measured; my files identical to `6fb874f701`); a
+scratch script through `perf/_window.mjs` `runWindow`/`windowMs` and `perf/_harness.mjs`
+`summarize`, 10 s windows, no supervisor, shared machine.
+Reading: `speechText.push40` (one 40-unit delta through `SpeechText.push`) median 0.003 ms, p99
+0.004, n 3,610,417. `speechView.deltaToSink` (`publishDelta` in the real channel to
+`TurnTextSink.text` through the view's `Live` subscription) median 0.058 ms, p95 0.064, p99
+0.155, n 148,900. Both are a small part of the 20 ms `speech.firstAudio` budget (W11.9's row).
+The unit tests also bound the probes: 1 MiB with no punctuation keeps sentences at most 1,000
+units and the backlog under one chunk plus 1,000 units; 1 MiB of sentences pushed 7 units at a
+time is split in well under 2 s.
+Fit: good.
+
+### J-1372 2026-11-19 W11.3 contract gaps found while building - finding
+Evidence: contract section 7; `engine-types.js` `OpenTurnViewOptions`, `SpeechText`.
+Reading: (1) `OpenTurnViewOptions` carries no limits; `openTurnView` also takes an optional
+`limits: { speakViewsPerSession, sentenceBacklogUnits }` (defaults from `audioLimits`), the
+host's test lever of 3.3. (2) The view count of step 1 needs a registry the options do not name:
+it is kept in the module, by `Live` object, then by session. (3) A settled turn whose final was
+staged has only the fold's preview in its snapshot, so replaying a finished turn through `speak`
+plays that preview, not the whole staged final; the full text is `Speech.replay`'s (D-M11-17).
+(4) An aborted turn's fold closes its streaming text into a message, so its replay ends with a
+newline (harmless for speech). (5) The round's text and a staged final are kept up to
+`sentenceBacklogUnits`; over it, the final adds nothing.
+Fit: neutral.
+
+### J-1373 2026-11-19 W11.3 time record - process
+Evidence: first command 2026-11-19T02:22:38Z.
+Reading: no command over 60 s (package tsc about 3 s, both test files under 2 s, the probe 20 s).
+Commits `c5b4f2eaa5`, `6fb874f701` and this journal commit; nothing pushed; session bundle
+233,126 bytes before and after (M11's cap 0: this unit adds no guest code); no change to
+`packages/thixotrope` or `rust/**`.
+Fit: neutral.
