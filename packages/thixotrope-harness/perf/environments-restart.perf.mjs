@@ -30,7 +30,8 @@ const { makeProvision, templateIdFor, names } =
   await import('../scripts/provision-steps.js');
 const { ensureTemplate, killStrays, startFromTemplate } =
   await import('../test/template/index.js');
-const { requestId, untilAsleep } = await import('../test/integration/_m1a-slice.js');
+const { requestId, untilAsleep } =
+  await import('../test/integration/_m1a-slice.js');
 const { turnRecords } = await import('../test/integration/_m1b.js');
 const {
   commandCall,
@@ -81,14 +82,24 @@ const restartTemplate = async () => {
           harden({ title: `env ${i}`, preset, backend, at: Date.now() }),
         );
         // eslint-disable-next-line no-await-in-loop
-        const { turn } = await E(composer).submit(session, 'one command', requestId());
+        const { turn } = await E(composer).submit(
+          session,
+          'one command',
+          requestId(),
+        );
         // eslint-disable-next-line no-await-in-loop
         const { state } = await E(turn).whenFinished();
         // eslint-disable-next-line no-await-in-loop
         const results = toolResultsOf(await turnRecords(turn));
-        if (state !== 'completed' || results.length !== 1 || results[0].failed ||
-            JSON.parse(results[0].result).stdout !== 'x') {
-          throw Error(`Environment restart fixture session ${i} did not run its command`);
+        if (
+          state !== 'completed' ||
+          results.length !== 1 ||
+          results[0].failed ||
+          JSON.parse(results[0].result).stdout !== 'x'
+        ) {
+          throw Error(
+            `Environment restart fixture session ${i} did not run its command`,
+          );
         }
       }
     },
