@@ -607,3 +607,18 @@ section.
 8. The saving with the most leverage is to make perf checks rate-per-fixed-time
    (run for a set number of minutes, report the rate and its trend) instead of
    fixed-count runs that take hours, then to run lanes concurrently.
+
+## Four-milestone integration run
+
+Run-lock checkpoint through 2026-11-19 07:50 UTC. Each row sums
+finished shared and exclusive acquisitions in the named checkout. Concurrent waits and
+holds can overlap. The group tests in temporary checkouts and the standalone unit, adapter
+and lint jobs are outside this table. The preceding generated block covers Claude's workflows.
+
+| checkout | finished acquisitions | summed wait (s) | summed hold (s) | nonzero exits | releases without exit code |
+|---|---:|---:|---:|---:|---:|
+| PM combined checkout | 9 | 4880 | 1351 | 5 | 0 |
+| M11 short-path checkout | 9 | 4551 | 1944 | 3 | 0 |
+| M11 checkout | 7 | 1377 | 400 | 7 | 0 |
+| M6 checkout | 12 | 1678 | 2102 | 9 | 1 |
+| M9 checkout | 3 | 1434 | 712 | 1 | 1 |
