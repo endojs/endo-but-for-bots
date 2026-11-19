@@ -1336,46 +1336,7 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
                 + (s1.iter().map(|s| s.len() as u64 + 1).sum::<u64>())
                     .saturating_mul(s2.len() as u64),
         );
-        let count1 = c1[0] as usize;
-        let count2 = c2[0] as usize;
-        let mut i1 = 1usize;
-        let lim1 = 1 + count1;
-        let mut i2 = 1usize;
-        let lim2 = 1 + count2;
-        let mut out = vec![0i32];
-        let mut flag = 0i32;
-        let mut old = 0i32;
-        while i1 < lim1 && i2 < lim2 {
-            let test = c1[i1] - c2[i2];
-            let mut character = 0i32;
-            if test <= 0 {
-                character = c1[i1];
-                flag ^= 1;
-                i1 += 1;
-            }
-            if test >= 0 {
-                character = c2[i2];
-                flag ^= 2;
-                i2 += 1;
-            }
-            if flag == op || old == op {
-                out.push(character);
-            }
-            old = flag;
-        }
-        if op & 2 == 0 {
-            while i1 < lim1 {
-                out.push(c1[i1]);
-                i1 += 1;
-            }
-        }
-        if op & 1 == 0 {
-            while i2 < lim2 {
-                out.push(c2[i2]);
-                i2 += 1;
-            }
-        }
-        out[0] = (out.len() - 1) as i32;
+        let out = charset_merge(&c1, &c2, op);
         let mut strings = match op {
             MX_CHARSET_UNION_OP => s1.iter().chain(s2.iter()).cloned().collect::<Vec<_>>(),
             MX_CHARSET_SUBTRACT_OP => s1
@@ -3363,6 +3324,66 @@ fn is_v_reserved_punctuator(c: i64) -> bool {
         )
 }
 
+/// The boundary-merge sweep of `fxCharSetCombine`, as a pure function of
+/// two endpoint lists `[count, b0, e0, b1, e1, ...]` (half-open ranges) and
+/// the operation: union ([`MX_CHARSET_UNION_OP`]), subtraction
+/// ([`MX_CHARSET_SUBTRACT_OP`]) or intersection
+/// ([`MX_CHARSET_INTERSECTION_OP`]). `flag` holds "inside set 1" in bit 0
+/// and "inside set 2" in bit 1; a boundary is emitted where the state enters
+/// or leaves the one `op` names (union names "inside neither"). Extracted
+/// from `Compiler::charset_combine`, which keeps the work charge and the node
+/// allocation, so metering is unchanged; guarantee STR-3 proves its set
+/// semantics.
+fn charset_merge(c1: &[i32], c2: &[i32], op: i32) -> Vec<i32> {
+    let mut out = vec![0i32];
+    charset_merge_into(c1, c2, op, &mut |c| out.push(c));
+    out[0] = (out.len() - 1) as i32;
+    out
+}
+
+/// [`charset_merge`]'s sweep, handing each output boundary to `emit` in
+/// ascending order, so the proofs can collect them without a growing `Vec`.
+fn charset_merge_into(c1: &[i32], c2: &[i32], op: i32, emit: &mut impl FnMut(i32)) {
+    let count1 = c1[0] as usize;
+    let count2 = c2[0] as usize;
+    let mut i1 = 1usize;
+    let lim1 = 1 + count1;
+    let mut i2 = 1usize;
+    let lim2 = 1 + count2;
+    let mut flag = 0i32;
+    let mut old = 0i32;
+    while i1 < lim1 && i2 < lim2 {
+        let test = c1[i1] - c2[i2];
+        let mut character = 0i32;
+        if test <= 0 {
+            character = c1[i1];
+            flag ^= 1;
+            i1 += 1;
+        }
+        if test >= 0 {
+            character = c2[i2];
+            flag ^= 2;
+            i2 += 1;
+        }
+        if flag == op || old == op {
+            emit(character);
+        }
+        old = flag;
+    }
+    if op & 2 == 0 {
+        while i1 < lim1 {
+            emit(c1[i1]);
+            i1 += 1;
+        }
+    }
+    if op & 1 == 0 {
+        while i2 < lim2 {
+            emit(c2[i2]);
+            i2 += 1;
+        }
+    }
+}
+
 fn charset_contains(chars: &[i32], character: i32) -> bool {
     let mut low = 0usize;
     let mut high = chars[0] as usize / 2;
@@ -3541,3 +3562,69 @@ mod recursion_bounds {
 
 // The child owns its test gate for recursive source inspection.
 mod validation_tests;
+
+/// STR-3 beyond the Kani bounds: the merge and the membership search
+/// against a linear-scan model, on PRNG-driven well-formed sets of up to 6
+/// ranges per side.
+#[cfg(test)]
+mod charset_properties {
+    use super::*;
+
+    /// The linear-scan meaning of an endpoint list.
+    fn linear_contains(chars: &[i32], c: i32) -> bool {
+        chars[1..].chunks_exact(2).any(|r| r[0] <= c && c < r[1])
+    }
+
+    /// Strictly ascending boundaries, even count, header equal to it.
+    fn well_formed(chars: &[i32]) -> bool {
+        chars[0] as usize == chars.len() - 1
+            && (chars.len() - 1).is_multiple_of(2)
+            && chars[1..].windows(2).all(|w| w[0] < w[1])
+    }
+
+    fn random_set(state: &mut u64, max_ranges: u64, span: i32) -> Vec<i32> {
+        let mut next = || {
+            *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = *state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+        let n = 2 * (next() % (max_ranges + 1)) as usize;
+        let mut points: Vec<i32> = (0..n).map(|_| (next() % span as u64) as i32).collect();
+        points.sort_unstable();
+        points.dedup();
+        points.truncate(points.len() & !1);
+        let mut out = vec![points.len() as i32];
+        out.extend(points);
+        out
+    }
+
+    #[test]
+    fn merge_has_set_semantics_and_contains_is_a_scan() {
+        let mut state = 0xC4A5u64;
+        for _ in 0..20_000 {
+            let a = random_set(&mut state, 6, 40);
+            let b = random_set(&mut state, 6, 40);
+            for (op, f) in [
+                (
+                    MX_CHARSET_UNION_OP,
+                    (|x, y| x || y) as fn(bool, bool) -> bool,
+                ),
+                (MX_CHARSET_SUBTRACT_OP, |x, y| x && !y),
+                (MX_CHARSET_INTERSECTION_OP, |x, y| x && y),
+            ] {
+                let out = charset_merge(&a, &b, op);
+                assert!(well_formed(&out), "{a:?} {op} {b:?} -> {out:?}");
+                for c in -1..=41 {
+                    let want = f(linear_contains(&a, c), linear_contains(&b, c));
+                    assert_eq!(linear_contains(&out, c), want);
+                    assert_eq!(charset_contains(&out, c), want);
+                }
+            }
+            for c in -1..=41 {
+                assert_eq!(charset_contains(&a, c), linear_contains(&a, c));
+            }
+        }
+    }
+}
