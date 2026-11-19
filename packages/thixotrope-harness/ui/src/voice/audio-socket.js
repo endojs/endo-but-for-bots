@@ -83,7 +83,9 @@ export const decodeFrame = data => {
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
   if (bytes.length < FRAME_HEADER_BYTES || bytes[1] !== 0) return undefined;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
-  return harden({
+  // Frozen, not hardened: hardening a byte view walks every index (about
+  // 0.6 ms for one 85 ms block), and the bytes are the caller's anyway.
+  return Object.freeze({
     kind: bytes[0],
     stream: view.getUint16(2),
     payload: bytes.subarray(FRAME_HEADER_BYTES),
@@ -185,7 +187,7 @@ export const decodeServerFrame = data => {
       payload.byteOffset,
       4,
     ).getUint32(0);
-    return harden({
+    return Object.freeze({
       kind: 'pcm',
       stream,
       sampleRate,
