@@ -686,6 +686,24 @@ test('auto-speak: a queued send is spoken when its turn starts, after one receip
   t.is(speaks[0][2], controller.getState().view?.current?.turnId);
 });
 
+test('a muted page reads no receipt and no turn status for its sends (no extra crank)', async t => {
+  const { controller, state, log, control } = await setup({
+    sessions: [{ key: 's1', running: 'earlier' }],
+  });
+  await controller.selectSession('s1');
+  state.toggleSpeaker();
+  t.false(state.view().autoSpeak);
+  await controller.send('queued while muted');
+  control.play('s1');
+  await flush();
+  control.play('s1');
+  await controller.send('started while muted');
+  await flush();
+  t.is(control.callsOf('Session', 'getSubmissionReceipt').length, 0);
+  t.is(control.callsOf('Turn', 'getStatus').length, 0);
+  t.is(callsNamed(log.calls, 'speak').length, 0);
+});
+
 test('waiting submissions are bounded', async t => {
   const { controller, control } = await setup({
     sessions: [{ key: 's1', running: 'earlier' }],

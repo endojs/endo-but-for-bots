@@ -371,6 +371,11 @@ export const makeVoiceState = ({
     autoSpeakChoice ??
     Boolean(conn && conn.configuration && conn.configuration.speechOut);
 
+  /** Whether this page's fresh turns are spoken now (R5-45). */
+  const speaks = () =>
+    autoSpeak() &&
+    Boolean(conn && conn.configuration && conn.configuration.speechOut);
+
   const updateWake = () =>
     wakeLock.set(
       wakeWanted({
@@ -584,8 +589,7 @@ export const makeVoiceState = ({
    * @param {string | undefined} turnId
    */
   const speakFresh = (sessionKey, session, turnId) => {
-    if (turnId === undefined || !autoSpeak()) return;
-    if (!conn || !conn.configuration || !conn.configuration.speechOut) return;
+    if (turnId === undefined || !speaks()) return;
     if (viewState().activeKey !== sessionKey) return;
     speakTurn(session, turnId).catch(report);
   };
@@ -606,7 +610,8 @@ export const makeVoiceState = ({
    */
   const onSubmission = (c, notice) => {
     const { sessionKey, session, requestId, receipt } = notice;
-    if (conn !== c || !receipt) return;
+    // Nothing is read for a send that will not be spoken (no crank, rule 9).
+    if (conn !== c || !receipt || !speaks()) return;
     if (receipt.state === 'started') {
       turnIdOf(receipt).then(
         turnId => speakFresh(sessionKey, session, turnId),
@@ -627,7 +632,7 @@ export const makeVoiceState = ({
    */
   const onTurnStart = (sessionKey, turnId) => {
     const c = conn;
-    if (!c) return;
+    if (!c || !speaks()) return;
     for (const wait of c.waiting.filter(w => w.sessionKey === sessionKey)) {
       E(wait.session)
         .getSubmissionReceipt(wait.requestId)
