@@ -18092,3 +18092,32 @@ shape check at the public adapter. The 28 list-channel and pool/factory
 tests passed, including batched rows, removals, order, refresh after restart
 and refusal of unknown keys and oversized batches at the receiver. Its full
 performance results are pending.
+
+Full exclusive mail on 17bbccdfed (f595d6bc64 factory, allocation GC,
+50M crank budget) finished with exit 1 on throughput. Operator ACK was
+146.447 ms median (95 samples, strict 200 ms). Session-to-session was
+349 ms (69 samples, strict 300 ms, wrapper 375 ms). The causal delivery
+count remains unverified as described above. The inbox histogram over
+all deliveries between operator send and receipt had median upper bound
+30 ms and p95 upper bound 500 ms across 55 posts (budget 550 ms).
+Four senders completed and dismissed 164 posts in 61.420 s, 2.670/s
+against 3/s, with eight active recipients, eight acknowledged posts
+awaiting dismissal at peak and largest inbox six.
+
+Fresh growth passed at 0.605 times after 301 attachment posts in
+121.371 s and 32 idle cranks. Image bytes went 158,391 to 215,239
+and log bytes 534,380 to 203,799 (total 692,771 to 419,038).
+Compactions went 12 to 43 and pending log records 69 to 23. The smaller
+log accounted for the falling total despite an increase in image bytes.
+The prior warm runs lack component breakdowns. Raw output is in
+`/private/tmp/thix-qc-mail-candidate-final.log`.
+
+The corresponding integration subagent run on 3b0869a860 recorded
+1,513 ms spawn median (12 samples, strict 1,500 ms, wrapper 1,875 ms)
+and 363 ms ask overhead (58 samples, strict 300 ms, wrapper 375 ms).
+Median parent tool time was 490 ms, current whole-child-turn time
+117 ms and provider interval 4 ms. Previous provider-based overhead
+was 627 ms. The three burst-of-eight runs took 13.829, 14.325 and
+13.685 s against 30 s. All stops removed three workers, in 1.769,
+1.808 and 1.724 s. Raw output is in
+`/private/tmp/thix-qc-post-allocation-subagents.log`.
