@@ -15121,3 +15121,70 @@ Reading: no command over 60 s; no supervisor, browser or run lock used; nothing 
 change to `packages/thixotrope` or `rust/**`; no shared file edited (the part and the entries are
 not registered: S1 and S6 are W9.8's).
 Fit: neutral.
+
+### J-12400 2026-11-19 W9.4 post office and operator mail - built
+Evidence: `8d71039794` (`guest/factory/post-office.js`, `test/unit/_post-office-fakes.js`,
+`test/unit/post-office.test.js`, 19 tests), `228c303fd4` (`guest/factory/operator-mail.js`,
+`test/unit/operator-mail.test.js`, 12 tests); both files about 1.4 s together.
+Reading: `makePostOffice({ admin, rows, starts, lastKnownTime? })` mints one `MailAddress` and one
+`Outbox` per row and one operator address (title `user`), recognises a recipient only by a
+factory `WeakMap` (never calls it: acceptance 6's counting fake), and posts: draft-level refusals
+(`mailFraud`, `envelopeTooLarge`) reject the post; per recipient `notAnAddress`, `recipientLost`
+(a dropped or lost row; a retired break from `deliverMail` marks the row lost), `postOfficeBusy`
+(rows or kept bytes) and the recipient's own refusal are the receipt's results. A staged body to
+a turn-starting recipient is copied per recipient through the relay writers (fetched once,
+re-fetched once on a retired break); a `reply`/`value` to a session is kept inline (a staged
+body becomes its preview plus `bodyCut`, no copy); a staged reply to the operator is copied and
+released by `OperatorMessage.dismiss`. `seq` is assigned when the envelope is first sent (after
+its copy), so a slow copy cannot reorder a recipient's sequence; a re-drive resends the same
+envelope. Replies are checked against the 4,096 ring (replier = the postmark's recipient,
+`to` = its sender); an open ask's listener gets the reply instead of an inbox, a closed postmark
+consumes it. `restart(current)` re-drives every flight stamped earlier, 32 at a time, and
+answers without waiting for a guest call. `makeOperatorMail({ postOffice, admin, rows })`
+registers its inbox with the post office; the mailbox sends, requests and forms; tickets answer
+once; forms are checked again by pattern (no JSON parsed in the vat), defaults applied, and post a
+`value` message; `responseKey` reuses open or settled requests (a failed or cancelled one is
+replaced); at most 1,024 requests, the oldest settled evicted first.
+Fit: good; amplification by `WeakMap` is the natural Thixotrope shape for an unforgeable sender,
+and all delivery state is plain heap records that persist with the factory vat.
+
+### J-12401 2026-11-19 W9.4 sizes and bounds - measured
+Evidence: `228c303fd4`; `post-office.test.js` acceptance-22 case (Node, no supervisor);
+`node scripts/bundle-guest.mjs session factory` at `6493d955c7`.
+Reading: with a stalled recipient and 8,192-byte inline bodies, 509 envelopes were admitted
+(4,193,142 kept bytes of the 4,194,304 bound) and the 510th refused with `postOfficeBusy`; with
+one-byte bodies the 1,025th; after the deliveries answered, kept bytes returned to 0 and posts
+were accepted again. A re-drive of 40 stalled flights sent 32, then the rest as answers came.
+Session program unchanged by this unit (233,126 bytes before and after; neither module is in the
+session bundle). The factory bundle (192,892 bytes) gains the two modules (23,946 + 17,291 source
+bytes before comment stripping) only when W9.9 imports them. No rate measured: the unit's rows
+(`mail.post.operator`, `mail.throughput`) need the supervisor and are W9.10's.
+Fit: neutral.
+
+### J-12402 2026-11-19 W9.4 what the contract's internal API lacked - finding
+Evidence: m9-interfaces.md 3.1 (`PostOffice`), `guards/post-office.js` `MailDraft`,
+`OperatorDraft` (no `at`), `OperatorMessageView.values`, `RequestInfo`.
+Reading: (1) A draft carries no time and a vat has no clock: `makePostOffice` takes an optional
+`lastKnownTime` (W9.9 should pass the kit's `knownTime`), and `post` an optional `at` (asks and
+spawns carry one); otherwise the latest `at` seen. (2) Added to `PostOffice`: `bindAddress(handle,
+row)` (the subagent tree's `SubagentHandle` is "also a mail address", but only the tree mints
+it), `cancelDelivery(postmark)` (close and `cancelMail` sendOnly, for `cancelAsk` and
+`RequestHandle.cancel`), `copy(blob, options)` (the relay with its re-fetch, for the ask answer's
+cut copy), `recipientOfPostmark`, `now()`, `attachOperatorInbox` (the operator mail module's
+registration), `status()`; `post` also takes `onReply` so an ask is registered before its delivery
+is sent. `onReply` answers false for an unknown or closed postmark. (3) Not built as texts exist
+for: a stray staged body's `cutFrom` and `bodyCut` count are its bytes (the factory cannot know
+its units without reading the blob); a full request table reuses `postOfficeBusy(1024)`, whose
+words say "deliveries in flight"; an unknown or repeated form field uses
+`textOf.unexpectedArgument(name, 'submitForm', fieldNames)`; a form's value message is dropped
+(the handle keeps the values) when the operator inbox is full; `OperatorMessage.reply` on a
+`value` message is `mailFraud` (it was never delivered by post). A `value` message's submission
+is bounded by `envelopeBytes` so its view fits a page.
+Fit: fair: each gap is a fixed shape the guards could carry at the fold (W9.F).
+
+### J-12403 2026-11-19 W9.4 time record - process
+Evidence: first command 2026-11-19T02:23:31Z; last 2026-11-19T02:36:36Z (before this entry).
+Reading: no command over 60 s; no supervisor, browser or run lock used; nothing pushed; no
+change to `packages/thixotrope`, `rust/**` or any shared file; `corepack yarn lint:duplicates`
+1.74 % (ceiling 2.05 %); eslint 0 errors on the unit's files, `tsc` clean for the package.
+Fit: neutral.
