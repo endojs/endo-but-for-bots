@@ -227,7 +227,14 @@ mod tests {
     #[test]
     fn exhaustive_on_small_and_boundary_operands() {
         let values: Vec<i32> = (-40..40)
-            .chain([i32::MIN, i32::MIN + 1, i32::MAX, i32::MAX - 1, 1 << 30, -(1 << 30)])
+            .chain([
+                i32::MIN,
+                i32::MIN + 1,
+                i32::MAX,
+                i32::MAX - 1,
+                1 << 30,
+                -(1 << 30),
+            ])
             .collect();
         for &x in &values {
             for &y in &values {

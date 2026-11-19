@@ -133,6 +133,22 @@ pub fn remainder_int32(n: i32, d: i32) -> u64 {
     number_value_of_integer(i128::from(r)) // Step 11.
 }
 
+/// Steps 7–9 of Number::remainder ([`remainder_int32`]) restated without
+/// division, for proofs: for finite non-zero `n` and `d`, `q =
+/// truncate(ℝ(n) / ℝ(d))` and `r = ℝ(n) - ℝ(d) × q` exactly when
+///
+/// - `ℝ(n) = ℝ(d) × q + r`,
+/// - `|r| < |ℝ(d)|`, and
+/// - `r = 0` or `r` has the sign of `n`.
+///
+/// (Division with remainder: for each `d ≠ 0` exactly one pair `(q, r)`
+/// with `|r| < |d|` and `r` zero or of `n`'s sign satisfies the equation,
+/// and the truncated quotient and its remainder are such a pair.)
+pub fn is_truncated_division(n: i32, d: i32, q: i64, r: i64) -> bool {
+    let (n, d) = (i64::from(n), i64::from(d));
+    n == d * q + r && r.abs() < d.abs() && (r == 0 || (r < 0) == (n < 0))
+}
+
 /// ECMA-262 §6.1.6.1.1 Number::unaryMinus ( x ) on an int32-valued `x`:
 ///
 /// > 1. If x is NaN, return NaN.
@@ -242,12 +258,24 @@ mod tests {
         assert_eq!(number_value_of_integer(-3), b(-3.0));
         assert_eq!(number_value_of_integer(1 << 53), b(9007199254740992.0));
         // 2^53 + 1 is a tie between 2^53 and 2^53 + 2: even is 2^53.
-        assert_eq!(number_value_of_integer((1 << 53) + 1), b(9007199254740992.0));
+        assert_eq!(
+            number_value_of_integer((1 << 53) + 1),
+            b(9007199254740992.0)
+        );
         // 2^53 + 3 ties between 2^53 + 2 and 2^53 + 4: even is + 4.
-        assert_eq!(number_value_of_integer((1 << 53) + 3), b(9007199254740996.0));
-        assert_eq!(number_value_of_integer(-(1 << 53) - 1), b(-9007199254740992.0));
+        assert_eq!(
+            number_value_of_integer((1 << 53) + 3),
+            b(9007199254740996.0)
+        );
+        assert_eq!(
+            number_value_of_integer(-(1 << 53) - 1),
+            b(-9007199254740992.0)
+        );
         // 2^62 - 1 rounds up to 2^62 (a carry out of 53 bits).
-        assert_eq!(number_value_of_integer((1 << 62) - 1), b(4611686018427387904.0));
+        assert_eq!(
+            number_value_of_integer((1 << 62) - 1),
+            b(4611686018427387904.0)
+        );
         assert_eq!(
             number_value_of_integer(i128::from(i32::MIN) * i128::from(i32::MIN)),
             b(4611686018427387904.0)
@@ -298,7 +326,15 @@ mod tests {
     #[test]
     fn int32_arithmetic_matches_platform_floats() {
         let values: Vec<i32> = (-60..60)
-            .chain([i32::MIN, i32::MIN + 1, i32::MAX, i32::MAX - 1, 46341, -46341, 1 << 30])
+            .chain([
+                i32::MIN,
+                i32::MIN + 1,
+                i32::MAX,
+                i32::MAX - 1,
+                46341,
+                -46341,
+                1 << 30,
+            ])
             .collect();
         for &x in &values {
             for &y in &values {
@@ -314,6 +350,45 @@ mod tests {
                 }
             }
             assert_eq!(unary_minus_int32(x), b(-f64::from(x)));
+        }
+    }
+
+    #[test]
+    fn truncated_division_characterises_the_remainder() {
+        let values: Vec<i32> = (-50..50)
+            .chain([
+                i32::MIN,
+                i32::MIN + 1,
+                i32::MAX,
+                i32::MAX - 1,
+                46341,
+                -65536,
+            ])
+            .collect();
+        for &n in &values {
+            for &d in &values {
+                if n == 0 || d == 0 {
+                    continue;
+                }
+                let q = i64::from(n) / i64::from(d);
+                let r = i64::from(n) - i64::from(d) * q;
+                assert!(is_truncated_division(n, d, q, r));
+                let want = if r == 0 && n < 0 {
+                    NEGATIVE_ZERO
+                } else {
+                    number_value_of_integer(i128::from(r))
+                };
+                assert_eq!(remainder_int32(n, d), want, "{n} % {d}");
+                // Every other remainder candidate is rejected.
+                for delta in [-2i64, -1, 1, 2] {
+                    let other = r + delta * i64::from(d);
+                    assert!(
+                        !is_truncated_division(n, d, q - delta, other),
+                        "{n} {d} {delta}"
+                    );
+                    assert!(!is_truncated_division(n, d, q, r + delta));
+                }
+            }
         }
     }
 

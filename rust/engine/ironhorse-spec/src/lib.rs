@@ -26,6 +26,7 @@
 #![forbid(unsafe_code)]
 
 pub mod arith;
+pub mod date;
 pub mod float16;
 pub mod index_string;
 pub mod int32;

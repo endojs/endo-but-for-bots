@@ -68,7 +68,12 @@ mod tests {
 
     #[test]
     fn renders_like_the_platform() {
-        for n in (0..2000).chain([4294967294, 4294967295, 9007199254740991, 999_999_999_999_999]) {
+        for n in (0..2000).chain([
+            4294967294,
+            4294967295,
+            9007199254740991,
+            999_999_999_999_999,
+        ]) {
             assert_eq!(render(n), n.to_string());
         }
     }
@@ -90,7 +95,10 @@ mod tests {
         assert_eq!(array_index(b""), None);
         assert_eq!(array_index(b" 1"), None);
         assert_eq!(array_index(b"+1"), None);
-        assert_eq!(integer_key(b"9007199254740991", (1 << 53) - 1), Some((1 << 53) - 1));
+        assert_eq!(
+            integer_key(b"9007199254740991", (1 << 53) - 1),
+            Some((1 << 53) - 1)
+        );
         assert_eq!(integer_key(b"9007199254740992", (1 << 53) - 1), None);
     }
 }
