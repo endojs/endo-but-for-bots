@@ -105,7 +105,8 @@ export const makeApiProvider = ({
         now,
         label,
         unreachable: wire.unreachable,
-        stream: async function* apiStream({ projection, signal }) {
+        // M8 (S-15): `tools` replaces the request's (the summary call).
+        stream: async function* apiStream({ projection, signal, tools }) {
           const model = wire.model(req);
           const key = await readProviderKey(readKey);
           const system = await systemTextOf(req.system, blobs, owner);
@@ -113,7 +114,7 @@ export const makeApiProvider = ({
             model,
             transcript: projection.transcript,
             system,
-            req,
+            req: tools === undefined ? req : { ...req, tools },
             spec,
           });
           const retryRound =

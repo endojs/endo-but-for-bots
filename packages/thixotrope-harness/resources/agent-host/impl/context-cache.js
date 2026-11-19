@@ -68,6 +68,25 @@
  * `archive` and no archive key here fails the round (the sealed part would
  * be missing from the context).
  *
+ * M8 (`designs/m8-interfaces.md` 5.4, D-M8-16; seam S-13): an entry also
+ * holds the compaction `boundary` (`RoundRequest.base.boundary`, present
+ * once the epoch moved).
+ *
+ * - Rebase: a request one epoch on, whose boundary lies in the kept
+ *   records and whose archive state is the entry's (the answer of
+ *   `TurnSink.compacted` right after a compaction), drops the records and
+ *   texts below the boundary and the whole sealed part (everything sealed
+ *   lies before it, D-M8-4), then is applied as an ordinary request. No
+ *   vat crank; the archive's `compacted` is called off the round's path.
+ * - Rebuild of a compacted session: the archive's manifest is reconciled
+ *   with the vat's `{ epoch, boundary }` first (`archive.compacted`, which
+ *   returns at once when they agree), and the tail starts at the later of
+ *   `sealedTo` and the boundary.
+ * - `prepare(..., { planInput: true })` (the endpoint sets it for a request
+ *   that carries `compaction`) keeps the entry's records, texts and sealed
+ *   part for the projection it answers, read once through `planInputOf`
+ *   (the compaction plan's input; the projection itself is unchanged).
+ *
  * Node only.
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
@@ -89,6 +108,27 @@ export const isAbandoned = error =>
   typeof error === 'object' && error !== null && abandoned.has(error);
 harden(isAbandoned);
 
+/**
+ * Projection -> the cache's records it was made from, for the compaction
+ * plan (M8 5.4). Weakly held: an entry lives as long as its projection.
+ * @type {WeakMap<object, import('./providers/compaction.js').PlanInput>}
+ */
+const planInputs = new WeakMap();
+
+/**
+ * The plan input of a projection prepared with `planInput: true`, once
+ * (a second read answers undefined).
+ * @param {unknown} projection
+ * @returns {import('./providers/compaction.js').PlanInput | undefined}
+ */
+export const planInputOf = projection => {
+  if (typeof projection !== 'object' || projection === null) return undefined;
+  const input = planInputs.get(projection);
+  planInputs.delete(projection);
+  return input;
+};
+harden(planInputOf);
+
 /** Milliseconds, for the timing of one prepare. */
 const clock = () => performance.now();
 
@@ -99,6 +139,8 @@ const messageOf = error =>
 /**
  * @typedef {object} Entry
  * @property {number} epoch
+ * @property {number} boundary M8: the compaction boundary (0 until the
+ *   first compaction)
  * @property {number} start absolute index of `records[0]`
  * @property {any[]} records
  * @property {Map<any, string>} texts blob presence -> its text
@@ -126,6 +168,9 @@ const messageOf = error =>
  * @property {number} sealedLoads M2: rebuilds that loaded a sealed part
  * @property {number} mirrorTails M2: rebuild tails taken from the mirror
  * @property {number} mirrorMisses M2: mirrors that disagreed with the vat
+ * @property {number} rebases M8: entries moved to a new boundary in place
+ * @property {number} reconciles M8: rebuilds that told the archive the
+ *   vat's epoch and boundary
  */
 
 /**
@@ -182,6 +227,8 @@ export const makeContextCache = ({
     sealedLoads: 0,
     mirrorTails: 0,
     mirrorMisses: 0,
+    rebases: 0,
+    reconciles: 0,
   };
 
   /** @param {any} session */
@@ -381,7 +428,7 @@ export const makeContextCache = ({
   };
 
   /**
-   * @typedef {{ turnId: string, base: { count: number, epoch: number, archive?: { sealedTo: number, sealedTurns: number, segments: number, digest: string } }, append: any[], context?: any }} CacheRequest
+   * @typedef {{ turnId: string, base: { count: number, epoch: number, boundary?: number, archive?: { sealedTo: number, sealedTurns: number, segments: number, digest: string } }, append: any[], context?: any }} CacheRequest
    *   the parts of a RoundRequest the cache reads
    */
 
@@ -403,6 +450,16 @@ export const makeContextCache = ({
     const { base, context } = request;
     const vat = base.archive;
     const loading = clock();
+    if (base.epoch > 0) {
+      // M8 (D-M8-16): the vat's epoch and boundary are the truth; the
+      // manifest and context.jsonl are caches of them.
+      await archive.compacted({
+        key,
+        epoch: base.epoch,
+        boundary: base.boundary ?? 0,
+      });
+      counts.reconciles += 1;
+    }
     const sealed = await archive.prepareSealed(session, key, vat, {
       context,
     });
@@ -420,7 +477,8 @@ export const makeContextCache = ({
             digest: vat.digest,
             sealedTo: vat.sealedTo,
           };
-    const from = Number(vat?.sealedTo ?? 0);
+    // M8: the kept records start at the boundary once it passed sealedTo.
+    const from = Math.max(Number(vat?.sealedTo ?? 0), fresh.boundary);
     fresh.start = from;
     fresh.mirrored = -1;
     /** @type {Promise<void>[]} */
@@ -473,6 +531,33 @@ export const makeContextCache = ({
       // Most recently prepared last.
       entries.delete(session);
       entries.set(session, entry);
+    }
+    if (
+      entry !== undefined &&
+      base.epoch === entry.epoch + 1 &&
+      base.boundary !== undefined &&
+      base.boundary >= entry.start &&
+      base.boundary <= entry.start + entry.records.length &&
+      entry.start + entry.records.length <= base.count &&
+      segmentsOf(entry.archive) === segmentsOf(vat) &&
+      headOf(entry.archive) === headOf(vat)
+    ) {
+      // M8 rebase (D-M8-16): the session compacted in this round; the
+      // model sees nothing before the boundary any more. No vat crank.
+      dropBelow(entry, base.boundary);
+      textUnits -= entry.sealedUnits;
+      entry.sealed = [];
+      entry.sealedUnits = 0;
+      entry.epoch = base.epoch;
+      entry.boundary = base.boundary;
+      counts.rebases += 1;
+      if (archived) {
+        // Off the round's path, as the mirror is written; the archive
+        // queues it before any later seal of this session.
+        archive
+          .compacted({ key, epoch: entry.epoch, boundary: entry.boundary })
+          .catch(() => {});
+      }
     }
     if (
       entry !== undefined &&
@@ -548,6 +633,7 @@ export const makeContextCache = ({
     /** @type {Entry} */
     const fresh = {
       epoch: base.epoch,
+      boundary: base.boundary ?? 0,
       start: base.count,
       records: [],
       texts: new Map(),
@@ -616,8 +702,9 @@ export const makeContextCache = ({
    * @param {any} session
    * @param {CacheRequest} request
    * @param {string | undefined} given M2: the session's archive key
+   * @param {boolean} planInput M8: keep the plan input for the projection
    */
-  const prepareNow = async (session, request, given) => {
+  const prepareNow = async (session, request, given, planInput) => {
     /** @type {Entry} */
     let entry;
     const timing = newTiming();
@@ -676,8 +763,20 @@ export const makeContextCache = ({
           ? started.input
           : entry.texts.get(started.input.blob);
     }
+    const answer = harden(projection);
+    if (planInput) {
+      planInputs.set(
+        answer,
+        harden({
+          start: entry.start,
+          records: harden(entry.records.slice()),
+          texts: entry.texts,
+          sealed: harden(entry.sealed.slice()),
+        }),
+      );
+    }
     trimPrepared(session);
-    return harden(projection);
+    return answer;
   };
 
   return harden({
@@ -686,12 +785,15 @@ export const makeContextCache = ({
      * presence the endpoint serves); one at a time per session.
      * @param {any} session
      * @param {CacheRequest} request a RoundRequest
-     * @param {{ key?: string }} [options] M2: the session's archive key
+     * @param {{ key?: string, planInput?: boolean }} [options] M2: the
+     *   session's archive key; M8: keep the plan input (`planInputOf`)
      * @returns {Promise<import('./projection.js').Projection>}
      */
-    prepare: (session, request, { key } = {}) => {
+    prepare: (session, request, { key, planInput = false } = {}) => {
       const before = tails.get(session) ?? Promise.resolve();
-      const result = before.then(() => prepareNow(session, request, key));
+      const result = before.then(() =>
+        prepareNow(session, request, key, planInput),
+      );
       tails.set(
         session,
         result.then(

@@ -66,7 +66,14 @@ import { emptyUsage } from '../../../../guest/lib/token-usage.js';
 /* eslint-enable import/no-relative-packages */
 import { isAbandoned } from '../context-cache.js';
 import { makeEventLog } from './event-log.js';
-import { stageResult, tailText } from './round.js';
+import {
+  isProviderFailure,
+  stageResult,
+  systemTextOf,
+  tailText,
+} from './round.js';
+import { compactBeforeRound } from './compaction-round.js';
+import { scriptedSummary } from './compaction-texts.js';
 import { makeProviderShell } from './shell.js';
 
 /**
@@ -280,10 +287,75 @@ export const makeScriptedProvider = ({
   };
 
   /**
+   * W1b.2's `context` line: what the provider would have received this
+   * round (M8: a compacted round's, after the compaction).
+   * @param {any} req a RoundRequest
+   * @param {any} owner
+   * @param {any} projection
+   * @param {number} ms the prepare's time
+   */
+  const logContextOf = async (req, owner, projection, ms) => {
+    const where = { turnId: req.turnId, round: req.round };
+    const { transcript, timing } = projection;
+    // M2 W2.6: the system prompt the request carries (seam 1), in full.
+    // M5 (W5.3, S2, H-9): a two-part system (the prompt and the turn's
+    // R4-29 line) is read part by part and digested joined with a blank
+    // line, as round.js `systemTextOf` joins it (not imported: round.js
+    // imports this module).
+    /** @type {string | undefined} */
+    let system;
+    if (req.system !== undefined) {
+      /** @type {(string | undefined)[]} */
+      const parts = [];
+      for (const part of [req.system].flat()) {
+        parts.push(
+          isStaged(part)
+            ? // eslint-disable-next-line no-await-in-loop -- at most two parts
+              await blobs?.read(part.blob, owner).catch(() => undefined)
+            : part,
+        );
+      }
+      if (parts.every(part => typeof part === 'string')) {
+        system = parts.join('\n\n');
+      }
+    }
+    // M2 W2.9 (acceptance 15, m2-interfaces.md 4.13): a perf run that
+    // measures per-turn cost at length creates `<logPath>.nodigest`; the
+    // line then carries the timing only, so digesting the whole
+    // transcript every round (which grows with the session) is not in
+    // the measurement. Default (no such file): unchanged.
+    const digests = logPath === undefined || !existsSync(`${logPath}.nodigest`);
+    // Digested off the round's path, as `later` does for its lines.
+    timers.after(0, () => {
+      try {
+        log('context', {
+          ...where,
+          ms,
+          ...(digests ? contextDigests(transcript) : {}),
+          ...systemDigest(system),
+          ...(timing === undefined
+            ? {}
+            : {
+                timing: Object.fromEntries(
+                  Object.entries(timing).map(([k, v]) => [
+                    k,
+                    Math.round(v * 10) / 10,
+                  ]),
+                ),
+              }),
+        });
+      } catch {
+        // Dropped.
+      }
+    });
+  };
+
+  /**
    * @param {any} req a RoundRequest
    * @param {any} channel
    * @param {import('./round.js').RoundControl} control
-   * @param {(() => Promise<any>) | undefined} prepare
+   * @param {((next?: any) => Promise<any>) | undefined} prepare (M8:
+   *   called again after a compaction)
    * @param {any} owner the Session presence served (its disk quota)
    */
   const runRound = async (req, channel, control, prepare, owner) => {
@@ -295,6 +367,7 @@ export const makeScriptedProvider = ({
     };
     /** @type {any} */
     let projection;
+    let ms = 0;
     if (prepare !== undefined) {
       const t0 = now();
       try {
@@ -314,61 +387,10 @@ export const makeScriptedProvider = ({
         );
         return;
       }
-      if (logContext) {
-        const ms = now() - t0;
-        const { transcript, timing } = projection;
-        // M2 W2.6: the system prompt the request carries (seam 1), in full.
-        // M5 (W5.3, S2, H-9): a two-part system (the prompt and the turn's
-        // R4-29 line) is read part by part and digested joined with a blank
-        // line, as round.js `systemTextOf` joins it (not imported: round.js
-        // imports this module).
-        /** @type {string | undefined} */
-        let system;
-        if (req.system !== undefined) {
-          /** @type {(string | undefined)[]} */
-          const parts = [];
-          for (const part of [req.system].flat()) {
-            parts.push(
-              isStaged(part)
-                ? // eslint-disable-next-line no-await-in-loop -- at most two parts
-                  await blobs?.read(part.blob, owner).catch(() => undefined)
-                : part,
-            );
-          }
-          if (parts.every(part => typeof part === 'string')) {
-            system = parts.join('\n\n');
-          }
-        }
-        // M2 W2.9 (acceptance 15, m2-interfaces.md 4.13): a perf run that
-        // measures per-turn cost at length creates `<logPath>.nodigest`; the
-        // line then carries the timing only, so digesting the whole
-        // transcript every round (which grows with the session) is not in
-        // the measurement. Default (no such file): unchanged.
-        const digests =
-          logPath === undefined || !existsSync(`${logPath}.nodigest`);
-        // Digested off the round's path, as `later` does for its lines.
-        timers.after(0, () => {
-          try {
-            log('context', {
-              ...where,
-              ms,
-              ...(digests ? contextDigests(transcript) : {}),
-              ...systemDigest(system),
-              ...(timing === undefined
-                ? {}
-                : {
-                    timing: Object.fromEntries(
-                      Object.entries(timing).map(([k, v]) => [
-                        k,
-                        Math.round(v * 10) / 10,
-                      ]),
-                    ),
-                  }),
-            });
-          } catch {
-            // Dropped.
-          }
-        });
+      ms = now() - t0;
+      // M8 (S-16): a round that compacts logs the context it streams.
+      if (logContext && req.compaction === undefined) {
+        await logContextOf(req, owner, projection, ms);
       }
       if (control.stopped() !== undefined) {
         cancelled();
@@ -419,6 +441,48 @@ export const makeScriptedProvider = ({
       if (control.stopped() !== undefined) {
         cancelled();
         return;
+      }
+    }
+    // M8 (m8-interfaces.md 5.1, S-16, D-M8-13): a compaction ask is
+    // answered with the scripted summary and no usage, consuming no
+    // script round.
+    if (req.compaction !== undefined) {
+      /** @param {unknown} error */
+      const failureOf = error =>
+        isProviderFailure(error)
+          ? /** @type {any} */ (error).reason
+          : scriptedUnexpectedFailure;
+      const step = await systemTextOf(req.system, blobs, owner).then(
+        system =>
+          compactBeforeRound({
+            req,
+            projection,
+            stream: async function* scriptedSummaryStream() {
+              yield { delta: scriptedSummary };
+            },
+            control,
+            prepare,
+            blobs,
+            owner,
+            log,
+            now,
+            system,
+            failureOf,
+          }),
+        error => harden({ failed: failureOf(error) }),
+      );
+      if ('abandon' in step) {
+        cancelled();
+        return;
+      }
+      if ('failed' in step) {
+        log('round-failed', where);
+        E.sendOnly(sink).roundFailed(failure(round, step.failed));
+        return;
+      }
+      projection = step.projection;
+      if (logContext && projection !== undefined) {
+        await logContextOf(req, owner, projection, ms);
       }
     }
     log('request', where);

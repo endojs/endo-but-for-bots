@@ -115,7 +115,8 @@ test('a pool open passes the ops guard and offers accountStatus, which answers t
   );
   t.deepEqual(
     ports.tools.map((/** @type {any} */ e) => e.name),
-    ['accountStatus'],
+    // M8 (S-18): every kind's ports also carry viewImage.
+    ['accountStatus', 'viewImage'],
   );
   t.is(s.loads(), 0, 'dormant: nothing loaded at open');
   const outcome = await E(ports.tools[0].tool).execute(

@@ -59,8 +59,9 @@ const MAX_TIMER_MS = 2_147_483_647;
  * @param {any} options.channel the session's channel (deltas go here, in-process)
  * @param {import('./timers.js').Timers} options.timers
  * @param {() => number} [options.now]
- * @param {(req: any) => Promise<any>} [options.prepare] W1b.2: the
- *   session's context cache for one RoundRequest
+ * @param {(req: any, options?: { planInput?: boolean }) => Promise<any>} [options.prepare]
+ *   W1b.2: the session's context cache for one RoundRequest (M8: with
+ *   `planInput` for a request that carries a compaction ask)
  * @param {any} [options.owner] the Session presence this endpoint serves;
  *   the provider stages its text for it (disk quota, provenance; J-9361)
  */
@@ -130,7 +131,14 @@ export const makeEndpoint = ({
       early.delete(req.turn);
       for (const [opId, ms] of waiting) arm(state, opId, ms);
     }
-    const project = prepare === undefined ? undefined : () => prepare(req);
+    // M8 (S-14): the provider may prepare again within the round, after a
+    // compaction, with the request's next `{ base, append }`; a request
+    // that carries a compaction ask keeps the plan input.
+    const project =
+      prepare === undefined
+        ? undefined
+        : (/** @type {any} */ next = req) =>
+            prepare(next, next.compaction ? { planInput: true } : {});
     provider.startRound(req, channel, project, owner).catch(() => {
       if (released.has(req.turn)) return;
       // M2 W2.1a (R4-79): every backend kind names a fixed text for a

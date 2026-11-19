@@ -12,6 +12,11 @@
  *    `textOf.stagingFailed`.
  * 2. Round 0 sends nothing to the provider before `E(req.sink).dispatching(0)`
  *    answered `true` (contract 6); a refusal or a break abandons the round.
+ * 2b. M8 (`designs/m8-interfaces.md` 5.1, seam S-15): a request that
+ *    carries a `compaction` ask is compacted first (`compaction-round.js`
+ *    `compactBeforeRound`: plan, the tool-less summary call, the session's
+ *    `compacted`, the cache rebased); the round then streams from the new
+ *    projection, sends nothing more (abandoned), or fails.
  * 3. `stream({ projection, signal })` is called and its events consumed:
  *    `{ delta }` is published in process on the session's channel (zero vat
  *    deliveries per delta; split at the `DeltaEvent` bound) and appended to
@@ -58,6 +63,7 @@ import { isStaged } from '../../../../guest/session/staging.js';
 import { emptyUsage } from '../../../../guest/lib/token-usage.js';
 /* eslint-enable import/no-relative-packages */
 import { isAbandoned } from '../context-cache.js';
+import { compactBeforeRound } from './compaction-round.js';
 
 /**
  * The last `units` UTF-16 units of `text`, never starting inside a pair
@@ -254,10 +260,13 @@ const deltaPieces = text => {
  * @param {object} options
  * @param {any} options.req the RoundRequest
  * @param {any} options.channel the session's channel (`publishDelta`)
- * @param {(() => Promise<any>) | undefined} options.prepare the projection
+ * @param {((next?: any) => Promise<any>) | undefined} options.prepare the
+ *   projection (M8: called again with the session's next `{ base, append }`
+ *   after a compaction)
  * @param {import('../blobs.js').BlobStore | undefined} options.blobs
  * @param {import('./event-log.js').EventLog} options.log
- * @param {(args: { projection: any, signal: AbortSignal }) => AsyncIterable<RoundEvent>} options.stream
+ * @param {(args: { projection: any, signal: AbortSignal, tools?: readonly any[] }) => AsyncIterable<RoundEvent>} options.stream
+ *   (`tools` replaces the request's tools: M8's summary call offers none)
  * @param {any} [options.owner] the Session presence (blob quota)
  * @param {RoundControl} options.control
  * @param {import('../timers.js').Timers} options.timers
@@ -386,6 +395,43 @@ export const runProviderRound = async ({
       cancelled();
       return;
     }
+  }
+
+  // 2b. Compaction (M8): plan, summarize, record, re-project.
+  if (req.compaction !== undefined) {
+    /** @param {unknown} error */
+    const failureOf = error =>
+      isProviderFailure(error)
+        ? /** @type {ProviderFailure} */ (error).reason
+        : unreachable;
+    const step = await systemTextOf(req.system, blobs, owner).then(
+      system =>
+        compactBeforeRound({
+          req,
+          projection,
+          stream,
+          control,
+          prepare,
+          blobs,
+          owner,
+          log,
+          now,
+          label,
+          system,
+          failureOf,
+        }),
+      error => harden({ failed: failureOf(error) }),
+    );
+    if ('abandon' in step) {
+      cancelled();
+      return;
+    }
+    if ('failed' in step) {
+      log('round-failed', where);
+      E.sendOnly(sink).roundFailed(failure(step.failed));
+      return;
+    }
+    projection = step.projection;
   }
 
   // 3. The stream.

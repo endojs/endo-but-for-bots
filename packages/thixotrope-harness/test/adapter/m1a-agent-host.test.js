@@ -929,7 +929,8 @@ test('manager: backends, host facets and TurnPorts through the attach pattern', 
   t.true(Number(ports.since) <= Date.now());
   t.deepEqual(
     ports.tools.map((/** @type {any} */ entry) => entry.name),
-    ['echo'],
+    // M8 (S-18): every kind's ports also carry viewImage.
+    ['echo', 'viewImage'],
   );
   t.deepEqual(kit.counts(), { registers: 1, incarnations: 1 });
   const publisher = await E(host).liveChannel();
