@@ -52,6 +52,9 @@ pub enum SlotCodecError {
     BadKind(u8),
     /// A payload tag that names no payload arm.
     BadPayloadTag(u8),
+    /// A record (or record array) whose byte length is not exactly
+    /// [`SLOT_RECORD_BYTES`] (or a whole multiple of it): the length found.
+    BadLength(usize),
 }
 
 /// Serialize one slot into `out` (appends exactly [`SLOT_RECORD_BYTES`]).
@@ -111,14 +114,22 @@ fn encode_payload(p: &Payload) -> (u8, [u8; 10]) {
     (tag, d)
 }
 
-/// Deserialize one slot record (exactly [`SLOT_RECORD_BYTES`] bytes).
+/// Deserialize one slot record (exactly [`SLOT_RECORD_BYTES`] bytes; any
+/// other length is [`SlotCodecError::BadLength`]).
 pub fn decode_slot(rec: &[u8]) -> Result<Slot, SlotCodecError> {
-    debug_assert_eq!(rec.len(), SLOT_RECORD_BYTES);
-    let kind = Kind::from_u8(rec[0]).ok_or(SlotCodecError::BadKind(rec[0]))?;
-    let flag = rec[1];
-    let id = u16::from_be_bytes([rec[2], rec[3]]);
-    let next = SlotIndex(u32::from_be_bytes([rec[4], rec[5], rec[6], rec[7]]));
-    let value = decode_payload(rec[8], &rec[10..20])?;
+    let rec: &[u8; SLOT_RECORD_BYTES] = rec
+        .try_into()
+        .map_err(|_| SlotCodecError::BadLength(rec.len()))?;
+    decode_record(rec)
+}
+
+/// [`decode_slot`] on a record whose width the type already proves.
+fn decode_record(rec: &[u8; SLOT_RECORD_BYTES]) -> Result<Slot, SlotCodecError> {
+    let [kind, flag, id0, id1, n0, n1, n2, n3, tag, _reserved, data @ ..] = *rec;
+    let kind = Kind::from_u8(kind).ok_or(SlotCodecError::BadKind(kind))?;
+    let id = u16::from_be_bytes([id0, id1]);
+    let next = SlotIndex(u32::from_be_bytes([n0, n1, n2, n3]));
+    let value = decode_payload(tag, data)?;
     Ok(Slot {
         next,
         id,
@@ -128,19 +139,23 @@ pub fn decode_slot(rec: &[u8]) -> Result<Slot, SlotCodecError> {
     })
 }
 
-fn decode_payload(tag: u8, d: &[u8]) -> Result<Payload, SlotCodecError> {
-    let u32_at = |i: usize| u32::from_be_bytes([d[i], d[i + 1], d[i + 2], d[i + 3]]);
+fn decode_payload(tag: u8, d: [u8; 10]) -> Result<Payload, SlotCodecError> {
+    let [d0, d1, d2, d3, d4, d5, d6, d7, _, _] = d;
+    let word = u32::from_be_bytes([d0, d1, d2, d3]);
     Ok(match tag {
         P_NONE => Payload::None,
-        P_BOOL => Payload::Boolean(d[0] != 0),
-        P_INT => Payload::Integer(i32::from_be_bytes([d[0], d[1], d[2], d[3]])),
+        P_BOOL => Payload::Boolean(d0 != 0),
+        P_INT => Payload::Integer(i32::from_be_bytes([d0, d1, d2, d3])),
         P_NUM => Payload::Number(f64::from_bits(u64::from_be_bytes([
-            d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
+            d0, d1, d2, d3, d4, d5, d6, d7,
         ]))),
-        P_STR => Payload::String(ChunkOffset(u32_at(0))),
-        P_REF => Payload::Reference(SlotIndex(u32_at(0))),
-        P_AT => Payload::At(u16::from_be_bytes([d[0], d[1]]), u32_at(2)),
-        P_BIGINT => Payload::BigInt(ChunkOffset(u32_at(0))),
+        P_STR => Payload::String(ChunkOffset(word)),
+        P_REF => Payload::Reference(SlotIndex(word)),
+        P_AT => Payload::At(
+            u16::from_be_bytes([d0, d1]),
+            u32::from_be_bytes([d2, d3, d4, d5]),
+        ),
+        P_BIGINT => Payload::BigInt(ChunkOffset(word)),
         other => return Err(SlotCodecError::BadPayloadTag(other)),
     })
 }
@@ -154,13 +169,16 @@ pub fn encode_slots(slots: &[Slot]) -> Vec<u8> {
     out
 }
 
-/// Decode a flat record array back into a `Vec<Slot>`.
+/// Decode a flat record array back into a `Vec<Slot>`. A trailing partial
+/// record is [`SlotCodecError::BadLength`] rather than silently dropped.
 pub fn decode_slots(buf: &[u8]) -> Result<Vec<Slot>, SlotCodecError> {
+    let records = buf.chunks_exact(SLOT_RECORD_BYTES);
+    if !records.remainder().is_empty() {
+        return Err(SlotCodecError::BadLength(buf.len()));
+    }
     let mut out = Vec::with_capacity(buf.len() / SLOT_RECORD_BYTES);
-    let mut i = 0;
-    while i + SLOT_RECORD_BYTES <= buf.len() {
-        out.push(decode_slot(&buf[i..i + SLOT_RECORD_BYTES])?);
-        i += SLOT_RECORD_BYTES;
+    for rec in records {
+        out.push(decode_slot(rec)?);
     }
     Ok(out)
 }
@@ -276,6 +294,27 @@ mod tests {
         let mut buf = vec![0u8; SLOT_RECORD_BYTES];
         buf[0] = 200; // no such kind
         assert_eq!(decode_slot(&buf), Err(SlotCodecError::BadKind(200)));
+    }
+
+    /// Regression: `decode_slot` is public and indexed its input with only a
+    /// `debug_assert` on the width, so a short record (here one byte) panicked
+    /// with an out-of-bounds index in release builds; and `decode_slots`
+    /// silently dropped a trailing partial record. Both now refuse by length.
+    #[test]
+    fn rejects_records_of_the_wrong_width() {
+        assert_eq!(decode_slot(&[7]), Err(SlotCodecError::BadLength(1)));
+        assert_eq!(decode_slot(&[]), Err(SlotCodecError::BadLength(0)));
+        assert_eq!(
+            decode_slot(&[0; SLOT_RECORD_BYTES + 1]),
+            Err(SlotCodecError::BadLength(SLOT_RECORD_BYTES + 1))
+        );
+        let mut bytes = encode_slots(&[Slot::integer(1)]);
+        bytes.push(0);
+        assert_eq!(
+            decode_slots(&bytes),
+            Err(SlotCodecError::BadLength(SLOT_RECORD_BYTES + 1))
+        );
+        assert_eq!(decode_slots(&[]), Ok(Vec::new()));
     }
 
     #[test]
