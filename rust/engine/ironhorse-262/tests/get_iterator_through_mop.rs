@@ -32,7 +32,7 @@ fn each_consumer(setup: &str, operand: &str) {
         ))
         .expect("the XS oracle machine must start");
         assert!(
-            run.ironhorse_result != "" && !run.ironhorse_result.starts_with("SyntaxError"),
+            !run.ironhorse_result.is_empty() && !run.ironhorse_result.starts_with("SyntaxError"),
             "{setup} / {body}: the program must run: {run:?}"
         );
         assert!(

@@ -210,7 +210,7 @@ struct Tie {
 fn ulp_eight_ties(count: usize) -> Vec<Tie> {
     let mut ties = Vec::new();
     let mut x: u64 = 1 << 55;
-    while x % 8 != 0 || x % 10 != 4 {
+    while !x.is_multiple_of(8) || x % 10 != 4 {
         x += 1;
     }
     while ties.len() < count {

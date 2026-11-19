@@ -41,9 +41,10 @@ overflow-checks = true
 [workspace.lints.rust]
 unsafe_code = "deny"
 
-# Incremental W0 gate: only warning families observed with Rust 1.88.0
-# are grandfathered. New default Clippy warnings fail CI via -D warnings;
-# remove these named allowances as each family is cleaned up.
+# Incremental W0 gate: only warning families observed when the gate was
+# introduced (Rust 1.88.0) are grandfathered; the gate now runs on the pinned
+# toolchain (rust-toolchain.toml). New default Clippy warnings fail CI via
+# -D warnings; remove these named allowances as each family is cleaned up.
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 collapsible_else_if = "allow"

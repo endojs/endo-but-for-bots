@@ -8645,11 +8645,11 @@ mod side_table_field_refusals {
             table_length: minimum,
             entries: vec![],
         };
-        assert!(decode_collections(&encode_collections(&[row.clone()])).is_ok());
+        assert!(decode_collections(&encode_collections(std::slice::from_ref(&row))).is_ok());
         for length in [0, minimum - 1, minimum * 3, 2 * 1024 * 1024] {
             row.table_length = length;
             assert_eq!(
-                decode_collections(&encode_collections(&[row.clone()])),
+                decode_collections(&encode_collections(std::slice::from_ref(&row))),
                 Err(SnapshotError::Corrupt(
                     "collections side table: unreachable rehash geometry"
                 ))
@@ -8660,11 +8660,11 @@ mod side_table_field_refusals {
         row.entries = (0..high)
             .map(|i| (Slot::integer(i as i32), Slot::undefined()))
             .collect();
-        assert!(decode_collections(&encode_collections(&[row.clone()])).is_ok());
+        assert!(decode_collections(&encode_collections(std::slice::from_ref(&row))).is_ok());
         row.entries
             .push((Slot::integer(high as i32), Slot::undefined()));
         assert_eq!(
-            decode_collections(&encode_collections(&[row.clone()])),
+            decode_collections(&encode_collections(std::slice::from_ref(&row))),
             Err(SnapshotError::Corrupt(
                 "collections side table: live size past the grow threshold"
             ))
@@ -8673,10 +8673,10 @@ mod side_table_field_refusals {
         for kind in [2, 3] {
             row.kind = kind;
             row.table_length = 0;
-            assert!(decode_collections(&encode_collections(&[row.clone()])).is_ok());
+            assert!(decode_collections(&encode_collections(std::slice::from_ref(&row))).is_ok());
             row.table_length = minimum;
             assert_eq!(
-                decode_collections(&encode_collections(&[row.clone()])),
+                decode_collections(&encode_collections(std::slice::from_ref(&row))),
                 Err(SnapshotError::Corrupt(
                     "collections side table: weak kind carries a hash table"
                 ))
@@ -8741,7 +8741,7 @@ mod side_table_field_refusals {
             message: Some("m".into()),
             frames: vec!["f".into()],
         };
-        let bytes = encode_errors(&[row.clone()]);
+        let bytes = encode_errors(std::slice::from_ref(&row));
         assert!(decode_errors(&bytes).is_ok());
         let mut invalid = bytes.clone();
         invalid[12] = 0xff; // name follows count, owner, and length
@@ -9196,7 +9196,7 @@ mod object_state_refusals {
                 ))
             );
         }
-        let bytes = encode_disposable_stacks(&[first.clone()]);
+        let bytes = encode_disposable_stacks(std::slice::from_ref(&first));
         for offset in [8, 9, bytes.len() - 1] {
             for value in [2, 255] {
                 let mut invalid = bytes.clone();
@@ -10227,7 +10227,7 @@ mod generator_decoder_refusals {
                 ..valid.clone()
             };
             assert_eq!(
-                decode_generators(&encode_generators(&[row.clone()])).unwrap(),
+                decode_generators(&encode_generators(std::slice::from_ref(&row))).unwrap(),
                 vec![row]
             );
         }
@@ -10265,7 +10265,7 @@ mod generator_decoder_refusals {
             );
         }
         for tag in [2, 255] {
-            let mut bytes = encode_generators(&[valid.clone()]);
+            let mut bytes = encode_generators(std::slice::from_ref(&valid));
             bytes[9] = tag; // count, owner, state, frame tag
             assert_eq!(
                 decode_generators(&bytes),
@@ -10276,7 +10276,7 @@ mod generator_decoder_refusals {
         let current_target = 10 + 12 + 2 * SLOT_RECORD_BYTES + 4;
         for offset in [current_target, current_target + 5] {
             for tag in [2, 255] {
-                let mut bytes = encode_generators(&[valid.clone()]);
+                let mut bytes = encode_generators(std::slice::from_ref(&valid));
                 bytes[offset] = tag;
                 assert_eq!(
                     decode_generators(&bytes),
@@ -10314,7 +10314,7 @@ mod generator_decoder_refusals {
             frame: Some(saved),
         };
         assert_eq!(
-            decode_generators(&encode_generators(&[valid.clone()])).unwrap(),
+            decode_generators(&encode_generators(std::slice::from_ref(&valid))).unwrap(),
             vec![valid.clone()]
         );
         for id in [2, 1] {

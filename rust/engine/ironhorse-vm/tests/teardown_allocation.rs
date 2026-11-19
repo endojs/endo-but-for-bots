@@ -155,7 +155,7 @@ fn ast_shapes() -> Vec<(&'static str, Item)> {
             return Item::Null;
         }
         let children = vec![full(depth - 1), full(depth - 1), full(depth - 1)];
-        if depth % 2 == 0 {
+        if depth.is_multiple_of(2) {
             node(children)
         } else {
             Item::List(children)
@@ -213,7 +213,7 @@ fn json_source_shapes() -> Vec<(&'static str, JsonSourceTree)> {
             return JsonSourceTree::leaf();
         }
         let children = vec![full(depth - 1), full(depth - 1), full(depth - 1)];
-        if depth % 2 == 0 {
+        if depth.is_multiple_of(2) {
             JsonSourceTree::array(children)
         } else {
             JsonSourceTree::object(children)

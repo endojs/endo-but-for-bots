@@ -897,10 +897,10 @@ pub fn gen_json_structured_program(data: &[u8]) -> String {
     // A value at the given remaining depth: a leaf at depth 0, else a leaf,
     // object, or array (bounded breadth).
     fn mk_value(b: &mut Bytes, depth: u8) -> String {
-        if depth == 0 || b.next() % 3 == 0 {
+        if depth == 0 || b.next().is_multiple_of(3) {
             return mk_leaf(b);
         }
-        if b.next() % 2 == 0 {
+        if b.next().is_multiple_of(2) {
             let n = (b.next() % 3) as usize; // 0..=2 keys (small literal)
             let mut parts = Vec::new();
             for i in 0..n {
@@ -938,7 +938,7 @@ pub fn gen_json_parse_program(data: &[u8]) -> String {
     }
     // A JSON value string at the given remaining depth.
     fn mk_json(b: &mut Bytes, depth: u8) -> String {
-        if depth == 0 || b.next() % 3 == 0 {
+        if depth == 0 || b.next().is_multiple_of(3) {
             return match b.choice(5) {
                 0 => ((b.next() % 200) as i32 - 100).to_string(),
                 1 => "true".to_string(),
@@ -947,7 +947,7 @@ pub fn gen_json_parse_program(data: &[u8]) -> String {
                 _ => format!("\"{}\"", mk_word(b)),
             };
         }
-        if b.next() % 2 == 0 {
+        if b.next().is_multiple_of(2) {
             let n = (b.next() % 4) as usize; // 0..=3 members, keys distinct by index
             let parts: Vec<String> = (0..n)
                 .map(|i| format!("\"{}{}\":{}", mk_word(b), i, mk_json(b, depth - 1)))
