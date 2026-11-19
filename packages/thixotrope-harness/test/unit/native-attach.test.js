@@ -8,11 +8,12 @@ import './_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 import { makeAttachedOps } from '../../resources/native-attach.js';
-// eslint-disable-next-line import/no-relative-packages -- guest/ is its own private package
+/* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import {
   HUB_RETIRED_MESSAGE,
   isRetiredBreak,
 } from '../../guest/lib/retired.js';
+/* eslint-enable import/no-relative-packages */
 
 /**
  * A fake adapter: each reconcile attaches a fresh facet whose `call` the
@@ -23,8 +24,6 @@ const makeFixture = () => {
   /** @type {string[]} */
   const applied = [];
   let breakNext = false;
-  /** @type {any} */
-  let attached;
   const makeFacet = (/** @type {number} */ incarnation) => {
     let retired = false;
     return harden({
@@ -50,9 +49,8 @@ const makeFixture = () => {
     isRetired: isRetiredBreak,
     writeBroken: () => Error('outcome unknown'),
   });
-  attached = ops;
   return {
-    ops: attached,
+    ops,
     applied,
     reconciles: () => reconciles,
     breakNext: () => {
