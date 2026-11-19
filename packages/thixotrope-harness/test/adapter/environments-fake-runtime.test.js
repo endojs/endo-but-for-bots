@@ -114,12 +114,19 @@ test('runs in the workspace with exactly A.3 variables (R3-45)', async t => {
   const printed = await runtime.exec(env, ['env'], options);
   const lines = decoder.decode(printed.stdout).trim().split('\n');
   const vars = Object.fromEntries(
-    lines.map(line => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
+    lines.map(line => [
+      line.slice(0, line.indexOf('=')),
+      line.slice(line.indexOf('=') + 1),
+    ]),
   );
-  t.deepEqual(
-    Object.keys(vars).sort(),
-    ['CARGO_HOME', 'CARGO_TARGET_DIR', 'HOME', 'LANG', 'PATH', 'RUSTUP_HOME'],
-  );
+  t.deepEqual(Object.keys(vars).sort(), [
+    'CARGO_HOME',
+    'CARGO_TARGET_DIR',
+    'HOME',
+    'LANG',
+    'PATH',
+    'RUSTUP_HOME',
+  ]);
   t.deepEqual(vars, { ...fakeCommandEnv(env.home) });
   t.is(vars.HOME, env.home);
   t.is(vars.LANG, 'C.UTF-8');
@@ -143,7 +150,11 @@ test('caps: each stream keeps streamBytes and is drained to the end', async t =>
   // drained (a pipe that is not read blocks it), so exit 0 proves the drain.
   const big = await runtime.exec(
     env,
-    ['sh', '-c', 'head -c 10485760 /dev/zero & head -c 10485760 /dev/zero >&2; wait'],
+    [
+      'sh',
+      '-c',
+      'head -c 10485760 /dev/zero & head -c 10485760 /dev/zero >&2; wait',
+    ],
     options,
   );
   t.is(big.exitCode, 0);

@@ -213,7 +213,7 @@ export const makeFakeRuntime = ({
     try {
       kill(-pgid, 0);
       return true;
-    } catch (error) {
+    } catch {
       // EPERM: the number is someone else's group now; not ours to signal.
       return false;
     }
@@ -318,7 +318,10 @@ export const makeFakeRuntime = ({
         if (pgid === undefined) return;
         timedOut = true;
         signalGroup(pgid, 'SIGTERM');
-        graceTimer = setTimeout(() => signalGroup(pgid, 'SIGKILL'), killGraceMs);
+        graceTimer = setTimeout(
+          () => signalGroup(pgid, 'SIGKILL'),
+          killGraceMs,
+        );
       }, timeoutMs);
 
       /** @type {{ code: number | null, signal: string | null } | undefined} */
@@ -359,7 +362,9 @@ export const makeFakeRuntime = ({
         if (pgid !== undefined) forget(env.run, pgid);
         // The code only (ENOENT, EACCES): never the host path of the spawn.
         reject(
-          Error(environmentTextOf.runtimeFailed(`${program}: ${codeOf(error)}`)),
+          Error(
+            environmentTextOf.runtimeFailed(`${program}: ${codeOf(error)}`),
+          ),
         );
       });
       child.on('exit', (code, signal) => {
