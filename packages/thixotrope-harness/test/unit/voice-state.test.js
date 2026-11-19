@@ -18,7 +18,7 @@ import { h, render } from 'preact';
 
 /* eslint-disable import/no-relative-packages */
 import { interfaces } from '../../guest/lib/interfaces.js';
-import { speechGuards } from '../../guest/lib/speech-guards.js';
+import { speechInterfaces } from '../../guest/lib/speech-guards.js';
 import { ttsDefaults, voiceLimits } from '../../guest/lib/voice-preferences.js';
 /* eslint-enable import/no-relative-packages */
 import { speechTexts } from '../../resources/agent-host/impl/speech/audio-protocol.js';
@@ -117,7 +117,6 @@ const configuration = harden({
  * @param {{ calls: any[][] }} log
  */
 const makeFakeSpeech = log => {
-  const { interfaces: speechInterfaces } = speechGuards();
   let utterances = 0;
   let playbacks = 0;
   const port = makeExo('AudioPort', speechInterfaces.AudioPort, {

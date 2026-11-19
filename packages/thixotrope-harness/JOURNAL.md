@@ -15422,3 +15422,15 @@ Reading: no command over 60 s (the longest, the UI unit lane, 1.7 s; `lint:types
 `541034968f`, `ccb6ce177b`, `ae18dd5922`, `6433ad7140` and this journal commit; nothing pushed;
 no change to `packages/thixotrope`, `rust/**` or a guest file; no integration or browser run.
 Fit: neutral.
+
+### J-12720 2026-11-19 M11 merge fold — guard exports and bundle verification
+
+The gateway and UI state tests now consume the exported speech interface table.
+The M3 gateway contract and architecture describe the binary HELLO token,
+factory-owned Voice and the speech extension's readGrant power. Rebuilding the
+three programs at a88083f75e with the fold gives session 233,126 bytes
+(06aceb9a1412), exec 64,500 (6f1d6d607b6b), and factory 199,356
+(1b259c97e0fb). The session and exec digests match the pre-M11 digests in
+J-12661, which also records install.factory at 7,833 ms. Duplicate lines
+measure 1.61% against the 2.05% ceiling. The feature-context migration awaits
+step 5(a), M13 owns export/import, and WX.F owns the M6 built-in preset rerun.

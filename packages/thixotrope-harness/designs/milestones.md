@@ -38,7 +38,7 @@ M1a" at the end of this file.
     `AH/gateway/extensions.js`: M4 `m4-secrets.js`; M11's is `speech.js` by review rule 1), `H/ui/src/<dir>/feature.js`
     [M3 W3.4] (one directory per lane feature group, collected in directory-name order by
     `H/ui/build.mjs` and `H/ui/src/features.js`), and `H/test/browser/`. These replace the hook
-    tables `AH/gateway/routes.js` and `H/ui/src/features.js` this list named before M3's contract.
+    tables the gateway route table and `H/ui/src/features.js` this list named before M3's contract.
     The gateway's key vocabulary is no longer a registry: a table module that adds browser-sendable
     shapes is one entry in `H/guest/lib/vocabulary-tables.js` (HR-SYN-7; a module not listed or
     excluded there fails `test/adapter/gateway-vocabulary-tables.test.js`). New files in these
@@ -2321,7 +2321,7 @@ against the code or the spec before acting.
 | F B-5 startup wakes workers with an unsnapshotted journal | `pkg/src/core/daemon.js:826-847`; `supervisor.js:141` (`idleSleepMs` option) | Accepted. Restart tests use `idleSleepMs: 2000`, wait for checkpoint and `pool.whenSettled()` before SIGKILL; "0 idle vats woken" is a gate counting checkpointed vats only. |
 | F B-6 1 s `sleep` exec acceptance impossible | native.md:39-40 (`clock.after(0n)` 989 ms) | Accepted. M1a acceptance 3 uses the adapter `echo` tool with `delayMs` and asserts overlap (< 1.6 x one call). Interactive timers are adapter timers (architecture section 8). |
 | F B-7 `exec.sends100 <= 2 s` ignores answer deliveries | tooling.md 4.5; J-0017 | Accepted. Budget split: 100 answered <= 8 s, 100 `sendOnly` <= 1 s (M1b). |
-| F B-8 parallel groups not disjoint; no run lock | old ownership lists | Accepted. Hook tables (`runtime-parts.js`, `holds-table.js`, `session-options.js`, `services.js`, `projection-hooks.js`, `channel-taps.js`, `gateway/routes.js`, `provision-steps.js`, `features.js`), sequential ownership transfers (`prompt.js`, `provision.mjs`), W3.0 merged before M4/M5 UI units, PM-merged files with pre-allocated journal number ranges, and the run lock. |
+| F B-8 parallel groups not disjoint; no run lock | old ownership lists | Accepted. Hook tables (`runtime-parts.js`, `holds-table.js`, `session-options.js`, `services.js`, `projection-hooks.js`, `channel-taps.js`, the gateway route table, `provision-steps.js`, `features.js`), sequential ownership transfers (`prompt.js`, `provision.mjs`), W3.0 merged before M4/M5 UI units, PM-merged files with pre-allocated journal number ranges, and the run lock. |
 | C queue entry lifecycle can post twice | SPEC:1619-1620 (A.4 `dispatching` row); R4-54 SPEC:527 | Accepted. Atomic claim: the entry is removed in the crank that records `TurnStarted`; a never-dispatched turn is closed with the R4-66 text and not re-queued (architecture 4.3-4.4). Test: M1a acceptance 6. Journal: atomic claim is a good fit. |
 | C cancel retires the exec vat | R4-49 SPEC:519 | Accepted. Cancel abandons the answer by generation; the vat is retired only on the exec deadline, a MeterAbort, or when still busy at the next call, always with a stated scope loss (architecture section 6). Test: M1b acceptance 3. |
 | C more than about 200 tool calls in one round quarantine the session | baseline (e) 500 sends MeterAbort | Accepted. `maxCallsPerRound` 64 with an error result for extras, `callWindow` 16 in flight; probe of 300 calls in M1b. Open decision 11. |
