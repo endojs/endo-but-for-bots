@@ -6,6 +6,15 @@
 //! The shared `ironhorse_meter` crate owns weights, parse costs, default keys,
 //! and their digest. Increment-point changes also require a release bump.
 //! Check points determine interruption, independently of accumulated cost.
+//!
+//! Every accumulation saturates. `index == u64::MAX` is the **exhausted**
+//! state: the accrued total is no longer representable, so every check and
+//! admission from it refuses ([`MeterCheck::Abort`]), armed or not, and no
+//! refund leaves it; only [`Meter::begin`] or [`Meter::restore`] do. A
+//! restored snapshot can carry any `MeterState`, so this is what keeps a
+//! crafted `METR` atom from panicking (`overflow-checks` are on in release)
+//! or from erasing accrued cost. Reaching it honestly takes about `2^48`
+//! computrons. The proofs are MTR-1 … MTR-6 in `rust/engine/VERIFICATION.md`.
 
 /// The frozen, release-versioned id of the meter's cost table (design
 /// `designs/ironhorse-engine.md` § roadmap row 6: "meter state across
@@ -185,7 +194,7 @@ impl Meter {
     /// in `mxBreak`).
     #[inline]
     pub fn tick_code(&mut self) {
-        self.index += CODE_METERING;
+        self.tick_raw(CODE_METERING);
     }
 
     /// Undo one bytecode dispatch's metering (`meterIndex -=
@@ -193,10 +202,11 @@ impl Meter {
     /// escaping `throw`/`rethrow` opcode's `mxBreak` is bypassed by the
     /// `fxJump` longjmp into the host, so XS never meters it, whereas
     /// ironhorse's dispatch loop pre-meters every opcode. See
-    /// `crate::interp::THROW_HOST_ESCAPE_METERING`.
+    /// `crate::interp::THROW_HOST_ESCAPE_METERING`. A paired refund, with
+    /// [`Self::untick_raw`]'s contract.
     #[inline]
     pub fn untick_code(&mut self) {
-        self.index -= CODE_METERING;
+        self.untick_raw(CODE_METERING);
     }
 
     /// Add `n` bytecode-equivalent units in one step (the explicit
@@ -204,19 +214,19 @@ impl Meter {
     /// element-access path).
     #[inline]
     pub fn tick_code_n(&mut self, n: u64) {
-        self.index += n * CODE_METERING;
+        self.tick_raw(n.saturating_mul(CODE_METERING));
     }
 
     /// Add one built-in step (`mxMeterOne`).
     #[inline]
     pub fn tick_builtin(&mut self) {
-        self.index += BUILTIN_METERING;
+        self.tick_raw(BUILTIN_METERING);
     }
 
     /// Add `k` built-in steps (`mxMeterSome(k)`).
     #[inline]
     pub fn tick_builtin_some(&mut self, k: u64) {
-        self.index += k * BUILTIN_METERING;
+        self.tick_raw(k.saturating_mul(BUILTIN_METERING));
     }
 
     /// Meter one slot allocation (`fxNewSlot`'s
@@ -225,14 +235,14 @@ impl Meter {
     /// what makes computrons allocation-dependent.
     #[inline]
     pub fn tick_slot_alloc(&mut self) {
-        self.index += SLOT_ALLOCATION_METERING;
+        self.tick_raw(SLOT_ALLOCATION_METERING);
     }
 
     /// Meter a chunk allocation of `size` bytes (`fxNewChunk`'s
     /// `meterIndex += size * XS_CHUNK_ALLOCATION_METERING`).
     #[inline]
     pub fn tick_chunk_alloc(&mut self, size: u64) {
-        self.index += size * CHUNK_ALLOCATION_METERING;
+        self.tick_raw(size.saturating_mul(CHUNK_ALLOCATION_METERING));
     }
 
     /// Meter one `fxNewChunk(size)` allocation **faithfully**: XS meters
@@ -262,16 +272,21 @@ impl Meter {
     /// that this stage models as a measured constant rather than
     /// individually — see `crate::interp` § Allocation-faithful
     /// metering), and by the callers that meter a property-creation slot
-    /// cluster.
+    /// cluster. Every `tick_*` accrues through here, saturating: a total
+    /// past `u64::MAX` leaves the meter exhausted (module docs) rather than
+    /// wrapping or panicking.
     #[inline]
     pub fn tick_raw(&mut self, n: u64) {
-        self.index += n;
+        self.index = self.index.saturating_add(n);
     }
 
     /// Admit work before it allocates or executes. `n` is a raw 16.16
     /// charge, using the same weights as the corresponding `tick_*` call.
     /// An unrepresentable total fails closed, even when checks are disabled;
-    /// wrapping it would let guest work erase its accrued cost.
+    /// wrapping it would let guest work erase its accrued cost. A total
+    /// past `u64::MAX` is refused with the index unchanged; a total of
+    /// exactly `u64::MAX` is admitted into the exhausted state and refused
+    /// there by the check.
     #[inline]
     pub fn charge_and_check<F: FnMut(u64) -> bool>(&mut self, n: u64, host: &mut F) -> MeterCheck {
         let Some(index) = self.index.checked_add(n) else {
@@ -290,8 +305,19 @@ impl Meter {
     /// inline unwinds are the only constructors), so the reversal is always
     /// covered; the saturation is a floor against a future unpaired reversal
     /// wrapping the index to `u64::MAX` rather than a case that occurs.
+    ///
+    /// The `debug_assert!` states that pairing precondition, `index ≥ n`, as
+    /// an internal invariant of the engine's call sequences (a refund follows
+    /// its charge within one step, and a snapshot is never taken between
+    /// them), not as a property of restored states: the proofs assume it
+    /// (MTR-1), and release builds, which a crafted snapshot reaches, rely
+    /// on the saturation. A refund never leaves the exhausted state: the
+    /// total it would refund from is unknown, so it stays refused.
     #[inline]
     pub fn untick_raw(&mut self, n: u64) {
+        if self.index == u64::MAX {
+            return;
+        }
         debug_assert!(
             self.index >= n,
             "untick_raw({n}) below the index {}",
@@ -341,7 +367,8 @@ impl Meter {
     /// `mxCheckMeter`: at a loop-closing point, if metering is armed and
     /// the index passed the threshold, consult `host`. Mirrors
     /// `fxCheckMetering`: on continue, advance `meterCount` by the
-    /// interval; on refusal, signal an abort.
+    /// interval; on refusal, signal an abort. An exhausted meter
+    /// (`index == u64::MAX`) aborts without consulting `host`, armed or not.
     #[inline]
     pub fn check<F: FnMut(u64) -> bool>(&mut self, host: &mut F) -> MeterCheck {
         self.check_inner(host, false)
@@ -382,6 +409,12 @@ impl Meter {
         host: &mut F,
         monotone: bool,
     ) -> MeterCheck {
+        if self.index == u64::MAX {
+            // Exhausted (module docs): the total is unrepresentable, and a
+            // saturated window (`count == u64::MAX`) would otherwise never
+            // see `index > count`.
+            return MeterCheck::Abort;
+        }
         if self.interval != 0 && self.index > self.count {
             self.last_reported = self.computrons();
             if host(self.last_reported) {
@@ -524,6 +557,112 @@ mod tests {
             m.count, m.interval,
             "wrap guard resets meterCount to interval"
         );
+    }
+
+    /// A meter restored to `index` with checks un-armed.
+    fn restored(index: u64) -> Meter {
+        let mut m = Meter::new();
+        m.restore(MeterState {
+            index,
+            interval: 0,
+            count: 0,
+        });
+        m
+    }
+
+    // Kani counterexamples (MTR-1) from before accumulation saturated: each
+    // of these panicked with "attempt to add/multiply with overflow" in
+    // release builds, which set `overflow-checks = true`.
+    #[test]
+    fn ticks_saturate_at_the_ceiling() {
+        let ticks: [fn(&mut Meter); 9] = [
+            Meter::tick_code,
+            Meter::tick_builtin,
+            Meter::tick_slot_alloc,
+            |m| m.tick_raw(1),
+            |m| m.tick_chunk_alloc(1),
+            |m| m.tick_chunk_new(0),
+            |m| m.tick_string(0),
+            |m| m.tick_code_n(1),
+            |m| m.tick_builtin_some(1),
+        ];
+        for (i, tick) in ticks.iter().enumerate() {
+            let mut m = restored(u64::MAX);
+            tick(&mut m);
+            assert_eq!(m.raw(), u64::MAX, "tick {i} from the ceiling");
+            let mut m = restored(u64::MAX - 1);
+            tick(&mut m);
+            assert_eq!(m.raw(), u64::MAX, "tick {i} onto the ceiling");
+        }
+    }
+
+    #[test]
+    fn wide_tick_multiplications_saturate() {
+        let mut m = restored(0);
+        m.tick_code_n(1 << 63);
+        assert_eq!(m.raw(), u64::MAX, "n * CODE_METERING overflows");
+        let mut m = restored(1 << 63);
+        m.tick_code_n(1 << 47);
+        assert_eq!(m.raw(), u64::MAX, "index + n * CODE_METERING overflows");
+        let mut m = restored(0);
+        m.tick_builtin_some(u64::MAX);
+        assert_eq!(m.raw(), u64::MAX);
+        let mut m = restored(0);
+        m.tick_chunk_alloc(u64::MAX);
+        assert_eq!(m.raw(), u64::MAX);
+        // Below the ceiling the charges are exact.
+        let mut m = restored(5);
+        m.tick_code_n(3);
+        m.tick_builtin_some(2);
+        assert_eq!(m.raw(), 5 + 3 * CODE_METERING + 2 * BUILTIN_METERING);
+    }
+
+    /// An unpaired refund breaks the engine's pairing invariant, which
+    /// debug builds assert; release builds (which a crafted snapshot can
+    /// reach) saturate at zero instead of underflowing.
+    #[test]
+    #[cfg_attr(debug_assertions, should_panic(expected = "below the index"))]
+    fn unpaired_untick_code_saturates_in_release() {
+        let mut m = restored(0);
+        m.untick_code();
+        assert_eq!(m.raw(), 0);
+        let mut m = restored(5);
+        m.untick_raw(9);
+        assert_eq!(m.raw(), 0);
+    }
+
+    #[test]
+    fn the_exhausted_meter_is_absorbing() {
+        let mut m = restored(u64::MAX - 1);
+        m.tick_code();
+        assert_eq!(m.raw(), u64::MAX);
+        // A refund does not leave the exhausted state.
+        m.untick_code();
+        m.untick_raw(1 << 15);
+        assert_eq!(m.raw(), u64::MAX);
+        // Every check and admission refuses, un-armed and armed, without
+        // consulting the host.
+        assert_eq!(m.check(&mut |_| panic!("consulted")), MeterCheck::Abort);
+        assert_eq!(
+            m.check_compilation(&mut |_| panic!("consulted")),
+            MeterCheck::Abort
+        );
+        assert_eq!(
+            m.charge_and_check(0, &mut |_| panic!("consulted")),
+            MeterCheck::Abort
+        );
+        assert!(!m.charge_compilation(0, None));
+        m.restore(MeterState {
+            index: u64::MAX,
+            interval: u64::MAX,
+            count: u64::MAX,
+        });
+        assert!(m.is_armed());
+        assert_eq!(m.check(&mut |_| panic!("consulted")), MeterCheck::Abort);
+        // Only begin (or restore) leaves it.
+        m.begin(1);
+        assert_eq!(m.raw(), 0);
+        assert_eq!(m.check(&mut |_| false), MeterCheck::Continue);
     }
 
     #[test]

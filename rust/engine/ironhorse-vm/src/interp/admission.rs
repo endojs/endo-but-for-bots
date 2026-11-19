@@ -75,7 +75,8 @@ impl Interp {
         match self.meter_host.as_mut() {
             Some(host) => self.meter.check(host),
             None if self.meter.is_armed() => MeterCheck::Abort,
-            None => MeterCheck::Continue,
+            // Un-armed: never consults, but an exhausted meter still refuses.
+            None => self.meter.check(&mut |_| true),
         }
     }
 
