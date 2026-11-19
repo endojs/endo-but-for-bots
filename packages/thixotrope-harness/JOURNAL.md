@@ -17686,3 +17686,11 @@ use of a fresh worker. Further work compares a compacted 300-turn restart with t
 subagent ask. The M9 allocation comparison uses the same emitter for the unmodified
 WX.1 guest tree and the isolated M9 tree (J-12541). The seven-file M6 source checkpoint
 remains in its original checkout. J-1451 and J-1452 are the pre-change results.
+### J-1485 2026-11-19 M9 post-office envelope validation
+
+The factory formerly cloned, hardened and measured the full envelope twice on
+each turn-starting post. It now reuses the validated envelope for every
+recipient. Only a session receiving a shortened body needs its own envelope
+and second validation. The operator still receives the full original.
+The post-office and subagent-tree suites passed all 39 cases at b669cf1f8f.
+The change is in the factory and does not reduce the session allocation.

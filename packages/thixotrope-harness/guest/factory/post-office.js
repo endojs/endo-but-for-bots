@@ -567,17 +567,16 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
     };
     if (ticket !== undefined) base.ticket = ticket;
     if (fields !== undefined) base.fields = fields;
-    const full = harden({ ...base });
-    /** @type {Record<string, any>} */
-    const stray = { ...base };
+    const full = harden(base);
+    checkEnvelope(full);
+    let toSessions = full;
     if (!startsTurn) {
       const kept = strayBody(draft.body);
-      stray.body = kept.body;
-      if (kept.cutFrom !== undefined) stray.cutFrom = kept.cutFrom;
+      if (kept.cutFrom !== undefined) {
+        toSessions = harden({ ...base, ...kept });
+        checkEnvelope(toSessions);
+      }
     }
-    const toSessions = harden(stray);
-    checkEnvelope(full);
-    checkEnvelope(toSessions);
     /** @param {any} object */
     const deliver = object => {
       const party = recipientOf(object);
