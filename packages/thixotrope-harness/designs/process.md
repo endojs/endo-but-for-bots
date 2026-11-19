@@ -172,6 +172,13 @@ Two subsequent full files passed on the integrated harness. All four cases in
 passed in full, or 25 of the current 26 including retirement. The original mixed
 `m1b-qc` file retains its separate result above.
 
+On the same revision and file order, all 51 routine milestone files passed 94
+tests twice. With contention, wall time was 4,818.5 s. With warm templates
+and six reserved slots, wall time after acquisition was 974.4 s (16 min 14.4 s),
+with 5,607.1 slot-seconds held. Three mixed files were outside both timings.
+The original 54-file gate remains open. The four list-feed daemon tests also
+passed on the combined factory at `c8d57059bd` (J-1465).
+
 Earlier full-list baseline: the step 3 close-out (T3-CLOSE, J-10251), 2026-11-19 00:09-00:37 UTC, at
 `804398c4d9` (lane `endo-thix-clean`, after the review's step 3, documents edited), 6 jobs in
 shared slots, load 2.0-4.3, with the long-session template chain (section 3.2) holding one slot

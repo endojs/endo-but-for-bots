@@ -18225,3 +18225,21 @@ corepack yarn exec node scripts/run-lock.mjs --exclusive --max-ms 3000000 \
     { stdio: "inherit" });
   process.exitCode = run.status ?? 1;'
 ```
+
+### J-1459 2026-11-19 WX.F full mail result and throughput follow-up
+
+The local combined harness includes the factory allocation change and the
+fresh-state growth benchmark measured at `17bbccdfed`. J-12549 records
+the completed exclusive run. The operator receipt passed at 146.447 ms
+median against 200 ms. The four-client, eight-recipient workload paid for
+the final reply dismissals and completed 164 posts in 61.420 s (2.670/s).
+At that duration a passing run would require at least 185 completed posts.
+The throughput follow-up keeps those receipt, turn, dismissal and timing
+boundaries. The next comparison measures repeated per-message work in the
+factory and recipient session. The original allocation limit and fixed M9
+input references remain the basis for any session code changes (J-1460).
+
+The independent 51-file warm milestone run and the unchanged list-feed
+regression are recorded in J-1465. The environment lane completed its
+reviewed cold-create run under 6 s (5,663.632 ms median across six sessions).
+Voice and environment experiments continue on separate local branches.

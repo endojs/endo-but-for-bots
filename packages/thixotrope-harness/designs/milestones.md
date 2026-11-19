@@ -1959,18 +1959,17 @@ at `1881601aab`, load 1.9-3.2, 690.9 s held, 786 s of wall for the files; J-1226
 **Status: integrated with open performance gates.** The five daemon regression files passed
 12 tests across the recorded runs (J-12544). The combined branch also passed the stopped-mail
 and child-environment cases. On the linked build, all eight mail daemon tests passed
-(J-1461). The four-sender, eight-recipient benchmark measured 388 ms for operator
-acknowledgment (target 200 ms), 390 ms for session delivery (target 300 ms) and
-1.30 completed and dismissed posts/s (target 3). Inbox p95 met its 550 ms limit at
-500 ms. Persisted hub bytes grew 1.419× against 1.25× after 215 completed posts
-(J-12547). That growth ratio used the post-throughput state as its baseline;
-the contract's fresh-state comparison is still open. J-1448 records the earlier
-workload. Native timing located a median 220 ms of collection on the critical
-factory row update in an ordinary mail diagnostic (J-1458). The separate four-deliveries
-per forwarded mail limit still needs a causally attributed count.
-All three eight-child bursts and subtree stops passed. On the linked build, ask
-overhead was 393 ms against 300 ms, measured from parent tool call to result
-less the child's full turn on one observer clock (J-1474).
+(J-1461). In the exclusive full benchmark on `17bbccdfed`, operator acknowledgment
+passed at 146.447 ms median (95 sends, target 200 ms). Four senders and eight recipients
+completed and dismissed 164 replies in 61.420 s, or 2.670 posts/s against 3.
+Session-to-session delivery measured 349 ms against 300 ms. Inbox p95 passed at
+500 ms against 550 ms. The contractual fresh hub comparison passed at 0.605×
+(301 posts, 31 natural compactions, limit 1.25×). J-12549 records the image and log
+sizes; the earlier J-12547 ratio used the post-throughput state as its denominator.
+J-1458 traces time spent in collection on the previous acknowledgment path.
+The four-deliveries-per-forwarded-mail limit still needs a causally attributed count.
+All three eight-child bursts and subtree stops passed. Ask overhead was 363 ms
+against 300 ms and spawn was 1,513 ms against 1,500 ms (J-12549).
 The ten mail, request and subagent tools are registered. With the production session
 linker, M9 adds 21,430 bytes to the WX.1 base of 115,502, within its 21,500-byte
 allocation. J-1460 gives both Git inputs, the exact command and the earlier J-12541 miss.
