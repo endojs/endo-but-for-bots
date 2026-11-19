@@ -12,7 +12,8 @@
  * `802bd2767c`, ceiling 3.5 %; measured 3.00 % (802 of 26,741 lines) at
  * `f6a844cbbf`, ceiling 3.25 %; measured 1.80 % (478 of 26,553 lines) at
  * `dc8ea804f0` after step 3's provider seam and catalogue core (that part
- * alone: 718 to 478 repeated lines), ceiling 2.05 %. A change that lowers
+ * alone: 718 to 478 repeated lines), ceiling 2.05 %. The four-lane fold
+ * measured 1.52 % (584 of 38,383 source lines), ceiling 1.77 %. A change that lowers
  * the share lowers the ceiling in the same commit (keep about 0.25 points
  * of margin).
  *
@@ -23,7 +24,7 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const CEILING_PERCENT = 2.05;
+const CEILING_PERCENT = 1.77;
 
 const ceilingAt = process.argv.indexOf('--ceiling');
 const ceiling =

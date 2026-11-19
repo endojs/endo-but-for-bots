@@ -102,7 +102,8 @@ one that names `H/test/*/m6-*` or an `interfaces-m6.js`).
    milestone's module instead of copying it; the export is a one-line seam listed in the lane's
    contract and reviewed by the module's owner. Copying more than 15 lines is a review finding.
    `corepack yarn lint:duplicates` fails above the duplicate ceiling (`scripts/check-duplicates.mjs`:
-   2.05 % of normalised lines over `guest`, `resources` and `ui` since step 3, `d94ad96129`;
+   1.77 % of normalised lines over `guest`, `resources` and `ui` at the four-lane fold;
+   measured 1.52 % (584 of 38,383 source lines). The step-3 ceiling was 2.05 %, `d94ad96129`;
    measured 1.80 %, 478 of 26,614 lines, at `804398c4d9`; 3.25 % and 3.00 % after the fold);
    the ceiling only goes down.
 4. **Fakes are built from the real guards** (T5): `makeExo` with the product's interface,

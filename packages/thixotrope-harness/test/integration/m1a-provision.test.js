@@ -143,6 +143,10 @@ run('provision, create, list, lost after restart', async t => {
         // M5's registered step (50-m5-fixtures.js), a no-op without
         // options.m5Fixtures.
         ['m5 fixtures', true],
+        ['install-native environments', true],
+        ['configure environments', true],
+        ['attach environments', true],
+        ['voice', true],
       ],
     );
     const byName = new Map(buildReports.map(r => [r.name, r]));

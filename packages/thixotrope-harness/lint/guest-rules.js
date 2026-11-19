@@ -559,6 +559,7 @@ export const makeHarnessLintConfigs = ({ nodeGlobals }) => [
     ignores: [
       `${HARNESS}/tmp/`,
       `${HARNESS}/dist-guest/`,
+      `${HARNESS}/resources/agent-host/impl/gateway/assets/`,
       // Survey reference scripts, kept as written; they import by paths
       // relative to packages/thixotrope and do not run from here.
       `${HARNESS}/designs/`,

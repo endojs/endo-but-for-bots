@@ -425,7 +425,8 @@ kept every layer. From M6 on (PM rulings, 2026-11-18; the naming and code rules 
   reviewed by that module's owner. A copy of more than 15 lines is a review finding.
 - **Duplicate ceiling.** `corepack yarn lint:duplicates` (part of `yarn lint`) runs
   `arch-review/tools/find-duplicates.mjs` over `guest`, `resources` and `ui` and fails above
-  2.05 % of normalised lines in repeated blocks (set by `d94ad96129` in step 3; measured 1.80 %,
+  1.77 % of normalised source lines in repeated blocks (four-lane fold, measured 1.52 %).
+  The preceding ceiling was 2.05 % (set by `d94ad96129` in step 3; measured 1.80 %,
   478 of 26,614 lines in 23 clusters, at `804398c4d9`; 3.00 % after the fold under a 3.25 %
   ceiling; 3.22 % at `802bd2767c` under 3.5 %). A change that lowers the share lowers the ceiling
   in the same commit; nobody raises it.

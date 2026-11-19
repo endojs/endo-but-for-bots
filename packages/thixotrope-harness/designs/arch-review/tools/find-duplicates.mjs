@@ -9,6 +9,11 @@
 // touch both sets are reported.
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const gatewayAssets = fileURLToPath(
+  new URL('../../../resources/agent-host/impl/gateway/assets', import.meta.url),
+);
 
 const argv = process.argv.slice(2);
 let min = 8;
@@ -25,6 +30,7 @@ const walk = dir =>
   fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => {
     if (e.name === 'node_modules' || e.name.startsWith('.')) return [];
     const p = path.join(dir, e.name);
+    if (path.resolve(p) === gatewayAssets) return [];
     if (e.isDirectory()) return walk(p);
     return /\.(m?js|ts)$/.test(e.name) && !/\.d\.ts$/.test(e.name) ? [p] : [];
   });
