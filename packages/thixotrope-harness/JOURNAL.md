@@ -17329,6 +17329,23 @@ is being measured first with ordinary sequential staging. A host-only profile on
 10,000-file fixture took 57–66 ms for the bounded 50-commit Git page in twelve reads.
 The public benchmark includes the session, exec vat, manager and adapter round trips.
 
+### J-12108 2026-11-19 session preset and pinned voice creation
+
+The factory already validates that a selected preset belongs to its catalogue, remains
+live and is available. In `7f6f649b0b` it reads the public snapshot's backing record
+locally in that same creation. A child passes its parent's snapshot directly through
+the option resolvers. A factory regression verified the original revision and instructions
+after a save, the explicitly delegated objects, and the existing refusal after deletion.
+The concurrent save and rollback test also passed.
+
+In `cdda47dd25` a pinned shortcut starts its two backend reads together. The invocation
+reuses the model answer only when the selected backend and model still match. An edited
+preset can switch backend while the original lookup waits. A regression verified the new
+backend wins even when the former backend's description rejects. Two successive API
+shortcut launches made one description and one model lookup each. The factory, voice
+and subagent tree suites passed 41 tests and the package TypeScript check passed.
+The exclusive startup timing remained pending while unrelated work saturated the host.
+
 ### J-12120 2026-11-19 W6.8 shared layout and guarded bundle boundaries
 
 `32fccde460` shares the package and state path resolvers between the two native resources and
