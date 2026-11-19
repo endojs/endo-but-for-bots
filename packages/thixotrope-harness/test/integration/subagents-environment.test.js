@@ -76,12 +76,12 @@ run(
       ],
     });
     const { backend } = await slice.makeBackend(script);
+    const baselineKeys = new Set(environmentKeys(state.root));
     const parent = await startEnvironmentSession(slice, backend);
     const live = await slice.subscribe(parent);
     t.teardown(() => live.stop());
     const workspace = (/** @type {string} */ key) =>
       path.join(state.root, 'environments', 'sessions', key, 'workspace');
-    const baselineKeys = new Set(environmentKeys(state.root));
     await runTurn(slice, parent, live, 'mark parent');
     const newKeys = environmentKeys(state.root).filter(
       key => !baselineKeys.has(key),
