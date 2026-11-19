@@ -17523,7 +17523,10 @@ The broad run at `054eb818d8` measured 568 ms from rename invocation to
 delivery at the slower of two list subscribers against the 500 ms M1b
 limit. The M3 browser-facing list test times delivery from rename
 completion. Those intervals answer different questions. The broad M1b run
-remains a failure under its original limit.
+remains a failure under its original limit. The focused rerun of the unchanged
+case at `8ffc0ed742` passed in 47.8 s in a shared slot. It measured 318,
+114 and 114 ms from rename invocation to delivery at the slower subscriber.
+The three create rows arrived 16, 228 and 23 ms after return.
 
 At `b90e7461c6` the broad QC run found no disappearance among the original
 exec workers at its single observation after a two-second sleep. Session
