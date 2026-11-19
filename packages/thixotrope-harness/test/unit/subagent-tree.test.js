@@ -409,6 +409,23 @@ test('cancelAsk ends the ask, tells the child, and a late reply is consumed', as
   t.is((await E(handle).describe()).state, 'ready');
 });
 
+test('cancel during the reply copy releases the new handle', async t => {
+  const tree = makeTree();
+  const parent = tree.addParent('Root');
+  const { handle } = await spawn(parent.delegation, 'slow');
+  const asked = E(handle).ask(
+    harden({ task: 'report', attachments: none, at: AT }),
+  );
+  await settle();
+  tree.world.stallCopies();
+  await replyFrom(tree.childOf(handle), stagedText(32_000));
+  await E(handle).cancelAsk();
+  await t.throwsAsync(asked, { message: mailTexts.askAbandoned });
+  tree.world.releaseCopies();
+  await settle();
+  t.deepEqual(tree.world.released, [tree.world.copies[0].copied.blob]);
+});
+
 test('a cancel before the post office answered cancels the delivery once it answers', async t => {
   const tree = makeTree();
   const parent = tree.addParent('Root');

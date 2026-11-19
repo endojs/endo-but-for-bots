@@ -337,7 +337,10 @@ export const makeSubagents = ({
       if (open.closed) return;
       answerOf(node, reply).then(
         answer => {
-          if (open.closed) return;
+          if (open.closed) {
+            if (typeof answer.text === 'object') postOffice.release(answer.text);
+            return;
+          }
           finish();
           open.kit.resolve(answer);
         },
