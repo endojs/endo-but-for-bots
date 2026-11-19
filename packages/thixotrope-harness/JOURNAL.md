@@ -15005,3 +15005,65 @@ Commits `c5b4f2eaa5`, `6fb874f701` and this journal commit; nothing pushed; sess
 233,126 bytes before and after (M11's cap 0: this unit adds no guest code); no change to
 `packages/thixotrope` or `rust/**`.
 Fit: neutral.
+
+### J-1330 2026-11-19 W11.1 speech in, process kind - built
+Evidence: `edf702bfbe` (`AH/speech/child-engine.js`), `03b9283077` (`AH/speech/stt-process.js`,
+`AH/speech/engines/moonshine_daemon.py`, `test/fixtures/fake-stt.mjs`); tests
+`test/adapter/speech-child-engine.test.js` (10) and `test/adapter/speech-stt-process.test.js` (11,
+plus one `[real-moonshine]` case skipped unless `THIX_HARNESS_REAL_SPEECH=moonshine`), 21 passing,
+three runs in a row.
+Reading: `child-engine.js` exports `spawnEngineProcess(options, handlers)` (one child: the
+`engineEnvironment` allowlist only, its own process group so a kill reaches `uv run`'s Python
+child, stderr discarded, JSON lines through a bounded reader or raw bytes, a ready line within
+`engineLoadMs`, `terminate()` = end of input, SIGTERM to the group, SIGKILL after `killGraceMs`,
+`pauseOutput`/`resumeOutput`/`queuedBytes` for the speech-out unit's backpressure),
+`makeRestartPacing` (at most `failuresInWindow` timestamps), `makeChildEngine` (a resident
+engine, respawned on next use), `makeLineReader`, `engineEnvironmentOf`, `afterMs` (unref'd
+host timer). `stt-process.js` exports `makeProcessSttEngine(settings, options)`: one resident
+engine per settings revision; whole samples forwarded (an odd byte carried, the trailing one
+dropped at END); `listening` the first sink call, after `open` returned; partials forwarded until
+END (dropped after, as Endo's `finish`); bounds `utteranceBytes` (the engine ends the utterance,
+`tooLong()` true, the final follows), `sttBacklogBytes` (stdin queue x 3/4, abort `backlog`),
+`engineLineBytes`; timeouts `sttIdleMs`, `engineTimeoutMs` (counted only while the engine is
+ready, from 1 s of audio without output and from END), `engineLoadMs`. A test SIGKILLs an
+adapter-like parent and finds its engine gone within 5 s (end of input, D-M11-15).
+Fit: good. Engines are ordinary adapter children; nothing of speech in touches a vat or the hub.
+
+### J-1331 2026-11-19 W11.1 speech-in engine costs - measured
+Evidence: `03b9283077`; a scratch script through `perf/_window.mjs` `runWindow`/`windowMs` and
+`perf/_harness.mjs` `summarize`, `PERF_WINDOW_SCALE=0.25` (15 s windows; 7.5 s for the respawn),
+under `run-lock.mjs --shared`, the fake engine, no supervisor, load average 7.9-10.3.
+Reading: `stt.process.audioCall` (one 2,720-byte block: base64 and the line write, paced 1 ms
+apart) median 0.015 ms, p95 0.033, p99 0.046, n 11,756, 0 aborts. `stt.process.partialRoundTrip`
+(the block completing 0.5 s of audio to the partial at the sink: two pipe hops and the fake's
+parse) median 0.043 ms, p95 0.093, p99 0.148, n 5,675. `stt.process.respawnToReady` (engine
+SIGKILLed, then the next `open` to ready) median 28.1 ms, p95 30.6, p99 34.1, n 244. All far under
+W11.9's `speech.audioForward` (1 ms), `speech.partialRelay` (2 ms) and `speech.engineRespawn`
+(100 ms) budgets; those rows add the socket and are W11.9's. A first unpaced attempt wrote blocks
+back to back with no await and hit the 2 MiB backlog bound on purpose of the bound: the numbers
+above are the paced run.
+Fit: good.
+
+### J-1332 2026-11-19 W11.1 contract gaps found while building - finding
+Evidence: contract 6.2, 3.3, 5.2; `engine-types.js` `SttEngine`, `UtteranceSink`, `Utterance`.
+Reading: (1) "Utterance `n` is engine stream `u<n>`" cannot hold: one engine serves every port of
+the incarnation and each port numbers its first utterance 1, and `SttEngine.open(sink)` takes no
+number; engine ids are `u<k>` from the engine's own wrapping counter. (2) `UtteranceSink` has no
+way to carry the `utteranceTooLong` note of the `end` event; the utterance answers `tooLong()`
+(type `ProcessUtterance`), which the route reads at the final. (3) The settings' `command` is used
+as the whole argv; `language` is not appended (the provisioning default carries `--lang`).
+(4) `engineTimeoutMs` would kill an engine still loading its model (600 s allowed), so its timer
+runs only while the engine is ready. (5) With the real Moonshine, partials come only when the
+text changes, so 11 s of continuous non-speech audio after a word would time the engine out; the
+client's endpointing ends such an utterance first (1.2 s of silence), so this is left as written.
+(6) Pacing holds a start for `backoffMs` without waiting: an utterance opened meanwhile aborts
+`engineUnavailable` at once (the user is waiting).
+Fit: neutral.
+
+### J-1333 2026-11-19 W11.1 time record - process
+Evidence: first command 2026-11-19T02:22:37Z.
+Reading: no command over 60 s (package tsc about 3 s, both test files under 2 s, the perf smoke
+about 50 s). Commits `edf702bfbe`, `03b9283077` and this journal commit; nothing pushed; session
+bundle 233,126 bytes before and after (M11's cap 0: this unit adds no guest code); no change to
+`packages/thixotrope` or `rust/**`; `lint:duplicates` 1.68 % (ceiling 2.05 %).
+Fit: neutral.
