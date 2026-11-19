@@ -267,6 +267,23 @@ class Repository(unittest.TestCase):
         jobs = self.selected("deny.toml")
         self.assertEqual([n for n, value in jobs.items() if value], ["cargo-deny"])
 
+    OUTER_SOURCES = ["rust/endo/src/lib.rs", "rust/endo/xsnap/src/ffi.rs",
+                     "rust/endo/benches/codec.rs", "rust/endo_iroh/src/lib.rs",
+                     "rust/ocapn_noise/src/lib.rs", "rust/thixotrope-xs-worker/src/main.rs",
+                     "rust/thixotrope-ironhorse-worker/src/main.rs",
+                     "rust/endo/ironhorse-store-sqlite/src/lib.rs"]
+
+    def test_outer_workspace_format_follows_every_member(self):
+        """rustfmt covers the whole repo-root workspace, not only the SQLite
+        store, so every member's Rust source selects the format job, as does
+        a rustfmt configuration file."""
+        for path in self.OUTER_SOURCES + ["rust/endo/rustfmt.toml", ".rustfmt.toml"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["format-ironhorse"])
+        for path in ["packages/cbor/src/encode.js", "rust/endo/README.md"]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["format-ironhorse"])
+
     def test_format_helper_inputs(self):
         self.assertTrue(self.selected("rust/engine/scripts/generate-compiler-opcodes.py")["format-ironhorse"])
 

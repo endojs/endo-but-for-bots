@@ -61,6 +61,10 @@ can introduce a crate, a licence or a source.
 New advisories arrive without a commit, so `cargo-deny-advisories.yml` also
 re-checks advisories weekly; editing that workflow selects the `cargo-deny` job.
 
+The `format-ironhorse` job checks the formatting of the engine workspace and of
+every root-workspace member, so any Rust source under either selects it, as does
+a `rustfmt.toml`.
+
 When adding a test job, register its package or crate roots and any non-manifest
 inputs in the detector, then wire its job-level condition to the returned flag.
 Add regression cases showing both relevant and unrelated changes.

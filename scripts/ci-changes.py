@@ -197,6 +197,11 @@ class Graph:
         return {self.crate_names[node[5:]] for node in nodes if node.startswith("rust:")}
 
 
+def outer_members(graph):
+    """Directories of the repo-root Cargo workspace's members."""
+    return graph.workspaces.get(".", {}).get("members", [])
+
+
 def under(path, directory):
     return directory == "." or path == directory or path.startswith(f"{directory}/")
 
@@ -337,7 +342,13 @@ def classify(paths, graphs, all_jobs=False):
             jobs["viable-release"] = True
         if path == "scripts/update-action-pins.mjs":
             jobs["check-action-pins"] = True
-        if path.endswith(".rs") and (under(path, "rust/engine") or under(path, "rust/endo/ironhorse-store-sqlite")):
+        # The format job checks the engine workspace and every member of the
+        # repo-root workspace.
+        if path.endswith(".rs") and (under(path, "rust/engine") or any(
+            under(path, member) for member in outer_members(current)
+        )):
+            jobs["format-ironhorse"] = True
+        if PurePosixPath(path).name in {"rustfmt.toml", ".rustfmt.toml"}:
             jobs["format-ironhorse"] = True
         # Supply-chain policy: every manifest and lockfile can add a crate,
         # a licence or a source.

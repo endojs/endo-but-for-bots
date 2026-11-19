@@ -830,8 +830,14 @@ jobs:
       - name: Check standalone-root formatting
         run: rustfmt +1.88.0 --edition 2021 --check rust/engine/stack-lanes/probe/src/main.rs rust/engine/stack-lanes/cases.rs rust/engine/ironhorse-snapshot/footprint/src/main.rs rust/engine/stack-lanes/memory/probe/src/main.rs
 
-      - name: Check SQLite heap-store formatting
-        run: cargo +1.88.0 fmt --manifest-path Cargo.toml --package ironhorse-store-sqlite -- --check
+      # Every member of the repo-root workspace, on the root
+      # rust-toolchain.toml's compiler (rustup installs it and its rustfmt on
+      # first use). Not `--all`: that also walks the members' path
+      # dependencies into rust/engine, which the step above checks with its
+      # own pinned rustfmt. (`cargo fmt` takes no `--manifest-path` for a
+      # virtual manifest without `-p`; it runs from the repository root.)
+      - name: Check outer Rust workspace formatting
+        run: cargo fmt -- --check
 
   test-thixotrope-ironhorse:
     needs: changes
