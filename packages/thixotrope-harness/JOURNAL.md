@@ -15277,3 +15277,75 @@ nothing pushed; session bundle 233,126 bytes before and after (digest `06aceb9a1
 this unit adds no guest code); no change to `packages/thixotrope` or `rust/**`;
 `lint:duplicates` 1.66 % (ceiling 2.05 %).
 Fit: neutral.
+
+### J-12620 2026-11-19 W11.5 speech host, /audio route, playback, kinds and the extension - built
+Evidence: `aa004f2606`, `69fa32328c`, `e867eaa129`, `c4cf4d6dc3`, `b8535f265f`.
+Reading: seams H5 (`GW/server.js`: the handshake and connection counts moved unchanged into a
+server-scope `accept(request, raw, head, { maxMessageBytes, onSocket })` answering the socket or
+`undefined`; `/ws` and extension upgrade routes call it after the path and Origin checks;
+`GatewaySocket.bufferedBytes()`), H6 (`GW/index.js` `extensionPowers`, the operator holder in
+the service closure, `operator()` on the context, `contextFor(extension)` made once per listed
+extension object with the getter of `stateDir` kept; `extensions.js` `contextFor` on both
+helpers, defaulting to `context` so M3's and M4's tests run unchanged; `protocol.js` typedefs)
+and H7 (`AH/index.js`: the import and one `extensionPowers` entry with `secrets().readKey`).
+`AH/speech/host.js` `makeSpeechHost({ context, kinds, pipeline, options })`: settings cache read
+through `E(E(operator).getVoice()).speechSettings()` at first use and at a stale `openAudio`;
+engines per direction and revision (idle ones stopped at a new revision, busy ones after their
+last stream); ports with SHA-256 token digests and a `timingSafeEqual` bind; odd and even stream
+numbers; utterances and playbacks; `configuration`, `status`, `replay` (inline texts and Blobs
+read through `Content` a page at a time). `route.js` frame codec, HELLO deadline and binding;
+`playback.js` text source to `SpeechText` to `Synthesis` to PCM frames with `drained()`
+backpressure (polls `bufferedBytes()` every 5 ms while over 1 MiB); `kinds.js` the one module
+naming engine modules (`process` and `openai-audio`, both directions, each adapted from the
+host's `EngineContext`; the playback option check is `voice-catalogue.js` `checkTtsOptions`). `GW/extensions/speech.js`: service `speech`, routes `/audio` and the
+capture worklet, `Speech.replay` a LargeCall. Tests: `gateway-speech-extension` 5,
+`speech-audio-route` 9, `speech-host` 11 (one runs the fake process engines through the
+incarnation's kinds), `speech-timeouts` 3 (28 in about 4 s).
+Fit: good.
+
+### J-12621 2026-11-19 W11.5 A-5: require(esm) and import share one extension object - measured
+Evidence: `69fa32328c`, `test/adapter/gateway-speech-extension.test.js`; Node 22.23.4.
+Reading: `loadGatewayExtensions()` over `GW/extensions/` answers, for `speech`, the very object
+`import { gatewayExtension } from '.../speech.js'` answers (`t.is`), and the same holds for two
+probe extensions loaded from a test directory; through a bound `makeGatewayService` only the
+listed probe's context carries `readGrant`, the other's has no such property, both have
+`operator()` answering the bind's operator. No fallback to a file-name match was needed. In the
+real adapter (`m3-gateway.test.js`, a supervisor) the speech extension loads with no skip and its
+service is in every page's extras.
+Fit: good (an object at the code-loading boundary works because Node keeps one module record).
+
+### J-12622 2026-11-19 W11.5 audio path numbers - measured
+Evidence: `e867eaa129`; adapter tests, no supervisor, shared machine with other lanes.
+Reading: backpressure: a raw client that stops reading after READY, replaying 2.5 Mi units of
+text at 32 PCM bytes per unit (80 MiB possible): synthesis paused at 1,575,328 / 1,574,720 /
+1,574,720 bytes (3 runs) and did not move in the next 500 ms; the socket stayed open (never near
+the 8 MiB send bound) and resumed when the client read again. 1,000 sockets with wrong tokens in
+rounds of 8: 1.0-1.2 s, each closed 4103, no port left, connections back to 1. Session bundle
+233,126 and exec 64,500 bytes before and after (M11 cap 0: no guest file touched); factory
+199,356 (W11.7's growth). `lint:duplicates` 1.66 % (524 of 31,617), no cluster in these files.
+Fit: neutral.
+
+### J-12623 2026-11-19 W11.5 contract differences and a pinned list - finding
+Evidence: `69fa32328c`, `c4cf4d6dc3`; `test:integration m3-gateway` 107.8 s held.
+Reading: (1) `makeSpeechHost` takes a fourth input, `pipeline: { openTurnView, makeSpeechText }`,
+given by the extension, so host tests use stand-in views (the view is W11.3's subject).
+(2) Engines emit `phase`, `sttIdle` and the utterance length bound themselves (W11.1, W11.4), so
+the host only forwards; it reads `utterance.tooLong?.()` for the `end` note. (3) Late frames: after
+a server abort, a stream's late frames are ignored; after a normal server end only a late ABORT is;
+anything else for a closed stream closes `protocol` (the contract's probe holds for the page's own
+closed streams). (4) `transcribe`/`speak` on a port whose socket is not bound answer
+`speechTexts.portClosed` (no text for "not yet bound"). (5) `GatewayContext.operator` is typed
+optional so existing fake contexts type-check. (6) The host's `stop()` is not called by the gateway
+(an extension has no unbind hook): ports close with their sockets at unbind and engines die with
+the process. (8) The host never calls the process speech-out engine's `warm(options)`, so the
+warm spare (D-M11-12) is not started for the shared preferences yet. (7) `test/integration/m3-gateway.test.js` l.350 pins the extras labels to
+`[secretWriter, fixture]`; with the speech extension the list is `[secretWriter, fixture, speech]`,
+so acceptance 16 fails until that line names `speech` (an M3 file in the core regression list).
+Fit: poor at (7) (a pinned list of all extensions breaks for every new extension).
+
+### J-12624 2026-11-19 W11.5 time record - process
+Evidence: first command 2026-11-19T02:22:38Z.
+Reading: over 60 s: adapter tests importing `AH/index.js` 61 s; `test:integration m3-gateway` twice,
+107.9 s each (shared slot). Commits `aa004f2606`, `69fa32328c`, `e867eaa129`, `c4cf4d6dc3`,
+`b8535f265f` and this journal commit; nothing pushed; no change to `packages/thixotrope` or `rust/**`.
+Fit: neutral.
