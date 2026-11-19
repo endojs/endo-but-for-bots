@@ -226,6 +226,38 @@ export const textOf = harden({
  * M1b's and M2's.
  */
 const m1aShapeBuilders = {
+  /**
+   * The `SourceReader.read` argument: the protocol `readSources` targets
+   * implement (M6's workspace `Dir`; the M5 test fixture). Fae's item.
+   */
+  SourceReadRequest: () =>
+    record(
+      {
+        path: list(
+          text(limits.pathSegmentUnits),
+          limits.readSourcesPathSegments,
+        ),
+      },
+      {
+        startLine: M.and(count, M.lte(limits.readSourcesMaxStartLine)),
+        lineCount: M.and(count, M.lte(limits.readSourcesLineCount)),
+        search: text(limits.searchUnits),
+      },
+    ),
+  /** `SourceReader.read` answer, bounded by the callee (per-field budget). */
+  SourceReadResult: () =>
+    record(
+      { ok: M.boolean() },
+      {
+        lines: list(
+          record({ line: count, text: text(limits.readSourcesItemUnits) }),
+          limits.readSourcesLineCount,
+        ),
+        scanTruncated: M.boolean(),
+        outputTruncated: M.boolean(),
+        error: S.Reason,
+      },
+    ),
   Reason: () => text(limits.reasonUnits),
   ToolName: () => text(limits.toolNameUnits),
   /** A tool as offered to the model; `parameters` is JSON Schema as text. */

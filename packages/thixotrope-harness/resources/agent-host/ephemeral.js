@@ -27,33 +27,13 @@
  */
 import { makeAdapter } from '@endo/thixotrope/native-adapter.js';
 import { randomBytes } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
-import { argv, pid } from 'node:process';
+import { join } from 'path';
+import { pid } from 'process';
 
-/**
- * The harness package directory, from the adapter process's entry module.
- * @param {string | undefined} [entry]
- */
-export const findHarnessRoot = (entry = argv[1]) => {
-  if (typeof entry !== 'string')
-    throw Error('agent host: the adapter process has no entry module path');
-  // .../packages/thixotrope/src/platform/node/adapter-process-entry.js
-  const root = resolve(
-    dirname(entry),
-    '..',
-    '..',
-    '..',
-    '..',
-    'thixotrope-harness',
-  );
-  if (!existsSync(join(root, 'resources', 'agent-host', 'impl', 'index.js')))
-    throw Error(
-      `agent host: no implementation under ${root}; the harness must be the core's sibling package`,
-    );
-  return root;
-};
+import { findHarnessRoot } from '../native-layout.js';
+
+export { findHarnessRoot };
 
 /**
  * Load the implementation and build the adapter root.

@@ -37,7 +37,6 @@ import { HUB_RETIRED_MESSAGE } from '../../guest/lib/retired.js';
 /* eslint-enable import/no-relative-packages */
 import {
   SERVICE_KEY,
-  fullText,
   make as makeManagerVat,
   sameSettings,
 } from '../../resources/environments/durable.js';
@@ -381,13 +380,16 @@ const makeKit = (t, { checkOk = true, real = false } = {}) => {
 
 /**
  * The manager's status once `done` holds: the adapter reports stops and
- * releases sendOnly, so a test waits for them (20 tries, 10 ms apart).
+ * releases sendOnly, so a test waits for the observable acknowledgement.
  * @param {any} admin
  * @param {(status: { environments: number, pendingStops: number, pendingReleases: number }) => boolean} done
  */
 const statusWhen = async (admin, done) => {
   let status = await E(admin).status();
-  for (let i = 0; i < 20 && !done(status); i += 1) {
+  const deadline = Date.now() + 10_000;
+  while (!done(status)) {
+    if (Date.now() >= deadline)
+      throw Error(`Manager status did not settle: ${JSON.stringify(status)}`);
     // eslint-disable-next-line no-await-in-loop -- polling, in order
     await new Promise(r => setTimeout(r, 10));
     // eslint-disable-next-line no-await-in-loop -- polling, in order
@@ -817,7 +819,7 @@ test('records are bounded by maxEnvironments; a release makes room once answered
   for (let i = 0; i < L.maxEnvironments; i += 1)
     kits.push(kit.admin.provide({ workspace: true, shell: false }));
   t.throws(() => kit.admin.provide({ workspace: true, shell: false }), {
-    message: fullText,
+    message: T.tooManyEnvironments,
   });
   kit.admin.release(kits[0].control);
   await statusWhen(

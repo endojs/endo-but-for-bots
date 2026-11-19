@@ -55,14 +55,6 @@ const { makeExo } = /** @type {any} */ (globalThis);
 export const SERVICE_KEY = 'environments';
 
 /**
- * `provide` with `maxEnvironments` records kept. Not in the shared table
- * yet (the environments guard module is the contract's): moved there by
- * the lane's fold.
- */
-export const fullText =
-  'Too many environments: delete sessions that have one first';
-
-/**
  * The forwarded git operations the read-only facet has (retried once after
  * a break), and the others, the writes (never sent twice).
  */
@@ -473,7 +465,7 @@ export const make = ({ makeManager }) => {
     /** @param {{ workspace: boolean, shell: boolean }} request */
     provide: ({ workspace, shell }) => {
       if (settings === undefined) throw Error(T.notConfigured);
-      if (records.size >= L.maxEnvironments) throw Error(fullText);
+      if (records.size >= L.maxEnvironments) throw Error(T.tooManyEnvironments);
       serial += 1;
       /** @type {EnvironmentRecord} */
       const record = {

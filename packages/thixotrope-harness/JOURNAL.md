@@ -17206,3 +17206,10 @@ four lanes on the same build. The standalone session-program tests exercised the
 program, its prelude and its byte gate. The supervisor SIGKILL restart test passed (192.1 s
 file wall, including template wait). The first mail smoke timed out during cold setup after
 123 s. Further live results are recorded separately.
+### J-12100 2026-11-19 W6.7 checkpoint recovery
+
+The seven interrupted acceptance and performance files in `c7c0571d6a` match their checkpoint
+SHA-256 digests byte for byte. Its parent is the original M6 tip `5437fe19f2`. Running the five
+environment regression files from a deeper checkout hit the macOS 103-byte socket path limit
+before the daemon served. Commit `f3f6bd97e3` lets the test helper take a short private state
+directory through `THIX_HARNESS_TMP`. Run-lock slots remain shared across checkouts.

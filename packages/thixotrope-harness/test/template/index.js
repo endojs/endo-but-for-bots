@@ -232,6 +232,7 @@ const harnessSources = async () => [
     .filter(entry => entry.isFile())
     .map(entry => path.join(harnessRoot, 'resources', 'agent-host', entry.name))
     .sort(),
+  path.join(harnessRoot, 'resources', 'native-layout.js'),
   path.join(harnessRoot, 'scripts', 'provision-steps.js'),
   ...(await filesUnder(path.join(harnessRoot, 'scripts', 'provision-steps'))),
   path.join(harnessRoot, 'scripts', 'bundle-guest.mjs'),

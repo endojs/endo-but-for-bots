@@ -1671,7 +1671,7 @@ naming M6 and M8, CC-101 as spike step 2, CC-110 as C-10.
 
 ## M6. Containers and git workspace
 
-**Status: contract settled, not built.** Reference: `m6-interfaces.md` (work units 8, acceptance
+**Status: environment manager, adapters, factory, session tools and settings UI implemented. W6.7 regression and performance verification is in progress.** Reference: `m6-interfaces.md` (work units 8, acceptance
 9, perf 10, probes 11, fold 14); guards and texts `guest/lib/guards/environments.js`.
 
 **Goal.** Development sessions: a per-session rootless container with `/workspace` backed by the

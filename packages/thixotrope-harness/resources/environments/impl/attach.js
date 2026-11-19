@@ -30,7 +30,7 @@ import { existsSync, realpathSync } from 'node:fs';
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { environmentTexts as T } from '../../../guest/lib/guards/environments.js';
 /* eslint-enable import/no-relative-packages */
-import { findStateDir } from '../../agent-host/impl/blobs.js';
+import { findStateDir } from '../../native-layout.js';
 import { makeTimers } from '../../agent-host/impl/timers.js';
 import { makeLayout } from './layout.js';
 import { makeOps } from './ops.js';

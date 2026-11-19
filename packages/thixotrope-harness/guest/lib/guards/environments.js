@@ -45,8 +45,6 @@ import {
   lazyTable,
   shapes as baseShapes,
 } from './base.js';
-// M5's SourceReader protocol (`readSources`), which the Git facets serve.
-import { shapes as sessionShapes } from './session.js';
 // M8's image bounds (seam X-1): `openImage` takes the path M8's image tool
 // checked, by the same rule (imported, not copied: review rule 3).
 
@@ -248,6 +246,7 @@ export const gitOps = harden([
  * the comment, `1315bef86`); the harness's own otherwise.
  */
 export const environmentTexts = harden({
+  tooManyEnvironments: 'Too many environments: delete sessions that have one first',
   /** R3-21 (Fae session-factory.js:3911-3922, reworded without backends). */
   runnerRequired:
     'A preset that provisions a shell needs a configured environment runner',
@@ -572,8 +571,8 @@ const gitReadGuards = () => ({
   trackingStatus: M.callWhen().returns(S.GitTracking),
   stashList: M.callWhen().returns(S.GitStashes),
   // M5's SourceReader protocol (readSources over the worktree).
-  read: M.callWhen(sessionShapes.SourceReadRequest).returns(
-    sessionShapes.SourceReadResult,
+  read: M.callWhen(baseShapes.SourceReadRequest).returns(
+    baseShapes.SourceReadResult,
   ),
   // Seam X-1 (M8 `viewImage`): an adapter-side `ImageSource` (M8's guard,
   // `image-guards.js`) over one worktree file; its pages go adapter to

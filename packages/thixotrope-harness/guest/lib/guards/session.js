@@ -1688,38 +1688,6 @@ const objectShapeBuilders = {
       },
       { name: S.ToolName, reason: S.Reason, label: S.Label },
     ),
-  /**
-   * The `SourceReader.read` argument: the protocol `readSources` targets
-   * implement (M6's workspace `Dir`; the M5 test fixture). Fae's item.
-   */
-  SourceReadRequest: () =>
-    record(
-      {
-        path: list(
-          text(limits.pathSegmentUnits),
-          limits.readSourcesPathSegments,
-        ),
-      },
-      {
-        startLine: M.and(count, M.lte(limits.readSourcesMaxStartLine)),
-        lineCount: M.and(count, M.lte(limits.readSourcesLineCount)),
-        search: text(limits.searchUnits),
-      },
-    ),
-  /** `SourceReader.read` answer, bounded by the callee (per-field budget). */
-  SourceReadResult: () =>
-    record(
-      { ok: M.boolean() },
-      {
-        lines: list(
-          record({ line: count, text: text(limits.readSourcesItemUnits) }),
-          limits.readSourcesLineCount,
-        ),
-        scanTruncated: M.boolean(),
-        outputTruncated: M.boolean(),
-        error: S.Reason,
-      },
-    ),
 };
 
 /** Interfaces of the label map, granted tools and source readers (M5). */

@@ -53,12 +53,6 @@
  * results through it).
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
-import {
-  interfaces as relayInterfaces,
-  interfaces,
-  textOf,
-  texts,
-} from '../../../guest/lib/interfaces.js';
 import { E } from '@endo/far';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
@@ -72,16 +66,20 @@ import {
   stat,
   unlink,
 } from 'node:fs/promises';
-import { dirname, basename, join } from 'node:path';
+import { join } from 'node:path';
 import { argv as processArgv, pid } from 'node:process';
 import { StringDecoder } from 'node:string_decoder';
 
+import { interfaces, textOf, texts } from '../../../guest/lib/interfaces.js';
 import { limits } from '../../../guest/lib/limits.js';
 import { chunkText, previewText } from '../../../guest/lib/bounded.js';
 import { blobLimits } from '../../../config/defaults.js';
+import { findStateDir } from '../../native-layout.js';
 import { makeTimers } from './timers.js';
 import { syncDirectory } from './files.js';
 /* eslint-enable import/no-relative-packages */
+
+export { findStateDir };
 
 const { makeExo, Fail } = /** @type {any} */ (globalThis);
 
@@ -219,29 +217,6 @@ const boundStreamed = (prefix, total, maxUnits) => {
   if (marker.length >= maxUnits) return previewText(marker, maxUnits);
   return `${previewText(prefix, maxUnits - marker.length)}${marker}`;
 };
-
-/**
- * The daemon's state directory, from the adapter process's bundle path:
- * `argv[3]` is `<state>/bundles/<digest>.cjs` (pkg store-fs.js `bundlePath`,
- * adapter-process-entry.js), so state copies and templates carry their
- * files. The core gives an adapter no state directory (AR-SYN-28); this is
- * the one place that reads it from argv (HR-SYN-22).
- * @param {readonly string[]} [argv]
- */
-export const findStateDir = (argv = processArgv) => {
-  const bundle = argv[3];
-  if (
-    typeof bundle !== 'string' ||
-    !bundle.endsWith('.cjs') ||
-    basename(dirname(bundle)) !== 'bundles'
-  ) {
-    throw Error(
-      'agent host: no state directory (argv[3] is not <state>/bundles/<digest>.cjs)',
-    );
-  }
-  return dirname(dirname(bundle));
-};
-harden(findStateDir);
 
 /**
  * The blob directory in a state directory.
@@ -1045,7 +1020,7 @@ export const makeBlobStore = ({
     return cutCopy(source, { maxUnits, suffix, to: recipientOwner });
   };
 
-  const relayWriters = makeExo('RelayWriters', relayInterfaces.RelayWriters, {
+  const relayWriters = makeExo('RelayWriters', interfaces.RelayWriters, {
     open: async () => makeWriter(undefined),
     /**
      * @param {any} blob
