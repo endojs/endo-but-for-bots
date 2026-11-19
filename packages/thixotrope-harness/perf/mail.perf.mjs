@@ -1,93 +1,295 @@
 // @ts-check
-/**
- * Mail perf (designs/m9-interfaces.md 10.1), through the daemon from the
- * m1a state template (the real factory and session programs).
- *
- * - `mail.post.operator`: the control client's `OperatorMailbox.send` of a
- *   short package to one session, call to answer, back to back over a fixed
- *   window (MAIL_WINDOW_MS, default 60 s); budget median <= 200 ms (the
- *   control hop 37 ms plus two vat round trips of 66 ms, J-9333, J-10192).
- *   Each row carries the deliveries per post from `status().timings`.
- *
- * The session's `inbox` part is built but not registered in the session
- * program (D-M9-19), so the recipient's `deliverMail` answers the not-built
- * text: the row then measures a post to that refusal (factory crank, the
- * call into the session vat and its answer, the receipt), not a delivery
- * into an inbox, and is named so (`mail.post.operator.toRefusal`); it
- * becomes `mail.post.operator` once the inbox answers.
- *
- * The rows that need a mail turn in the recipient (`mail.sessionToSession`,
- * `mail.throughput`, `mail.inboxCrank`, `mail.hubGrowth`) are printed as
- * not measured, with the reason, until the parts are registered; they never
- * pass silently.
- *
- *   node scripts/run-lock.mjs --exclusive --label mail -- node perf/mail.perf.mjs
- *   PERF_WINDOW_SCALE=0.1 node perf/mail.perf.mjs --shared      # smoke
- */
-import { emit, runPerf, stats } from './_harness.mjs';
+/** Measured operator and session mail, bounded inbox delivery, throughput and hub growth. */
+import { performance } from 'node:perf_hooks';
+import { emit, hubJsonBytes, loadAvg, runPerf, stats } from './_harness.mjs';
 import { runWindow, windowFields, windowMs } from './_window.mjs';
 
-// After the harness module (it locks down first).
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
 installGuestPrelude();
 const { E } = await import('@endo/far');
 const { sliceScript } = await import('../test/fixtures/scripts/m1a-slice.js');
-const { makeSlice, sliceTemplate } =
+const { connect, TEMPLATE_WORKSPACE } =
+  await import('../test/template/index.js');
+const { makeSlice, sliceTemplate, waitFor } =
   await import('../test/integration/_m1a-slice.js');
-// eslint-disable-next-line import/no-relative-packages -- guest/ is its own private package
-const { texts } = await import('../guest/lib/guards/session.js');
+const { names } = await import('../scripts/provision-steps.js');
 
-const WINDOW_MS = windowMs('MAIL_WINDOW_MS', 60_000);
-const WARMUP = 5;
+const window = windowMs('MAIL_WINDOW_MS', 60_000);
+const growthWindow = windowMs('MAIL_GROWTH_WINDOW_MS', 120_000);
 
-/** Rows that need the registered inbox part (a mail turn in the recipient). */
-const needsInbox = harden([
-  'mail.sessionToSession',
-  'mail.throughput',
-  'mail.inboxCrank',
-  'mail.hubGrowth',
-]);
+/** @param {any} mailbox @param {any} session @param {any[]} attachments @param {string} [body] */
+const post = async (mailbox, session, attachments, body = 'ping') => {
+  const start = performance.now();
+  const { results } = await E(mailbox).send(
+    harden({ to: [session], body, attachments }),
+  );
+  const elapsed = performance.now() - start;
+  const { postmark, refused } = results[0];
+  if (!Number.isSafeInteger(postmark))
+    throw Error(refused || 'Missing postmark');
+  return { postmark, elapsed };
+};
+
+/** @param {any} mailbox @param {number[]} expected */
+const dismissReplies = async (mailbox, expected) => {
+  const pending = new Set(expected);
+  let peak = 0;
+  await waitFor(
+    async () => {
+      const { messages } = await E(mailbox).list();
+      peak = Math.max(peak, messages.length);
+      for (const m of messages) {
+        if (pending.delete(m.inReplyTo)) await E(m.message).dismiss();
+      }
+      return pending.size === 0;
+    },
+    60_000,
+    'the mail turns and their replies',
+  );
+  return peak;
+};
+
+/** @param {string} name @param {Record<string, any>} args */
+const call = (name, args) => ({
+  chunks: [{ text: 'tool' }],
+  toolCalls: [{ name, args: JSON.stringify(args) }],
+});
 
 await runPerf('mail', async ({ provision }) => {
-  const template = await sliceTemplate();
-  const run = await provision({ template });
+  const run = await provision({ template: await sliceTemplate() });
   const slice = await makeSlice(run);
-  const { backend } = await slice.makeBackend(harden(sliceScript));
-  const session = await slice.createSession(backend, 'mail perf');
-  const operator = await E(slice.harness).getOperator();
-  const mailbox = await E(operator).getMail();
-  const draft = harden({ to: [session], body: 'ping', attachments: [] });
-
-  const post = async () => {
-    const { results } = await E(mailbox).send(draft);
-    return results[0].refused;
+  const made = await slice.makeBackend(harden(sliceScript));
+  const receiver = await slice.createSession(made.backend, 'Mail recipient');
+  const mailbox = await E(E(slice.harness).getOperator()).getMail();
+  const one = async () => {
+    const { postmark, elapsed } = await post(mailbox, receiver, []);
+    await dismissReplies(mailbox, [postmark]);
+    return elapsed;
   };
-  for (let i = 0; i < WARMUP; i += 1) await post();
-  const before = await run.counters();
-  const w = await runWindow(post, { ms: WINDOW_MS });
-  const after = await run.counters();
-  const answers = new Set(w.results);
-  const notBuilt = answers.has(texts.notBuiltYet);
-  await stats(
-    notBuilt ? 'mail.post.operator.toRefusal' : 'mail.post.operator',
-    w.samples,
-    {
-      budget: { median: 200 },
+  await one();
+  const op = await runWindow(one, { ms: window });
+  await stats('mail.post.operator', op.results, {
+    budget: { median: 200 },
+    extra: windowFields(op),
+  });
+
+  const senderBackend = await slice.makeBackend(
+    harden({
+      turns: [
+        {
+          input: 'remember',
+          rounds: [
+            call('adopt', {
+              messageNumber: 1,
+              edgeName: 'target',
+              petName: 'target',
+            }),
+            { chunks: [{ text: 'ready' }] },
+          ],
+        },
+        {
+          input: 'forward',
+          rounds: [
+            call('send', { recipient: ['target'], strings: ['ping'] }),
+            { chunks: [{ text: 'sent' }] },
+          ],
+        },
+      ],
+    }),
+    { label: 'Mail sender' },
+  );
+  const sender = await slice.createSession(
+    senderBackend.backend,
+    'Mail sender',
+  );
+  const receipt = await post(
+    mailbox,
+    sender,
+    [{ label: 'target', value: await E(mailbox).addressOf(receiver) }],
+    'remember',
+  );
+  await dismissReplies(mailbox, [receipt.postmark]);
+  const between = await runWindow(
+    async () => {
+      const before = made.log().length;
+      const { turn } = await slice.submit(sender, 'forward');
+      const { turnId, state } = await E(turn).whenFinished();
+      if (state !== 'completed') throw Error(`sender ended ${state}`);
+      const start = senderBackend
+        .log()
+        .find(
+          line =>
+            line.turnId === turnId &&
+            line.round === 0 &&
+            line.kind === 'round-final',
+        );
+      const end = await waitFor(
+        () =>
+          made
+            .log()
+            .slice(before)
+            .find(line => line.kind === 'request'),
+        60_000,
+        'recipient provider request',
+      );
+      return Number(end.at) - Number(start.at);
+    },
+    { ms: window },
+  );
+  await stats('mail.sessionToSession', between.results, {
+    budget: { median: 300 },
+    extra: windowFields(between),
+  });
+
+  // Import the kept messages in bounded pages. Every sampled delivery starts with 255 kept rows.
+  const full = await E(slice.harness).importSession(
+    harden({ title: 'Full inbox', backend: made.backend, at: Date.now() }),
+  );
+  await E(full.internal).importState(harden({ part: 'head' }));
+  for (let from = 1; from <= 255; from += 16) {
+    const messages = Array.from(
+      { length: Math.min(16, 256 - from) },
+      (_, i) => ({
+        number: from + i,
+        type: 'reply',
+        fromTitle: 'operator',
+        body: 'kept',
+        edges: [],
+        at: 0,
+        state: 'kept',
+      }),
+    );
+    await E(full.internal).importState(harden({ part: 'inbox', messages }));
+  }
+  await E(full.internal).importState(harden({ part: 'end' }));
+  const attached = Array.from({ length: 32 }, (_, i) => ({
+    label: `edge-${i}`,
+    value: receiver,
+  }));
+  const hist = async () => (await run.client.call('status')).deliveryHistogram;
+  const counts = [];
+  const crank = await runWindow(
+    async () => {
+      const before = await hist();
+      const r = await post(mailbox, full.session, attached);
+      const after = await hist();
+      for (const [i, n] of after.counts.entries())
+        counts[i] = (counts[i] || 0) + Number(n) - Number(before.counts[i]);
+      await dismissReplies(mailbox, [r.postmark]);
+      return after.bounds;
+    },
+    { ms: window },
+  );
+  const upper = crank.results[0];
+  const total = counts.reduce((a, b) => a + b, 0);
+  /** @param {number} q */
+  const quantile = q => {
+    let n = 0;
+    const i = counts.findIndex(c => {
+      n += c;
+      return n >= total * q;
+    });
+    return i < 0 || i >= upper.length ? Infinity : upper[i];
+  };
+  const p95 = quantile(0.95);
+  emit({
+    metric: 'mail.inboxCrank',
+    unit: 'ms',
+    counts,
+    bounds: upper,
+    median: quantile(0.5),
+    p95,
+    interval: 'all measured deliveries from operator send through receipt',
+    budget: { p95: 550 },
+    pass: total > 0 && p95 <= 550,
+    ...windowFields(crank),
+  });
+  if (!total || p95 > 550) process.exitCode = 1;
+
+  await E(slice.harness).configure(harden({ backends: [made.backend] }));
+  const clients = [];
+  try {
+    for (let i = 0; i < 4; i += 1) {
+      const client = await connect(run.root, { workspace: TEMPLATE_WORKSPACE });
+      const root = await client.call('lookup', names.harness);
+      const operator = await E(root).getOperator();
+      const factory = await E(operator).getFactory();
+      const [backend] = await E(factory).listBackends();
+      const [preset] = await E(factory).listPresets();
+      const [a, b] = await Promise.all(
+        [0, 1].map(j =>
+          E(factory).createSession(
+            harden({
+              title: `Mailbox ${i}-${j}`,
+              backend,
+              preset,
+              at: Date.now(),
+            }),
+          ),
+        ),
+      );
+      clients.push({
+        client,
+        mailbox: await E(operator).getMail(),
+        sessions: [a, b],
+        attachments: [
+          { label: 'preset', value: preset },
+          { label: 'backend', value: backend },
+        ],
+      });
+    }
+    /** @param {number} ms @param {boolean} edges */
+    const waves = async (ms, edges) => {
+      let largest = 0;
+      const w = await runWindow(
+        async i => {
+          const receipts = await Promise.all(
+            clients.map(c =>
+              post(c.mailbox, c.sessions[i % 2], edges ? c.attachments : []),
+            ),
+          );
+          const seen = await dismissReplies(
+            mailbox,
+            receipts.map(r => r.postmark),
+          );
+          largest = Math.max(largest, seen);
+        },
+        { ms },
+      );
+      return { posts: w.samples.length * clients.length, largest, w };
+    };
+    const rate = await waves(window, false);
+    const perSecond = (rate.posts * 1000) / rate.w.elapsedMs;
+    emit({
+      metric: 'mail.throughput',
+      unit: 'posts/s',
+      value: perSecond,
+      posts: rate.posts,
+      largestInbox: rate.largest,
+      loadAvg: loadAvg(),
+      budget: { minimum: 3 },
+      pass: perSecond >= 3,
+      ...windowFields(rate.w),
+    });
+    if (perSecond < 3) process.exitCode = 1;
+    const before = await hubJsonBytes(run.root);
+    const growth = await waves(growthWindow, true);
+    for (let i = 0; i < 32; i += 1) await E(mailbox).rev();
+    const after = await hubJsonBytes(run.root);
+    const ratio = before && after ? after / before : Infinity;
+    emit({
+      metric: 'mail.hubGrowth',
+      unit: 'ratio',
+      value: ratio,
       before,
       after,
-      extra: {
-        ...windowFields(w),
-        recipient: notBuilt ? 'not-built' : 'inbox',
-      },
-    },
-  );
-
-  for (const metric of needsInbox) {
-    emit({
-      metric,
-      measured: false,
-      reason:
-        'needs the inbox part registered in the session program (m9-interfaces.md D-M9-19: over the limit with it)',
+      posts: growth.posts,
+      budget: { maximum: 1.25 },
+      pass: ratio <= 1.25,
+      ...windowFields(growth.w),
     });
+    if (ratio > 1.25) process.exitCode = 1;
+  } finally {
+    for (const { client } of clients) client.close();
   }
 });

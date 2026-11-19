@@ -569,7 +569,10 @@ export const runPerf = async (feature, fn) => {
       process.stderr.write(`run-lock: ${JSON.stringify(event)}\n`),
   });
   // Unix socket paths are limited to 103 bytes: keep the state path short.
-  const root = path.join(harnessRoot, 'tmp', `pf${process.pid}`);
+  const root = path.join(
+    process.env.THIX_HARNESS_TMP ?? path.join(harnessRoot, 'tmp'),
+    `pf${process.pid}`,
+  );
   /** @type {Provisioned[]} */
   const opened = [];
   try {
