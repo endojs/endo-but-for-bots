@@ -1,0 +1,12 @@
+Mutant MTR-3-a: the check fires only past count + interval.
+--- a/ironhorse-vm/src/meter.rs
++++ b/ironhorse-vm/src/meter.rs
+@@ -424,7 +424,7 @@
+             // see `index > count`.
+             return MeterCheck::Abort;
+         }
+-        if self.interval != 0 && self.index > self.count {
++        if self.interval != 0 && self.index > self.count.saturating_add(self.interval) {
+             self.last_reported = self.computrons();
+             if !host(self.last_reported) {
+                 return MeterCheck::Abort;

@@ -1,0 +1,12 @@
+Mutant MTR-4-c: computrons reports index >> 15.
+--- a/ironhorse-vm/src/meter.rs
++++ b/ironhorse-vm/src/meter.rs
+@@ -361,7 +361,7 @@
+     /// Computrons (`meterIndex >> 16`), what the host callback sees.
+     #[inline]
+     pub fn computrons(&self) -> u64 {
+-        self.index >> 16
++        self.index >> 15
+     }
+ 
+     /// `mxCheckMeter`: at a loop-closing point, if metering is armed and

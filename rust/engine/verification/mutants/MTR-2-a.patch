@@ -1,0 +1,12 @@
+Mutant MTR-2-a: untick_raw subtracts from the exhausted state.
+--- a/ironhorse-vm/src/meter.rs
++++ b/ironhorse-vm/src/meter.rs
+@@ -315,7 +315,7 @@
+     /// total it would refund from is unknown, so it stays refused.
+     #[inline]
+     pub fn untick_raw(&mut self, n: u64) {
+-        if self.index == u64::MAX {
++        if false {
+             return;
+         }
+         debug_assert!(

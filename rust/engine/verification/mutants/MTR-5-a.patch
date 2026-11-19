@@ -1,0 +1,12 @@
+Mutant MTR-5-a: restore re-seeds count from index.
+--- a/ironhorse-vm/src/meter.rs
++++ b/ironhorse-vm/src/meter.rs
+@@ -354,7 +354,7 @@
+     pub fn restore(&mut self, s: MeterState) {
+         self.index = s.index;
+         self.interval = s.interval;
+-        self.count = s.count;
++        self.count = s.index;
+         self.last_reported = s.index >> 16;
+     }
+ 

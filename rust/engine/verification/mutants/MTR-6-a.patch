@@ -1,0 +1,12 @@
+Mutant MTR-6-a: the wrap branch resets the index to 0 again (the XS behaviour).
+--- a/ironhorse-vm/src/meter.rs
++++ b/ironhorse-vm/src/meter.rs
+@@ -436,7 +436,7 @@
+                 // Execution fails closed rather than adopting
+                 // `fxCheckMetering`'s wrap-and-reset (xsRun.c:4475),
+                 // which would erase the accrued cost.
+-                None => return MeterCheck::Abort,
++                None => self.index = 0,
+             }
+         }
+         MeterCheck::Continue

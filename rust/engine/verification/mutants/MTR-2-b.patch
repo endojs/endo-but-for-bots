@@ -1,0 +1,12 @@
+Mutant MTR-2-b: an un-armed exhausted meter passes its check.
+--- a/ironhorse-vm/src/meter.rs
++++ b/ironhorse-vm/src/meter.rs
+@@ -418,7 +418,7 @@
+         host: &mut F,
+         monotone: bool,
+     ) -> MeterCheck {
+-        if self.index == u64::MAX {
++        if self.index == u64::MAX && self.interval != 0 {
+             // Exhausted (module docs): the total is unrepresentable, and a
+             // saturated window (`count == u64::MAX`) would otherwise never
+             // see `index > count`.

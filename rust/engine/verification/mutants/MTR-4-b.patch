@@ -1,0 +1,12 @@
+Mutant MTR-4-b: chunk_cost rounds up from bytes + 8 instead of bytes + 7.
+--- a/ironhorse-meter/src/lib.rs
++++ b/ironhorse-meter/src/lib.rs
+@@ -311,7 +311,7 @@
+ 
+ /// Frozen allocation geometry, independent of host pointer size.
+ pub fn chunk_cost(bytes: u64) -> u64 {
+-    let aligned = bytes.saturating_add(CHUNK_ALIGNMENT - 1) & !(CHUNK_ALIGNMENT - 1);
++    let aligned = bytes.saturating_add(CHUNK_ALIGNMENT) & !(CHUNK_ALIGNMENT - 1);
+     aligned
+         .saturating_add(CHUNK_HEADER_BYTES)
+         .saturating_mul(CHUNK_ALLOCATION_METERING)

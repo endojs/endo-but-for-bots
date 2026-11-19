@@ -1,0 +1,12 @@
+Mutant MTR-6-b: a refund takes one raw unit more than it un-charges.
+--- a/ironhorse-vm/src/meter.rs
++++ b/ironhorse-vm/src/meter.rs
+@@ -323,7 +323,7 @@
+             "untick_raw({n}) below the index {}",
+             self.index
+         );
+-        self.index = self.index.saturating_sub(n);
++        self.index = self.index.saturating_sub(n.saturating_add(1));
+     }
+ 
+     /// Raw fixed-point index (`the->meterIndex`).

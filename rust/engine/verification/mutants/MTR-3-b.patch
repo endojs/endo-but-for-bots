@@ -1,0 +1,12 @@
+Mutant MTR-3-b: a refusing host is ignored on the execution path.
+--- a/ironhorse-vm/src/meter.rs
++++ b/ironhorse-vm/src/meter.rs
+@@ -426,7 +426,7 @@
+         }
+         if self.interval != 0 && self.index > self.count {
+             self.last_reported = self.computrons();
+-            if !host(self.last_reported) {
++            if !host(self.last_reported) && monotone {
+                 return MeterCheck::Abort;
+             }
+             match self.index.checked_add(self.interval) {

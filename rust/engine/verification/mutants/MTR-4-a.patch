@@ -1,0 +1,12 @@
+Mutant MTR-4-a: scale_interval shifts instead of saturating (2^48 scales to 0).
+--- a/ironhorse-vm/src/meter.rs
++++ b/ironhorse-vm/src/meter.rs
+@@ -129,7 +129,7 @@
+ /// than by an astronomically large interval.
+ #[inline]
+ pub(crate) fn scale_interval(interval: u64) -> u64 {
+-    interval.saturating_mul(1 << 16)
++    interval << 16
+ }
+ 
+ impl Meter {
