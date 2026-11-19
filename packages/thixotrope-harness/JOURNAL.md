@@ -18683,3 +18683,56 @@ ran this diagnostic. The [developer guide](designs/ironhorse-performance.md)
 links source, counters and the command to retrieve the compact phase record
 at `59369d4afee4` and capture entry at `419e73c1b471`. Both are retained on
 local branches. The release result on the pinned worker is J-12552.
+### J-12553 2026-11-20 WX.F pinned worker meets ACK and throughput together
+
+On clean e4dafe639d, the unmodified full exclusive mail benchmark
+finished with exit 0. The sole product change after control 69997bd0c5
+was f82f3a9097, which sends the automatic package reply one-way.
+This internal sender had already discarded its result. Operator sends,
+explicit session sends and operator inbox replies retain their receipts.
+Both runs used worker SHA-256
+367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25,
+allocation GC, 4,000,000 slots, a 50,000,000 crank budget and the log
+store. No profiler ran in either acceptance run. The payloads, four
+clients, eight recipients, completed/dismissed counting and windows
+are unchanged. The combined session is 145,946 bytes (digest
+f55c7602aaa398573c129337bc499259b488dfa65d950e18910f3a5e4db215c6).
+With the same emitter the isolated M9 guest plus this change was
+136,921 B against fixed WX.1 at 115,502 B, a delta of 21,419 B.
+
+| Full stock row | 69997bd0c5 control | e4dafe639d | Contract |
+| --- | ---: | ---: | --- |
+| Operator ACK median | 216.441 ms | 160.827 ms (n=102; p95 469.584) | ≤200 ms, pass |
+| Four senders, completed + dismissed/s | 168/61.282 s = 2.741411/s | 196/61.059 s = 3.210019/s | ≥3/s, pass |
+| Session-to-session median | 328 ms | 359 ms (n=70; p95 694) | ≤300 ms, miss; 375 ms wrapper pass |
+| Inbox histogram p95 upper bound | 500 ms | 500 ms (median upper 50; 56 posts) | ≤550 ms, pass |
+| Fresh attachment hub image + log | 3.051047× | 0.968065× | ≤1.25×, pass |
+
+At peak eight recipients were active, eight ACKs awaited dismissal
+and the operator inbox held five. Fresh growth covered 375 attachment
+posts in 121.371 s, then 32 idle cranks. The image grew 158,181 to
+276,068 B, the log fell 585,651 to 444,010 B, and total bytes fell
+743,832 to 720,078. Compactions went 12 to 48, log records 69 to 29.
+The ≤4 causal deliveries per session-to-session mail remains unverified.
+Raw output is in `/private/tmp/thix-qc-mail-oneway-final.log` and
+`/private/tmp/thix-qc-mail-factory-final.log`. The paired medians
+and rates are observations of these two complete runs.
+
+An independent idle ACK probe used the 69997bd0c5 guest, the stock
+worker and temporary host/native timers on 18 ordinary pings after
+the pool settled and a warm-up post was dismissed. Each span had one
+matched factory send, recipient deliverMail, factory changed and factory
+fulfill. Their median host wall times were 20, 62, 28 and 16 ms. The
+fulfill waited a median 33.5 ms in the factory queue. Nine samples
+overlapped native collection in at least one of those four steps and
+had median ACK 335 ms; the other nine had median 137 ms. Collections
+occurred on 3/18 sends, 4/18 recipient deliveries, 2/18 changes and
+1/18 fulfills. The overall sample median was 258.52 ms. The four
+worker-reply-to-batch-return medians were 8, 16, 7.5 and 6 ms.
+Outbound JSON parse medians were at most 0.01 ms, hub serialization
+0.11–0.23 ms, and hub log fsync 3.99, 8.03, 4.07 and 4.10 ms. Those
+subspans can overlap and their medians do not add. This operator
+trace does not establish the separate session mail delivery-count
+gate. Records are in `/private/tmp/thix-qc-current-idle-run.log`,
+`/private/tmp/thix-qc-current-idle-methods.jsonl` and
+`/private/tmp/thix-qc-current-idle-engine.jsonl`.
