@@ -17452,3 +17452,26 @@ checkpoint, the public factory services, the tool registrations and the regressi
 The seven original M6 file digests still matched the untouched source tree, its backup and
 the checkpoint commit. The local landing uses a fast-forward from `9adecb9b94`. Earlier
 performance misses stay open; work in later milestone groups has its own scope.
+
+### J-12726 2026-11-19 W11.9 — monotonic-clock transport pass
+
+Node 22.23.4, worker 367e78ad1db3, b1601fb0ac, 60-second exclusive
+windows, exit 0. One stream had gateway median/p99 0.053/0.171 ms (706
+frames). At 16 streams these were 0.025/0.067 ms (11,296 frames), with
+client-send to child-read p99 22.056 ms. Partial relay median was 0.420 ms
+(n=117; minimum 0.128 ms), first audio 13.860 ms (p99 26.140 ms) and
+engine respawn 38.879 ms (n=1,464). A six-second shared-slot smoke had
+partial relay median 5.376 ms. All five gated rows passed in the exclusive
+pass. The daemon voice-speak file also passed all five tests.
+
+### J-12727 2026-11-19 W11.9 — six-file voice regression and Chromium
+
+Headless Chromium passed the synthetic-microphone case for dictation, grace
+send, meter movement, auto-speak on the submitting page, barge-in and wake
+lock release (70.6 s test, 125.3 s slot). All five daemon files have passing
+runs, including the two successful reruns of the speech-restart file in
+J-12724. The original two-job list exited 1 before that restart-driver fix.
+Its total slot usage was 805.7 s; elapsed time was 4,610.6 s, above the
+20-minute list target. The speak and browser files waited 3,683.3 s and
+2,711.4 s respectively before acquiring shared slots. This pass does not
+establish the list wall-time target.
