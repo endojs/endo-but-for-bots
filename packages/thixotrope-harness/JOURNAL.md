@@ -17781,3 +17781,26 @@ The bundle, M3 guard bundle, mail tool and subagent tool suites passed 42 tests.
 Coverage includes lexical initialization in the entry and a dependency,
 unused imports with observable effects, module-specific globals, cycles,
 mutable entry exports, namespace keys and retained function names.
+
+### J-1461 2026-11-19 Installed session with the production linker
+
+On a clean normal checkout at b09f365895, the ordinary pinned worker
+(367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25)
+installed the session bundle measured in J-1460. The focused mail daemon
+suite ran through the shared lock and passed eight tests in 150.7 s.
+Building the fresh state template took 50,731 ms. Starting from that
+template took 3,910 ms. Setup created two session vats and obtained the
+operator mailbox. The tests observed package delivery to both vats and
+their replies, request-handle recovery, invalid address and form refusals,
+recipient deletion, and a gateway attachment.
+
+Run from the harness package with the pinned worker installed and the
+repository's dependencies available through Yarn:
+
+```sh
+THIX_HARNESS_INTEGRATION=1 corepack yarn exec node \
+  scripts/test-integration.mjs test/integration/mail.test.js
+```
+
+The package typecheck passed. ESLint reported zero errors on the modified
+product and test files and three pre-existing warnings.
