@@ -147,6 +147,7 @@ export const regressionLists = Object.freeze({
   environments: Object.freeze([
     'test/integration/environments-restart.test.js',
     'test/integration/environments-shell.test.js',
+    'test/integration/environments-stop.test.js',
     'test/browser/environment-ui.test.mjs',
   ]),
   context: Object.freeze(/** @type {string[]} */ ([])),

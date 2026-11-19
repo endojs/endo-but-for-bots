@@ -101,7 +101,7 @@ run('home, runner restart alone, SIGKILL during a command', async t => {
   // 11 / K8: the environments adapter alone killed during a command.
   const adapterBefore = environmentsAdapter(state.root);
   t.truthy(adapterBefore, 'the environments adapter runs');
-  let from = live.deliveries.length;
+  const from = live.deliveries.length;
   let receipt = await slice.submit(session, 'runner restart');
   await waitFor(
     () => environmentProcesses(state.root).length > 0,
