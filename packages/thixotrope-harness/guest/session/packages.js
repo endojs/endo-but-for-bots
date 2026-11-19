@@ -18,16 +18,18 @@
  *   claim), so they are released (R3-8).
  *
  * `packagesPart` is the `packages` entry of `runtime-parts.js`. Its value:
- * `{ table, enqueueMessageOnce(submission, requestId, at, attachments) }`.
- * `enqueueMessageOnce` runs inside the Session method's crank (session.js
- * wraps it in `inCrank` after `refuseIfDeleting`): it checks the
- * attachments and the text bound before anything is written, then does
- * what `Session.enqueueOnce` does with the attachments kept in the entry.
+ * `{ table, hooks }`. `Session.enqueueMessageOnce` (session.js) calls
+ * `checkAttachments` before anything is written, then the session's one
+ * enqueue with the attachments kept in the entry.
  *
- * The turn hooks (`tools/mentions.js`) are module functions called with
- * `{ core, active }`; they find the session's part through `partOf(core)`,
- * a WeakMap from the session's `SessionCore` filled when the part is made
- * (rights amplification, no name).
+ * The part's hooks (closing over its table):
+ * - `onClaim` (seam S3, claim crank, after `TurnStarted`): an entry with
+ *   attachments opens a package for the new turn and sets the turn's
+ *   `systemNote` to `textOf.mentionLine(number, labels)`; every round
+ *   request of that turn carries it (S2), later turns do not.
+ * - `onSettle` (settle crank, recovery's settle included) and `onRecover`
+ *   (recovery step 6, before that settle): the turn's packages are closed,
+ *   their objects released.
  *
  * Guest rules.
  */
@@ -43,8 +45,8 @@ import { isValidLabel } from './labels.js';
  * @property {string} turnId
  *
  * @typedef {ReturnType<typeof makePackages>} Packages
- * @typedef {{ table: Packages, enqueueMessageOnce: (submission: any, requestId: string, at: number, attachments: readonly { label: string, value: any }[]) => any }} PackagesPart
  */
+/** @import { HookTurn } from './runtime-parts.js' */
 
 /**
  * 2.6: the refusals of `enqueueMessageOnce`, before anything is written.
@@ -117,40 +119,36 @@ export const makePackages = () => {
 };
 harden(makePackages);
 
-/** @type {WeakMap<object, PackagesPart>} */
-const parts = new WeakMap();
-
-/**
- * The session's packages part, from its `SessionCore`.
- * @param {any} core
- * @returns {PackagesPart | undefined}
- */
-export const partOf = core =>
-  core !== null && typeof core === 'object' ? parts.get(core) : undefined;
-harden(partOf);
-
 export const packagesPart = harden({
   name: /** @type {const} */ ('packages'),
-  /** @param {any} runtime */
-  make: runtime => {
+  make: () => {
     const table = makePackages();
-    /** @type {PackagesPart['enqueueMessageOnce']} */
-    const enqueueMessageOnce = (submission, requestId, at, attachments) => {
-      checkAttachments(submission, attachments);
-      const { runner, queue } = runtime.session;
-      runner.see(at);
-      const { receipt, added } = queue.enqueueOnce(
-        submission,
-        requestId,
-        at,
-        attachments,
-      );
-      if (!added || runner.claimNext() === undefined) return receipt;
-      return queue.receiptFor(requestId) ?? receipt;
+    /** @param {HookTurn} turn */
+    const closePackages = ({ active }) => {
+      table.closeTurn(active.turnId);
     };
-    const part = harden({ table, enqueueMessageOnce });
-    const core = runtime.session?.core;
-    if (core !== undefined) parts.set(core, part);
-    return part;
+    return harden({
+      table,
+      hooks: harden({
+        /**
+         * @param {HookTurn} turn
+         * @param {any} item the queue entry, or undefined
+         */
+        onClaim: ({ active }, item) => {
+          /** @type {readonly { label: string, value: any }[] | undefined} */
+          const attachments = item?.attachments;
+          if (attachments === undefined || attachments.length === 0) return;
+          const labels = harden(attachments.map(a => a.label));
+          const number = table.open({
+            labels,
+            values: new Map(attachments.map(a => [a.label, a.value])),
+            turnId: active.turnId,
+          });
+          active.systemNote = textOf.mentionLine(number, labels);
+        },
+        onSettle: closePackages,
+        onRecover: closePackages,
+      }),
+    });
   },
 });

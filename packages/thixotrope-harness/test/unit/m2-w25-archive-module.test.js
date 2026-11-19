@@ -34,11 +34,13 @@ const setup = (overrides = {}) => {
   const dropped = [];
   /** @type {unknown[]} */
   const failures = [];
+  let closed = false;
   const archive = makeSessionArchive({
     records,
     limits: harden({ ...small, ...overrides }),
     onSealed: ids => dropped.push(ids),
     onNotSealed: error => failures.push(error),
+    fence: harden({ closed: () => closed }),
   });
   const context = makeContextSource({ records, archive });
   const fake = makeFakeArchive();
@@ -77,7 +79,11 @@ const setup = (overrides = {}) => {
     await drain();
     return sent;
   };
-  return { records, archive, context, fake, dropped, failures, turn, seal };
+  return {
+    /** Close the session's delete fence. */
+    closeFence: () => {
+      closed = true;
+    }, records, archive, context, fake, dropped, failures, turn, seal };
 };
 
 test('RecordLog.dropBefore keeps absolute indexes and ordinals', t => {
@@ -198,7 +204,7 @@ test('segments() pages the index; the ceiling stops sealing; the fence', async t
 
   const fenced = setup();
   for (let i = 0; i < 6; i += 1) fenced.turn();
-  fenced.archive.fence();
+  fenced.closeFence();
   t.false(await fenced.seal());
 });
 
@@ -233,4 +239,17 @@ test('without an archive port, nothing is sealed', async t => {
   for (let i = 0; i < 6; i += 1) s.turn();
   t.false(s.archive.maybeSeal({ ports: harden({}), context: s.context }));
   t.false(s.archive.maybeSeal({ ports: undefined, context: s.context }));
+});
+
+test('unresolved archived turns: kept by id, at most maxUnresolvedTurns, gone once resolved', t => {
+  const s = setup({ maxUnresolvedTurns: 2 });
+  const infos = [1, 2, 3].map(n => ({ turnId: `t${n}` }));
+  for (const info of infos) s.archive.keepUnresolved(info.turnId, info);
+  t.is(s.archive.unresolvedInfo('t1'), undefined, 'the oldest went');
+  t.is(s.archive.unresolvedInfo('t2'), infos[1]);
+  t.is(s.archive.unresolvedInfo('t3'), infos[2]);
+  s.archive.resolve('t2');
+  t.is(s.archive.unresolvedInfo('t2'), undefined);
+  t.is(s.archive.unresolvedInfo('t3'), infos[2]);
+  t.false('unresolved' in s.archive, 'the map is not reachable');
 });

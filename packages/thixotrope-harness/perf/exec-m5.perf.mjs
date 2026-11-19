@@ -56,6 +56,7 @@ const {
   fixturesOf,
   objectsTemplate,
   presetSession,
+  tooBigOutcome,
   turnOf,
 } = await import('../test/integration/_m5-objects.js');
 const { keyFloodName, makeDisposableKeyFlood } =
@@ -351,14 +352,16 @@ await runPerf('exec-m5', async ({ provision }) => {
     text,
   );
   const terminated = textOf.errorResult(texts.inspectTerminated);
+  // The shared predicate of m5-objects' big help (stopped, hub-refused or
+  // staged).
   await probe(
     'probe b',
     30_000,
-    r => r === terminated || (typeof r === 'object' && r.bytes > 0),
+    r => tooBigOutcome(r) !== undefined,
     r =>
-      r === terminated
-        ? 'inspectTerminated'
-        : { staged: r?.bytes, preview: text(r) },
+      tooBigOutcome(r) === 'staged'
+        ? { staged: r?.bytes, preview: text(r) }
+        : tooBigOutcome(r),
   );
   await probe(
     'probe c',

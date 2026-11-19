@@ -21,6 +21,8 @@ installGuestPrelude();
 
 const { makeSecretStore } =
   await import('../../resources/agent-host/impl/secrets/store.js');
+const { makeWrappingKey } =
+  await import('../../resources/agent-host/impl/secrets/wrapping-key.js');
 const { makeCredentialAccess } =
   await import('../../resources/agent-host/impl/secrets/credential-access.js');
 const { makeMemberCredential } =
@@ -30,8 +32,10 @@ const { makeMemberCredential } =
 const job = JSON.parse(readFileSync(argv[2], 'utf8'));
 const store = makeSecretStore({
   file: job.files.file,
-  keyFile: job.files.keyFile,
-  stateDir: job.files.stateDir,
+  wrappingKey: makeWrappingKey({
+    keyFile: job.files.keyFile,
+    stateDir: job.files.stateDir,
+  }),
 });
 /** @type {typeof globalThis.fetch} */
 const blockedFetch = () => {

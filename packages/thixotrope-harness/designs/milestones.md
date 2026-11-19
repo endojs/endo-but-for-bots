@@ -20,8 +20,13 @@ M1a" at the end of this file.
   - **Hook tables** (append-only: a milestone adds registration lines or table entries, never edits
     another milestone's entries; the PM resolves trivial merges). Each is created by the milestone
     named in brackets:
-    `H/guest/session/tool-table.js` [M1a], `H/guest/session/turn-hooks.js` [M1a] (`beforeRound`,
-    `onCancel`, `onSettle`, `turnSources`, `recoverySteps`), `H/guest/session/holds-table.js` [M2],
+    `H/guest/session/tool-table.js` [M1a] (`toolTable`, static entries only),
+    `H/guest/session/runtime-parts.js` [M5] (the runtime parts: since step 3 of the harness review
+    the one per-session extension point, replacing the deleted `turn-hooks.js` lists and
+    `toolSources`; a part is one name in `PartName` and `requiredParts`, one getter and one entry
+    in `runtimeParts`, and its value carries `hooks` { `onClaim`, `beforeRound`, `onCancel`,
+    `onSettle`, `onRecover`, `nextTurn` } and `tools`; `arch-review/step3-plan.md` section 2),
+    `H/guest/session/holds-table.js` [M2],
     `H/guest/factory/services.js` [M1a] (per-session `SessionServices` builders),
     `H/guest/factory/session-options.js` [M1a] (`createSession` option resolvers),
     `AH/index.js` [M1a] (implementation registrations), `AH/channel-taps.js` [M1a],
@@ -97,7 +102,8 @@ one that names `H/test/*/m6-*` or an `interfaces-m6.js`).
    milestone's module instead of copying it; the export is a one-line seam listed in the lane's
    contract and reviewed by the module's owner. Copying more than 15 lines is a review finding.
    `corepack yarn lint:duplicates` fails above the duplicate ceiling (`scripts/check-duplicates.mjs`:
-   3.25 % of normalised lines over `guest`, `resources` and `ui`; measured 3.00 % at `f6a844cbbf`);
+   2.05 % of normalised lines over `guest`, `resources` and `ui` since step 3, `d94ad96129`;
+   measured 1.80 %, 478 of 26,614 lines, at `804398c4d9`; 3.25 % and 3.00 % after the fold);
    the ceiling only goes down.
 4. **Fakes are built from the real guards** (T5): `makeExo` with the product's interface,
    assemblies exported by the product rather than re-assembled in a fixture; a product branch
@@ -110,6 +116,18 @@ one that names `H/test/*/m6-*` or an `interfaces-m6.js`).
    stands for an object, a reason or a position?"; a list of files is explicit, never a glob.
 7. **A new job names its module** (T7): when a contract adds a job to an existing closure, it
    names the module the job lives in.
+
+**Where later jobs go after step 3 of the review** (`arch-review/step3-plan.md`; as built:
+`architecture.md` 4.7-4.9, D-6, D-8, D-18; J-10200..J-10253). A per-session job is a runtime
+part (`guest/session/runtime-parts.js`, 4.8), never a new member of `turn.js`; its hooks are
+synchronous and get a `HookTurn { active, round, append, emit }`, which can add records and
+events to the crank but cannot change the round request or skip a round (M8's tool-less summary
+round needs a contract addition there, J-10253). A backend kind is one `backendKinds` entry in
+`AH/providers/kinds.js` under the provider shell; a pool kind also adds one line to
+`providerOfKind` in `guest/lib/subscription-texts.js` (a guest file: templates rebuild). A feed
+builds on `AH/channel-subscriber.js`; an atomic file write uses `AH/files.js`; anything keyed by
+the wrapping key takes the incarnation's `makeWrappingKey` object. A history or archive preview
+uses `guest/lib/record-preview.js`, and usage arithmetic `guest/lib/usage-counts.js`.
 
 ## Order and parallelism
 
@@ -2229,7 +2247,7 @@ against the code or the spec before acting.
 | F B-5 startup wakes workers with an unsnapshotted journal | `pkg/src/core/daemon.js:826-847`; `supervisor.js:141` (`idleSleepMs` option) | Accepted. Restart tests use `idleSleepMs: 2000`, wait for checkpoint and `pool.whenSettled()` before SIGKILL; "0 idle vats woken" is a gate counting checkpointed vats only. |
 | F B-6 1 s `sleep` exec acceptance impossible | native.md:39-40 (`clock.after(0n)` 989 ms) | Accepted. M1a acceptance 3 uses the adapter `echo` tool with `delayMs` and asserts overlap (< 1.6 x one call). Interactive timers are adapter timers (architecture section 8). |
 | F B-7 `exec.sends100 <= 2 s` ignores answer deliveries | tooling.md 4.5; J-0017 | Accepted. Budget split: 100 answered <= 8 s, 100 `sendOnly` <= 1 s (M1b). |
-| F B-8 parallel groups not disjoint; no run lock | old ownership lists | Accepted. Hook tables (`turn-hooks.js`, `holds-table.js`, `session-options.js`, `services.js`, `projection-hooks.js`, `channel-taps.js`, `gateway/routes.js`, `provision-steps.js`, `features.js`), sequential ownership transfers (`prompt.js`, `provision.mjs`), W3.0 merged before M4/M5 UI units, PM-merged files with pre-allocated journal number ranges, and the run lock. |
+| F B-8 parallel groups not disjoint; no run lock | old ownership lists | Accepted. Hook tables (`runtime-parts.js`, `holds-table.js`, `session-options.js`, `services.js`, `projection-hooks.js`, `channel-taps.js`, `gateway/routes.js`, `provision-steps.js`, `features.js`), sequential ownership transfers (`prompt.js`, `provision.mjs`), W3.0 merged before M4/M5 UI units, PM-merged files with pre-allocated journal number ranges, and the run lock. |
 | C queue entry lifecycle can post twice | SPEC:1619-1620 (A.4 `dispatching` row); R4-54 SPEC:527 | Accepted. Atomic claim: the entry is removed in the crank that records `TurnStarted`; a never-dispatched turn is closed with the R4-66 text and not re-queued (architecture 4.3-4.4). Test: M1a acceptance 6. Journal: atomic claim is a good fit. |
 | C cancel retires the exec vat | R4-49 SPEC:519 | Accepted. Cancel abandons the answer by generation; the vat is retired only on the exec deadline, a MeterAbort, or when still busy at the next call, always with a stated scope loss (architecture section 6). Test: M1b acceptance 3. |
 | C more than about 200 tool calls in one round quarantine the session | baseline (e) 500 sends MeterAbort | Accepted. `maxCallsPerRound` 64 with an error result for extras, `callWindow` 16 in flight; probe of 300 calls in M1b. Open decision 11. |

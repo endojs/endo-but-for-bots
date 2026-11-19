@@ -52,8 +52,7 @@
     "@endo/marshal": "workspace:^",
     "@endo/thixotrope": "workspace:^",
     "preact": "^10.29.8",
-    "ses": "workspace:^",
-    "ws": "^8.22.0"
+    "ses": "workspace:^"
   },
   "devDependencies": {
     "@endo/ses-ava": "workspace:^",

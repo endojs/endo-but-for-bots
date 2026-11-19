@@ -93,7 +93,6 @@ import { appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { pid } from 'node:process';
-import { clearTimeout, setTimeout } from 'node:timers';
 
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
 import { interfaces, shapes } from '../../../guest/lib/interfaces.js';
@@ -107,14 +106,18 @@ import { isStaged } from '../../../guest/session/staging.js';
 /* eslint-enable import/no-relative-packages */
 import { channelLimits } from '../../../config/defaults.js';
 import { channelTaps } from './channel-taps.js';
+import {
+  makeRevReorder,
+  makeSubscriber,
+  slowestOf,
+  unrefSchedule,
+} from './channel-subscriber.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { ChannelTap } from './channel-taps.js' */
 /** @import { FoldableStatus } from '../../../guest/lib/reply-fold.js' */
 
-const { E, M, makeExo, makePromiseKit } = /** @type {GuestGlobals} */ (
-  globalThis
-);
+const { E, M, makeExo } = /** @type {GuestGlobals} */ (globalThis);
 /** @type {GuestGlobals['mustMatch']} */
 const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
 
@@ -125,7 +128,8 @@ const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
 export const SUBSCRIBER_QUEUE_LIMIT = channelLimits.subscriberQueueDeliveries;
 
 /**
- * Why a subscriber was closed (recorded by the channel; see `closes()`).
+ * Why a subscriber was closed: the keys are the reasons a closed
+ * subscription answers and `closes()` counts (`shapes.CloseReason`).
  */
 export const closeReasons = harden({
   client: 'closed by its client',
@@ -155,12 +159,6 @@ export const LIVE_SUBSCRIPTION_GUARD = M.interface('LiveSubscription', {
 });
 
 /**
- * What a closed subscription answers to every `next()`.
- * @param {keyof typeof closeReasons} reason
- */
-const closedBatch = reason => harden({ deliveries: [], closed: true, reason });
-
-/**
  * @typedef {{ seq: number, rev: number, event: any }} Delivery
  * @typedef {{
  *   turnId: string,
@@ -168,17 +166,9 @@ const closedBatch = reason => harden({ deliveries: [], closed: true, reason });
  *   status: FoldableStatus,
  *   settled: boolean,
  * }} TurnFold
- * @typedef {(fn: () => void, ms: number) => () => void} Schedule runs `fn`
- *   once after `ms`; returns a cancel function
- * @typedef {{ kind: 'batch', rev: number, events: readonly any[] } | { kind: 'delta', event: any }} Held
+ * @typedef {import('./channel-subscriber.js').Schedule} Schedule
+ * @typedef {import('./channel-subscriber.js').Subscriber} Subscriber
  */
-
-/** @type {Schedule} */
-const defaultSchedule = (fn, ms) => {
-  const timer = setTimeout(fn, ms);
-  timer.unref?.();
-  return () => clearTimeout(timer);
-};
 
 /**
  * Cut `text` to at most `units` UTF-16 units without leaving a lone high
@@ -226,106 +216,6 @@ const foldable = event => {
 };
 
 /**
- * One subscriber: its queue, its pending `next()` callers and its facet.
- * @param {object} options
- * @param {number} options.queueLimit deliveries
- * @param {number} options.queueBytes UTF-8 bytes of queued deliveries
- * @param {(reason: string) => void} options.onClose removes it from its
- *   channel and records the reason
- */
-const makeSubscriber = ({ queueLimit, queueBytes, onClose }) => {
-  /** @type {Delivery[]} */
-  const queue = [];
-  /** @type {number[]} bytes of each queued delivery, in step with `queue` */
-  const sizes = [];
-  let bytes = 0;
-  /** @type {ReturnType<typeof makePromiseKit>[]} */
-  const waiters = [];
-  let closed = false;
-  let flushScheduled = false;
-
-  const take = () => {
-    const deliveries = queue.splice(0, limits.liveBatchDeliveries);
-    for (const size of sizes.splice(0, deliveries.length)) bytes -= size;
-    return harden({ deliveries });
-  };
-
-  /** Answer the waiting `next()` callers, oldest first, while there is anything to give. */
-  const flush = () => {
-    flushScheduled = false;
-    while (waiters.length > 0 && queue.length > 0) {
-      const waiter = /** @type {ReturnType<typeof makePromiseKit>} */ (
-        waiters.shift()
-      );
-      waiter.resolve(take());
-    }
-  };
-
-  /** @type {keyof typeof closeReasons} */
-  let closedFor = 'client';
-  /** @param {keyof typeof closeReasons} reason a closeReasons key */
-  const close = reason => {
-    if (closed) return;
-    closed = true;
-    closedFor = reason;
-    queue.length = 0;
-    sizes.length = 0;
-    bytes = 0;
-    onClose(closeReasons[reason]);
-    for (const waiter of waiters.splice(0)) {
-      waiter.resolve(closedBatch(reason));
-    }
-  };
-
-  /**
-   * Queue one delivery. A waiting `next()` is answered on a microtask, so the
-   * events of one publish (or of one synchronous burst) arrive in one batch.
-   * @param {Delivery} delivery
-   * @param {number} size its UTF-8 bytes (0 for the snapshot)
-   */
-  const push = (delivery, size) => {
-    if (closed) return;
-    queue.push(delivery);
-    sizes.push(size);
-    bytes += size;
-    if (queue.length > queueLimit) {
-      close('queueDeliveries');
-      return;
-    }
-    if (bytes > queueBytes) {
-      close('queueBytes');
-      return;
-    }
-    if (waiters.length > 0 && !flushScheduled) {
-      flushScheduled = true;
-      void Promise.resolve().then(flush);
-    }
-  };
-
-  const facet = makeExo('LiveSubscription', LIVE_SUBSCRIPTION_GUARD, {
-    async next() {
-      if (closed) return closedBatch(closedFor);
-      if (queue.length > 0 && waiters.length === 0) return take();
-      const waiter = makePromiseKit();
-      waiters.push(waiter);
-      return waiter.promise;
-    },
-    close() {
-      close('client');
-    },
-  });
-
-  return harden({
-    push,
-    close,
-    facet,
-    isClosed: () => closed,
-    queuedBytes: () => bytes,
-    queuedDeliveries: () => queue.length,
-  });
-};
-
-/**
  * @typedef {object} ChannelOptions
  * @property {readonly ChannelTap[]} taps
  * @property {number} queueLimit
@@ -355,37 +245,11 @@ const makeChannel = (
   },
 ) => {
   let seq = 0;
-  /** The last delivered vat rev (0 = none yet). */
-  let latestRev = 0;
-  /** The rev the next vat batch must carry; undefined before the first. */
-  /** @type {number | undefined} */
-  let expectedRev;
-  /**
-   * What arrived behind a missing rev, in arrival order: vat batches newer
-   * than `expectedRev` and the deltas that came after the first of them.
-   * Empty, or its first entry is a batch.
-   * @type {Held[]}
-   */
-  const backlog = [];
-  let heldBatches = 0;
-  let heldDeliveries = 0;
-  /** @type {(() => void) | undefined} */
-  let cancelWait;
-  const counts = {
-    /** Batches delivered after a newer one had arrived (held, then in order). */
-    reordered: 0,
-    /** Batches dropped: at or below the delivered rev, or already held. */
-    dropped: 0,
-    /** Times the channel gave missing revs up. */
-    gaps: 0,
-    /** Revs given up in those gaps. */
-    missingRevs: 0,
-  };
-  /** @type {Map<string, number>} closed subscribers by reason */
+  /** @type {Map<string, number>} closed subscribers by close-reason key */
   const closes = new Map();
   /** @type {TurnFold | undefined} */
   let current;
-  /** @type {Set<ReturnType<typeof makeSubscriber>>} */
+  /** @type {Set<Subscriber>} */
   const subscribers = new Set();
 
   /** Keep the fold within the adapter's bounds (rule 12.6). */
@@ -455,81 +319,17 @@ const makeChannel = (
   };
 
   /**
-   * @param {number} rev
-   * @param {readonly any[]} events
+   * Vat batches in rev order; deltas that arrive while a batch is held wait
+   * behind it with the channel's latest delivered rev (module comment).
    */
-  const deliverBatch = (rev, events) => {
-    latestRev = rev;
-    expectedRev = rev + 1;
-    for (const event of events) deliver(event, rev);
-  };
-
-  /**
-   * Deliver from the backlog what may go now: deltas at its head, and the
-   * batch with the expected rev wherever it is.
-   */
-  const drain = () => {
-    while (backlog.length > 0) {
-      const head = backlog[0];
-      if (head.kind === 'delta') {
-        backlog.shift();
-        heldDeliveries -= 1;
-        deliver(head.event, latestRev);
-      } else {
-        const at = backlog.findIndex(
-          item => item.kind === 'batch' && item.rev === expectedRev,
-        );
-        if (at < 0) break;
-        const [item] = backlog.splice(at, 1);
-        if (item.kind !== 'batch') break; // unreachable; narrows the type
-        heldBatches -= 1;
-        heldDeliveries -= item.events.length;
-        counts.reordered += 1;
-        deliverBatch(item.rev, item.events);
-      }
-    }
-    if (backlog.length === 0 && cancelWait !== undefined) {
-      cancelWait();
-      cancelWait = undefined;
-    }
-  };
-
-  /**
-   * Give up the missing revs before the oldest held batch: deliver from it
-   * on, in rev order.
-   */
-  const declareGap = () => {
-    let oldest = Infinity;
-    for (const item of backlog) {
-      if (item.kind === 'batch' && item.rev < oldest) oldest = item.rev;
-    }
-    if (oldest === Infinity) return;
-    counts.gaps += 1;
-    counts.missingRevs += oldest - /** @type {number} */ (expectedRev);
-    expectedRev = oldest;
-    drain();
-  };
-
-  /** (Re)arm the wait for the missing rev while anything is held. */
-  const armWait = () => {
-    if (cancelWait !== undefined || backlog.length === 0) return;
-    cancelWait = schedule(() => {
-      cancelWait = undefined;
-      declareGap();
-      armWait();
-    }, reorderWaitMs);
-  };
-
-  /** Give revs up while the held state is over its bounds. */
-  const enforceWindow = () => {
-    while (
-      backlog.length > 0 &&
-      (heldBatches > reorderWindowBatches ||
-        heldDeliveries > reorderBacklogDeliveries)
-    ) {
-      declareGap();
-    }
-  };
+  const reorder = makeRevReorder({
+    limits: { reorderWindowBatches, reorderBacklogDeliveries, reorderWaitMs },
+    schedule,
+    deliverBatch: (rev, events) => {
+      for (const event of events) deliver(event, rev);
+    },
+    deliverHeld: delta => deliver(delta, reorder.latestRev()),
+  });
 
   const snapshot = () => {
     if (current === undefined) return harden({ type: 'snapshot' });
@@ -546,24 +346,7 @@ const makeChannel = (
   const publisher = makeExo('LivePublisher', interfaces.LivePublisher, {
     /** @param {any} batch a PublishBatch (the guard checked it) */
     publish({ rev, events }) {
-      const batchRev = /** @type {number} */ (rev);
-      if (expectedRev === undefined || batchRev === expectedRev) {
-        deliverBatch(batchRev, events);
-        drain();
-        return;
-      }
-      if (
-        batchRev < expectedRev ||
-        backlog.some(item => item.kind === 'batch' && item.rev === batchRev)
-      ) {
-        counts.dropped += 1;
-        return;
-      }
-      backlog.push({ kind: 'batch', rev: batchRev, events });
-      heldBatches += 1;
-      heldDeliveries += events.length;
-      enforceWindow();
-      armWait();
+      reorder.publish(/** @type {number} */ (rev), events);
     },
   });
 
@@ -572,30 +355,7 @@ const makeChannel = (
     mustMatch(event, shapes.DeltaEvent);
     const { turnId, round, text } = event;
     const delta = harden({ type: 'delta', turnId, round, text });
-    if (backlog.length === 0) {
-      deliver(delta, latestRev);
-      return;
-    }
-    backlog.push({ kind: 'delta', event: delta });
-    heldDeliveries += 1;
-    enforceWindow();
-  };
-
-  /** The attached subscriber with the most queued bytes (then deliveries). */
-  const slowest = () => {
-    /** @type {ReturnType<typeof makeSubscriber> | undefined} */
-    let worst;
-    for (const subscriber of subscribers) {
-      if (
-        worst === undefined ||
-        subscriber.queuedBytes() > worst.queuedBytes() ||
-        (subscriber.queuedBytes() === worst.queuedBytes() &&
-          subscriber.queuedDeliveries() > worst.queuedDeliveries())
-      ) {
-        worst = subscriber;
-      }
-    }
-    return worst;
+    if (!reorder.hold(delta)) deliver(delta, reorder.latestRev());
   };
 
   /**
@@ -607,10 +367,12 @@ const makeChannel = (
     const first = snapshot();
     mustMatch(first, shapes.SnapshotEvent);
     while (subscribers.size >= maxSubscribers) {
-      slowest()?.close('subscriberLimit');
+      slowestOf(subscribers)?.close('subscriberLimit');
     }
-    /** @type {ReturnType<typeof makeSubscriber>} */
+    /** @type {Subscriber} */
     const subscriber = makeSubscriber({
+      exoName: 'LiveSubscription',
+      guard: LIVE_SUBSCRIPTION_GUARD,
       queueLimit,
       queueBytes,
       onClose: reason => {
@@ -619,7 +381,7 @@ const makeChannel = (
       },
     });
     subscribers.add(subscriber);
-    subscriber.push(harden({ seq, rev: latestRev, event: first }), 0);
+    subscriber.push(harden({ seq, rev: reorder.latestRev(), event: first }), 0);
     return subscriber.facet;
   };
 
@@ -628,17 +390,11 @@ const makeChannel = (
     publishDelta,
     subscribe,
     snapshot,
-    latestRev: () => latestRev,
+    latestRev: reorder.latestRev,
     /** Subscribers currently attached (tests, diagnostics). */
     subscriberCount: () => subscribers.size,
     /** Ordering counters (tests, diagnostics). */
-    ordering: () =>
-      harden({
-        ...counts,
-        expectedRev: expectedRev ?? null,
-        heldBatches,
-        heldDeliveries,
-      }),
+    ordering: reorder.ordering,
     /** Closed subscribers by reason (tests, diagnostics). */
     closes: () => harden(Object.fromEntries(closes)),
     /**
@@ -753,7 +509,7 @@ export const makeChannelRegistry = ({
   reorderWindowBatches = channelLimits.reorderWindowBatches,
   reorderBacklogDeliveries = channelLimits.reorderBacklogDeliveries,
   reorderWaitMs = channelLimits.reorderWaitMs,
-  schedule = defaultSchedule,
+  schedule = unrefSchedule,
   probe = null,
 } = {}) => {
   /** @type {WeakMap<object, Channel>} */

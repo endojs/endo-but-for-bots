@@ -11,9 +11,10 @@
  *   96-bit nonce per write, written `*.tmp` then fsync, rename, fsync of the
  *   directory, so a SIGKILL leaves the old file or the new one.
  *
- * The wrapping key is a 32-byte file outside the state directory (refused
- * inside it, and refused when its mode lets the group or others read it),
- * created 0600 if absent. `findSecretsFiles` says where both are.
+ * The wrapping key is a 32-byte file outside the state directory
+ * (`wrapping-key.js`: refused inside it, and refused when its mode lets the
+ * group or others read it, created 0600 if absent); the store takes the
+ * incarnation's one `WrappingKey`. `findSecretsFiles` says where both are.
  *
  * The audit log (R7-24) is a second file, `secrets-audit.log`, one line per
  * event, each line sealed on its own with the same key (deviation from
@@ -39,32 +40,18 @@ import {
   createHash,
   randomBytes,
 } from 'node:crypto';
-import {
-  appendFileSync,
-  closeSync,
-  fsyncSync,
-  openSync,
-  renameSync,
-  writeSync,
-} from 'node:fs';
-import {
-  chmod,
-  link,
-  mkdir,
-  open,
-  readFile,
-  rename,
-  stat,
-  truncate,
-  unlink,
-} from 'node:fs/promises';
+import { appendFileSync, closeSync, openSync } from 'node:fs';
+import { mkdir, readFile, truncate, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { textOf } from '../../../../guest/lib/interfaces.js';
 import { limits } from '../../../../guest/lib/limits.js';
 import { subscriptionLimits } from '../../../../guest/lib/subscription-limits.js';
 /* eslint-enable import/no-relative-packages */
+import { writeFileAtomic, writeFileAtomicSync } from '../files.js';
+
+/** @import { WrappingKey } from './wrapping-key.js' */
 
 /** The environment variable naming the wrapping key file (serve.mjs passes it). */
 export const SECRETS_KEY_VARIABLE = 'THIX_HARNESS_SECRETS_KEY';
@@ -72,7 +59,6 @@ export const SECRETS_KEY_VARIABLE = 'THIX_HARNESS_SECRETS_KEY';
 export const AUDIT_KEEP = limits.auditKeepEvents;
 const FILE_FORMAT = 'thix-secrets-1';
 const AUDIT_FORMAT = 'thix-secrets-audit-1';
-const KEY_BYTES = 32;
 const NONCE_BYTES = 12;
 const TAG_BYTES = 16;
 
@@ -122,103 +108,6 @@ export const findSecretsFiles = ({ stateDir, env = {}, home }) => {
 harden(findSecretsFiles);
 
 /**
- * @param {string} child
- * @param {string} parent
- */
-const isInside = (child, parent) => {
-  const rel = relative(resolve(parent), resolve(child));
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-};
-
-/**
- * Read the wrapping key, creating it (0600, exclusive) if absent. Refused
- * inside `stateDir`, when not 32 bytes, or readable by group or others.
- *
- * @param {object} options
- * @param {string} options.keyFile
- * @param {string} [options.stateDir]
- * @returns {Promise<Buffer>}
- */
-export const loadWrappingKey = ({ keyFile, stateDir }) => {
-  // Loads of one key file in flight at once share one read: the store and
-  // the sealing keys ask together on a fresh file (J-9486). Nothing is kept
-  // once it settles.
-  const known = keyLoads.get(keyFile);
-  if (known !== undefined) return known;
-  const loading = readWrappingKey({ keyFile, stateDir });
-  keyLoads.set(keyFile, loading);
-  const done = () => keyLoads.delete(keyFile);
-  void loading.then(done, done);
-  return loading;
-};
-harden(loadWrappingKey);
-
-/**
- * Create the key file whole or not at all: random bytes in a temp file
- * (0600), fsynced, linked into place (fails if another got there first,
- * whose key then wins), the directory fsynced. A SIGKILL leaves at most a
- * temp file, never an empty key file.
- * @param {string} keyFile
- */
-const createWrappingKey = async keyFile => {
-  const dir = dirname(keyFile);
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  const temp = `${keyFile}.${randomBytes(6).toString('hex')}.tmp`;
-  const handle = await open(temp, 'wx', 0o600);
-  try {
-    await handle.writeFile(randomBytes(KEY_BYTES));
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  let created = true;
-  try {
-    await link(temp, keyFile);
-  } catch (error) {
-    if (/** @type {any} */ (error).code !== 'EEXIST') throw error;
-    created = false;
-  } finally {
-    await unlink(temp).catch(() => {});
-  }
-  const dirHandle = await open(dir, 'r');
-  try {
-    await dirHandle.sync();
-  } finally {
-    await dirHandle.close();
-  }
-  return created;
-};
-
-/** @type {Map<string, Promise<Buffer>>} */
-const keyLoads = new Map();
-
-/**
- * @param {{ keyFile: string, stateDir?: string }} options
- * @returns {Promise<Buffer>}
- */
-const readWrappingKey = async ({ keyFile, stateDir }) => {
-  if (!isAbsolute(keyFile))
-    throw Error('the secrets key file path must be absolute');
-  if (stateDir !== undefined && isInside(keyFile, stateDir))
-    throw Error('the secrets key file must be outside the state directory');
-  let created = false;
-  try {
-    await stat(keyFile);
-  } catch (error) {
-    if (/** @type {any} */ (error).code !== 'ENOENT') throw error;
-    created = await createWrappingKey(keyFile);
-  }
-  const info = await stat(keyFile);
-  // eslint-disable-next-line no-bitwise
-  if (!created && (info.mode & 0o077) !== 0)
-    throw Error('the secrets key file must not be readable by group or others');
-  const key = await readFile(keyFile);
-  if (key.length !== KEY_BYTES)
-    throw Error('the secrets key file must hold exactly 32 bytes');
-  return key;
-};
-
-/**
  * AES-256-GCM: nonce | ciphertext | tag.
  * @param {Buffer} key
  * @param {Buffer} plain
@@ -249,16 +138,6 @@ export const decrypt = (key, sealed, aad) => {
   return Buffer.concat([decipher.update(body), decipher.final()]);
 };
 harden(decrypt);
-
-/** @param {string} path */
-const syncDirectory = async path => {
-  const handle = await open(path, 'r');
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-};
 
 /**
  * R7-25: 1-200 characters, no newline.
@@ -314,19 +193,18 @@ harden(assertDescription);
 /**
  * @param {object} options
  * @param {string} options.file `secrets.enc`
- * @param {string} options.keyFile the wrapping key (outside the state dir)
+ * @param {WrappingKey} options.wrappingKey the incarnation's wrapping key
+ *   (`makeWrappingKey`)
  * @param {string} [options.auditFile] default: `secrets-audit.log` next to
  *   `file`
- * @param {string} [options.stateDir] refuse a key file inside it
  * @param {() => number} [options.now]
  * @param {number} [options.auditKeep]
  * @returns {SecretStore}
  */
 export const makeSecretStore = ({
   file,
-  keyFile,
+  wrappingKey,
   auditFile = join(dirname(file), 'secrets-audit.log'),
-  stateDir,
   now = () => Date.now(),
   auditKeep = AUDIT_KEEP,
 }) => {
@@ -358,17 +236,13 @@ export const makeSecretStore = ({
       .concat('\n');
 
   const rewriteAudit = () => {
-    const tmp = `${auditFile}.tmp`;
-    const fd = openSync(tmp, 'w', 0o600);
-    try {
-      writeSync(fd, events.map(sealEvent).join(''));
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
+    const text = events.map(sealEvent).join('');
     if (auditFd !== undefined) closeSync(auditFd);
     auditFd = undefined;
-    renameSync(tmp, auditFile);
+    // No directory fsync: the log before the rename holds every event the
+    // rewritten one does (a superset), so power loss that undoes the rename
+    // loses nothing.
+    writeFileAtomicSync(auditFile, text, { syncDirectory: false });
     auditLines = events.length;
     counters.auditRewrites += 1;
   };
@@ -400,7 +274,10 @@ export const makeSecretStore = ({
   };
 
   const load = async () => {
-    wrapKey = await loadWrappingKey({ keyFile, stateDir });
+    // A load runs again after a failed one: start from nothing.
+    entries.clear();
+    events = [];
+    wrapKey = await wrappingKey.get();
     await mkdir(dirname(file), { recursive: true, mode: 0o700 });
     await unlink(`${file}.tmp`).catch(() => {});
     await unlink(`${auditFile}.tmp`).catch(() => {});
@@ -466,8 +343,15 @@ export const makeSecretStore = ({
     loaded = true;
   };
 
+  /** Loads once; a failed load is not kept, the next call tries again. */
   const ready = () => {
-    loading ??= load();
+    if (loading === undefined) {
+      const attempt = load();
+      loading = attempt;
+      attempt.catch(() => {
+        if (loading === attempt) loading = undefined;
+      });
+    }
     return loading;
   };
 
@@ -481,17 +365,7 @@ export const makeSecretStore = ({
       format: FILE_FORMAT,
       data: sealed.toString('base64'),
     });
-    const tmp = `${file}.tmp`;
-    const handle = await open(tmp, 'w', 0o600);
-    try {
-      await handle.writeFile(body);
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await chmod(tmp, 0o600);
-    await rename(tmp, file);
-    await syncDirectory(dirname(file));
+    await writeFileAtomic(file, body, { chmod: true });
     counters.writes += 1;
   };
 

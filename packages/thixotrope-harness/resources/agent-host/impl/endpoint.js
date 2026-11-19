@@ -25,7 +25,8 @@
  * - M1b W1b.2: every round run is handed `prepare`, a thunk the provider
  *   calls first to bring the session's context cache up to the request and
  *   get the projection (context-cache.js); without `prepare` (M1a tests)
- *   the provider gets none.
+ *   the provider gets none, which only the scripted double accepts (an API
+ *   or pool round without it fails with the kind's fixed text, HR-SYN-3).
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { E } from '@endo/far';
@@ -46,14 +47,15 @@ const MAX_TIMER_MS = 2_147_483_647;
 
 /**
  * @param {object} options
- * @param {{ startRound: (req: any, channel: any, prepare?: () => Promise<any>, owner?: any) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} options.provider
- *   `cancelRound` and `releaseTurn` stop the turn's round; an API provider
+ * @param {import('./providers/shell.js').Provider} options.provider
+ *   the backend's provider (`providers/shell.js`, the one shell of every
+ *   kind); `cancelRound` and `releaseTurn` stop the turn's round; an API provider
  *   aborts its request with them (M2 W2.1a, R4-7: the provider's server
  *   sees the connection close) and sends nothing more to the vat.
  * @param {string} options.unexpectedFailure the fixed reason of a round
  *   whose provider threw (R4-79): the backend kind's text (`BackendKind`
- *   in `index.js`), never the error's message, which may quote a provider
- *   body (HR-SYN-12). Required.
+ *   in `providers/kinds.js`), never the error's message, which may quote a
+ *   provider body (HR-SYN-12). Required.
  * @param {any} options.channel the session's channel (deltas go here, in-process)
  * @param {import('./timers.js').Timers} options.timers
  * @param {() => number} [options.now]

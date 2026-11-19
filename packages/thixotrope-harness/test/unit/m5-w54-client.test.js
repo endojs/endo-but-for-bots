@@ -4,7 +4,7 @@
 // tool's M5 changes (guest/session/tools/exec.js), over in-memory fakes, no
 // timers. Covers: the answer; a retired break (scope retired,
 // inspectTerminated); exhausted (retired, execExhausted); cancel and
-// recovery by turn through execHooks (late answers ignored, a call outside
+// recovery by turn through the exec part's hooks (late answers ignored, a call outside
 // a turn untouched); the deadline armed for readSources and toolExecute
 // only and fired through inspectDeadline; the window of inspectWindow
 // calls; one scope shared with exec; ExecRequest.powers from the runtime.
@@ -21,7 +21,7 @@ import {
   inspectFor,
   NOT_RUN_TEXT,
 } from '../../guest/session/tools/inspect-client.js';
-import { execEntry, execHooks } from '../../guest/session/tools/exec.js';
+import { execEntry, execPart } from '../../guest/session/tools/exec.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -100,12 +100,20 @@ const setup = () => {
   const services = harden({ execVat });
   const writers = Far('BlobWriters', {});
   const target = Far('Target', {});
+  // The session's exec part: its state is shared by exec and the inspector.
+  const exec = execPart.make();
   /**
    * @param {number} turn
-   * @param {any} [runtime]
+   * @param {any} [runtime] more runtime parts
    */
   const contextOf = (turn, runtime) =>
-    harden({ turn, turnId: `t${turn}`, services, endpoint, runtime });
+    harden({
+      turn,
+      turnId: `t${turn}`,
+      services,
+      endpoint,
+      runtime: harden({ exec, ...runtime }),
+    });
   /**
    * The active turn as the hooks see it: its running calls' contexts.
    * @param {number} turn
@@ -125,6 +133,10 @@ const setup = () => {
     target,
     contextOf,
     activeOf,
+    /** The exec part's hooks, as the runner calls them. @param {any} active */
+    hookTurn: active =>
+      /** @type {any} */ (Object.freeze({ active, round: 0 })),
+    exec,
   };
 };
 
@@ -197,7 +209,9 @@ test('a retired break retires the scope and answers inspectTerminated; exhausted
 test('cancel and recovery settle the turn calls by generation; late answers are ignored; other turns untouched', async t => {
   const s = setup();
   const one = inspectFor(s.contextOf(1));
-  const outside = inspectFor(harden({ services: s.services }));
+  const outside = inspectFor(
+    harden({ services: s.services, runtime: harden({ exec: s.exec }) }),
+  );
   const read = one({
     op: 'readSources',
     target: s.target,
@@ -212,7 +226,7 @@ test('cancel and recovery settle the turn calls by generation; late answers are 
   });
   await drain();
   t.deepEqual(s.endpointLog, [['arm', 'op-r', 4000]]);
-  execHooks.onCancel({ active: s.activeOf(1) });
+  s.exec.hooks.onCancel(s.hookTurn(s.activeOf(1)));
   t.deepEqual(await read, failed(texts.execAbandoned));
   // A cancel disarms what it armed.
   t.deepEqual(s.endpointLog, [
@@ -238,7 +252,7 @@ test('cancel and recovery settle the turn calls by generation; late answers are 
     opId: 'op-x',
   });
   await drain();
-  execHooks.recoverySteps({ active: s.activeOf(2) });
+  s.exec.hooks.onRecover(s.hookTurn(s.activeOf(2)));
   t.deepEqual(await run, failed(texts.toolOutcomeUnknown));
   t.deepEqual(s.endpointLog.slice(2), [['arm', 'op-x', 4000]]);
   t.deepEqual(s.retired, []);
@@ -293,7 +307,7 @@ test('at most inspectWindow calls are in flight; the rest wait in issue order', 
   await drain();
   t.is(scope.inspects.length, limits.inspectWindow + 1);
   // Cancelling the turn: the waiting call never ran.
-  execHooks.onCancel({ active: s.activeOf(4) });
+  s.exec.hooks.onCancel(s.hookTurn(s.activeOf(4)));
   const outcomes = await Promise.all(calls);
   t.deepEqual(outcomes[0], { status: 'ok', methods: ['0'] });
   t.deepEqual(outcomes[n - 1], failed(NOT_RUN_TEXT));
@@ -329,11 +343,11 @@ test('exec and the inspector share the scope; run carries the runtime powers sou
   scope.inspects[0].kit.resolve(harden({ status: 'ok', methods: [] }));
   t.deepEqual(await ran, { status: 'ok', text: '1' });
   t.deepEqual(await looked, { status: 'ok', methods: [] });
-  // Without a runtime (an M1b session) the request carries no powers.
+  // Without a powers part the request carries no powers.
   const plain = execEntry.execute(
     harden({ opId: 'e2', args: '{"code":"return 2"}', turnId: 't6' }),
     ports,
-    harden({ turn: 6, services: s.services }),
+    harden({ turn: 6, services: s.services, runtime: harden({ exec: s.exec }) }),
   );
   await drain();
   t.false('powers' in scope.runs[1].request);

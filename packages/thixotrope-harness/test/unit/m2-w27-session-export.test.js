@@ -36,6 +36,17 @@ const exportAll = internal => {
   return pages;
 };
 
+/** A session's delete fence, as session.js makes it. */
+const makeFence = () => {
+  let closed = false;
+  return harden({
+    close: () => {
+      closed = true;
+    },
+    closed: () => closed,
+  });
+};
+
 test('blob pages name every staged field of the kept records and the waiting entries', async t => {
   const s = await makeQueueSession();
   const big = staged('a long message');
@@ -85,7 +96,6 @@ test('blob pages hold at most 64 handles and resume inside one record', async t 
   const queue = makeQueue();
   const runner = {
     current: () => undefined,
-    archive: { state: () => undefined },
     beginDelete: () => {},
     usage: () => undefined,
   };
@@ -93,6 +103,8 @@ test('blob pages hold at most 64 handles and resume inside one record', async t 
     records,
     queue,
     runner,
+    archive: { state: () => undefined, entries: () => [] },
+    fence: makeFence(),
     config: harden({}),
     info: () => harden({}),
     rowReporter: Far('RowReporter', { changed: () => {} }),
@@ -179,7 +191,6 @@ test('import: a new session only, records in order, resends answered, the queue 
   const reported = [];
   const runner = {
     current: () => undefined,
-    archive: { state: () => undefined },
     beginDelete: () => {},
     usage: () => undefined,
     see: () => {},
@@ -203,6 +214,8 @@ test('import: a new session only, records in order, resends answered, the queue 
     records,
     queue,
     runner,
+    archive: { state: () => undefined, entries: () => [] },
+    fence: makeFence(),
     config: harden({}),
     info: () => harden({}),
     rowReporter: Far('RowReporter', {

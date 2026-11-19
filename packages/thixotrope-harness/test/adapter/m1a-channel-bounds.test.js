@@ -266,7 +266,7 @@ test('a subscriber over its queued bytes is dropped with the reason recorded', a
     closed: true,
     reason: 'queueBytes',
   });
-  t.deepEqual(channel.closes(), { [closeReasons.queueBytes]: 1 });
+  t.deepEqual(channel.closes(), { queueBytes: 1 });
   // The snapshot is not counted: a subscriber whose only queued delivery
   // is a large snapshot stays.
   const { channel: other } = freshChannel({ subscriberQueueBytes: 400 });
@@ -297,7 +297,7 @@ test('a subscribe beyond subscribersPerSession drops the slowest subscriber', as
     closed: true,
     reason: 'subscriberLimit',
   });
-  t.deepEqual(channel.closes(), { [closeReasons.subscriberLimit]: 1 });
+  t.deepEqual(channel.closes(), { subscriberLimit: 1 });
   channel.publishDelta(delta('after'));
   t.is((await E(reading).next()).deliveries[0].event.text, 'after');
   const [snap, next] = (await E(newcomer).next()).deliveries;
@@ -305,9 +305,13 @@ test('a subscribe beyond subscribersPerSession drops the slowest subscriber', as
   t.is(next.event.text, 'after');
   await E(reading).close();
   t.deepEqual(channel.closes(), {
-    [closeReasons.subscriberLimit]: 1,
-    [closeReasons.client]: 1,
+    subscriberLimit: 1,
+    client: 1,
   });
+  // Counted by close-reason key, the same key a closed `next()` answers.
+  for (const key of Object.keys(channel.closes())) {
+    t.true(Object.hasOwn(closeReasons, key), key);
+  }
 });
 
 test('the default bounds are the named channelLimits', t => {

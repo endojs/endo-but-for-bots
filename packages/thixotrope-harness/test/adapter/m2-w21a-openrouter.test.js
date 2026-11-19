@@ -39,7 +39,7 @@ import {
   openRouterMessages,
   shown,
 } from '../../resources/agent-host/impl/providers/openrouter.js';
-import { backendKinds } from '../../resources/agent-host/impl/index.js';
+import { backendKinds } from '../../resources/agent-host/impl/providers/kinds.js';
 import {
   BODY_MARKER,
   openRouterChunks,

@@ -56,7 +56,6 @@ import { E } from '@endo/far';
 import { Buffer } from 'node:buffer';
 import {
   mkdir,
-  open,
   readdir,
   readFile,
   rename,
@@ -94,6 +93,7 @@ import {
   writeSegment,
 } from './segment.js';
 import { makeHistory } from './history.js';
+import { writeFileAtomic } from '../files.js';
 
 const { makeExo } = /** @type {any} */ (globalThis);
 
@@ -186,23 +186,6 @@ const emptyState = () => ({
   segments: 0,
   digest: '',
 });
-
-/**
- * Write a file through a temp file, fsync it and rename it.
- * @param {string} path
- * @param {string} text
- */
-const writeDurably = async (path, text) => {
-  const temp = `${path}.tmp`;
-  const handle = await open(temp, 'w', 0o600);
-  try {
-    await handle.writeFile(text);
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  await rename(temp, path);
-};
 
 /**
  * What a segment's keyed records say about themselves (manifest fields).
@@ -549,9 +532,12 @@ export const makeArchiveStore = ({
   /** @param {SessionArchive} st */
   const writeManifest = async st => {
     await ensureDir(st);
-    await writeDurably(
+    // No directory fsync: a manifest that power loss turns back is rebuilt
+    // from the segment files (`scanSegments`).
+    await writeFileAtomic(
       manifestPath(st),
       JSON.stringify(/** @type {Manifest} */ (st.manifest)),
+      { syncDirectory: false },
     );
     st.ordinals = undefined;
     st.resolved = undefined;

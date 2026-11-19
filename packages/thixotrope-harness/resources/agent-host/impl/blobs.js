@@ -60,6 +60,7 @@ import { limits } from '../../../guest/lib/limits.js';
 import { previewText } from '../../../guest/lib/bounded.js';
 import { blobLimits } from '../../../config/defaults.js';
 import { makeTimers } from './timers.js';
+import { syncDirectory } from './files.js';
 /* eslint-enable import/no-relative-packages */
 
 const { makeExo } = /** @type {any} */ (globalThis);
@@ -197,16 +198,6 @@ harden(findBlobDir);
  */
 export const blobsUncountedText =
   'the blob directory has not been counted (its start-up sweep failed); staging is refused until a sweep succeeds';
-
-/** @param {string} path */
-const syncDirectory = async path => {
-  const handle = await open(path, 'r');
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-};
 
 /**
  * @template T

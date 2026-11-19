@@ -43,6 +43,7 @@
 import { interfaces, shapes } from '../lib/guards/factory.js';
 import { limits } from '../lib/limits.js';
 
+/** @import { StartCount } from './starts.js' */
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { ProgramStore, SessionProgram } from './root.js' */
 const { E, makeExo, makePromiseKit } = /** @type {GuestGlobals} */ (globalThis);
@@ -91,7 +92,7 @@ export const execStagingSources = harden({
  * @typedef {object} PoolCreation
  * @property {SpareKind} kind
  * @property {string} digest
- * @property {number} epoch the start epoch it began in
+ * @property {number} start the daemon start (`starts.js`) it began in
  * @property {any} facade once created
  * @property {boolean} abandoned
  */
@@ -143,6 +144,8 @@ harden(makePoolSettings);
  * @param {number} [powers.lanes] creations in flight at most (default `poolLanes`)
  * @param {() => Promise<any>} [powers.mintHost] mints an unbound
  *   `SessionHostFacet` (`E(admin).forSession()`) for each session spare
+ * @param {StartCount} powers.starts the factory's start count (the start
+ *   listener raises it before `onStart`)
  */
 export const makePool = ({
   vats,
@@ -151,6 +154,7 @@ export const makePool = ({
   sessionSources,
   lanes = limits.poolLanes,
   mintHost,
+  starts,
 }) => {
   /**
    * Ready spares by kind, oldest first. Maps, not records keyed by kind
@@ -176,7 +180,6 @@ export const makePool = ({
   /** @type {ReturnType<typeof makePromiseKit>[]} */
   let waiters = [];
   let active = false;
-  let epoch = 0;
   let counter = 0;
   /** Lifetime counts (status, tests). */
   const counts = {
@@ -312,7 +315,7 @@ export const makePool = ({
       const creation = {
         kind,
         digest: program.digest,
-        epoch,
+        start: starts.current(),
         facade: undefined,
         abandoned: false,
       };
@@ -454,13 +457,14 @@ export const makePool = ({
       refill();
     },
     /**
-     * Every daemon start (the factory's start listener): abandon creations
-     * of earlier starts (their host answers broke) and refill.
+     * Every daemon start (the factory's start listener, after it counted
+     * the start): abandon creations of earlier starts (their host answers
+     * broke) and refill.
      */
     onStart: () => {
-      epoch += 1;
+      const current = starts.current();
       for (const creation of [...inflight]) {
-        if (creation.epoch < epoch) {
+        if (creation.start < current) {
           creation.abandoned = true;
           inflight.delete(creation);
           counts.abandoned += 1;

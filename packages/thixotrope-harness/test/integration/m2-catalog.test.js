@@ -94,7 +94,6 @@ run(
     t.timeout(4 * 60_000);
     mkdirSync(keyDir, { recursive: true, mode: 0o700 });
     t.teardown(() => rmSync(keyDir, { recursive: true, force: true }));
-    process.env.THIX_HARNESS_SECRETS_KEY = path.join(keyDir, 'secrets.key');
 
     const server = await startFakeProviderServer({
       plan: [
@@ -107,7 +106,10 @@ run(
     });
     t.teardown(() => server.close());
     const template = await sliceTemplate();
-    const state = await startFromTemplate(template, { t });
+    const state = await startFromTemplate(template, {
+      t,
+      secretsKeyFile: path.join(keyDir, 'secrets.key'),
+    });
     const slice = await makeSlice(state);
 
     const secrets = await E(slice.admin).getSecrets();

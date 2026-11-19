@@ -197,6 +197,9 @@ export const NO_POOL_TEXT = 'This harness root has no spare pool';
  * @param {HarnessSettings} [powers.settings] the M2 settings (W2.7)
  * @param {{ exportPage: (cursor?: string) => any, importSession: (options: any) => Promise<any> }} [powers.exports]
  *   data-only export and importing (W2.7, `export.js`)
+ * @param {() => string | undefined} [powers.startListenerFailure] the error
+ *   of a failed start-listener registration (HR-GUEST-12): `status()`
+ *   reports it, since the factory then has no restart recovery
  */
 export const makeHarnessRoot = ({
   operator,
@@ -206,6 +209,7 @@ export const makeHarnessRoot = ({
   pool,
   settings,
   exports,
+  startListenerFailure = () => undefined,
 }) => {
   const needExports = () => {
     if (exports === undefined) throw Error(NO_EXPORT_TEXT);
@@ -219,10 +223,13 @@ export const makeHarnessRoot = ({
   return makeExo('HarnessRoot', interfaces.HarnessRoot, {
     getOperator: () => operator,
     status: () => {
+      /** @type {{ sessions: number, program: any, error?: string, execProgram?: any, pool?: any }} */
       const base = {
         sessions: rows.size(),
         program: programInfo(programs.current()),
       };
+      const failure = startListenerFailure();
+      if (failure !== undefined) base.error = failure;
       if (pool === undefined || execPrograms === undefined) return harden(base);
       return harden({
         ...base,

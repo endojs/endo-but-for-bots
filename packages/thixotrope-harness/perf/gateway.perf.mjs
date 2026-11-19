@@ -122,11 +122,11 @@ await runPerf('gateway', async ({ provision }) => {
   const key = useTestWrappingKey('pfgw');
   try {
     const template = await sliceTemplate();
-    const run = await provision({ template });
+    const run = await provision({ template, secretsKeyFile: key.file });
     const slice = await makeSlice(run);
     const made = await slice.makeBackend(gatewayScript, { label: 'Gw' });
     await E(slice.harness).configure(harden({ backends: [made.backend] }));
-    const gateway = await serveGateway(run);
+    const gateway = await serveGateway(run, { secretsKeyFile: key.file });
     const page = await gateway.connect();
     const factory = await E(page.powers.operator).getFactory();
     const [preset] = await E(factory).listPresets();

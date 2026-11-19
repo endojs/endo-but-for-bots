@@ -21,12 +21,14 @@
  * 403, another path: 404; over `maxConnections` in all or
  * `connectionsPerAddress` from one client address: 503 before the upgrade.
  *
- * The WebSocket protocol (RFC 6455, server side) is implemented here rather
- * than with the `ws` package, which this package does not depend on (H6 is
- * W3.4's request): no extensions, no subprotocol; client frames must be
- * masked; binary frames only, a text frame closes with
- * `closeCodes.protocol`; a message over `wsMessageBytes` closes with 1009;
- * pings are answered. A slow reader that lets more than `sendBufferBytes`
+ * The WebSocket protocol (RFC 6455, server side) is implemented here; the
+ * package does not depend on `ws` (HR-SYN-35): no extensions, no
+ * subprotocol; client frames must be masked; binary frames only, a text
+ * frame closes with `closeCodes.protocol`; a message over `wsMessageBytes`
+ * closes with 1009; pings are answered. A received close is echoed with its
+ * code (1000 for none); a code a peer may not send (RFC 6455 7.4) or a
+ * one-byte close body closes with 1002, a reason that is not UTF-8 with
+ * 1007. A slow reader that lets more than `sendBufferBytes`
  * pile up in the send buffer is closed with 1008 (bounds retained state).
  *
  * Logs (never a body, a query, a fragment or a secret): refusals with their
@@ -67,10 +69,44 @@ const OP_PONG = 0xa;
 export const wsCloseCodes = harden({
   normal: 1000,
   protocolError: 1002,
+  invalidData: 1007,
   policy: 1008,
   tooBig: 1009,
   internal: 1011,
 });
+
+/**
+ * A close code a peer may send (RFC 6455 7.4.1, 7.4.2; the IANA registry
+ * through 1014): 1000-1003, 1007-1014 and 3000-4999.
+ * @param {number} code
+ */
+export const isPeerCloseCode = code =>
+  (code >= 1000 && code <= 1003) ||
+  (code >= 1007 && code <= 1014) ||
+  (code >= 3000 && code <= 4999);
+harden(isPeerCloseCode);
+
+const fatalUtf8 = new TextDecoder('utf-8', { fatal: true });
+
+/**
+ * A received close body: its code and reason, or the code to close with
+ * when the body is not a valid one.
+ * @param {Buffer} payload
+ * @returns {{ code: number, reason: string } | { refuse: number, text: string }}
+ */
+const readCloseBody = payload => {
+  if (payload.length === 0) return { code: 1005, reason: '' };
+  if (payload.length === 1)
+    return { refuse: wsCloseCodes.protocolError, text: 'protocol error' };
+  const code = payload.readUInt16BE(0);
+  if (!isPeerCloseCode(code))
+    return { refuse: wsCloseCodes.protocolError, text: 'protocol error' };
+  try {
+    return { code, reason: fatalUtf8.decode(payload.subarray(2)) };
+  } catch {
+    return { refuse: wsCloseCodes.invalidData, text: 'invalid UTF-8' };
+  }
+};
 
 const STATUS_TEXT = harden({
   400: 'Bad Request',
@@ -307,9 +343,13 @@ const makeWebSocket = ({ raw, address, maxMessageBytes, gone }) => {
       payload[i] ^= mask[i & 3];
     }
     if (opcode === OP_CLOSE) {
-      const code = payload.length >= 2 ? payload.readUInt16BE(0) : 1005;
-      const reason =
-        payload.length > 2 ? payload.subarray(2).toString('utf8') : '';
+      const body = readCloseBody(payload);
+      if ('refuse' in body) {
+        if (closing) finish(body.refuse, body.text);
+        else close(body.refuse, body.text);
+        return false;
+      }
+      const { code, reason } = body;
       if (!closing) {
         closing = true;
         const echo = Buffer.alloc(2);

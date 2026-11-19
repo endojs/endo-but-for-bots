@@ -11,7 +11,7 @@
  * - No `dispatch` with `onBegun`/`release`: the claim removes the entry in
  *   the crank that appends `TurnStarted`, so a turn that "never began" holds
  *   no entry to give back (architecture 4.3). The session claims
- *   (`SessionCore.claimNext()`); `first()` says what it may claim.
+ *   (the runner's `claimNext()`, turn.js); `first()` says what it may claim.
  * - No load-time `restart` hold: a restart is learned from the turn's lease
  *   (recovery.js holds `restart`); a queue that cannot be read
  *   (`unavailable`) cannot happen to a heap.

@@ -709,6 +709,52 @@ test('close: a client close is echoed and reported once', async t => {
   t.notThrows(() => sockets[0].send(Buffer.from('late')));
 });
 
+test('close: a received close code or reason a peer may not send closes with 1002 or 1007 (HR-SYN-35)', async t => {
+  /**
+   * @param {number | undefined} code
+   * @param {Buffer} [reason]
+   */
+  const closeBody = (code, reason = Buffer.alloc(0)) => {
+    if (code === undefined) return Buffer.alloc(0);
+    const head = Buffer.alloc(2);
+    head.writeUInt16BE(code, 0);
+    return Buffer.concat([head, reason]);
+  };
+  /** @type {Array<[Buffer, number, string]>} body, answered code, reported reason */
+  const cases = [
+    [closeBody(1001, Buffer.from('away')), 1001, 'away'],
+    [closeBody(3000), 3000, ''],
+    [closeBody(4999), 4999, ''],
+    [closeBody(undefined), 1000, ''],
+    [Buffer.from([3]), 1002, 'protocol error'],
+    [closeBody(999), 1002, 'protocol error'],
+    [closeBody(1004), 1002, 'protocol error'],
+    [closeBody(1005), 1002, 'protocol error'],
+    [closeBody(1006), 1002, 'protocol error'],
+    [closeBody(1015), 1002, 'protocol error'],
+    [closeBody(2999), 1002, 'protocol error'],
+    [closeBody(5000), 1002, 'protocol error'],
+    [closeBody(1000, Buffer.from([0xff, 0xfe])), 1007, 'invalid UTF-8'],
+    [closeBody(1000, Buffer.from([0xe2, 0x82])), 1007, 'invalid UTF-8'],
+  ];
+  await null;
+  for (const [body, answered, reason] of cases) {
+    // eslint-disable-next-line no-await-in-loop
+    const { client, sockets } = await openEcho(t);
+    /** @type {[number, string][]} */
+    const seen = [];
+    sockets[0].onClose((code, why) => seen.push([code, why]));
+    client.write(frame(8, body));
+    // eslint-disable-next-line no-await-in-loop
+    const closing = await client.closeFrame();
+    t.is(closing?.code, answered, `${body.toString('hex')}`);
+    // eslint-disable-next-line no-await-in-loop
+    await client.closed();
+    const reported = answered === 1000 && body.length === 0 ? 1005 : answered;
+    t.deepEqual(seen, [[reported, reason]], `${body.toString('hex')}`);
+  }
+});
+
 test('close: the server closes with a code and reason; close() stops all', async t => {
   const served = await serve(t);
   const one = await upgrade(served.server.port, {

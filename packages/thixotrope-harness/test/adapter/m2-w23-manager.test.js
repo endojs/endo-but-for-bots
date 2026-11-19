@@ -29,6 +29,7 @@ import {
   makeSealKeys,
   sealTo,
 } from '../../resources/agent-host/impl/secrets/seal.js';
+import { makeWrappingKey } from '../../resources/agent-host/impl/secrets/wrapping-key.js';
 import { makeSecretsOps } from '../../resources/agent-host/impl/secrets/manager.js';
 import { makeTestSecretValue } from '../integration/_m2-secrets.js';
 
@@ -71,10 +72,14 @@ const makeKit = () => {
     incarnations += 1;
     const store = makeSecretStore({
       file: files.file,
-      keyFile: files.keyFile,
-      stateDir: files.stateDir,
+      wrappingKey: makeWrappingKey({
+        keyFile: files.keyFile,
+        stateDir: files.stateDir,
+      }),
     });
-    const seal = makeSealKeys({ file: files.keyFile });
+    const seal = makeSealKeys({
+      wrappingKey: makeWrappingKey({ keyFile: files.keyFile }),
+    });
     const { sink } = desiredSpec;
     const secrets = makeSecretsOps({ store, seal, sink });
     const incarnation = { retired: false, secrets, store };

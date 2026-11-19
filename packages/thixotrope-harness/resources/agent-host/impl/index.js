@@ -10,8 +10,8 @@
  * and the ops facet the manager vat calls (`attach.js`).
  *
  * Hook tables (append-only; milestones.md "Hook tables"): later milestones
- * add entries to `backendKinds` and `adapterTools` below, never edit another
- * milestone's entry.
+ * add entries to `backendKinds` (`providers/kinds.js`) and `adapterTools`
+ * below, never edit another milestone's entry.
  */
 import { dirname } from 'node:path';
 import { env, pid, stderr } from 'node:process';
@@ -31,38 +31,25 @@ import { makeContent } from './content.js';
 import { makeContextCache } from './context-cache.js';
 import { archiveDirFor, makeArchiveStore } from './archive/store.js';
 import { makeListChannel } from './list-channel.js';
-import {
-  makeEventLog,
-  makeScriptedProvider,
-  scriptedUnexpectedFailure,
-} from './providers/scripted.js';
+import { makeEventLog } from './providers/event-log.js';
+import { assertBackendKinds, backendKinds, kindOf } from './providers/kinds.js';
 import { makeEchoTool } from './tools/echo.js';
-import { openRouterKind } from './providers/openrouter.js';
-import { anthropicKind } from './providers/anthropic.js';
 import { makeCatalog } from './providers/catalog.js';
 import { findSecretsFiles, makeSecretStore } from './secrets/store.js';
 import { makeSealKeys } from './secrets/seal.js';
+import { makeWrappingKey } from './secrets/wrapping-key.js';
 import { makeSecretsOps } from './secrets/manager.js';
 import { makeGatewayService } from './gateway/index.js';
 // eslint-disable-next-line import/no-relative-packages -- guest/ is its own private package
 import { GATEWAY_KEY } from '../../../guest/lib/interfaces-m3.js';
 import { makeSubscriptions } from './subscriptions/index.js';
-import { claudePoolKind, codexPoolKind } from './subscriptions/provider.js';
 import {
   accountStatusDescription,
   makeAccountStatusTool,
 } from './subscriptions/account-tool.js';
 
 /**
- * @typedef {object} BackendKind
- * @property {string} kind the `BackendSpec.kind` it serves
- * @property {(options: { label: string, spec: any, readKey?: () => Promise<string>, script: any, logPath?: string, timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore, backend: any, subscriptions: any }) => { startRound: (req: any, channel: any, prepare?: () => Promise<import('./projection.js').Projection>) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} makeProvider
- * @property {readonly string[]} tools names in `adapterTools` this kind
- *   offers in its `TurnPorts.tools`
- * @property {string} unexpectedFailure the fixed reason of a round whose
- *   provider threw (R4-79): never the error's message, which may quote a
- *   provider body. Required: a kind without it is refused when the
- *   incarnation is made (HR-SYN-12)
+ * @typedef {import('./providers/kinds.js').BackendKind} BackendKind
  *
  * @typedef {object} AdapterToolKind
  * @property {string} name the tool name the model sees
@@ -71,48 +58,8 @@ import {
  *   in each `AdapterToolEntry`. A tool with a static tool-table entry of its
  *   name (`echo`) needs none; any other is offered to the model only with
  *   one (D-M4-9 as amended, XC)
- * @property {(options: { timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore, backend: any, session: any, subscriptions: any }) => any} makeTool
+ * @property {(options: { timers: import('./timers.js').Timers, log: import('./providers/event-log.js').EventLog, blobs: import('./blobs.js').BlobStore, backend: any, session: any, subscriptions: any }) => any} makeTool
  */
-
-/**
- * Backend kinds, by `BackendSpec.kind` (hook table).
- * @type {readonly BackendKind[]}
- */
-export const backendKinds = harden([
-  // M1a W1a.2: the scripted fake provider; offers echo.
-  {
-    kind: 'scripted',
-    makeProvider: makeScriptedProvider,
-    tools: ['echo'],
-    unexpectedFailure: scriptedUnexpectedFailure,
-  },
-  // M2 W2.1a: OpenRouter chat completions, streamed (m2-interfaces.md 8.1).
-  openRouterKind,
-  // M2 W2.1b: the Anthropic Messages API, streamed (m2-interfaces.md 8.1).
-  anthropicKind,
-  // M4 W4.6: subscription pools (m4-interfaces.md 5.2).
-  claudePoolKind,
-  codexPoolKind,
-]);
-
-/**
- * Refuse a kind table with a kind that names no fixed failure text
- * (HR-SYN-12): its rounds would otherwise have no reason that keeps provider
- * bodies out of the turn record.
- * @param {readonly BackendKind[]} table
- */
-export const assertBackendKinds = table => {
-  for (const entry of table) {
-    if (
-      typeof entry.unexpectedFailure !== 'string' ||
-      entry.unexpectedFailure === ''
-    )
-      throw Error(
-        `backend kind ${JSON.stringify(entry.kind)} has no unexpectedFailure text`,
-      );
-  }
-};
-harden(assertBackendKinds);
 
 /**
  * Tools that run in this adapter (hook table).
@@ -266,7 +213,9 @@ export const makeAgentHostImpl = ({
   // W1b.2: the context cache of every session served here (D-9).
   const contextCache = makeContextCache({ store: blobs, archive });
   // M2 W2.2: the model catalogue (R4-17, R4-104), this incarnation only.
-  const models = catalog ?? makeCatalog(fetch === undefined ? {} : { fetch });
+  const models =
+    catalog ??
+    makeCatalog({ kinds, ...(fetch === undefined ? {} : { fetch }) });
 
   /**
    * M2 (W2.3's ops, wired by W2.2, m2-interfaces 2.3): made on first use,
@@ -278,14 +227,19 @@ export const makeAgentHostImpl = ({
   const secrets = () => {
     if (secretsMade === undefined) {
       const files = findSecretsFiles({ stateDir: stateDirNow(), env });
+      // One wrapping key per incarnation for the store and the sealing keys
+      // (one load, one failure policy: HR-SYN-5).
+      const wrappingKey = makeWrappingKey({
+        keyFile: files.keyFile,
+        stateDir: files.stateDir,
+      });
       secretsMade = makeSecretsOps({
         store: makeSecretStore({
           file: files.file,
-          keyFile: files.keyFile,
+          wrappingKey,
           auditFile: files.auditFile,
-          stateDir: files.stateDir,
         }),
-        seal: makeSealKeys({ file: files.keyFile, stateDir: files.stateDir }),
+        seal: makeSealKeys({ wrappingKey }),
         sink: requireSink,
       });
     }
@@ -308,6 +262,15 @@ export const makeAgentHostImpl = ({
     spec.keyGrant === undefined
       ? undefined
       : () => secrets().readKey(spec.keyGrant);
+  /**
+   * The catalogue that answers for `spec`'s kind (the model catalogue for a
+   * kind this table does not know: its listing refuses the spec).
+   * @param {any} spec
+   * @returns {import('./providers/kinds.js').ModelCatalog}
+   */
+  const catalogOf = spec =>
+    kindOf(spec, kinds)?.catalog({ models, pools: subscriptions.catalog }) ??
+    models;
   /**
    * A Secrets handler that builds the operations on first use.
    * @param {string} name
@@ -353,7 +316,7 @@ export const makeAgentHostImpl = ({
   const backendState = (backend, spec) => {
     const known = backends.get(backend);
     if (known !== undefined) return known;
-    const kind = kinds.find(entry => entry.kind === spec.kind);
+    const kind = kindOf(spec, kinds);
     if (kind === undefined)
       throw Error(`No backend kind ${JSON.stringify(spec.kind)} here`);
     const log = makeEventLog({ label: spec.label, logPath: spec.logPath });
@@ -444,22 +407,18 @@ export const makeAgentHostImpl = ({
     releaseBlobs: keys => blobs.release(keys),
     releaseArchive: key => archive.release(key),
     writersFor: session => blobs.writersFor(session),
-    // M2 W2.2 (8.4): the catalogue, with the backend's key.
+    // M2 W2.2 (8.4): the catalogue, with the backend's key; which catalogue
+    // is the kind's (the pool kinds': the pool catalogue, H-4 (g)).
     listModels: ({ backend, spec, request }) =>
-      (subscriptions.handles(spec) ? subscriptions.catalog : models).listModels(
-        {
-          backend,
-          spec,
-          readKey: readKeyOf(spec),
-          log: backendState(backend, spec).log,
-          ...(request === undefined ? {} : { request }),
-        },
-      ),
+      catalogOf(spec).listModels({
+        backend,
+        spec,
+        readKey: readKeyOf(spec),
+        log: backendState(backend, spec).log,
+        ...(request === undefined ? {} : { request }),
+      }),
     resolveModel: ({ backend, spec, modelId }) =>
-      (subscriptions.handles(spec)
-        ? subscriptions.catalog
-        : models
-      ).resolveModel({
+      catalogOf(spec).resolveModel({
         backend,
         spec,
         readKey: readKeyOf(spec),

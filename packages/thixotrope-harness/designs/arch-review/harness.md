@@ -465,7 +465,7 @@ becomes "Turn records" if the spec allows.
 
 ---
 
-## 8. Status after steps 1 and 2
+## 8. Status after steps 1-3
 
 Added by CL-CLOSE (2026-11-18) after the step 1 and 2 units on `claude/thix-clean` (G1, S1, S2,
 F2, then the review CL-QC and its fixes CL-FIX; journal J-10130..J-10194). The findings above are
@@ -474,13 +474,18 @@ listed; **open**: not started. Commits are on `claude/thix-clean` after `802bd27
 row says otherwise; journal numbers point to the numbers and proofs. The regression run and perf
 mini-pass over the cleaned tree are J-10191..J-10193.
 
+Updated by T3-CLOSE (2026-11-19) after step 3 (P3's plan `step3-plan.md`, then T3-SESSION,
+T3-PROVIDERS, T3-HOST, the review T3-QC and its fixes T3-FIX; journal J-10200..J-10249, commits
+after `9bb9f4f2ea`). The regression run and the perf mini-pass over the restructured tree are
+J-10251 and J-10252; what step 3 achieved in numbers is J-10253.
+
 | id | status | commits, journal | what is left |
 | --- | --- | --- | --- |
 | HR-SYN-1 | partly | `46b5602b19`, `a1373d71b9`, `33e726b912`, `93b410bf4b`, `436b6cb9f8`, `323e42e5bc`; J-10160..J-10165, J-10186; rename map `fold-plan.md` 6 | `interfaces-m3.js`, `interfaces-m4.js` and their `m3*`/`m4*` exports (step 4 reinstall); the guards' build-ingredient exports; `fold-plan.md` 4 (test helpers, template ids) and the perf file names |
 | HR-SYN-2 | open | - | step 4 |
-| HR-SYN-3 | open | - | step 3 (a), plan (b) |
-| HR-SYN-4 | open | - | step 3 |
-| HR-SYN-5 | open | - | step 3 (a), plan (b) |
+| HR-SYN-3 | partly | (a) `0e5d341e2f` (wire goldens first), `624dfc8f9b`, `74d86b8dca`, `b9f1fcf8d3`, `2bc791b072`, `d23d464cab`, `ec3212168f`; J-10220..J-10224, J-10247, J-10248 | (a) done: one provider shell, `makeApiProvider` with a wire record, `providers/event-log.js`, `providers/kinds.js` (`kindOf` the one match; `providerOfKind` stays the pools' own table, an import cycle otherwise), `prepare` required (behaviour change), dead pool fallback gone. (b) the scripted double as a stream under `runProviderRound`: plan, last and alone (about 60 repeated lines left) |
+| HR-SYN-4 | done | `30ea6e7788` (golden trace first), `19ad358149`, `bd7d38d675`, `c554e80661`, `31dc091ee7`, `5116a87fab`, `582085f5ad`; J-10206..J-10208, J-10240; regression J-10251 | - (runner 1,553 -> 1,266 lines; ARCH 4.7) |
+| HR-SYN-5 | partly | (a) `bb375e0208`; J-10230 | (a) done: one `makeWrappingKey` per incarnation, a failed load retried (behaviour change). Left: the sign-in file's own retrying loader (next gateway change); the store's error contract (a failed revoke audited as `REPLACE_FAILED`, the raw audit-append failure); (b) HKDF subkeys: plan |
 | HR-SYN-6 | open | - | step 5 (a), plan (b) |
 | HR-SYN-7 | partly | `b621c04535`, `31a13e6676`; J-10130, J-10131, J-10186 | the gateway extension loader still logs and skips (`AH/gateway/extensions.js`; with HR-SYN-15); `vocabulary-tables.js` lists three modules until `interfaces-m3/m4.js` fold |
 | HR-SYN-8 | done | `39ab65a208`, `9d43c8141a` (manager); J-10135..J-10143 | the manager part needs its reinstall when deployed |
@@ -490,32 +495,34 @@ mini-pass over the cleaned tree are J-10191..J-10193.
 | HR-SYN-12 | done | `48bb1848e9`; J-10135..J-10143 | - |
 | HR-SYN-13 | partly | `84bb177365` (probe injected); J-10135..J-10143 | `BackendSpec.logPath` (step 4) |
 | HR-SYN-14 | open | - | step 5 |
-| HR-SYN-15 | open | - | step 3 |
+| HR-SYN-15 | done | `89366b1714`, docs `cd38c2368c`, `861622d6d3`; J-10209, J-10245 | the gateway extension registry (`AH/gateway/extensions.js`, with HR-SYN-7) is not a session extension and is left (ARCH 4.8) |
 | HR-SYN-16 | open | - | step 5 |
-| HR-SYN-17 | partly, by earlier work | `2fda3d801f` (XB, merged in `79adbbbcb9`: the pool catalogue reuses M2's `pageOf` and bounded reader) | one catalogue core with per-catalogue bounds (16 MB and 8 MB still two constants), `ANTHROPIC_VERSION` twice (step 3) |
+| HR-SYN-17 | done | `2fda3d801f` (XB, earlier), `74d86b8dca`; J-10222 | - (`providers/catalog-core.js`, bounds as parameters, `ANTHROPIC_VERSION` once) |
 | HR-SYN-18 | partly | `ab86c27484`, `5b8d7f1d05`, `43c1fb7997` (`test:regression:core`, `test:regression:milestones`); J-10151; `process.md` 3.1 table J-10191 | the file merges (step 5) |
 | HR-SYN-19 | partly | `f740d47b03`; J-10150, J-10153 | every window length now scales; the private window loops, the 14 medians, the two `window` row shapes and a perf variable table (step 5) |
 | HR-SYN-20 | partly | `fb6475f421`, `aaa219050c`; J-10152, J-10187 | the provisioning part: `templateIdFor` and the template options in `scripts/provision-steps.js`, `50-m5-fixtures.js` (before M6) |
-| HR-SYN-21 | partly | `fb6475f421`; J-10152 | `useTestWrappingKey` (`_m3-gateway.js`) and the `m2-secrets`, `m2-providers`, `m2-catalog` sites still set the variable process-wide (step 3) |
+| HR-SYN-21 | done | `fb6475f421`, `f85b129709`; J-10152, J-10233 | - (no test or perf file sets the key variable process-wide) |
 | HR-SYN-22 | partly | `1c4f5a3a64`; J-10135..J-10143 | the core's state-directory power (AR-SYN-28) and the gateway's own default (step 4) |
-| HR-SYN-23 | partly | `319366eb5f`; J-10160 | `site ?? 'adapter'`, `queue.release`, `assertNoActiveTurn`, the factory's optional pool and settings, `context-source.js` archive, the adapter ops `notBuilt` branches (with HR-SYN-2), `channelTaps`, `live-service.js`, the dead exports |
-| HR-SYN-24 | open | - | with M8 |
-| HR-SYN-25 | open | - | with the next feed |
-| HR-SYN-26 | open | - | step 3 |
+| HR-SYN-23 | partly | `319366eb5f`, `e5edbed850`, `c554e80661` (export's `isImporting`); J-10160, J-10212 | `queue.release`, `assertNoActiveTurn`, the factory's optional pool and settings and the root's no-pool branches (step 5's test fakes), `context-source.js` archive option, the adapter ops `notBuilt` branches (with HR-SYN-2), `channelTaps`, `live-service.js`, the dead exports |
+| HR-SYN-24 | done | `bd7d38d675` (vat), `dc8ea804f0` (adapter); J-10206, J-10224 | - (both rules in `m2-interfaces.md` 12; `journal-usage.js` and `transcript-records.js` stay test oracles, comment only) |
+| HR-SYN-25 | done | `e0a17bfba7`; J-10232 | - (`AH/channel-subscriber.js`; a later feed builds on it) |
+| HR-SYN-26 | done | `bb375e0208`, `1615ca6e5c`; J-10231 | `gateway/signin.js`'s own writer and `syncDirectory` (next gateway change), `subscriptions/account-file.js` and the `scripts/*` writers (plan); the blob store's split write stays by design |
 | HR-SYN-27 | partly | `50c997c4cc` (guest: one `messageOf`, `NOT_RUN_TEXT`); J-10163 | the adapter and UI copies, serial queues, surrogate-safe cuts |
-| HR-SYN-28 | open | - | before M8 |
+| HR-SYN-28 | done | `5089ca64db` (vat), `20020bd82a` (adapter); J-10205, J-10235 | `test/adapter/_m2-archive.js` `referencePreview` is a further test copy |
 | HR-SYN-29 | open | `4dd2506626` (plan only, `fold-plan.md` 4) | the renames and lane check (step 5) |
-| HR-SYN-30 | open | - | ARCH's nine places and its glossary |
+| HR-SYN-30 | done | T3-CLOSE documents commit; J-10253 | - (ARCH's nine places corrected, the union key guard stated as weaker; glossary ARCH section 14, 50 terms) |
 | HR-SYN-31 | open | - | `SealedText` is a CapTP alleged name, a wire name (F2, J-10160..J-10165) |
-| HR-SYN-32 | open | - | glossary |
-| HR-SYN-33 | partly | `b9b535e034` (`ExecLease` -> `ExecScopeInfo`); J-10160..J-10165 | the glossary; the `Registration` rename (step 4) and the other local renames |
+| HR-SYN-32 | partly | glossary ARCH 14 (T3-CLOSE); J-10253 | turn record and transcript record defined; the per-kind table of the three vocabularies (`tool-result`, `tool_result`) not written |
+| HR-SYN-33 | partly | `b9b535e034` (`ExecLease` -> `ExecScopeInfo`); glossary ARCH 14 (T3-CLOSE); J-10160..J-10165, J-10253 | the `Registration` rename (step 4) and the other local renames |
 | HR-SYN-34 | done | `4eda82d98d` (accounts watch closes with a field); the Claude-overload half by earlier work, `2fda3d801f` (XB); J-10164 | - |
-| HR-SYN-35 | open | - | `ws` still a dependency; close codes |
-| HR-SYN-36 | open | - | the factory's three start counts |
+| HR-SYN-35 | done | `cd7ad65df4`; J-10234 | - (close code and UTF-8 reason validated: behaviour change) |
+| HR-SYN-36 | done | `63f4168d04`; J-10210 | - (`guest/factory/starts.js`) |
 | HR-SYN-37 | leave | - | the owner decides |
 | HR-SYN-38 | done | `ab86c27484`; J-10151 | - |
 
 Outside the table: section 4's process changes are written as rules (`bf969cecef`:
 `milestones.md` "Rules from the harness review", `process.md` 6); the duplicate ceiling is in the
-lint lane (`1f5dedee5a`, lowered to 3.25 % by `88f0ee93f0` at 3.00 % measured); HR-GUEST-12 (the
-swallowed start-listener failure, section 3.3) is open.
+lint lane (`1f5dedee5a`, lowered to 3.25 % by `88f0ee93f0` at 3.00 % measured, and to 2.05 % by
+`d94ad96129` at 1.80 % after step 3); HR-GUEST-12 (the swallowed start-listener failure, section
+3.3) is done (`63f4168d04`, J-10210: the optional `HarnessStatus.error`, a guard addition) and
+HR-GUEST-11 (one `ActiveTurn` type, one fence) is done (`bd7d38d675`, `c554e80661`, J-10206).

@@ -32,6 +32,7 @@ import {
 } from '../../resources/agent-host/impl/secrets/seal.js';
 import { assertLocalValue } from '../../resources/agent-host/impl/secrets/writer.js';
 import { SECRETS_KEY_VARIABLE } from '../../resources/agent-host/impl/secrets/store.js';
+import { makeWrappingKey } from '../../resources/agent-host/impl/secrets/wrapping-key.js';
 import { connectGateway } from '../integration/_m3-gateway.js';
 import { makeStoreDirs, openStore } from './_m4-renewal.js';
 
@@ -63,8 +64,10 @@ const makeWorld = async tag => {
   const ops = makeSecretsOps({
     store,
     seal: makeSealKeys({
-      file: dirs.files.keyFile,
-      stateDir: dirs.files.stateDir,
+      wrappingKey: makeWrappingKey({
+        keyFile: dirs.files.keyFile,
+        stateDir: dirs.files.stateDir,
+      }),
     }),
     sink,
   });

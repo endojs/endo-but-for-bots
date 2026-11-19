@@ -72,15 +72,18 @@ import {
   retryAfterMs,
 } from './http.js';
 import { parseSseBatches } from './sse.js';
+import { ProviderFailure } from './round.js';
+import { isDelivery, openRouterDelay } from './retry.js';
+import { makeApiProvider } from './api.js';
 import {
-  makeRoundControl,
-  ProviderFailure,
-  readProviderKey,
-  runProviderRound,
-  systemTextOf,
-} from './round.js';
-import { makeEventLog } from './scripted.js';
-import { isDelivery, makeRetry, openRouterDelay } from './retry.js';
+  CATALOG_BODY_BYTES,
+  CATALOG_MAX_MODELS,
+  CATALOG_READ_TIMEOUT_MS,
+  catalogFail,
+  catalogModel,
+  readJson,
+  tokenCount,
+} from './catalog-core.js';
 
 /** OpenRouter's API base (a spec's `baseUrl` replaces it: the fake server). */
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -546,135 +549,164 @@ export async function* openRouterAttempt({
 harden(openRouterAttempt);
 
 /**
- * @param {object} options
- * @param {string} options.label the backend's label
- * @param {any} [options.spec] the BackendSpec (`modelId`, `baseUrl`,
- *   `timeoutMs`, `maxOutputTokens`, `logPath`)
- * @param {() => Promise<string>} [options.readKey] the key, read through the
- *   backend's grant at every round (R4-82)
- * @param {import('../timers.js').Timers} options.timers
- * @param {import('./scripted.js').EventLog} [options.log]
- * @param {import('../blobs.js').BlobStore} [options.blobs]
- * @param {typeof globalThis.fetch} [options.fetch]
- * @param {() => number} [options.now]
- * @param {(args: { attempt: (signal: AbortSignal) => AsyncIterable<import('./round.js').RoundEvent>, signal: AbortSignal }) => AsyncIterable<import('./round.js').RoundEvent>} [options.retry]
- *   the retry wrapper (default: `makeRetry` with `openRouterDelay`, one per
- *   round, logging each retry)
- * @param {string} [options.logPath] (as the scripted kind's options)
+ * OpenRouter's chat completions request and answer for the API provider
+ * (`api.js`).
+ * @type {import('./api.js').ApiWire}
  */
-export const makeOpenRouterProvider = ({
-  label,
-  spec = {},
-  readKey,
-  timers,
-  logPath = spec.logPath,
-  log = makeEventLog({ label, logPath }),
-  blobs,
-  fetch,
-  now = () => Date.now(),
-  retry,
-}) => {
-  const baseUrl = providerBaseUrl(spec.baseUrl, OPENROUTER_BASE_URL);
-  const timeoutMs = spec.timeoutMs ?? OPENROUTER_TIMEOUT_MS;
-  /** turn -> the control of its running round. */
-  /** @type {Map<any, import('./round.js').RoundControl>} */
-  const running = new Map();
+export const openRouterWire = harden({
+  baseUrl: OPENROUTER_BASE_URL,
+  timeoutMs: OPENROUTER_TIMEOUT_MS,
+  path: '/chat/completions',
+  unreachable: texts.openRouterUnreachable,
+  model: req => {
+    const model = req.options.modelId;
+    if (typeof model !== 'string' || !model.includes('/'))
+      throw new ProviderFailure(texts.openRouterModelPrefix);
+    return model;
+  },
+  body: ({ model, transcript, system, req, spec }) =>
+    openRouterBody({
+      model,
+      messages: openRouterMessages(transcript, system),
+      tools: req.tools,
+      maxOutputTokens: req.options.maxOutputTokens ?? spec.maxOutputTokens,
+      reasoningEffort: req.options.reasoningEffort,
+    }),
+  delay: openRouterDelay,
+  attempt: openRouterAttempt,
+});
 
-  return harden({
-    /**
-     * @param {any} req
-     * @param {any} channel
-     * @param {() => Promise<any>} [prepare]
-     * @param {any} [owner]
-     */
-    startRound: async (req, channel, prepare, owner) => {
-      running.get(req.turn)?.stop('release');
-      const control = makeRoundControl(timers);
-      running.set(req.turn, control);
-      try {
-        await runProviderRound({
-          req,
-          channel,
-          prepare,
-          blobs,
-          log,
-          owner,
-          control,
-          timers,
-          now,
-          label,
-          unreachable: texts.openRouterUnreachable,
-          stream: async function* openRouterStream({ projection, signal }) {
-            const model = req.options.modelId;
-            if (typeof model !== 'string' || !model.includes('/'))
-              throw new ProviderFailure(texts.openRouterModelPrefix);
-            const key = await readProviderKey(readKey);
-            const system = await systemTextOf(req.system, blobs, owner);
-            const transcript =
-              projection?.transcript ??
-              req.append
-                .filter(
-                  (/** @type {any} */ r) =>
-                    r.kind === 'turn-started' && typeof r.input === 'string',
-                )
-                .map((/** @type {any} */ r) => ({
-                  kind: 'message',
-                  role: 'user',
-                  content: r.input,
-                }));
-            const body = openRouterBody({
-              model,
-              messages: openRouterMessages(transcript, system),
-              tools: req.tools,
-              maxOutputTokens:
-                req.options.maxOutputTokens ?? spec.maxOutputTokens,
-              reasoningEffort: req.options.reasoningEffort,
-            });
-            const retryRound =
-              retry ??
-              makeRetry({
-                timers,
-                delayMs: openRouterDelay,
-                onRetry: ({ attempt, failure, waitMs }) =>
-                  log('retry', {
-                    turnId: req.turnId,
-                    round: req.round,
-                    attempt,
-                    waitMs,
-                    ...(failure.status === undefined
-                      ? {}
-                      : { status: failure.status }),
-                    timedOut: failure.timedOut,
-                  }),
-              });
-            yield* retryRound({
-              signal,
-              attempt: attemptSignal =>
-                openRouterAttempt({
-                  url: `${baseUrl}/chat/completions`,
-                  key,
-                  body,
-                  signal: attemptSignal,
-                  timeoutMs,
-                  ...(fetch === undefined ? {} : { fetch }),
-                  now,
-                }),
-            });
-          },
-        });
-      } finally {
-        if (running.get(req.turn) === control) running.delete(req.turn);
-      }
-    },
-    /** @param {any} turn aborts its request (R4-7); logged `cancelled` */
-    cancelRound: turn => running.get(turn)?.stop('cancel'),
-    /** @param {any} turn aborts its request silently (lease released) */
-    releaseTurn: turn => running.get(turn)?.stop('release'),
-  });
-};
+/**
+ * An OpenRouter backend's provider (`api.js` `makeApiProvider`'s options
+ * but `wire`).
+ * @param {Omit<Parameters<typeof makeApiProvider>[0], 'wire'>} options
+ */
+export const makeOpenRouterProvider = options =>
+  makeApiProvider({ ...options, wire: openRouterWire });
 harden(makeOpenRouterProvider);
 
-/** The `backendKinds` entry (AH/index.js hook table). */
+// ---- The model list (M2 W2.2, m2-interfaces.md 8.4; hosted-agent
+// `openrouter-model-read.js`): validated and bounded, failing closed with a
+// fixed text; a refused answer's body is never read, and no provider text
+// other than model titles and descriptions (display data) is kept.
+
+/** Printable ASCII, no space (hosted-agent's identifier rule). */
+const IDENTIFIER = /^[\x21-\x7e]+$/;
+
+/**
+ * @param {unknown} value
+ * @param {number} limit
+ */
+const textField = (value, limit) => {
+  if (typeof value !== 'string' || value.length > limit)
+    catalogFail('model text');
+  return /** @type {string} */ (value);
+};
+
+/** @param {unknown} value */
+const identifier = value => {
+  const result = textField(value, 256);
+  if (!IDENTIFIER.test(result)) catalogFail('model identifier');
+  return result;
+};
+
+/** @param {unknown} value */
+const identifiers = value => {
+  if (!Array.isArray(value) || value.length > 64)
+    catalogFail('model capabilities');
+  const result = /** @type {unknown[]} */ (value).map(identifier);
+  if (new Set(result).size !== result.length) catalogFail('model capabilities');
+  return result;
+};
+
+/**
+ * One OpenRouter model, validated (hosted-agent `normalizeModel`), or
+ * undefined when it cannot serve the harness (no text in and out, or no
+ * tool use: `modelsFromOpenRouterCatalog`).
+ * @param {any} model
+ * @returns {import('./catalog-core.js').CatalogModel | undefined}
+ */
+export const openRouterModel = model => {
+  if (!model || typeof model !== 'object' || Array.isArray(model))
+    catalogFail('model entry');
+  const id = identifier(model.id);
+  const title = textField(model.name, 1024);
+  const description = textField(model.description ?? '', 16_384);
+  const contextLength = tokenCount(model.context_length);
+  if (
+    model.top_provider != null &&
+    (typeof model.top_provider !== 'object' ||
+      Array.isArray(model.top_provider))
+  )
+    catalogFail('model provider metadata');
+  const maxOutputTokens = tokenCount(model.top_provider?.max_completion_tokens);
+  const inputs = identifiers(model.architecture?.input_modalities);
+  const outputs = identifiers(model.architecture?.output_modalities);
+  const parameters = identifiers(model.supported_parameters);
+  if (
+    !inputs.includes('text') ||
+    !outputs.includes('text') ||
+    !parameters.includes('tools')
+  )
+    return undefined;
+  return catalogModel(id, title, description, contextLength, maxOutputTokens);
+};
+harden(openRouterModel);
+
+/**
+ * An OpenRouter catalogue (`GET <baseUrl>/models`).
+ * @param {object} options
+ * @param {string} options.baseUrl
+ * @param {string} options.key
+ * @param {typeof globalThis.fetch} [options.fetch]
+ * @param {number} [options.timeoutMs]
+ * @returns {Promise<import('./catalog-core.js').CatalogModel[]>}
+ */
+export const readOpenRouterModels = async ({
+  baseUrl,
+  key,
+  fetch,
+  timeoutMs = CATALOG_READ_TIMEOUT_MS,
+}) => {
+  const payload = await readJson({
+    url: `${baseUrl}/models`,
+    headers: { authorization: `Bearer ${key}` },
+    fetch,
+    timeoutMs,
+    maxBytes: CATALOG_BODY_BYTES,
+  });
+  if (
+    !Array.isArray(payload?.data) ||
+    Number(payload.data.length) > CATALOG_MAX_MODELS ||
+    payload.links?.next != null ||
+    (payload.total_count !== undefined &&
+      payload.total_count !== Number(payload.data.length))
+  )
+    catalogFail('catalogue shape');
+  /** @type {import('./catalog-core.js').CatalogModel[]} */
+  const models = [];
+  const seen = new Set();
+  for (const entry of payload.data) {
+    const model = openRouterModel(entry);
+    if (model !== undefined) {
+      if (seen.has(model.id)) catalogFail('duplicate model');
+      seen.add(model.id);
+      models.push(model);
+    }
+  }
+  return harden(models);
+};
+harden(readOpenRouterModels);
+
+/**
+ * R4-21: a creation's OpenRouter model names its organisation
+ * (`org/model`, both parts present).
+ * @param {string} modelId
+ */
+export const isOpenRouterModelId = modelId => /^[^/\s]+\/\S+$/.test(modelId);
+harden(isOpenRouterModelId);
+
+/** The `backendKinds` entry (`kinds.js`). */
 export const openRouterKind = harden({
   kind: 'openrouter',
   makeProvider: makeOpenRouterProvider,
@@ -682,4 +714,12 @@ export const openRouterKind = harden({
   unexpectedFailure: texts.openRouterUnreachable,
   // M4 W4.6 (H-14, D-M4-9): account status on API backends too.
   tools: harden(['accountStatus']),
+  /** @type {import('./kinds.js').BackendKind['catalog']} */
+  catalog: ({ models }) => models,
+  /** @type {import('./kinds.js').BackendKind['readModels']} */
+  readModels: ({ spec, fetch }) => {
+    const baseUrl = providerBaseUrl(spec.baseUrl, OPENROUTER_BASE_URL);
+    return key => readOpenRouterModels({ baseUrl, key, fetch });
+  },
+  acceptsModelId: isOpenRouterModelId,
 });

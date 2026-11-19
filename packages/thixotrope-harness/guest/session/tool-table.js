@@ -11,7 +11,8 @@
  * - `site` says where `execute` calls: `'adapter'` (a transient adapter
  *   object: a retired break from it is a restart and runs recovery, never a
  *   tool failure) or `'guest'` (a guest vat: a retired break means that vat
- *   is lost and is an ordinary failed result). Absent means `'adapter'`;
+ *   is lost and is an ordinary failed result). Every entry names it
+ *   (HR-SYN-23: the absent-means-adapter fallback went);
  * - `available(ports)` is true when the entry can run with this turn's
  *   `TurnPorts`;
  * - `execute` receives the model's argument JSON as text: a vat never
@@ -24,9 +25,10 @@
  * - `site: 'session'`: `execute` makes no call that leaves the vat and
  *   settles in the crank that issues it; turn.js treats it as `'guest'`
  *   for retired breaks (it cannot meet one);
- * - `toolSources`, a second hook list of dynamic sources
- *   `(ports, services, runtime) -> entries[]`, asked at every round after
- *   the static table (W5.6 appends `grantedToolSource`, M9 more);
+ * - dynamic sources `(ports, services, runtime, builtIns) -> entries[]`,
+ *   asked at every round after the static table: the runtime parts'
+ *   `tools` (`runtime.toolSources`, in part table order; the `grants`
+ *   part's granted tools since W5.6, M9 more);
  * - `toolSetFor` runs per round (turn.js `invoke`) and applies the name
  *   rules of 2.5 to the dynamic entries: a name in the round's built-in set
  *   (every static entry's name, available or not, and every adapter tool
@@ -51,7 +53,6 @@ import { execEntry } from './tools/exec.js';
 import { objectToolEntries } from './tools/objects.js';
 import { inspectionToolEntries } from './tools/inspection.js';
 import { packageToolEntries } from './tools/mentions.js';
-import { grantedToolSource } from './tools/granted.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
@@ -59,7 +60,7 @@ const { E } = /** @type {GuestGlobals} */ (globalThis);
 /**
  * @typedef {object} ToolTableEntry
  * @property {string} name
- * @property {'adapter' | 'guest' | 'session'} [site]
+ * @property {'adapter' | 'guest' | 'session'} site
  * @property {() => { name: string, description: string, parameters: string }} describe
  * @property {(ports: any, services?: any) => boolean} available
  * @property {(request: { opId: string, args: any, turnId: string }, ports: any, context?: any) => Promise<{ status: 'ok' | 'failed' | 'frame-limit', text: any }>} execute
@@ -70,7 +71,8 @@ const { E } = /** @type {GuestGlobals} */ (globalThis);
  */
 
 /**
- * @typedef {(ports: any, services: any, runtime: any) => readonly ToolTableEntry[]} ToolSource
+ * @typedef {(ports: any, services: any, runtime: any, builtIns: Set<string>) => readonly ToolTableEntry[]} ToolSource
+ *   a runtime part's `tools`; `builtIns` is the round's built-in name set
  */
 
 /**
@@ -147,18 +149,6 @@ export const toolTable = harden([
 ]);
 
 /**
- * M5 (S1): dynamic tool sources, asked at every round after the static
- * table. Append-only.
- * @type {readonly ToolSource[]}
- */
-export const toolSources = harden([
-  // W5.6: granted tools, with the round's built-in name set (2.5).
-  /** @type {ToolSource} */
-  (ports, services, runtime) =>
-    grantedToolSource(ports, services, runtime, builtInToolNames(ports)),
-]);
-
-/**
  * The round's built-in name set (2.5): every static entry's name, available
  * or not, and every adapter tool these ports offer.
  * @param {any} ports
@@ -175,22 +165,23 @@ harden(builtInToolNames);
  * The tool-table entries available with these ports, in table order: their
  * descriptions for the round request and a name lookup.
  *
- * M5: then the dynamic entries of `sources`, with the name rules (module
- * comment); at most `maxToolsPerRound` descriptions in all.
+ * M5: then the dynamic entries of the runtime's `toolSources`, with the
+ * name rules (module comment); at most `maxToolsPerRound` descriptions in
+ * all.
  *
  * @param {any} ports
  * @param {readonly ToolTableEntry[]} [table]
  * @param {any} [services] SessionServices (M1b: `available(ports, services)`)
- * @param {readonly ToolSource[]} [sources] M5 dynamic sources
- * @param {any} [runtime] M5 session runtime (`runtime-parts.js`)
+ * @param {{ toolSources: readonly ToolSource[] }} [runtime] the session's
+ *   runtime (`runtime-parts.js`)
  */
 export const toolSetFor = (
   ports,
   table = toolTable,
   services = undefined,
-  sources = toolSources,
   runtime = undefined,
 ) => {
+  const sources = runtime?.toolSources ?? [];
   /** @type {any[]} */
   const descriptions = [];
   /** @type {Map<string, ToolTableEntry>} */
@@ -208,12 +199,14 @@ export const toolSetFor = (
     }
   }
   if (sources.length > 0) {
+    const builtIn = builtInToolNames(ports, table);
     /** @type {ToolTableEntry[]} */
     const dynamic = [];
     for (const source of sources) {
-      for (const entry of source(ports, services, runtime)) dynamic.push(entry);
+      for (const entry of source(ports, services, runtime, builtIn)) {
+        dynamic.push(entry);
+      }
     }
-    const builtIn = builtInToolNames(ports, table);
     /** @type {Map<string, number>} */
     const claims = new Map();
     for (const entry of dynamic) {

@@ -42,7 +42,7 @@ const SEG = limits.archiveSegmentTurns;
  */
 const mixed = async (s, n) => {
   for (let i = 0; i < n; i += 1) {
-    const k = s.runner.archive.state().sealedTurns + s.records.turnIds().length;
+    const k = s.archive.state().sealedTurns + s.records.turnIds().length;
     // eslint-disable-next-line no-await-in-loop
     await s.turn(
       k % 5 === 4 ? { calls: 3 } : k % 7 === 6 ? { end: 'failed' } : {},
@@ -54,7 +54,7 @@ test('seals at 160 kept settled turns, in the settle crank; drops only on the du
   const s = await makeArchiveSession();
   await mixed(s, KEEP + SEG - 1);
   t.is(s.fake.counts().seals, 0, 'no seal below 160 settled turns');
-  t.is(s.runner.archive.state().segments, 0);
+  t.is(s.archive.state().segments, 0);
   t.is(s.records.base(), 0);
   // The 160th settle sends the seal before the next entry is claimed.
   await mixed(s, 1);
@@ -70,7 +70,7 @@ test('seals at 160 kept settled turns, in the settle crank; drops only on the du
     previous: '',
   });
   t.is(request.kinds.length, request.records);
-  const state = s.runner.archive.state();
+  const state = s.archive.state();
   t.like(state, { sealedTo: request.to, sealedTurns: SEG, segments: 1 });
   t.is(state.digest, s.fake.segments()[0].digest);
   t.is(s.records.base(), request.to);
@@ -87,12 +87,12 @@ test('seals at 160 kept settled turns, in the settle crank; drops only on the du
     kept.push(s.records.turnIds().length);
   }
   t.true(kept.every(k => k >= KEEP && k < KEEP + SEG));
-  t.is(s.runner.archive.state().segments, 8);
-  t.is(s.runner.archive.entries().length, 8);
+  t.is(s.archive.state().segments, 8);
+  t.is(s.archive.entries().length, 8);
   t.is(await s.checkLog(), undefined);
   // The chain: each request names the previous segment's digest.
   const requests = s.fake.requests();
-  const entries = s.runner.archive.entries();
+  const entries = s.archive.entries();
   for (let i = 1; i < requests.length; i += 1) {
     t.is(requests[i].previous, entries[i - 1].digest);
     t.is(requests[i].from, entries[i - 1].to);
@@ -102,7 +102,7 @@ test('seals at 160 kept settled turns, in the settle crank; drops only on the du
 test('RoundRequest.base.archive, ContextSource from sealedTo, segments()', async t => {
   const s = await makeArchiveSession();
   await s.turns(KEEP + SEG);
-  const state = s.runner.archive.state();
+  const state = s.archive.state();
   t.is(state.segments, 1);
   await s.turn();
   const req = s.rounds.find(
@@ -127,7 +127,7 @@ test('RoundRequest.base.archive, ContextSource from sealedTo, segments()', async
     message: texts.recordsSealed,
   });
   const segments = await E(context).segments();
-  t.deepEqual(segments, { segments: s.runner.archive.entries() });
+  t.deepEqual(segments, { segments: s.archive.entries() });
   t.deepEqual(await E(context).segments('s1'), { segments: [] });
   await t.throwsAsync(() => E(context).segments('s2'), {
     message: texts.badCursor,
@@ -221,13 +221,13 @@ for (const { row, reaches, adapter } of killRows) {
     const opensBefore = s.counts.opens;
     await s.turn();
     t.is(sealCalls, 1, 'one seal sent, in the settle crank');
-    const state = s.runner.archive.state();
+    const state = s.archive.state();
     if (reaches === 'answer') {
       t.is(state.segments, 1, 'sealed');
       // The kill and restart after Z: the adapter validates against the
       // vat's state (the fake acknowledges what the state names).
       await s.restartAdapter();
-      t.notThrows(() => s.fake.acknowledge(s.runner.archive.state()));
+      t.notThrows(() => s.fake.acknowledge(s.archive.state()));
     } else {
       t.is(state.segments, 0, 'not sealed: every record stays');
       t.is(s.records.base(), 0);
@@ -251,17 +251,17 @@ for (const { row, reaches, adapter } of killRows) {
     // The next seal succeeds: after a break, at the eighth settle after it.
     const target = state.segments + 1;
     let extra = 1;
-    while (s.runner.archive.state().segments < target && extra < 64) {
+    while (s.archive.state().segments < target && extra < 64) {
       // eslint-disable-next-line no-await-in-loop
       await s.turn();
       extra += 1;
     }
-    t.is(s.runner.archive.state().segments, target, 'the next seal succeeds');
+    t.is(s.archive.state().segments, target, 'the next seal succeeds');
     if (reaches === 'break') {
       t.is(extra, limits.archiveSegmentTurns / 4, 'retried 8 settles later');
       if (orphan !== undefined) {
         // The same range sealed again: the same content and digest.
-        t.is(s.runner.archive.entries()[0].digest, orphan.digest);
+        t.is(s.archive.entries()[0].digest, orphan.digest);
       }
     }
     t.is(await s.checkLog(), undefined);
@@ -284,7 +284,7 @@ test('a seal answered while later turns run drops only its range', async t => {
   await drain();
   held.answer();
   await drain();
-  t.is(s.runner.archive.state().segments, 1);
+  t.is(s.archive.state().segments, 1);
   t.is(s.runner.current()?.turn, handle);
   const req = s.lastRound();
   req.sink.dispatching(0);
@@ -307,13 +307,13 @@ test('a rejected or mismatched seal leaves the records and retries 8 settles lat
   await s.turns(KEEP + SEG - 1);
   s.fake.rejectNext('disk full');
   await s.turn();
-  t.is(s.runner.archive.state().segments, 0);
+  t.is(s.archive.state().segments, 0);
   t.is(await s.checkLog(), undefined);
   await s.turns(limits.archiveSegmentTurns / 4 - 1);
   t.is(s.fake.counts().seals, 1, 'no retry within 8 settles');
   await s.turn();
   t.is(s.fake.counts().seals, 2);
-  t.is(s.runner.archive.state().segments, 1);
+  t.is(s.archive.state().segments, 1);
   t.is(await s.checkLog(), undefined);
 });
 
@@ -329,7 +329,7 @@ test('a stale or mismatched answer is ignored; nothing is dropped', async t => {
   });
   await s.turns(KEEP + SEG);
   t.is(s.fake.counts().seals, 1);
-  t.is(s.runner.archive.state().segments, 0);
+  t.is(s.archive.state().segments, 0);
   t.is(s.records.base(), 0);
   t.is(await s.checkLog(), undefined);
 });
@@ -347,7 +347,7 @@ test('archived turns: findTurn, Turn handles, unresolved outcome-unknown turns (
   t.is((await unknownHandles[0].getStatus()).state, 'outcome-unknown');
   // Enough turns to seal past turn 67 (three segments: 96 turns).
   await s.turns(KEEP + 3 * SEG - 67);
-  t.is(s.runner.archive.state().sealedTurns, 3 * SEG);
+  t.is(s.archive.state().sealedTurns, 3 * SEG);
   t.is(await s.checkLog(), undefined);
 
   // A kept turn's handle.
@@ -384,7 +384,7 @@ test('archived turns: findTurn, Turn handles, unresolved outcome-unknown turns (
   t.like(s.all[resolvedAt], { kind: 'turn-resolved', turnId: 't4' });
   t.is(await s.checkLog(), undefined);
   await s.turns(SEG * 5);
-  t.true(s.runner.archive.state().sealedTo > resolvedAt);
+  t.true(s.archive.state().sealedTo > resolvedAt);
   t.is(await s.checkLog(), undefined);
   const { seen } = s.historyWalk();
   t.is(new Set(seen).size, s.records.messageCount());
@@ -393,7 +393,7 @@ test('archived turns: findTurn, Turn handles, unresolved outcome-unknown turns (
 test('history pages: newest first, at most 32 turns, 48 records and frameBytes; the archive boundary', async t => {
   const s = await makeArchiveSession();
   await mixed(s, 300);
-  const state = s.runner.archive.state();
+  const state = s.archive.state();
   t.true(state.segments >= 5);
   const { seen, pages } = s.historyWalk();
   t.deepEqual(
@@ -468,7 +468,7 @@ test("sealed turns' Blob handles are no longer held by the session", async t => 
     await s.turn({ input: staged });
   }
   s.published.length = 0;
-  const state = s.runner.archive.state();
+  const state = s.archive.state();
   t.is(state.sealedTurns, SEG * 2);
   await drain();
   gc();
@@ -529,7 +529,7 @@ test('seams for W2.6: system prompt, output tokens, context window, turn deadlin
   });
 });
 
-test('seams for W2.7: beginDelete, importTurns, importEnd, importUsage', async t => {
+test('seams for W2.7: deleteSelf, importTurns, importEnd, importUsage', async t => {
   const source = await makeArchiveSession();
   await mixed(source, 200);
 
@@ -541,7 +541,7 @@ test('seams for W2.7: beginDelete, importTurns, importEnd, importUsage', async t
     // eslint-disable-next-line no-await-in-loop
     await drain();
   }
-  t.true(copy.runner.archive.state().segments >= 1);
+  t.true(copy.archive.state().segments >= 1);
   t.is(copy.records.messageCount(), 200);
   t.is(copy.records.count(), all.length);
   await copy.turn();
@@ -549,12 +549,12 @@ test('seams for W2.7: beginDelete, importTurns, importEnd, importUsage', async t
   t.is(copy.records.turnIds().at(-1), 't201');
   // The seal digests match the source's for the same ranges.
   const common = Math.min(
-    copy.runner.archive.entries().length,
-    source.runner.archive.entries().length,
+    copy.archive.entries().length,
+    source.archive.entries().length,
   );
   t.deepEqual(
-    copy.runner.archive.entries().slice(0, common),
-    source.runner.archive.entries().slice(0, common),
+    copy.archive.entries().slice(0, common),
+    source.archive.entries().slice(0, common),
   );
 
   // importUsage: the totals as exported.
@@ -590,10 +590,18 @@ test('seams for W2.7: beginDelete, importTurns, importEnd, importUsage', async t
   // beginDelete: the current turn is cancelled at once; nothing new starts.
   source.runner.startTurn('going', 1_800_000_000_000);
   await drain();
-  source.runner.beginDelete();
+  source.deleteSelf();
   t.is(source.runner.current(), undefined);
-  t.true(source.runner.deleting());
   t.throws(() => source.runner.startTurn('more', 1_800_000_000_001), {
     message: texts.sessionDeleting,
   });
+  // A waiting entry is not claimed after the fence closed.
+  source.queue.enqueueOnce(
+    harden({ text: 'waiting' }),
+    '1800000000002-00000000-0000-4000-8000-000000000001',
+    1_800_000_000_002,
+  );
+  t.is(source.queue.size(), 1);
+  t.is(source.runner.claimNext(), undefined);
+  t.is(source.runner.current(), undefined);
 });

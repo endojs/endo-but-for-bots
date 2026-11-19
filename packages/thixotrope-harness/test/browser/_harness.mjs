@@ -320,7 +320,7 @@ export const startBrowserGateway = async ({
     const made = await templateNamed(template);
     const key = useTestWrappingKey('br');
     undo.push(async () => key.remove());
-    const state = await startFromTemplate(made);
+    const state = await startFromTemplate(made, { secretsKeyFile: key.file });
     undo.push(() => state.cleanup());
     const gatewayLog = watchGatewayLog(state);
     undo.push(async () => gatewayLog.stop());
@@ -329,7 +329,10 @@ export const startBrowserGateway = async ({
       const operator = await E(root).getOperator();
       await provision({ root, operator });
     }
-    const gateway = await serveGateway(state, gatewayOptions);
+    const gateway = await serveGateway(state, {
+      ...gatewayOptions,
+      secretsKeyFile: key.file,
+    });
     const client = await gateway.connect();
     undo.push(async () => client.close());
     /**

@@ -85,8 +85,12 @@ await runPerf('gateway-restart', async ({ root }) => {
     state = await startFromTemplate(template, {
       root,
       idleSleepMs: 3_600_000,
+      secretsKeyFile: key.file,
     });
-    const gateway = await serveGateway(state, { port: await freePort() });
+    const gateway = await serveGateway(state, {
+      port: await freePort(),
+      secretsKeyFile: key.file,
+    });
     // One sign-in before the series, as gateway-session's rows did first.
     const first = await connectGateway({
       port: gateway.port,

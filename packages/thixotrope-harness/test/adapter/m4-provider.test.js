@@ -12,6 +12,9 @@
 // a string. No supervisor.
 import '../unit/_m1a-prelude.js';
 
+import { readFileSync, writeFileSync } from 'node:fs';
+import { env } from 'node:process';
+
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
@@ -28,7 +31,11 @@ import {
   codexPoolKind,
   makePoolProvider,
 } from '../../resources/agent-host/impl/subscriptions/provider.js';
-import { backendKinds } from '../../resources/agent-host/impl/index.js';
+import {
+  backendKinds,
+  kindOf,
+} from '../../resources/agent-host/impl/providers/kinds.js';
+import { PREPARE_REQUIRED } from '../../resources/agent-host/impl/providers/api.js';
 import {
   BODY_MARKER,
   exhaustedEntry,
@@ -227,6 +234,12 @@ test('the pool kinds are in backendKinds and offer accountStatus', t => {
   );
   t.deepEqual(claudePoolKind.tools, ['accountStatus']);
   t.deepEqual(codexPoolKind.tools, ['accountStatus']);
+});
+
+test('a pool spec is routed by kindOf alone: subscriptions has no handles', async t => {
+  const s = await setup(t, { kind: 'codex-pool' });
+  t.false('handles' in s.subscriptions, 'the dead spec router is gone');
+  t.is(kindOf(s.spec), codexPoolKind);
 });
 
 test('claude: a 429 exhausted before delivery hands the same request to the next member once; the mark reaches the sink', async t => {
@@ -544,4 +557,95 @@ test('XB (3.1): CredentialOps.poolsChanged makes the next round see a retired me
   s.subscriptions.credentialOps.poolsChanged();
   await s.round();
   t.is(s.fake.loads(), 3);
+});
+
+test('wire golden: what both pool kinds send for a recorded round (hand-over after a 429) is test/fixtures/pool-wire-golden.json', async t => {
+  /** @type {Record<string, any>} */
+  const recorded = {};
+  for (const kind of /** @type {const} */ (['claude-pool', 'codex-pool'])) {
+    // eslint-disable-next-line no-await-in-loop
+    const s = await setup(t, { kind });
+    const provider = kind === 'claude-pool' ? 'claude' : 'codex';
+    s.server.setPlan([
+      {
+        ...exhaustedEntry(provider, 4_000_000_000),
+        match: { credential: 'a' },
+      },
+      { sse: kind === 'claude-pool' ? 'claude-text.sse' : 'codex-text.sse' },
+    ]);
+    // eslint-disable-next-line no-await-in-loop
+    const r = await s.round({
+      transcript: [
+        { kind: 'message', role: 'user', content: 'first question' },
+        { kind: 'message', role: 'assistant', content: 'calling a tool' },
+        { kind: 'tool-call', id: 't1/r0/c0', name: 'echo', args: '{"a":1}' },
+        { kind: 'tool-result', id: 't1/r0/c0', content: 'a' },
+        { kind: 'message', role: 'user', content: 'second question' },
+      ],
+      system: 'You are a pool test.',
+      tools: [
+        {
+          name: 'echo',
+          description: 'Echo the text.',
+          parameters:
+            '{"type":"object","properties":{"text":{"type":"string"}}}',
+        },
+      ],
+      requestOptions: { maxOutputTokens: 321, reasoningEffort: 'high' },
+    });
+    // The deferred log lines are written a timer turn after the round.
+    // eslint-disable-next-line no-await-in-loop
+    await timers.delay(50);
+    recorded[kind] = {
+      requests: s.server
+        .requests()
+        .filter(q => q.method === 'POST')
+        .map(q => ({
+          path: q.path,
+          query: q.query,
+          headerNames: q.headerNames,
+          credential: q.credential,
+          bodyBytes: q.bodyBytes,
+          json: q.json,
+        })),
+      finals: r.finals.map((/** @type {any} */ f) => ({ ...f, at: 0 })),
+      failures: r.failures.map((/** @type {any} */ f) => ({ ...f, at: 0 })),
+      // The kinds seen (deferred lines interleave by timing).
+      log: [...new Set(r.log.map((/** @type {any} */ l) => l.kind))].sort(),
+    };
+  }
+  const file = new URL('../fixtures/pool-wire-golden.json', import.meta.url);
+  const json = JSON.parse(JSON.stringify(recorded));
+  if (env.THIX_WRITE_GOLDEN === '1') {
+    writeFileSync(file, `${JSON.stringify(json, null, 2)}\n`);
+    t.pass('golden written');
+    return;
+  }
+  t.deepEqual(json, JSON.parse(readFileSync(file, 'utf8')));
+});
+
+test('HR-SYN-3 (a): a pool round started without its projection is refused before a credential is read', async t => {
+  const s = await setup(t, { kind: 'claude-pool' });
+  s.server.setPlan([{ sse: 'claude-text.sse' }]);
+  const provider = makePoolProvider({
+    label: s.spec.label,
+    spec: s.spec,
+    backend: s.backend,
+    subscriptions: s.subscriptions,
+    timers,
+  });
+  await t.throwsAsync(
+    provider.startRound(
+      harden({
+        turn: {},
+        turnId: 't1',
+        round: 0,
+        options: { modelId: s.spec.modelId },
+      }),
+      undefined,
+      undefined,
+    ),
+    { message: PREPARE_REQUIRED },
+  );
+  t.is(s.server.requests().length, 0);
 });

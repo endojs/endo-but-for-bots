@@ -415,8 +415,6 @@ export const makeSubscriptions = ({
   });
 
   return harden({
-    /** @param {any} spec */
-    handles: spec => spec !== undefined && poolKinds.includes(spec.kind),
     catalog: harden({
       /** @param {any} request M2 `makeCatalog`'s request (`backend`, `spec`, ...) */
       listModels: request => {

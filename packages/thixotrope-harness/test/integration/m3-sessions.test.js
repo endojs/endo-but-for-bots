@@ -80,14 +80,14 @@ const ROW_FIELDS = [
 
 /** @type {Awaited<ReturnType<typeof startFromTemplate>> | undefined} */
 let state;
-/** @type {(() => void) | undefined} */
-let removeKey;
+/** @type {ReturnType<typeof useTestWrappingKey> | undefined} */
+let wrappingKey;
 /** @type {Awaited<ReturnType<typeof startFakeProviderServer>> | undefined} */
 let server;
 test.after.always(async () => {
   await state?.cleanup();
   await server?.close();
-  removeKey?.();
+  wrappingKey?.remove();
 });
 
 /**
@@ -164,7 +164,7 @@ const settledInputs = (session, count) =>
   );
 
 run('setup: served state, scripted and catalogue backends', async t => {
-  removeKey = useTestWrappingKey('m3ss').remove;
+  wrappingKey = useTestWrappingKey('m3ss');
   server = await startFakeProviderServer({
     plan: [
       {
@@ -174,7 +174,9 @@ run('setup: served state, scripted and catalogue backends', async t => {
       },
     ],
   });
-  state = await startFromTemplate(await sliceTemplate());
+  state = await startFromTemplate(await sliceTemplate(), {
+    secretsKeyFile: wrappingKey.file,
+  });
   t.truthy(state.client);
 });
 
@@ -186,7 +188,10 @@ run(
     const { backend } = await slice.makeBackend(harden(sliceScript));
     await E(slice.harness).configure(harden({ backends: [backend] }));
     const port = await freePort();
-    const gateway = await serveGateway(state, { port });
+    const gateway = await serveGateway(state, {
+      port,
+      secretsKeyFile: wrappingKey?.file,
+    });
     const pageA = await gateway.connect();
     const pageB = await gateway.connect();
     const factoryA = await E(pageA.powers.operator).getFactory();
@@ -360,7 +365,9 @@ run(
         defaultModelId: FIRST,
       }),
     );
-    const gateway = await serveGateway(state);
+    const gateway = await serveGateway(state, {
+      secretsKeyFile: wrappingKey?.file,
+    });
     const page = await gateway.connect();
     const factory = await E(page.powers.operator).getFactory();
 

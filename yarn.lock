@@ -3720,7 +3720,6 @@ __metadata:
     preact: "npm:^10.29.8"
     ses: "workspace:^"
     typescript: "catalog:dev"
-    ws: "npm:^8.22.0"
   languageName: unknown
   linkType: soft
 

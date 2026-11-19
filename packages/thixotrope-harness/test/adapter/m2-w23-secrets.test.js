@@ -36,6 +36,7 @@ import {
   makeSealKeys,
   sealTo,
 } from '../../resources/agent-host/impl/secrets/seal.js';
+import { makeWrappingKey } from '../../resources/agent-host/impl/secrets/wrapping-key.js';
 import { makeSecretsOps } from '../../resources/agent-host/impl/secrets/manager.js';
 import { ENV_ALLOWLIST } from '../../scripts/serve.mjs';
 import {
@@ -72,8 +73,10 @@ const makeDirs = () => {
 const storeOf = files =>
   makeSecretStore({
     file: files.file,
-    keyFile: files.keyFile,
-    stateDir: files.stateDir,
+    wrappingKey: makeWrappingKey({
+      keyFile: files.keyFile,
+      stateDir: files.stateDir,
+    }),
   });
 
 /** @param {string} code */
@@ -257,7 +260,7 @@ test('store: a new incarnation reads the file back; the key file is guarded', as
   // Another key file cannot open it, and says nothing about the content.
   const other = makeSecretStore({
     file: dirs.files.file,
-    keyFile: join(dirs.root, 'other.key'),
+    wrappingKey: makeWrappingKey({ keyFile: join(dirs.root, 'other.key') }),
   });
   await t.throwsAsync(other.ready(), {
     message: 'secrets.enc cannot be opened with this key file',
@@ -266,15 +269,20 @@ test('store: a new incarnation reads the file back; the key file is guarded', as
   // A key file inside the state directory, or readable by others, is refused.
   const inside = makeSecretStore({
     file: join(dirs.stateDir, 'x.enc'),
-    keyFile: join(dirs.stateDir, 'k.key'),
-    stateDir: dirs.stateDir,
+    wrappingKey: makeWrappingKey({
+      keyFile: join(dirs.stateDir, 'k.key'),
+      stateDir: dirs.stateDir,
+    }),
   });
   await t.throwsAsync(inside.ready(), { message: /outside the state/ });
   const loose = join(dirs.root, 'loose.key');
   writeFileSync(loose, Buffer.alloc(32, 7));
   chmodSync(loose, 0o644);
   await t.throwsAsync(
-    makeSecretStore({ file: join(dirs.root, 'y.enc'), keyFile: loose }).ready(),
+    makeSecretStore({
+      file: join(dirs.root, 'y.enc'),
+      wrappingKey: makeWrappingKey({ keyFile: loose }),
+    }).ready(),
     { message: /group or others/ },
   );
 });
@@ -284,7 +292,7 @@ test('store: the audit file stays bounded', async t => {
   t.teardown(dirs.done);
   const store = makeSecretStore({
     file: dirs.files.file,
-    keyFile: dirs.files.keyFile,
+    wrappingKey: makeWrappingKey({ keyFile: dirs.files.keyFile }),
     auditKeep: 8,
   });
   t.teardown(() => store.close());
@@ -307,8 +315,10 @@ test('J-9486: concurrent first loads of a fresh key file agree; no temp file is 
     const dirs = makeDirs();
     const store = storeOf(dirs.files);
     const seal = makeSealKeys({
-      file: dirs.files.keyFile,
-      stateDir: dirs.stateDir,
+      wrappingKey: makeWrappingKey({
+        keyFile: dirs.files.keyFile,
+        stateDir: dirs.stateDir,
+      }),
     });
     // eslint-disable-next-line no-await-in-loop
     await Promise.all([store.ready(), seal.ready()]);
@@ -347,7 +357,9 @@ test('J-9486: a torn audit tail is cut at load, so the next event is kept', asyn
 test('seal: a box opens only with the adapter key; defects say nothing', async t => {
   const dirs = makeDirs();
   t.teardown(dirs.done);
-  const seal = makeSealKeys({ file: dirs.files.keyFile });
+  const seal = makeSealKeys({
+    wrappingKey: makeWrappingKey({ keyFile: dirs.files.keyFile }),
+  });
   await seal.ready();
   const publicKey = seal.publicKey();
   t.regex(publicKey, /^[0-9a-f]{64}$/);
@@ -359,7 +371,9 @@ test('seal: a box opens only with the adapter key; defects say nothing', async t
   // Two boxes of one value differ (fresh ephemeral key and nonce).
   t.not(sealTo(publicKey, value).box, box.box);
   // Stable across incarnations: derived from the key file.
-  const again = makeSealKeys({ file: dirs.files.keyFile });
+  const again = makeSealKeys({
+    wrappingKey: makeWrappingKey({ keyFile: dirs.files.keyFile }),
+  });
   await again.ready();
   t.is(again.publicKey(), publicKey);
 
@@ -383,8 +397,10 @@ test('ops: values are re-read every round; one sink call per grant per incarnati
   const store = storeOf(dirs.files);
   t.teardown(() => store.close());
   const seal = makeSealKeys({
-    file: dirs.files.keyFile,
-    stateDir: dirs.stateDir,
+    wrappingKey: makeWrappingKey({
+      keyFile: dirs.files.keyFile,
+      stateDir: dirs.stateDir,
+    }),
   });
   const fake = makeFakeSecretSink();
   const ops = makeSecretsOps({ store, seal, sink: () => fake.sink });
@@ -449,8 +465,10 @@ test('state directory: after a full exercise no encoding of the value is there',
   t.teardown(dirs.done);
   const store = storeOf(dirs.files);
   const seal = makeSealKeys({
-    file: dirs.files.keyFile,
-    stateDir: dirs.stateDir,
+    wrappingKey: makeWrappingKey({
+      keyFile: dirs.files.keyFile,
+      stateDir: dirs.stateDir,
+    }),
   });
   const fake = makeFakeSecretSink();
   const ops = makeSecretsOps({ store, seal, sink: fake.sink });
