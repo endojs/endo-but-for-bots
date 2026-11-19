@@ -17270,3 +17270,15 @@ passed. A child reply cancelled during a relay copy releases the new handle, and
 that fails after staging a body releases it before dropping the half-imported session. Those two
 cleanup regressions passed. In the combined checkout the real environment stop fixed the setup
 of both queue/stop unit cases, and all ten tests in the mail wiring and export files passed.
+
+### J-12542 2026-11-19 M9 live mail workload smoke
+
+The live mail workload at 7a6cf310f6 posted through the operator, sent between sessions using
+the model tool, accepted 32 attachments with 255 inbox slots already occupied and drove four
+independent clients against eight recipients. A 1% duration smoke on a shared host measured
+operator median 598 ms (two samples), inter-session median 589 ms (one), delivery crank p95
+500 ms, throughput 1.40 posts/s and hub growth 2.27 times. The crank threshold was 550 ms.
+The other four measurements missed their thresholds. Each load window completed only one
+batch. A full exclusive window is still required to grade performance. Two real supervisor
+SIGKILL cases passed independently: dispatch interrupted before turn creation and a stalled
+package turn whose recovery delivered one error reply.
