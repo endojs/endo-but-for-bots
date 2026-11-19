@@ -420,14 +420,14 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
    * @param {Party} sender
    * @param {Party & { row: Row }} recipient
    * @param {Record<string, any>} base
+   * @param {number} bytes exact size of this recipient's validated envelope
    * @param {((reply: Reply) => void) | undefined} onReply
    */
-  const toSession = (sender, recipient, base, onReply) => {
+  const toSession = (sender, recipient, base, bytes, onReply) => {
     const { row } = recipient;
     if (row.dropped || row.state === 'lost' || row.internal === undefined) {
       return { refused: postOfficeTextOf.recipientLost(row.title) };
     }
-    const bytes = messageBytes(base);
     if (
       flights.size >= ML.postInFlight ||
       keptBytes + bytes > ML.postInFlightBytes
@@ -513,21 +513,22 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
       base.body = kept.body;
       if (kept.cutFrom !== undefined) base.cutFrom = kept.cutFrom;
     }
-    checkEnvelope(base);
+    const bytes = checkedBytes(base);
     const result = await ('row' in target
-      ? toSession(sender, target, harden(base), undefined)
+      ? toSession(sender, target, harden(base), bytes, undefined)
       : toOperator(harden(base), sender, target));
     // One delivery however often the sender is named.
     return harden({ results: harden(draft.to.map(() => result)) });
   };
 
   /** @param {Record<string, any>} base */
-  const checkEnvelope = base => {
+  const checkedBytes = base => {
     // `seq` and `postmark` are counts: no string bytes.
     const bytes = messageBytes(base);
     if (bytes > ML.envelopeBytes) {
       throw Error(postOfficeTextOf.envelopeTooLarge(bytes, ML.envelopeBytes));
     }
+    return bytes;
   };
 
   /**
@@ -568,13 +569,13 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
     if (ticket !== undefined) base.ticket = ticket;
     if (fields !== undefined) base.fields = fields;
     const full = harden(base);
-    checkEnvelope(full);
+    let sessionBytes = checkedBytes(full);
     let toSessions = full;
     if (!startsTurn) {
       const kept = strayBody(draft.body);
       if (kept.cutFrom !== undefined) {
         toSessions = harden({ ...base, ...kept });
-        checkEnvelope(toSessions);
+        sessionBytes = checkedBytes(toSessions);
       }
     }
     /** @param {any} object */
@@ -583,7 +584,8 @@ export const makePostOffice = ({ admin, rows, starts, lastKnownTime }) => {
       if (party === undefined) {
         return harden({ refused: postOfficeTexts.notAnAddress });
       }
-      if ('row' in party) return toSession(sender, party, toSessions, onReply);
+      if ('row' in party)
+        return toSession(sender, party, toSessions, sessionBytes, onReply);
       return toOperator(full, sender, party);
     };
     const deliveries = new Map();
