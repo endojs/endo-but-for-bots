@@ -23,7 +23,7 @@ const guestRoot = path.join(harnessRoot, 'guest');
 
 /**
  * Program budgets: the limits' (M5's merge raised them to 240,000 and
- * 120,000, contract O-1; INT-M5).
+ * 120,000, contract O-1; INT-M5; WX.1 the session's to 270,336, G-1).
  */
 const BUDGETS = harden({
   session: limits.sessionProgramBytes,

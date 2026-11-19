@@ -41,11 +41,16 @@ export const programPieceBytes = limits.frameBytes - PIECE_ENVELOPE_BYTES;
 /** Most pieces of one program. */
 export const MAX_PROGRAM_PIECES = 64;
 /**
- * The largest program the store keeps: the staged-source bound. The
- * session program's budget is `sessionProgramBytes` (240,000), checked by
- * provisioning and the `session.program` perf row, not here.
+ * The largest program the store keeps: the staged-source bound, or the
+ * session program's budget when that is larger (`sessionProgramBytes`,
+ * 270,336 since WX.1 against `execSourceBytes` 262,144), so a program
+ * provisioning accepts is never refused here. The budget itself is checked
+ * by provisioning and the `session.program` perf row, not here.
  */
-export const maxProgramBytes = limits.execSourceBytes;
+export const maxProgramBytes = Math.max(
+  limits.execSourceBytes,
+  limits.sessionProgramBytes,
+);
 
 /**
  * @typedef {object} SessionProgram

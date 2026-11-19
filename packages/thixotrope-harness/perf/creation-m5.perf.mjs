@@ -5,8 +5,8 @@
  * objects in the workspace vat):
  *
  * - `session.program`, `exec.program`: bytes of the bundled programs
- *   against `limits.sessionProgramBytes` (240,000) and `execProgramBytes`
- *   (120,000) as raised by O-1. Bytes are compared strictly (no slack).
+ *   against `limits.sessionProgramBytes` (270,336 since WX.1's G-1 default;
+ *   240,000 as raised by O-1) and `execProgramBytes` (120,000, O-1). Bytes are compared strictly (no slack).
  * - `prompt.compose.node`: `composeSystemPrompt` in Node over a fixed
  *   window (PROMPT_WINDOW_MS, default 10 s), the largest preset's
  *   instructions (4,096 units of three-byte text) and none alternating;

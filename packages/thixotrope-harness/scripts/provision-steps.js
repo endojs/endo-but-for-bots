@@ -121,10 +121,12 @@ export const programPieceBytes = limits.frameBytes - 1024;
 
 /**
  * The session program's size budget (architecture D-4, perf
- * `session.program`): `limits.sessionProgramBytes`, raised from 200,000 by
- * M5 (contract O-1).
+ * `session.program`): `limits.sessionProgramBytes` (the same value, the
+ * unit test of the session program keeps them equal), raised from 200,000
+ * by M5 (contract O-1) and from 240,000 for the group of M6, M8, M9 and
+ * M11 (owner question G-1, the PM's default; WX.1).
  */
-export const sessionProgramBytes = 240_000;
+export const sessionProgramBytes = 270_336;
 
 /**
  * @typedef {object} StepContext
