@@ -71,7 +71,10 @@ const here = path.dirname(url.fileURLToPath(import.meta.url));
 export const harnessRoot = path.resolve(here, '..', '..');
 const repoRoot = path.resolve(harnessRoot, '..', '..');
 const thixotropeRoot = path.join(repoRoot, 'packages', 'thixotrope');
-export const tmpRoot = path.join(harnessRoot, 'tmp');
+// A deep checkout can exceed the OS limit for a daemon's Unix socket path.
+export const tmpRoot = path.resolve(
+  process.env.THIX_HARNESS_TMP ?? path.join(harnessRoot, 'tmp'),
+);
 
 /** The workspace every template provisions and every client selects. */
 export const TEMPLATE_WORKSPACE = 'w';
