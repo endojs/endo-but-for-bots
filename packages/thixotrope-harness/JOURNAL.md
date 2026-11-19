@@ -15519,6 +15519,37 @@ waiting 215.6 s. The combined child workspace case passed in 64.6 s. It read dis
 parent and child markers from disk, checked the two Git histories and confirmed that the
 parent remained stopped while the child wrote its own workspace.
 
+### J-12104 2026-11-19 W6.7 restart recovery and Git workloads
+
+The daemon restart acceptance passed in 196.5 s. Its real adapter death interrupted the command
+with an unknown-outcome result, then the same turn issued the next command successfully. The
+supervisor SIGKILL path preserved the home marker and stopped state and removed the outstanding
+command and deleted environment. Runner restart to turn completion took 8.92 s. The supervisor
+served in 27.31 s and the test observed the sweep after 30.35 s. The test file held its slot
+for 252.6 s.
+
+The Git benchmark builds 10,000 tracked files and adds 1,000 commits with one fast-import. Each
+window checks the returned result. On a shared slot, setup took 45.97 s. Status returned all
+32 changes with no truncation, with a median of 700 ms across 44 samples against 1,000 ms. Log
+returned 50 entries, with a median of 903 ms across 38 samples against 500 ms. The process
+reported the log window over budget. The original fixture used Node outside the fake runtime's
+standard PATH. The corrected fixture uses its allowlisted system Python.
+
+The shell acceptance rerun measured submit through the delivered end event, excluding the
+test's later reads of the transcript. The single-call turn took 1,885.0 ms and the three-call
+turn took 2,428.7 ms, a ratio of 1.29 against 1.6. Cancellation took 395.7 ms. Both the
+ordinary shell case and the oversized public-input refusal passed. Three guest boundary cases
+remain TODO. The two cases together held their slot for 197.0 s.
+
+The twenty-session restart fixture completed one verified command in each session. Five
+shared-slot restarts served in 8.90, 8.19, 16.74, 10.41 and 10.56 s. One exceeded the strict
+15 s gate. All five reported zero new process groups and zero wakes across 22 session vats,
+including the two spares. The cold fixture build took 303.46 s. These sampling windows used
+shared slots. The combined-head exclusive measurements are tracked separately.
+
+The child workspace regression also passed in its lane checkout after capturing the inventory
+before parent creation. The case ran in 63.6 s and held its shared slot for 109.9 s.
+
 ### J-12120 2026-11-19 W6.8 shared layout and guarded bundle boundaries
 
 `32fccde460` shares the package and state path resolvers between the two native resources and
