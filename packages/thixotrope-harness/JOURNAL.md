@@ -18776,3 +18776,30 @@ checkout produced 145,946 bytes with SHA-256
 J-12902 covers the isolated WX.1/M9 size inputs, ten installed mail and
 restart cases, and ordinary message refusals versus receiver-side failures.
 All seven modified or untracked M6 sources matched their checkpoint digests.
+
+### J-12564 2026-11-20 M9 isolated Ironhorse sweep comparison
+
+CC-133 (`08d3b7a17b`) gathers reclaimed slot indices in the existing sweep
+order and applies the generated retain rules to 22 early side tables once.
+Cleanup still precedes live chunk reference collection, and late tables use
+the same dead set at their original point. The separate research branch is
+`codex/mail-batch-early-gc`. All 81 targeted engine and six ordinary worker
+checks passed. The three large-garbage synthetic first collections were
+50.5–53.3% faster in baseline/candidate/candidate/baseline order. Reclaiming
+one slot among 8,192 live arrays rose from 0.887 to 0.953 ms.
+
+In the warmed stock-prefix traffic diagnostic on guest `69997bd0c5`,
+baseline and candidate completed 46/16.357 s and 59/16.302 s, or 2.812 and
+3.619 posts/s. Seven of 46 and eleven of 59 factory replies collected,
+each time in two rounds. Median collector time among collecting replies
+was 264.640 and 140.211 ms. On those selected replies the first sweep and
+its entire cleanup took 115.644 and 8.082 ms (158,359 and 150,306 slots
+reclaimed). The follow-up sweeps took 2.195 and 1.122 ms. The faster
+candidate completed more of the preceding timed work before traffic.
+Capacity was 732,334 and 732,014; marked slots were 89,448 and 80,803.
+Full first-round collection took 195.900 and 75.949 ms, and the next round
+68.741 and 64.264 ms. These timings use the same scope around the candidate’s
+new end-of-sweep hook. A discarded setup had reused an uninstrumented build
+and ended before measurement. The measured candidate used a dedicated
+Cargo target, a verified phase label and worker SHA-256
+`ceac01a23d0e888d957a3e2c184a1859ed56df7e3115f7d3b2161fabc16d9a8b`.
