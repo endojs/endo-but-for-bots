@@ -344,9 +344,7 @@ export const makeFactoryKit = ({
         admin,
         backend: resolved.backend,
         preset: resolved.preset,
-        // A subagent's endowments are its parent's attachments only (R4-70).
-        presetSnapshot:
-          parent === undefined ? resolved.presetSnapshot : undefined,
+        presetSnapshot: resolved.presetSnapshot,
         key: row.key,
         host: creation.spareHost,
         makeExecVat:

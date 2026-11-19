@@ -88,8 +88,15 @@ const execVat = async ({ makeExecVat }) =>
  * rolls back the creation). No field when there are none (`chat-only`).
  * @type {ServiceBuilder}
  */
-const presetEndowments = async ({ preset, presetSnapshot, importing }) => {
-  if (importing) return {};
+const presetEndowments = async ({
+  preset,
+  presetSnapshot,
+  importing,
+  delegated,
+}) => {
+  // Fresh environment objects come from the snapshot. A child receives only
+  // the live endowments explicitly delegated by its parent.
+  if (importing || delegated !== undefined) return {};
   const at = presetSnapshot?.revision;
   if (typeof at !== 'number') return {};
   const endowments = presetEndowmentsAt(preset, at);
