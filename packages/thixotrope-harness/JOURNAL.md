@@ -15478,3 +15478,14 @@ median (1,260 samples in 60.036 s). Real Moonshine, Piper and remote speech
 provider timings are owner-run rows. The sub-millisecond partial-relay
 measure showed a negative minimum using separately calibrated time origins;
 the parent and fixture now timestamp with the machine monotonic clock.
+
+### J-12726 2026-11-19 W11.9 — monotonic-clock transport pass
+
+Node 22.23.4, worker 367e78ad1db3, b1601fb0ac, 60-second exclusive
+windows, exit 0. One stream had gateway median/p99 0.053/0.171 ms (706
+frames). At 16 streams these were 0.025/0.067 ms (11,296 frames), with
+client-send to child-read p99 22.056 ms. Partial relay median was 0.420 ms
+(n=117; minimum 0.128 ms), first audio 13.860 ms (p99 26.140 ms) and
+engine respawn 38.879 ms (n=1,464). A six-second shared-slot smoke had
+partial relay median 5.376 ms. All five gated rows passed in the exclusive
+pass. The daemon voice-speak file also passed all five tests.
