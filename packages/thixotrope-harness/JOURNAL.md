@@ -17905,3 +17905,33 @@ measurements were 2,379.1 and 1,876.4 ms, ratio 1.27. The first
 scenario reported 151.6 s wall including the fresh 104.1 s environment
 fixture build. The second reported 44.0 s. These two samples keep both
 outcomes; the files were running beside other host work.
+
+### J-1465 2026-11-19 Milestone functional batch, wall and list-feed follow-up
+
+On ea857fc639, 51 complete files from the 54-file milestone registry passed
+94 tests. The runner kept registry order, six jobs, the standard per-file
+commands and timeouts, and the pinned worker. It ran from 11:57:03 to
+13:17:22 UTC. The reported wall was 4,818.5 s, above the 1,200 s gate.
+The six slots spent 6,728.3 s held in total; cumulative waiting across
+the concurrent wrappers was 21,932.6 s. The first files waited over
+ten minutes for a shared slot. Other performance jobs acquired the
+whole pool between cohorts. The matched 51 files in the earlier
+54-file run accounted for 7,172.5 s held.
+
+The 51-file run excludes the M3 gateway, M5 security and environments
+shell files containing adversarial or oversized-input scenarios.
+J-1464 records the four selected gateway tests and the normal shell
+workflow separately. The M5 security file consists of one mixed case.
+The unchanged full 54-file gate was not exercised by this run.
+Its 51 observed held times would occupy 1,172.4 s in a six-slot
+simulation using registry order and no queue delays. This is a
+scheduling projection, not a measured 54-file time.
+
+A separate combined-tree confirmation at clean c8d57059bd exercised the
+f595d6bc64 list-feed change in real vats. `test/integration/m1b-live.test.js`
+passed four tests, including published row changes and removal, in 191.6 s
+held with no slot wait. The earlier wrapper exited 127 before starting
+AVA; the successful run used `corepack yarn exec node
+scripts/test-integration.mjs test/integration/m1b-live.test.js` with
+integration enabled. The existing 25-of-26 core coverage belongs to
+its previously recorded revision.
