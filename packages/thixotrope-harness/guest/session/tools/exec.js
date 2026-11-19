@@ -14,14 +14,18 @@
  * never awaited; `busy` -> retire, fresh scope, run again once with the
  * `execBusyReset` notice.
  *
- * State per session in a WeakMap keyed by its ExecHandle. Guest rules.
+ * The session's exec state is the `exec` runtime part (`execPart`, made
+ * once per session; `ToolContext.runtime.exec.state()`): each session has
+ * its own ExecHandle (`services.execVat`, made per session by the factory),
+ * so the state per part is the state per handle. Its hooks settle the
+ * turn's calls on cancel and in recovery. Guest rules.
  *
  * M5 (W5.4, `m5-interfaces.md` 2.7): `run` carries the session's
  * `ExecPowersSource` (`ToolContext.runtime.powers`, W5.5's part) as
  * `ExecRequest.powers`; the inspector client (`inspect-client.js`) shares
- * this state through `execStateOf`, `takeScope` and `retireScope` (one
- * scope per session, taken once), and its calls are settled by the same
- * cancel and recovery hooks, by turn.
+ * this state through `runtime.exec.state()`, `takeScope` and `retireScope`
+ * (one scope per session, taken once), and its calls are settled by the
+ * same cancel and recovery hooks, by turn.
  */
 import { execDescription, texts, textOf } from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
@@ -31,6 +35,7 @@ import { messageOf } from '../../lib/bounded.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { ToolTableEntry } from '../tool-table.js' */
+/** @import { HookTurn } from '../runtime-parts.js' */
 const { E, makePromiseKit } = /** @type {GuestGlobals} */ (globalThis);
 
 /** The result of a call the turn never ran (as turn.js words it). */
@@ -59,32 +64,15 @@ export const NOT_RUN_TEXT = 'the turn was cancelled before this call ran';
  * @property {any} scope the scope `run` went to
  */
 
-/** @type {WeakMap<object, ExecState>} */
-const states = new WeakMap();
-
-/** @param {any} handle */
-const stateOf = handle => {
-  let state = states.get(handle);
-  if (state === undefined) {
-    state = {
-      scope: undefined,
-      deadlineMs: limits.execDeadlineMs,
-      running: undefined,
-      waiting: new Set(),
-      taking: undefined,
-      inspecting: new Set(),
-    };
-    states.set(handle, state);
-  }
-  return state;
-};
-
-/**
- * The exec state of a session's ExecHandle (for `inspect-client.js`).
- * @param {any} handle
- * @returns {ExecState}
- */
-export const execStateOf = handle => stateOf(handle);
+/** @returns {ExecState} */
+const makeExecState = () => ({
+  scope: undefined,
+  deadlineMs: limits.execDeadlineMs,
+  running: undefined,
+  waiting: new Set(),
+  taking: undefined,
+  inspecting: new Set(),
+});
 
 /**
  * Make sure the session holds a scope: one `ExecHandle.scope()` call at a
@@ -257,17 +245,15 @@ const start = async (call, notice) => {
 /**
  * Settle every call of `active`'s turn: waiting ones first (they never ran),
  * then the running one, so settling it does not start a call of this turn.
+ * Nothing to do when the turn has no running tool call.
+ * @param {ExecState} state
  * @param {any} active
  * @param {any} ranText
  * @param {boolean} quiet
  */
-const abandon = (active, ranText, quiet) => {
-  /** @type {ExecState | undefined} */
-  let state;
-  for (const { context } of active.calls?.running?.values() ?? []) {
-    if (state === undefined) state = states.get(context?.services?.execVat);
-  }
-  if (state === undefined) return;
+const abandon = (state, active, ranText, quiet) => {
+  const running = active.calls?.running;
+  if (running === undefined || running.size === 0) return;
   // Inspector calls of the turn (M5): never interrupted in the exec vat,
   // their late answers ignored.
   for (const call of state.inspecting) {
@@ -315,7 +301,7 @@ export const execEntry = harden({
       return Promise.resolve(
         failed(textOf.execSourceTooLarge(bytes, limits.execSourceBytes)),
       );
-    const state = stateOf(context.services.execVat);
+    const state = context.runtime.exec.state();
     const kit = makePromiseKit();
     /** @type {ExecCall} */
     const call = {
@@ -339,7 +325,7 @@ export const execEntry = harden({
    * @param {any} context
    */
   deadline: ({ opId }, context) => {
-    const call = states.get(context.services.execVat)?.running;
+    const call = context.runtime.exec.state().running;
     if (call === undefined || call.opId !== opId) return;
     if (call.context.turn !== context.turn || call.settled) return;
     // Retire first: settling starts the next call, which must not reuse it.
@@ -348,11 +334,25 @@ export const execEntry = harden({
   },
 });
 
-/** Turn hooks (contract 8.4, 12): appended to `turnHooks`. */
-export const execHooks = harden({
-  /** @param {{ active: any }} hookContext */
-  onCancel: ({ active }) => abandon(active, texts.execAbandoned, false),
-  /** @param {{ active: any }} hookContext recovery wrote the unknown results */
-  recoverySteps: ({ active }) =>
-    abandon(active, texts.toolOutcomeUnknown, true),
+/**
+ * The `exec` runtime part (`runtime-parts.js`): the session's exec state
+ * and the hooks that settle a turn's calls (contract 8.4).
+ */
+export const execPart = harden({
+  name: /** @type {const} */ ('exec'),
+  make: () => {
+    const state = makeExecState();
+    return harden({
+      /** The session's exec state (mutable; shared with the inspector). */
+      state: () => state,
+      hooks: harden({
+        /** @param {HookTurn} turn */
+        onCancel: turn =>
+          abandon(state, turn.active, texts.execAbandoned, false),
+        /** @param {HookTurn} turn recovery wrote the unknown results */
+        onRecover: turn =>
+          abandon(state, turn.active, texts.toolOutcomeUnknown, true),
+      }),
+    });
+  },
 });

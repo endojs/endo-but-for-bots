@@ -520,3 +520,22 @@ test('INT-M4: a pool base URL outside https or loopback http is refused before a
   }
   t.is(server.requests().length, 0);
 });
+
+test('a round without its projection sends nothing: no empty-transcript fallback', async t => {
+  // The pool shell refuses a round with no prepare (PREPARE_REQUIRED), so
+  // the wire builder always has the projection and reads its transcript
+  // directly; a missing one fails before any request.
+  const server = await serverFor(t);
+  server.setPlan([{ sse: 'codex-text.sse' }]);
+  const result = await drain(
+    codexAttempt({
+      credential,
+      projection: /** @type {any} */ (undefined),
+      request: { modelId: MODEL, tools: [] },
+      spec: { baseUrl: server.url },
+      signal: new AbortController().signal,
+    }),
+  );
+  t.true(result.error instanceof TypeError);
+  t.is(server.requests().length, 0, 'nothing sent');
+});

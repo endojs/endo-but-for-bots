@@ -66,6 +66,7 @@ import {
   harnessRoot,
   integrationEnabled,
   startFromTemplate,
+  supervisorEnv,
   takeIntegrationLock,
 } from '../template/index.js';
 import { makeSlice, round1, sliceTemplate, waitFor } from './_m1a-slice.js';
@@ -151,25 +152,30 @@ let gateway;
  */
 const reserve = async options => {
   if (state === undefined) throw Error('no state');
-  gateway = await serveGateway(state, options);
+  gateway = await serveGateway(state, {
+    ...options,
+    secretsKeyFile: wrappingKey?.file,
+  });
   return gateway;
 };
 
-/** @type {(() => void) | undefined} */
-let removeKey;
+/** @type {ReturnType<typeof useTestWrappingKey> | undefined} */
+let wrappingKey;
 test.after.always(async () => {
   await state?.cleanup();
   for (const { to } of copies) rmSync(to, { force: true });
-  removeKey?.();
+  wrappingKey?.remove();
 });
 
 run('setup: fixture extension, wrapping key, served state', async t => {
   const t0 = performance.now();
   // Before the daemon starts: the adapter loads extensions when it is made.
   for (const { from, to } of copies) copyFileSync(from, to);
-  removeKey = useTestWrappingKey('m3gw').remove;
+  wrappingKey = useTestWrappingKey('m3gw');
   const template = await sliceTemplate();
-  state = await startFromTemplate(template);
+  state = await startFromTemplate(template, {
+    secretsKeyFile: wrappingKey.file,
+  });
   const served = await reserve();
   t.is(served.status.state, 'serving');
   t.regex(served.secret, /^[0-9a-f]{64}$/);
@@ -436,7 +442,7 @@ run('acceptance 11, K1, K2: rotation, SIGKILL, restore', async t => {
   const { stdout } = await promisify(execFile)(
     process.execPath,
     [path.join(harnessRoot, 'scripts/gateway.mjs'), 'url', served.root],
-    { env: process.env },
+    { env: supervisorEnv({ secretsKeyFile: wrappingKey?.file }) },
   );
   const rotated = secretOf(stdout.trim());
   t.not(rotated, current.secret);
@@ -528,7 +534,7 @@ run('acceptance 11, K1, K2: rotation, SIGKILL, restore', async t => {
     const answer = await rotation;
     await served.restart();
     const { status } = await untilServing();
-    const now = await readSignIn(served.root, status.origin);
+    const now = await readSignIn(served.root, status.origin, wrappingKey?.file);
     t.true(await signsIn(now.secret), 'the file secret signs in');
     if (now.secret !== known) {
       await delay(1100);

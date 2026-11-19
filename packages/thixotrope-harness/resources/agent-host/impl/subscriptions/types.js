@@ -173,7 +173,6 @@
 /**
  * W4.6 `AH/subscriptions/index.js`: one incarnation's subscriptions.
  * @typedef {object} Subscriptions
- * @property {(spec: any) => boolean} handles true for a `PoolSpec`
  * @property {{ listModels: (request: any) => Promise<any>, resolveModel: (request: any) => Promise<any> }} catalog
  *   the pool catalogue (W4.3), same request shape as M2's `makeCatalog`
  * @property {any} credentialOps the `CredentialOps` exo (`ops.credentials()`)

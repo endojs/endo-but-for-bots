@@ -132,7 +132,7 @@ const stagedOutcome = async (blobs, status, modelText, inline) => {
 /**
  * @param {object} options
  * @param {import('../timers.js').Timers} options.timers
- * @param {import('../providers/scripted.js').EventLog} [options.log] the
+ * @param {import('../providers/event-log.js').EventLog} [options.log] the
  *   backend's event log (`echo-start`, `echo-end`, `echo-frame-limit`)
  * @param {import('../blobs.js').BlobStore} [options.blobs] M1b staging
  */

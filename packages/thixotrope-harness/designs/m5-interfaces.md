@@ -877,7 +877,8 @@ found at run time (W5.7 does not import W5.6); everything else by W5.9.
    fixture (<= 48,000 units, then the tool limit); `readSources` of a fixture `SourceReader` with
    a search; a fixture whose `help()` answers 200 KB gives `texts.inspectTerminated` (or, since
    core CC-027, the hub refuses the answer and `describeCapability` shows the methods with
-   documentation `unavailable`) and the session's next turn runs normally.
+   documentation `unavailable`, as before step 3; only a granted tool's answer gets
+   `ANSWER_OVER_FRAME_TEXT`) and the session's next turn runs normally.
 6. **Granted tools** (P-65, R3-6; W5.6 `m5-grants`): a granted `echo2` is offered at the next
    round and its call returns its result; a grant named `exec` is `refused-builtin` and not
    offered; two grants named `t` are both `refused-duplicate`; withdrawing one offers the other at
@@ -900,7 +901,11 @@ found at run time (W5.7 does not import W5.6); everything else by W5.9.
     `textOf.membraneTooLarge`, the fixture's vat answers its next call; a record of 40 keys is
     refused; a granted tool answering 300 KB yields a staged, cut result,
     `texts.inspectTerminated` or (since core CC-027, what happens at the harness's 65,536-byte
-    ceiling) the hub's `FRAME_TOO_LARGE` text as the tool's error, and the session keeps working.
+    ceiling: the hub refuses the answer with `FRAME_TOO_LARGE` before the exec vat decodes it)
+    the inspector's `ANSWER_OVER_FRAME_TEXT` as the tool's error (step 3), and the session keeps
+    working. A 200 KB `help()` behind `describeCapability` that the hub refuses shows the methods
+    with documentation `unavailable` (`helpUnavailable`). One predicate (`test/integration/_m5-objects.js` `tooBigOutcome`) serves
+    `m5-objects`, `m5-security` and `perf/exec-m5.perf.mjs` probe b.
 11. **SIGKILL** (section 5): (a) K3 and K6 (W5.7 `m5-mentions-restart`); (b) K4 and K5: the
     fixture tool's log shows at most one run, the turn is outcome-unknown, no rerun; at K5's
     first point the call is recorded "Tool outcome unknown", at its second the true result is
@@ -945,7 +950,7 @@ before.
 | `mentions.turnStart` turn start with 32 attachments vs none | `mentions` (W5.7) | 60 s each | median <= +100 ms and <= 350 ms; <= 3 deliveries | M2's turn start budget; 32 handles add one larger frame |
 | `prompt.compose` | `creation-m5` (W5.9) | Node: compositions over 10 s; vat: creations over a 120 s window, the largest preset and `chat-only` alternating (pool 4) | Node <= 5 ms each; vat: creation <= `chat-only` + 150 ms and <= 750 ms | composition is one `join`; the creation budget is M1b's 750 ms with the pool |
 | `session.program` / `exec.program` bundle bytes; `session.createCold` | `creation-m5` (W5.9) | one build; cold creations over a 120 s window | <= the limits after O-1; cold <= 6 s | D-4's basis (10 us per byte); O-1 |
-| too-big probes (a) 100 KiB argument through the membrane, (b) 200 KB `help`, (c) 20,000-key answer, (f) exec body of 300 k iterations ok and 10 x the per-crank ceiling terminated (carried) | `exec-m5` (W5.5) | each capped: (a) 15 s, (b) 30 s, (c) 30 s, (f) 30 s | no halt of the session vat or the target's vat; the refusal texts. As built (CC-027, D-M5-2): (b) may now end refused by the hub (not re-measured on the combination, J-10074) | facts 2 and 4 |
+| too-big probes (a) 100 KiB argument through the membrane, (b) 200 KB `help`, (c) 20,000-key answer, (f) exec body of 300 k iterations ok and 10 x the per-crank ceiling terminated (carried) | `exec-m5` (W5.5) | each capped: (a) 15 s, (b) 30 s, (c) 30 s, (f) 30 s | no halt of the session vat or the target's vat; the refusal texts. As built (CC-027, D-M5-2): (b) may now end refused by the hub (not re-measured on the combination, J-10074); since step 3 probe b accepts that outcome (`ANSWER_OVER_FRAME_TEXT`) through `tooBigOutcome`, the predicate `m5-objects` uses | facts 2 and 4 |
 | too-big probes (d) 8,193-byte `store`, 257th label, 33 attachments; (e) a granted schema with 3,000-unit parameters | `tools` (W5.3) | each capped at 30 s | as above | as above |
 
 Files and their worst time (windows + capped probes + template setup): `tools` 4 windows + 60 s
@@ -1080,8 +1085,8 @@ rules; "Node" = adapter or tests.
 | W5.3 | `guest/session/label-seeds.js` (vat; hook table) | `labelSeeds` |
 | W5.3 | `guest/session/m5-parts.js` (vat; hook table) | `m5Parts` (`[{ name: 'powers' \| 'inspector' \| 'grants' \| 'packages', make(runtime) }]`), `makeRuntime({ labels, services, config }) -> runtime` |
 | W5.3 | `guest/session/tools/objects.js` (vat) | `objectToolEntries` |
-| W5.3 | `guest/session/tool-table.js` | `toolSources` (new list), `toolSetFor(ports, table?, services?, sources?, runtime?)` |
-| W5.3 | `guest/session/turn-hooks.js` | `turnHooks.onClaim` (new list) |
+| W5.3 | `guest/session/tool-table.js` | `toolSources` (new list), `toolSetFor(ports, table?, services?, sources?, runtime?)`; as built after step 3: `toolSetFor(ports, table, services, runtime)` reading `runtime.toolSources` |
+| W5.3 | `guest/session/turn-hooks.js` | `turnHooks.onClaim` (new list); as built after step 3: file deleted, a part's `hooks.onClaim` in `runtime-parts.js` |
 | W5.4 | `guest/exec/powers.js`, `membrane.js`, `inspect.js` (vat) | `makeCallPowers({ source, callE, isOpen })`, `makeMembrane({ callE, limits })`, `makeInspector({ writers, content })` |
 | W5.4 | `guest/session/tools/inspect-client.js` (vat) | `inspectFor(context) -> (request) -> Promise<outcome>` |
 | W5.4 | `test/fixtures/m5-objects.js` | the fixture source (evaluated in the workspace vat) and `makeM5Fixtures(client)` (Node) |
@@ -1102,10 +1107,10 @@ rules; "Node" = adapter or tests.
 | table | created by | M5 entries | later |
 |---|---|---|---|
 | `guest/session/tool-table.js` `toolTable` | M1a | W5.3 `objectToolEntries`; W5.5 `inspectionToolEntries`; W5.7 `packageToolEntries` | M6, M8, M9 (M4's `accountStatus` is an adapter tool, not an entry) |
-| `tool-table.js` `toolSources` (new) | W5.3 | W5.6 `grantedToolSource` | M9 |
-| `guest/session/turn-hooks.js` `onClaim` (new) | W5.3 | W5.7 | M9 (mail turns) |
-| `turn-hooks.js` `onSettle`, `recoverySteps` | M1a | W5.7 (close packages) | M6, M9 |
-| `guest/session/m5-parts.js` (new) | W5.3 | W5.5 `powers`, `inspector`; W5.6 `grants`; W5.7 `packages` | M9 (`inbox` part) |
+| `tool-table.js` `toolSources` (new; as built after step 3: deleted, now the `grants` part's `tools`) | W5.3 | W5.6 `grantedToolSource` | M9 adds a part with `tools`, not a list entry |
+| `guest/session/turn-hooks.js` `onClaim` (new; as built after step 3: deleted, now part `hooks.onClaim`) | W5.3 | W5.7 | M9 (mail turns) through a part's `hooks` |
+| `turn-hooks.js` `onSettle`, `recoverySteps` (as built after step 3: deleted, now part `hooks.onSettle`, `hooks.onRecover`) | M1a | W5.7 (close packages) | M6, M9 through a part's `hooks` |
+| `guest/session/m5-parts.js` (new; as built after step 3: `runtime-parts.js`, table `powers, inspector, grants, exec, packages`) | W5.3 | W5.5 `powers`, `inspector`; W5.6 `grants`; W5.7 `packages` | M6 `workspace`, M8 `compaction`, M9 `inbox` and `subagents` parts: one name in `PartName` and `requiredParts`, one getter, one entry in `runtimeParts` (`arch-review/step3-plan.md` 2.4) |
 | `guest/session/label-seeds.js` (new) | W5.3 | none | M6 `workspace`, `shell` |
 | `guest/lib/prompt-sections.js` (new) | W5.2 | parts 1, 2, 3, 7 | M6 part 6, M9 part 4, M12 part 5 |
 | `guest/factory/preset-templates.js` `objectProviders` (new) | W5.1 | none | M6 |
@@ -1132,3 +1137,4 @@ checks them.
 | `textOf.reservedLabel` | Fae's `Reserved or invalid endowment name: <label>` | R3-22 |
 | `textOf.unknownLabel`, `labelTaken`, `labelsFull`, `valueTooLarge`, `storedValuesFull`, `argumentsTooLarge`, `noPackage`, `noEdge`, `tooManyAttachments`, `packageTooLong`, `duplicateAttachment`, `toolNameBuiltIn`, `toolNameDuplicate`, `toolSchemaInvalid`, `toolOverBudget`, `membraneTooLarge`, `membraneTooManyKeys`, `membraneTooDeep`; `texts.powersExpired`, `inspectTerminated`, `grantWithdrawn`, `grantsFull`, `attachmentsLost` (the browser's mention addon; W5.8 keeps an equal copy) | see the file | harness |
 | tool descriptions and parameter schemas of `list`, `lookup`, `store`, `remove`, `describeCapability`, `readSources`, `adopt`, `adoptTool` | ported word for word by W5.3, W5.5, W5.7 | Fae `src/tool-makers.js`, `src/source-tools.js` |
+| `guest/exec/inspect.js` `ANSWER_OVER_FRAME_TEXT` (step 3) | `The answer was over the frame ceiling: the hub refused it before it reached the sandbox, so nothing of it is available. Ask for a smaller answer.`: a granted tool's `execute` answer the hub refused for size (a refused `help()` answer keeps the methods with documentation `unavailable`) (its break text equals `HUB_FRAME_TOO_LARGE`, the guest copy of the core's `FRAME_TOO_LARGE`, pinned by `test/unit/inspector-frame-refusal.test.js`) | harness |

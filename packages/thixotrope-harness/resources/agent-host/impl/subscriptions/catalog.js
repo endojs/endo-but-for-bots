@@ -51,23 +51,28 @@
 import { texts, textOf } from '../../../../guest/lib/interfaces.js';
 import { limits } from '../../../../guest/lib/limits.js';
 import { subscriptionLimits } from '../../../../guest/lib/subscription-limits.js';
-import { subscriptionTexts } from '../../../../guest/lib/subscription-texts.js';
+import {
+  providerOfKind,
+  subscriptionTexts,
+} from '../../../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { subscriptionDefaults } from '../../../../config/subscription-defaults.js';
-import { ANTHROPIC_VERSION } from '../providers/anthropic.js';
 import {
-  anthropicPage,
+  ANTHROPIC_VERSION,
+  readAnthropicCatalog,
+} from '../providers/anthropic.js';
+import {
   byTitleThenId,
-  CATALOG_FRESH_MS,
-  CATALOG_MAX_AGE_MS,
+  CATALOG_MAX_MODELS,
   CATALOG_READ_TIMEOUT_MS,
-  CATALOG_RETRY_MS,
-  CatalogReadError,
+  catalogFail as fail,
   cutUnits,
-  pageOf,
+  makeCatalogOwner,
+  makeOwnerTable,
   readJson,
   tokenCount,
-} from '../providers/catalog.js';
+} from '../providers/catalog-core.js';
+import { pageOf } from '../providers/catalog.js';
 import { providerBaseUrl } from '../providers/http.js';
 import {
   CLAUDE_BASE_URL,
@@ -85,10 +90,8 @@ export const CODEX_MODELS_PATH = '/backend-api/codex/models';
 export const CODEX_CLIENT_VERSION = '0.152.0';
 
 // Local resource bounds (hosted-agent), not claims about any provider.
-const MAX_MODELS = 4096;
+/** This catalogue's body bound (the API catalogues': 16 MB). */
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
-const ANTHROPIC_PAGES = 16;
-const ANTHROPIC_PAGE_LIMIT = 1000;
 const CODEX_SLUG = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
 const EFFORT = /^[a-z][a-z0-9_-]{0,63}$/;
 /** Members whose observations one incarnation keeps at once. */
@@ -105,11 +108,6 @@ const MAX_OWNERS = 2 * subscriptionLimits.maxMembers;
  * @property {number} [contextLength]
  * @property {number} [maxOutputTokens]
  */
-
-/** @param {string} what */
-const fail = what => {
-  throw new CatalogReadError(what);
-};
 
 /**
  * One GET with the member's headers; its 2xx body as JSON (M2's bounded
@@ -141,7 +139,7 @@ export const codexModels = payload => {
     typeof payload !== 'object' ||
     Array.isArray(payload) ||
     !Array.isArray(payload.models) ||
-    Number(payload.models.length) > MAX_MODELS
+    Number(payload.models.length) > CATALOG_MAX_MODELS
   )
     fail('catalogue shape');
   const seen = new Set();
@@ -222,41 +220,25 @@ harden(codexModels);
  * @returns {Promise<PoolModel[]>}
  */
 export const readClaudeModels = async ({ baseUrl, accessToken, fetch }) => {
-  /** @type {PoolModel[]} */
-  const models = [];
-  /** @type {string | undefined} */
-  let after;
-  for (let page = 0; page < ANTHROPIC_PAGES; page += 1) {
-    const query = new URLSearchParams({ limit: `${ANTHROPIC_PAGE_LIMIT}` });
-    if (after !== undefined) query.set('after_id', after);
-    // eslint-disable-next-line no-await-in-loop
-    const payload = await readMemberJson({
-      url: `${baseUrl}/v1/models?${query}`,
-      headers: {
-        authorization: `Bearer ${accessToken}`,
-        'anthropic-beta': CLAUDE_OAUTH_BETA,
-        'anthropic-version': ANTHROPIC_VERSION,
-      },
-      fetch,
-    });
-    const { models: more, next } = anthropicPage(payload);
-    for (const model of more) {
-      models.push({
-        id: model.id,
-        title: model.title,
-        description: '',
-        reasoningEfforts: claudeEfforts(model.id),
-      });
-    }
-    if (models.length > MAX_MODELS) fail('catalogue over its bound');
-    if (next === undefined) {
-      if (new Set(models.map(model => model.id)).size !== models.length)
-        fail('duplicate model');
-      return models;
-    }
-    after = next;
-  }
-  return fail('catalogue over its page bound');
+  // M2's paged Anthropic reader, with the member's OAuth headers and this
+  // catalogue's body bound.
+  const listed = await readAnthropicCatalog({
+    baseUrl,
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'anthropic-beta': CLAUDE_OAUTH_BETA,
+      'anthropic-version': ANTHROPIC_VERSION,
+    },
+    fetch,
+    timeoutMs: CATALOG_READ_TIMEOUT_MS,
+    maxBytes: MAX_BODY_BYTES,
+  });
+  return listed.map(model => ({
+    id: model.id,
+    title: model.title,
+    description: '',
+    reasoningEfforts: claudeEfforts(model.id),
+  }));
 };
 harden(readClaudeModels);
 
@@ -291,75 +273,6 @@ export const readCodexModels = async ({
   return codexModels(payload);
 };
 harden(readCodexModels);
-
-/**
- * @typedef {object} Observation
- * @property {number} readAt
- * @property {PoolModel[]} models
- */
-
-/**
- * One member's catalogue owner (M2 `makeOwner`'s rule: failure is a state,
- * never an error, and never carries a cause).
- * @param {object} options
- * @param {() => Promise<PoolModel[]>} options.read
- * @param {() => number} options.now
- */
-const makeMemberOwner = ({ read, now }) => {
-  /** @type {Observation | undefined} */
-  let observation;
-  let failed = false;
-  /** @type {number | undefined} */
-  let failedAt;
-  /** @type {Promise<void> | undefined} */
-  let refreshing;
-  const counters = { reads: 0, failures: 0 };
-  const age = () =>
-    observation === undefined ? Infinity : now() - observation.readAt;
-  const usable = () => age() < CATALOG_MAX_AGE_MS;
-  const fresh = () => age() < CATALOG_FRESH_MS;
-  const due = () =>
-    (!fresh() || failed) &&
-    (failedAt === undefined || now() - failedAt >= CATALOG_RETRY_MS);
-  const refresh = () => {
-    if (refreshing !== undefined) return refreshing;
-    const attempt = (async () => {
-      await null;
-      counters.reads += 1;
-      try {
-        const models = await read();
-        observation = { readAt: now(), models };
-        failed = false;
-        failedAt = undefined;
-      } catch {
-        failed = true;
-        failedAt = now();
-        counters.failures += 1;
-      }
-    })().finally(() => {
-      if (refreshing === attempt) refreshing = undefined;
-    });
-    refreshing = attempt;
-    return attempt;
-  };
-  return harden({
-    /** For a listing: read again when due, then answer what is usable. */
-    snapshot: async () => {
-      if (refreshing !== undefined || due()) await refresh();
-      return usable() ? observation : undefined;
-    },
-    /** For a creation: a usable observation at once, refreshed behind. */
-    admitting: async () => {
-      if (!usable()) {
-        if (refreshing !== undefined || due()) await refresh();
-      } else if (due()) {
-        void refresh();
-      }
-      return usable() ? observation : undefined;
-    },
-    stats: () => harden({ ...counters, failed }),
-  });
-};
 
 /**
  * Efforts a row may carry (the `ModelRow` bounds): known shape, at most
@@ -493,46 +406,44 @@ export const makePoolCatalog = ({
 }) => {
   /**
    * Observations per member presence (a member read once serves every pool
-   * it is in). Held strongly, oldest dropped past MAX_OWNERS (a read).
-   * @type {Map<any, ReturnType<typeof makeMemberOwner>>}
+   * it is in), with the catalogue core's timing (R4-104). Held strongly,
+   * oldest dropped past MAX_OWNERS (a read).
+   * @type {ReturnType<typeof makeOwnerTable<ReturnType<typeof makeCatalogOwner<PoolModel>>>>}
    */
-  const owners = new Map();
+  const owners = makeOwnerTable(MAX_OWNERS);
 
   /**
    * @param {import('./types.js').MemberEntry} entry
    * @param {any} spec
    */
-  const ownerOf = (entry, spec) => {
-    const known = owners.get(entry.member);
-    if (known !== undefined) return known;
-    /** @type {() => Promise<PoolModel[]>} */
-    const read =
-      entry.provider === 'claude'
-        ? async () => {
-            const credential = await readCredential(entry);
-            return readClaudeModels({
-              baseUrl: providerBaseUrl(spec.baseUrl, CLAUDE_BASE_URL),
-              accessToken: credential.accessToken,
-              ...(fetch === undefined ? {} : { fetch }),
-            });
-          }
-        : async () => {
-            const credential = await readCredential(entry);
-            return readCodexModels({
-              baseUrl: providerBaseUrl(spec.baseUrl, CODEX_BASE_URL),
-              credential,
-              clientVersion,
-              ...(fetch === undefined ? {} : { fetch }),
-            });
-          };
-    const owner = makeMemberOwner({ read, now });
-    if (owners.size >= MAX_OWNERS) {
-      const [oldest] = owners.keys();
-      owners.delete(oldest);
-    }
-    owners.set(entry.member, owner);
-    return owner;
-  };
+  const ownerOf = (entry, spec) =>
+    /** @type {ReturnType<typeof makeCatalogOwner<PoolModel>>} */ (
+      owners.ownerOf(entry.member, () => {
+        /** @type {() => Promise<PoolModel[]>} */
+        const read =
+          entry.provider === 'claude'
+            ? async () => {
+                const credential = await readCredential(entry);
+                return readClaudeModels({
+                  baseUrl: providerBaseUrl(spec.baseUrl, CLAUDE_BASE_URL),
+                  accessToken: credential.accessToken,
+                  ...(fetch === undefined ? {} : { fetch }),
+                });
+              }
+            : async () => {
+                const credential = await readCredential(entry);
+                return readCodexModels({
+                  baseUrl: providerBaseUrl(spec.baseUrl, CODEX_BASE_URL),
+                  credential,
+                  clientVersion,
+                  ...(fetch === undefined ? {} : { fetch }),
+                });
+              };
+        // No key of its own (the member's credential is read in `read`)
+        // and no log line per member: the listing logs the pool's.
+        return makeCatalogOwner({ read, now });
+      })
+    );
 
   /**
    * The pool's combined, sorted models, or undefined when no member has a
@@ -559,7 +470,7 @@ export const makePoolCatalog = ({
       });
     if (lists.length === 0) return undefined;
     const models =
-      spec.kind === 'codex-pool'
+      providerOfKind[spec.kind] === 'codex'
         ? pooledCodexModels(lists)
         : pooledClaudeModels(lists, spec.contextLength);
     const sorted = models.sort(byTitleThenId);
@@ -636,7 +547,7 @@ export const makePoolCatalog = ({
     resolveModel: async options => {
       const { spec } = options;
       const { chosen, model } = await admitted(options);
-      if (spec.kind === 'claude-pool') {
+      if (providerOfKind[spec.kind] === 'claude') {
         return harden({
           modelId: chosen,
           contextLength: spec.contextLength ?? settings.claudeContextLength,

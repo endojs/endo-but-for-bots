@@ -20,6 +20,14 @@ second copy of an `@endo/*` library.
   Ironhorse, other Endo packages) with its motivation; add an entry with each such change.
 - Settings: `config/defaults.js` (`limits`: frame sizes, crank budget, sends per crank, exec
   source size, vat key names, crash bound), with the evidence for each value.
+- Structure and words: the turn runner and its modules (`guest/session/turn.js`, `outbox.js`,
+  `usage.js`, `ports.js`, `turn-index.js`, `turn-import.js`, `recovery.js`), the one per-session
+  extension (`guest/session/runtime-parts.js`), the provider shell and backend kinds
+  (`resources/agent-host/impl/providers/shell.js`, `api.js`, `kinds.js`, `catalog-core.js`) and
+  the adapter's shared stores (`impl/channel-subscriber.js`, `impl/files.js`,
+  `impl/secrets/wrapping-key.js`) are described in `designs/architecture.md` 4.7-4.9, D-6 and
+  D-8; its section 14 is the glossary. The architecture review and the status of each finding:
+  `designs/arch-review/harness.md` (section 8).
 
 Paths below are relative to this package unless they start with the repository root
 (`../../`).
@@ -132,10 +140,10 @@ over one imported 159-turn session (`_m2-archive-kill.js`), `m2-probes` (the too
 Acceptance 15 (a 5,000-turn session behaves like a 200-turn one) is `perf/history.perf.mjs` and
 `perf/history.restart.perf.mjs`, whose sessions are copies of templates built by `importState`.
 Files that use a Secret give their supervisor a key file under `tmp/` (outside the state
-directory) and remove it: the M4 files and perf checks pass it to that one supervisor
-(`startFromTemplate(template, { secretsKeyFile })`, `testKeyFile` in `test/integration/_m4.js` and
-`perf/_m4.mjs`); the M2 files and `_m3-gateway.js` still set `THIX_HARNESS_SECRETS_KEY` for the
-process (HR-SYN-21, open).
+directory) and remove it, and pass it to that one supervisor only
+(`startFromTemplate(template, { secretsKeyFile })` or `provision`'s `secretsKeyFile`; `testKeyFile`
+in `test/integration/_m4.js` and `perf/_m4.mjs`, `useTestWrappingKey` in `_m3-gateway.js`): no
+test or perf file sets `THIX_HARNESS_SECRETS_KEY` for its process (HR-SYN-21, J-10233).
 
 The M3 acceptance files (`designs/m3-interfaces.md` 12): through a Node CapTP client over a real
 loopback WebSocket, `m3-gateway` (1, 2, 10, 11, 16; K1, K2), `m3-sessions` (3, 13, 14, 12
@@ -176,11 +184,10 @@ corepack yarn test:regression:milestones  # the M3, M4 and M5 files with their b
 ```
 
 Each prints every file's held and waited time from `runs.jsonl` and the batch's wall time; the
-lists are `regressionLists` in `scripts/test-integration.mjs`. Last run (CL-CLOSE, after the
-review's steps 1 and 2, `bd4c811b7b`, 2026-11-18, 6 jobs, load 1.9-5.7): core 1,286 unit and
-adapter tests passed (116 skipped, 67 s), 25 files, 4,194 s held, 927 s wall in all; milestones
-31 files, 3,301 s held, 703 s wall. All pass except `m1b-exec-tool` acceptance 11 once at load
-4-5, which passed alone. Per-file times are in process.md section 3.1.
+lists are `regressionLists` in `scripts/test-integration.mjs`. Last run (T3-CLOSE, after the
+review's step 3, `804398c4d9`, 2026-11-19, 6 jobs, load 2-4): core 1,328 unit and adapter tests
+passed (116 skipped, 67 s), 25 files, 4,344 s held, 989 s wall in all; milestones 31 files,
+3,326 s held, 665 s wall; every file passed (J-10251). Per-file times are in process.md section 3.1.
 
 **Known failures** (each marked `test.failing`, or opt-in, with the reason in its title):
 
@@ -243,7 +250,7 @@ the one unscaled read is `gateway-restart`'s file deadline `M3_RESTART_END_MS`.
 `LOOP_N`, `INSTALL_N` and `CRASH_*` shorten individual scripts. The milestone templates the
 checks copy are built with `node perf/_pass.mjs templates [m1a exec pool m4 m5o m3-300]` (under a
 shared run-lock wrapper); their keys follow the guest bundles and the manager part, so a guest
-change rebuilds them (CL-CLOSE: 166 s wall for all six in parallel).
+change rebuilds them (T3-CLOSE: 169 s wall for all six in parallel, J-10250).
 `perf/crash.perf.mjs` and `perf/restart.crash.perf.mjs` exit 1 by design while a restart with a crashing
 vat misses its 15 s target (core candidates C-8, C-9). Paste the lines into `JOURNAL.md` with a
 reading and a decision.
@@ -340,7 +347,7 @@ absent meanwhile.
 
 | Command | What it does |
 | --- | --- |
-| `node scripts/bundle-guest.mjs [program ...]` | Bundles `guest/<program>/main.js` into `dist-guest/<program>.js` without comments, refusing any module outside `guest/`. Sizes after the review's fold (`bd4c811b7b`; bytes, budget): session 206,907 (240,000), exec 61,688 (120,000), factory 155,427 (X-CLOSE: 214,690, 63,826, 164,836) |
+| `node scripts/bundle-guest.mjs [program ...]` | Bundles `guest/<program>/main.js` into `dist-guest/<program>.js` without comments, refusing any module outside `guest/`. Sizes after step 3 of the review (`804398c4d9`; bytes, budget): session 212,484 (240,000), exec 62,623 (120,000), factory 156,955 (after the fold, `bd4c811b7b`: 206,907, 61,688, 155,427; X-CLOSE: 214,690, 63,826, 164,836) |
 
 ## Disk
 

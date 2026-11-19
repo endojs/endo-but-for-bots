@@ -46,6 +46,7 @@ import { makeExecHandle } from './pool.js';
 import { buildSessionServices } from './services.js';
 import { resolveCreateOptions } from './session-options.js';
 
+/** @import { StartCount } from './starts.js' */
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { RowTable, Row } from './rows.js' */
 /** @import { ProgramStore, SessionProgram } from './root.js' */
@@ -83,7 +84,8 @@ export const INTERRUPTED_CREATION_TEXT =
 /**
  * @typedef {object} Creation
  * @property {Row} row
- * @property {number} epoch the factory start epoch the creation began in
+ * @property {number} start the daemon start (`starts.js`) the creation began
+ *   in
  * @property {any} facade the new worker's facade, once created
  * @property {{ host: any, backend: any, execVat?: any } | undefined} services
  * @property {{ session: any, internal: any } | undefined} made `make`'s answer
@@ -108,6 +110,8 @@ export const INTERRUPTED_CREATION_TEXT =
  * @param {ListFeed} [powers.listFeed] the session list feed (M1b W1b.5)
  * @param {HarnessSettings} [powers.harnessSettings] the M2 operator settings
  *   (W2.7: backends, default backend and model, turn deadline)
+ * @param {StartCount} powers.starts the count of daemon starts, shared with
+ *   the pool (`starts.js`)
  */
 export const makeFactoryKit = ({
   admin,
@@ -119,6 +123,7 @@ export const makeFactoryKit = ({
   settings,
   listFeed,
   harnessSettings,
+  starts,
 }) => {
   /** The latest `CreateOptions.at` seen (vats have no clock: time is data). */
   let latestAt = 0;
@@ -128,12 +133,10 @@ export const makeFactoryKit = ({
   const chatOnly = catalog.builtIn(CHAT_ONLY);
   const inventory = makeInventory();
 
-  /** Increased by every daemon start (the start listener). */
-  let epoch = 0;
   /** @type {Set<Creation>} creations not yet finished or rolled back */
   const creations = new Set();
   // M2 W2.7 (m2-interfaces.md 7.1): delete records, completed after restarts.
-  const deletions = makeDeletions({ admin, rows });
+  const deletions = makeDeletions({ admin, rows, starts });
 
   /** @param {Creation} creation */
   const ensureLive = creation => {
@@ -260,7 +263,7 @@ export const makeFactoryKit = ({
     /** @type {Creation} */
     const creation = {
       row,
-      epoch,
+      start: starts.current(),
       facade: undefined,
       services: undefined,
       made: undefined,
@@ -476,14 +479,14 @@ export const makeFactoryKit = ({
    * refresh the rows of sessions that were working.
    */
   const recover = async () => {
-    epoch += 1;
-    const current = epoch;
+    // Counted first: the pool and the delete records read it (HR-SYN-36).
+    const current = starts.next();
     // The previous incarnation's publisher is a tombstone; fetch the new
     // one (not awaited: changes before it answers go unpublished, and
     // viewers of the new incarnation start from the rev anyway).
     void listFeed?.refresh();
     pool?.onStart();
-    const interrupted = [...creations].filter(c => c.epoch < current);
+    const interrupted = [...creations].filter(c => c.start < current);
     await Promise.all(
       interrupted.map(async creation => {
         if (creation.made === undefined) {

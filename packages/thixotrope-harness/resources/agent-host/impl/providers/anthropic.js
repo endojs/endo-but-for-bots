@@ -92,15 +92,17 @@ import {
   retryAfterMs,
 } from './http.js';
 import { parseSseBatches } from './sse.js';
+import { ProviderFailure } from './round.js';
+import { anthropicDelay, isDelivery } from './retry.js';
+import { makeApiProvider } from './api.js';
 import {
-  makeRoundControl,
-  ProviderFailure,
-  readProviderKey,
-  runProviderRound,
-  systemTextOf,
-} from './round.js';
-import { makeEventLog } from './scripted.js';
-import { anthropicDelay, isDelivery, makeRetry } from './retry.js';
+  CATALOG_BODY_BYTES,
+  CATALOG_MAX_MODELS,
+  CATALOG_READ_TIMEOUT_MS,
+  catalogFail,
+  catalogModel,
+  readJson,
+} from './catalog-core.js';
 
 /** The API's base (a spec's `baseUrl` replaces it: the fake server). */
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
@@ -731,133 +733,157 @@ export async function* anthropicAttempt({
 harden(anthropicAttempt);
 
 /**
- * @param {object} options
- * @param {string} options.label the backend's label
- * @param {any} [options.spec] the BackendSpec (`modelId`, `baseUrl`,
- *   `timeoutMs` (0: none), `maxOutputTokens`, `logPath`)
- * @param {() => Promise<string>} [options.readKey] the key, read through the
- *   backend's grant at every round (R4-82)
- * @param {import('../timers.js').Timers} options.timers
- * @param {import('./scripted.js').EventLog} [options.log]
- * @param {import('../blobs.js').BlobStore} [options.blobs]
- * @param {typeof globalThis.fetch} [options.fetch]
- * @param {() => number} [options.now]
- * @param {(args: { attempt: (signal: AbortSignal) => AsyncIterable<import('./round.js').RoundEvent>, signal: AbortSignal }) => AsyncIterable<import('./round.js').RoundEvent>} [options.retry]
- *   the retry wrapper (default: `makeRetry` with `anthropicDelay`, one per
- *   round, logging each retry)
- * @param {string} [options.logPath] (as the scripted kind's options)
+ * The Messages API's request and answer for the API provider (`api.js`).
+ * @type {import('./api.js').ApiWire}
  */
-export const makeAnthropicProvider = ({
-  label,
-  spec = {},
-  readKey,
-  timers,
-  logPath = spec.logPath,
-  log = makeEventLog({ label, logPath }),
-  blobs,
-  fetch,
-  now = () => Date.now(),
-  retry,
-}) => {
-  const baseUrl = providerBaseUrl(spec.baseUrl, ANTHROPIC_BASE_URL);
-  const timeoutMs = spec.timeoutMs ?? ANTHROPIC_TIMEOUT_MS;
-  /** turn -> the control of its running round. */
-  /** @type {Map<any, import('./round.js').RoundControl>} */
-  const running = new Map();
+export const anthropicWire = harden({
+  baseUrl: ANTHROPIC_BASE_URL,
+  timeoutMs: ANTHROPIC_TIMEOUT_MS,
+  path: '/v1/messages',
+  unreachable: texts.anthropicUnreachable,
+  model: req => String(req.options.modelId),
+  body: ({ model, transcript, system, req, spec }) =>
+    anthropicBody({
+      model,
+      messages: anthropicMessages(transcript, model),
+      tools: req.tools,
+      system,
+      maxOutputTokens: req.options.maxOutputTokens ?? spec.maxOutputTokens,
+    }),
+  delay: anthropicDelay,
+  attempt: anthropicAttempt,
+});
 
-  return harden({
-    /**
-     * @param {any} req
-     * @param {any} channel
-     * @param {() => Promise<any>} [prepare]
-     * @param {any} [owner]
-     */
-    startRound: async (req, channel, prepare, owner) => {
-      running.get(req.turn)?.stop('release');
-      const control = makeRoundControl(timers);
-      running.set(req.turn, control);
-      try {
-        await runProviderRound({
-          req,
-          channel,
-          prepare,
-          blobs,
-          log,
-          owner,
-          control,
-          timers,
-          now,
-          label,
-          unreachable: texts.anthropicUnreachable,
-          stream: async function* anthropicStream({ projection, signal }) {
-            const model = String(req.options.modelId);
-            const key = await readProviderKey(readKey);
-            const system = await systemTextOf(req.system, blobs, owner);
-            const transcript =
-              projection?.transcript ??
-              req.append
-                .filter(
-                  (/** @type {any} */ r) =>
-                    r.kind === 'turn-started' && typeof r.input === 'string',
-                )
-                .map((/** @type {any} */ r) => ({
-                  kind: 'message',
-                  role: 'user',
-                  content: r.input,
-                }));
-            const body = anthropicBody({
-              model,
-              messages: anthropicMessages(transcript, model),
-              tools: req.tools,
-              system,
-              maxOutputTokens:
-                req.options.maxOutputTokens ?? spec.maxOutputTokens,
-            });
-            const retryRound =
-              retry ??
-              makeRetry({
-                timers,
-                delayMs: anthropicDelay,
-                onRetry: ({ attempt, failure, waitMs }) =>
-                  log('retry', {
-                    turnId: req.turnId,
-                    round: req.round,
-                    attempt,
-                    waitMs,
-                    ...(failure.status === undefined
-                      ? {}
-                      : { status: failure.status }),
-                    timedOut: failure.timedOut,
-                  }),
-              });
-            yield* retryRound({
-              signal,
-              attempt: attemptSignal =>
-                anthropicAttempt({
-                  url: `${baseUrl}/v1/messages`,
-                  key,
-                  body,
-                  signal: attemptSignal,
-                  timeoutMs,
-                  ...(fetch === undefined ? {} : { fetch }),
-                  now,
-                }),
-            });
-          },
-        });
-      } finally {
-        if (running.get(req.turn) === control) running.delete(req.turn);
-      }
-    },
-    /** @param {any} turn aborts its request (R4-7); logged `cancelled` */
-    cancelRound: turn => running.get(turn)?.stop('cancel'),
-    /** @param {any} turn aborts its request silently (lease released) */
-    releaseTurn: turn => running.get(turn)?.stop('release'),
-  });
-};
+/**
+ * An Anthropic API backend's provider (`api.js` `makeApiProvider`'s options
+ * but `wire`).
+ * @param {Omit<Parameters<typeof makeApiProvider>[0], 'wire'>} options
+ */
+export const makeAnthropicProvider = options =>
+  makeApiProvider({ ...options, wire: anthropicWire });
 harden(makeAnthropicProvider);
 
-/** The `backendKinds` entry (AH/index.js hook table). */
+// ---- The model list (M2 W2.2, m2-interfaces.md 8.4; hosted-agent
+// `anthropic-model-read.js`): validated and bounded, failing closed with a
+// fixed text; a refused answer's body is never read. M4's Claude pool reads
+// its members' lists with the same paged reader (its own headers and body
+// bound).
+
+/** Pages one model list read may take, and rows asked per page. */
+const ANTHROPIC_PAGES = 16;
+const ANTHROPIC_PAGE_LIMIT = 1000;
+/** Anthropic model ids (hosted-agent `anthropic-model-read.js`). */
+const ANTHROPIC_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+
+/**
+ * One page of an Anthropic catalogue, validated.
+ * @param {any} payload
+ * @returns {{ models: import('./catalog-core.js').CatalogModel[], next: string | undefined }}
+ */
+export const anthropicPage = payload => {
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    Array.isArray(payload) ||
+    !Array.isArray(payload.data) ||
+    Number(payload.data.length) > CATALOG_MAX_MODELS ||
+    typeof payload.has_more !== 'boolean' ||
+    (payload.last_id != null && typeof payload.last_id !== 'string')
+  )
+    catalogFail('catalogue shape');
+  const models = /** @type {any[]} */ (payload.data).map(row => {
+    if (
+      !row ||
+      typeof row !== 'object' ||
+      row.type !== 'model' ||
+      typeof row.id !== 'string' ||
+      !ANTHROPIC_MODEL_ID.test(row.id) ||
+      typeof row.display_name !== 'string' ||
+      row.display_name === '' ||
+      Number(row.display_name.length) > 1024
+    )
+      catalogFail('model entry');
+    return catalogModel(row.id, row.display_name, '', undefined, undefined);
+  });
+  let next;
+  if (payload.has_more) {
+    if (
+      typeof payload.last_id !== 'string' ||
+      !ANTHROPIC_MODEL_ID.test(payload.last_id)
+    )
+      catalogFail('catalogue page');
+    next = /** @type {string} */ (payload.last_id);
+  }
+  return harden({ models, next });
+};
+harden(anthropicPage);
+
+/**
+ * A paged Anthropic model list (`GET <baseUrl>/v1/models`) with the
+ * caller's headers.
+ * @param {object} options
+ * @param {string} options.baseUrl
+ * @param {Record<string, string>} options.headers
+ * @param {typeof globalThis.fetch} [options.fetch]
+ * @param {number} [options.timeoutMs]
+ * @param {number} [options.maxBytes] one page's body bound
+ * @returns {Promise<import('./catalog-core.js').CatalogModel[]>}
+ */
+export const readAnthropicCatalog = async ({
+  baseUrl,
+  headers,
+  fetch,
+  timeoutMs = CATALOG_READ_TIMEOUT_MS,
+  maxBytes = CATALOG_BODY_BYTES,
+}) => {
+  /** @type {import('./catalog-core.js').CatalogModel[]} */
+  const models = [];
+  /** @type {string | undefined} */
+  let after;
+  for (let page = 0; page < ANTHROPIC_PAGES; page += 1) {
+    const query = new URLSearchParams({ limit: `${ANTHROPIC_PAGE_LIMIT}` });
+    if (after !== undefined) query.set('after_id', after);
+    // eslint-disable-next-line no-await-in-loop
+    const payload = await readJson({
+      url: `${baseUrl}/v1/models?${query}`,
+      headers,
+      fetch,
+      timeoutMs,
+      maxBytes,
+    });
+    const { models: more, next } = anthropicPage(payload);
+    models.push(...more);
+    if (models.length > CATALOG_MAX_MODELS)
+      catalogFail('catalogue over its bound');
+    if (next === undefined) {
+      if (new Set(models.map(model => model.id)).size !== models.length)
+        catalogFail('duplicate model');
+      return harden(models);
+    }
+    after = next;
+  }
+  return catalogFail('catalogue over its page bound');
+};
+harden(readAnthropicCatalog);
+
+/**
+ * An Anthropic API catalogue, read with the key.
+ * @param {object} options
+ * @param {string} options.baseUrl
+ * @param {string} options.key
+ * @param {typeof globalThis.fetch} [options.fetch]
+ * @param {number} [options.timeoutMs]
+ */
+export const readAnthropicModels = ({ baseUrl, key, fetch, timeoutMs }) =>
+  readAnthropicCatalog({
+    baseUrl,
+    headers: { 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION },
+    fetch,
+    timeoutMs,
+  });
+harden(readAnthropicModels);
+
+/** The `backendKinds` entry (`kinds.js`). */
 export const anthropicKind = harden({
   kind: 'anthropic',
   makeProvider: makeAnthropicProvider,
@@ -865,4 +891,11 @@ export const anthropicKind = harden({
   unexpectedFailure: texts.anthropicUnreachable,
   // M4 W4.6 (H-14, D-M4-9): account status on API backends too.
   tools: harden(['accountStatus']),
+  /** @type {import('./kinds.js').BackendKind['catalog']} */
+  catalog: ({ models }) => models,
+  /** @type {import('./kinds.js').BackendKind['readModels']} */
+  readModels: ({ spec, fetch }) => {
+    const baseUrl = providerBaseUrl(spec.baseUrl, ANTHROPIC_BASE_URL);
+    return key => readAnthropicModels({ baseUrl, key, fetch });
+  },
 });

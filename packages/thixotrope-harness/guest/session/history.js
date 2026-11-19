@@ -16,18 +16,16 @@
  */
 import { texts } from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
-import { previewText } from '../lib/bounded.js';
+import {
+  PAGE_SLACK,
+  TURN_PREVIEW_KEYS_BYTES,
+  previewRecord,
+} from '../lib/record-preview.js';
 import { inCallOrder, plainBytes } from './records.js';
 import { blobsOf, isStaged } from './staging.js';
 
 /** @import { RecordLog } from './records.js' */
 
-/** Bytes kept free in a page for its wrapper. */
-const PAGE_SLACK = 512;
-/** Bytes one ToolIntents record may take in a preview. */
-const PREVIEW_INTENTS_BYTES = 6144;
-/** Bytes of a TurnPreview besides its records (keys, ids, state). */
-const TURN_PREVIEW_KEYS_BYTES = 64;
 
 /**
  * @param {object} options
@@ -45,69 +43,16 @@ export const makeHistory = ({ records, turnInfo, turnHandle, archive }) => {
    */
   const previews = new WeakMap();
 
-  /** @param {any} t */
-  const message = t =>
-    isStaged(t) ? t : previewText(t, limits.messagePreviewUnits);
-  /** @param {any} t */
-  const tool = t => (isStaged(t) ? t : previewText(t, limits.toolPreviewUnits));
-
   /**
    * A record with its text fields cut to previews (a staged field is its
    * own preview, with its blob), and its exact string bytes.
    * @param {any} record
    * @returns {{ record: any, cut: boolean, bytes: number }}
    */
-  const previewRecord = record => {
+  const previewOf = record => {
     const known = previews.get(record);
     if (known !== undefined) return known;
-    /** @type {any} */
-    let shown = record;
-    switch (record.kind) {
-      case 'turn-started': {
-        const input = message(record.input);
-        if (input !== record.input) shown = harden({ ...record, input });
-        break;
-      }
-      case 'partial':
-      case 'round-settled': {
-        const t = message(record.text);
-        if (t !== record.text) shown = harden({ ...record, text: t });
-        break;
-      }
-      case 'turn-settled': {
-        if (record.final === undefined) break;
-        const final = message(record.final);
-        if (final !== record.final) shown = harden({ ...record, final });
-        break;
-      }
-      case 'tool-result': {
-        const result = tool(record.result);
-        if (result !== record.result) shown = harden({ ...record, result });
-        break;
-      }
-      case 'tool-intents': {
-        let bytes = 0;
-        let changed = false;
-        /** @type {any[]} */
-        const intents = [];
-        for (const intent of record.intents) {
-          const args = tool(intent.args);
-          const one =
-            args === intent.args ? intent : harden({ ...intent, args });
-          if (one !== intent) changed = true;
-          bytes += plainBytes(one);
-          if (bytes > PREVIEW_INTENTS_BYTES && intents.length > 0) {
-            changed = true;
-            break;
-          }
-          intents.push(one);
-        }
-        if (changed) shown = harden({ ...record, intents: harden(intents) });
-        break;
-      }
-      default:
-        break;
-    }
+    const shown = previewRecord(record, { isStaged, intentBytes: plainBytes });
     const cut = shown !== record || blobsOf(record).length > 0;
     const preview = harden({ record: shown, cut, bytes: plainBytes(shown) });
     previews.set(record, preview);
@@ -138,7 +83,7 @@ export const makeHistory = ({ records, turnInfo, turnHandle, archive }) => {
     /** @type {any[]} */
     const shown = [];
     for (const record of ordered.slice(0, limit)) {
-      const one = previewRecord(record);
+      const one = previewOf(record);
       if (bytes + one.bytes > budget) {
         whole = false;
         cut = true;

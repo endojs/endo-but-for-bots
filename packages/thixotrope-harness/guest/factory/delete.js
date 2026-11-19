@@ -39,6 +39,7 @@
 import { texts } from '../lib/guards/factory.js';
 import { closeExecHandle } from './pool.js';
 
+/** @import { StartCount } from './starts.js' */
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { Row, RowTable } from './rows.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
@@ -56,25 +57,27 @@ export const onDelete = harden([]);
  * @property {string | undefined} cursor the next blob page's cursor
  * @property {number} runs runs started; a run stops once a newer one began
  * @property {Promise<void> | undefined} done the latest run
- * @property {number} startedAt the factory start epoch of the latest run
+ * @property {number} startedAt the daemon start (`starts.js`) of the latest
+ *   run
  */
 
 /**
  * @param {object} powers
  * @param {any} powers.admin the AgentHostAdmin
  * @param {RowTable} powers.rows
+ * @param {StartCount} powers.starts the factory's start count (the start
+ *   listener raises it before `resume`)
  * @param {typeof onDelete} [powers.hooks]
  */
-export const makeDeletions = ({ admin, rows, hooks = onDelete }) => {
+export const makeDeletions = ({ admin, rows, starts, hooks = onDelete }) => {
   /** @type {Map<Row, DeleteRecord>} */
   const records = new Map();
-  let epoch = 0;
   const counts = { started: 0, completed: 0, failed: 0, resumed: 0 };
 
   /** @param {DeleteRecord} record */
   const run = async record => {
     record.runs += 1;
-    record.startedAt = epoch;
+    record.startedAt = starts.current();
     const me = record.runs;
     const { row } = record;
     const live = () => record.runs === me && records.get(row) === record;
@@ -163,7 +166,7 @@ export const makeDeletions = ({ admin, rows, hooks = onDelete }) => {
     const known = records.get(row);
     if (known !== undefined) {
       // A run of this start still going: wait for it; else run again.
-      if (known.startedAt === epoch && known.done !== undefined) {
+      if (known.startedAt === starts.current() && known.done !== undefined) {
         const settled = await known.done.then(
           () => true,
           () => false,
@@ -179,7 +182,7 @@ export const makeDeletions = ({ admin, rows, hooks = onDelete }) => {
       cursor: undefined,
       runs: 0,
       done: undefined,
-      startedAt: epoch,
+      startedAt: starts.current(),
     };
     records.set(row, record);
     counts.started += 1;
@@ -191,7 +194,6 @@ export const makeDeletions = ({ admin, rows, hooks = onDelete }) => {
    * again from its step. Settles when every run settled.
    */
   const resume = async () => {
-    epoch += 1;
     const pending = [...records.values()];
     counts.resumed += pending.length;
     await Promise.all(pending.map(record => start(record).catch(() => {})));

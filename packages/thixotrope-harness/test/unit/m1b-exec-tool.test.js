@@ -16,10 +16,10 @@ import { limits } from '../../guest/lib/limits.js';
 import { HUB_RETIRED_MESSAGE } from '../../guest/lib/retired.js';
 import { makeSession } from '../../guest/session/session.js';
 import { toolTable } from '../../guest/session/tool-table.js';
-import { turnHooks } from '../../guest/session/turn-hooks.js';
+import { runtimeParts } from '../../guest/session/runtime-parts.js';
 import {
   execEntry,
-  execHooks,
+  execPart,
   NOT_RUN_TEXT,
 } from '../../guest/session/tools/exec.js';
 /* eslint-enable import/no-relative-packages */
@@ -211,10 +211,12 @@ const closeTurn = async (/** @type {any} */ s) => {
 
 const ok = (/** @type {string} */ text) => harden({ status: 'ok', text });
 
-test('hook tables carry the exec entry and hooks', t => {
+test('the tool table carries the exec entry; the exec part its hooks', t => {
   t.true(toolTable.includes(execEntry));
-  t.true(turnHooks.onCancel.includes(execHooks.onCancel));
-  t.true(turnHooks.recoverySteps.includes(execHooks.recoverySteps));
+  t.true(runtimeParts.includes(execPart));
+  const { hooks } = execPart.make();
+  t.is(typeof hooks.onCancel, 'function');
+  t.is(typeof hooks.onRecover, 'function');
 });
 
 test('available only with an ExecHandle and writers/timer ports', async t => {

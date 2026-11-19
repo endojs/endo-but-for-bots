@@ -3,13 +3,14 @@
  * A session's delete fence, blob pages and data-only export and import
  * (M2 W2.7; `designs/m2-interfaces.md` 7.1, 7.3, 4.11; R4-9).
  *
- * `makeSessionExport({ records, queue, runner, config, info, rowReporter })`
- * gives the `SessionInternal` methods M2 adds:
+ * `makeSessionExport({ records, queue, runner, archive, fence, config, info,
+ * rowReporter })` gives the `SessionInternal` methods M2 adds:
  *
- * - `deleteSelf()` (delete step 1): the session refuses new work with
- *   `texts.sessionDeleting` (session.js asks `isDeleting()`), cancels its
- *   current turn and starts no seal: `runner.beginDelete()`, the fence W2.5
- *   builds in turn.js (2.4 item 5). Idempotent.
+ * - `deleteSelf()` (delete step 1): closes the session's one delete fence
+ *   (made in session.js; the runner, the archive and the Session methods
+ *   read it), so the session refuses new work with `texts.sessionDeleting`,
+ *   claims nothing and starts no seal; then `runner.beginDelete()` cancels
+ *   the current turn. Idempotent.
  * - `blobPage(cursor?)` (delete step 2): every staged field of the kept
  *   records (from the archive's `sealedTo`), the current turn's progress
  *   checkpoint, the staged system prompt and the waiting entries, at most
@@ -63,6 +64,10 @@ const cursorNumbers = (cursor, pattern) => {
  * @param {{ items: () => any[], currentHold: () => any, size: () => number, hold: (reason: any, message: string) => void, enqueueOnce: (submission: any, requestId: string, at: number) => any }} powers.queue
  *   the session's queue
  * @param {any} powers.runner the turn runner (seams of 2.4 item 5)
+ * @param {{ state: () => any, entries: () => any[] }} powers.archive the
+ *   session's archive (`archive.js`)
+ * @param {{ close: () => void, closed: () => boolean }} powers.fence the
+ *   session's delete fence
  * @param {any} powers.config the SessionConfig
  * @param {() => any} powers.info the session's `SessionInfo`
  * @param {any} powers.rowReporter
@@ -71,22 +76,23 @@ export const makeSessionExport = ({
   records,
   queue,
   runner,
+  archive,
+  fence,
   config,
   info,
   rowReporter,
 }) => {
-  let deleting = false;
   /** 0: never imported; 1: an import is open; 2: the import ended. */
   let importing = 0;
 
   /** @returns {{ sealedTo: number, sealedTurns: number, segments: number, digest: string } | undefined} */
-  const archiveState = () => runner.archive.state();
+  const archiveState = () => archive.state();
   /** @returns {number} */
   const keptFrom = () => records.base();
 
   const deleteSelf = () => {
-    if (deleting) return undefined;
-    deleting = true;
+    if (fence.closed()) return undefined;
+    fence.close();
     runner.beginDelete();
     return undefined;
   };
@@ -133,8 +139,8 @@ export const makeSessionExport = ({
   };
 
   const head = () => {
-    const archive = archiveState();
-    const sealed = archive !== undefined && archive.segments > 0;
+    const state = archiveState();
+    const sealed = state !== undefined && state.segments > 0;
     /** @type {Record<string, any>} */
     const page = {
       part: 'head',
@@ -143,7 +149,7 @@ export const makeSessionExport = ({
       usage: runner.usage(),
       next: sealed ? 'a0' : `r${keptFrom()}`,
     };
-    if (sealed) page.archive = archive;
+    if (sealed) page.archive = state;
     const hold = queue.currentHold();
     if (hold !== undefined) page.hold = hold;
     return harden(page);
@@ -152,7 +158,7 @@ export const makeSessionExport = ({
   /** @param {number} from */
   const archivePage = from => {
     /** @type {any[]} */
-    const entries = runner.archive.entries();
+    const entries = archive.entries();
     const to = from + limits.segmentPageEntries;
     return harden({
       part: 'archive',
@@ -229,7 +235,7 @@ export const makeSessionExport = ({
 
   /** @param {any} chunk a `SessionExportPage` (checked by the guard) */
   const importState = chunk => {
-    if (deleting) throw Error(texts.sessionDeleting);
+    if (fence.closed()) throw Error(texts.sessionDeleting);
     const { part } = chunk;
     if (importing === 2) return progress();
     if (part === 'head') {
@@ -282,8 +288,6 @@ export const makeSessionExport = ({
     blobPage,
     exportState,
     importState,
-    isDeleting: () => deleting,
-    isImporting: () => importing === 1,
   });
 };
 harden(makeSessionExport);

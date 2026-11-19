@@ -1,15 +1,9 @@
 // @ts-check
 /**
- * Mentions: `adopt`, `adoptTool` and the package turn hooks (W5.7;
- * `designs/m5-interfaces.md` 2.6; R3-8, R4-29, P-40).
+ * Mentions: `adopt` and `adoptTool` (W5.7; `designs/m5-interfaces.md` 2.6;
+ * R3-8, R4-29, P-40). The package turn hooks are the `packages` runtime
+ * part's (`packages.js`).
  *
- * - `mentionHooks.onClaim` (seam S3, claim crank, after `TurnStarted`): an
- *   entry with attachments opens a package for the new turn and sets the
- *   turn's `systemNote` to `textOf.mentionLine(number, labels)`; every
- *   round request of that turn carries it (S2), later turns do not.
- * - `mentionHooks.onSettle` (settle crank, recovery's settle included) and
- *   `mentionHooks.recoverySteps` (recovery step 6, before that settle):
- *   the turn's packages are closed, their objects released.
  * - `adopt({ messageNumber, edgeName, petName })`, `site: 'session'`: binds
  *   the package's object in the label map with source `adopted`; settles
  *   in the issuing crank (kill point K3).
@@ -33,7 +27,6 @@ import { textOf } from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
 import { argSpecs, parseClosedArgs } from '../../lib/tool-args.js';
 import { isValidLabel } from '../labels.js';
-import { partOf } from '../packages.js';
 import { fieldBytes, isStaged } from '../staging.js';
 import { messageOf } from '../../lib/bounded.js';
 
@@ -177,28 +170,3 @@ const adoptToolEntry = harden({
 
 /** The entries appended to `toolTable` (H-5), in `packageToolNames` order. */
 export const packageToolEntries = harden([adoptEntry, adoptToolEntry]);
-
-/** @param {{ core: any, active: any, round?: number }} context */
-const closePackages = ({ core, active }) => {
-  partOf(core)?.table.closeTurn(active.turnId);
-};
-
-export const mentionHooks = harden({
-  /** @param {{ core: any, active: any, item: any }} context */
-  onClaim: ({ core, active, item }) => {
-    /** @type {readonly { label: string, value: any }[] | undefined} */
-    const attachments = item?.attachments;
-    if (attachments === undefined || attachments.length === 0) return;
-    const part = partOf(core);
-    if (part === undefined) return;
-    const labels = harden(attachments.map(a => a.label));
-    const number = part.table.open({
-      labels,
-      values: new Map(attachments.map(a => [a.label, a.value])),
-      turnId: active.turnId,
-    });
-    active.systemNote = textOf.mentionLine(number, labels);
-  },
-  onSettle: closePackages,
-  recoverySteps: closePackages,
-});

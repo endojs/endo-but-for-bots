@@ -16,7 +16,7 @@
  * - `queue.view.100ascii` / `queue.view.100euro`: `view()` of 100 waiting
  *   entries of 8,192 units, ASCII (no cut) and three-byte (previews cut to
  *   fit one frame); `bytes` is the view's exact size.
- * - `recovery.open20`: `recoverAfterRestart` of a dispatched turn with 20
+ * - `recovery.open20`: `recover` (recovery.js) of a dispatched turn with 20
  *   open intents and 2 queued messages, over a minimal core.
  * - `session.queueRecovery.bundle`: source bytes of queue.js and recovery.js
  *   and the bytes of each bundled alone (with its guest/lib imports), next
@@ -39,7 +39,7 @@ const { stats, single } = await import('../../perf/_harness.mjs');
 const { bundleGuest } = await import('../../scripts/bundle-guest.mjs');
 /* eslint-disable import/no-relative-packages */
 const { makeQueue } = await import('../../guest/session/queue.js');
-const { recoverAfterRestart } = await import('../../guest/session/recovery.js');
+const { makeRecovery } = await import('../../guest/session/recovery.js');
 const { limits } = await import('../../guest/lib/limits.js');
 const { messageBytes } = await import('../../guest/lib/bounded.js');
 const { textOf } = await import('../../guest/lib/interfaces.js');
@@ -150,21 +150,25 @@ for (const [name, unit] of /** @type {const} */ ([
         current.ports = undefined;
       },
     };
-    const core = {
-      records: {
-        append: (/** @type {any} */ r) => log.push(r),
-        ofTurn: () => log,
-      },
+    const records = {
+      append: (/** @type {any} */ r) => log.push(r),
+      ofTurn: () => log,
+    };
+    const recovery = makeRecovery({
+      records,
       queue,
       current: () => current,
       settle: (/** @type {any} */ _active, /** @type {any} */ outcome) => {
         log.push({ kind: 'turn-settled', ...outcome });
         current = undefined;
       },
-    };
+      hooks: { onRecover: () => {} },
+      hookTurn: (/** @type {any} */ turn) =>
+        /** @type {any} */ (Object.freeze({ active: turn })),
+    });
     const active = current;
     const t0 = performance.now();
-    recoverAfterRestart(/** @type {any} */ (core), active);
+    recovery.recover(active);
     const t1 = performance.now();
     if (log.length !== 21) throw Error('expected 21 records');
     if (i >= 20) samples.push(t1 - t0);

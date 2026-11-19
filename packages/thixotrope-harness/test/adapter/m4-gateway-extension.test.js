@@ -25,6 +25,7 @@ import { harnessNames } from '../../resources/agent-host/impl/gateway/vocabulary
 import { m4MethodNames } from '../../guest/lib/interfaces-m4.js';
 import { makeSecretsOps } from '../../resources/agent-host/impl/secrets/manager.js';
 import { makeSealKeys } from '../../resources/agent-host/impl/secrets/seal.js';
+import { makeWrappingKey } from '../../resources/agent-host/impl/secrets/wrapping-key.js';
 import { makeStoreDirs, openStore } from './_m4-renewal.js';
 
 const { Far } = /** @type {any} */ (globalThis);
@@ -84,8 +85,10 @@ test("INT-M4: M3's extension loader loads m4-secrets; makeLargeCalls exempts the
   const ops = makeSecretsOps({
     store: openStore(dirs.files),
     seal: makeSealKeys({
-      file: dirs.files.keyFile,
-      stateDir: dirs.files.stateDir,
+      wrappingKey: makeWrappingKey({
+        keyFile: dirs.files.keyFile,
+        stateDir: dirs.files.stateDir,
+      }),
     }),
     sink: Far('AgentHostSink', {}),
   });

@@ -58,7 +58,21 @@ import { isStaged } from '../../../../guest/session/staging.js';
 import { emptyUsage } from '../../../../guest/lib/token-usage.js';
 /* eslint-enable import/no-relative-packages */
 import { isAbandoned } from '../context-cache.js';
-import { tailText } from './scripted.js';
+
+/**
+ * The last `units` UTF-16 units of `text`, never starting inside a pair
+ * (a progress checkpoint's `tail`).
+ * @param {string} text
+ * @param {number} units
+ */
+export const tailText = (text, units) => {
+  if (text.length <= units) return text;
+  let start = text.length - units;
+  const code = text.charCodeAt(start);
+  if (code >= 0xdc00 && code <= 0xdfff) start += 1;
+  return text.slice(start);
+};
+harden(tailText);
 
 /**
  * A provider failure with a fixed text. `retryable`, `retryAfterMs` and
@@ -242,7 +256,7 @@ const deltaPieces = text => {
  * @param {any} options.channel the session's channel (`publishDelta`)
  * @param {(() => Promise<any>) | undefined} options.prepare the projection
  * @param {import('../blobs.js').BlobStore | undefined} options.blobs
- * @param {import('./scripted.js').EventLog} options.log
+ * @param {import('./event-log.js').EventLog} options.log
  * @param {(args: { projection: any, signal: AbortSignal }) => AsyncIterable<RoundEvent>} options.stream
  * @param {any} [options.owner] the Session presence (blob quota)
  * @param {RoundControl} options.control
@@ -613,7 +627,8 @@ harden(runProviderRound);
 
 /**
  * The RoundResult with every field over its bound staged (M1b 5.2), or a
- * rejection with `texts.frameLimit` when it still does not fit (5.4).
+ * rejection with `texts.frameLimit` when it still does not fit (5.4). The
+ * scripted double stages its results with it too.
  * @param {object} round
  * @param {number} round.round
  * @param {string} round.text
@@ -627,7 +642,7 @@ harden(runProviderRound);
  * @param {any[]} round.staged collects every StagedText of the result
  * @param {string} [round.nativeContext] staged with no preview (R4-31)
  */
-const stageResult = async ({
+export const stageResult = async ({
   round,
   text,
   textBytes,
@@ -687,3 +702,4 @@ const stageResult = async ({
   }
   return result;
 };
+harden(stageResult);

@@ -24,7 +24,6 @@ import { makeQueue } from '../../guest/session/queue.js';
 import { runtimeParts } from '../../guest/session/runtime-parts.js';
 import { makeSession } from '../../guest/session/session.js';
 import { toolTable } from '../../guest/session/tool-table.js';
-import { turnHooks } from '../../guest/session/turn-hooks.js';
 import { systemTextOf } from '../../resources/agent-host/impl/providers/round.js';
 import { projectRecords } from '../../resources/agent-host/impl/projection.js';
 import {
@@ -158,6 +157,16 @@ const makeM5Session = async ({
 const resultsIn = req =>
   req.append.filter((/** @type {any} */ r) => r.kind === 'tool-result');
 
+/**
+ * The runtime table with one test part after it (hooks or tools).
+ * @param {Record<string, any>} value what the part's make answers
+ */
+const withProbe = value =>
+  harden([
+    ...runtimeParts,
+    harden({ name: 'probe', make: () => harden(value) }),
+  ]);
+
 test('endowments seed the label map; the object tools run in the issuing crank', async t => {
   const notes = Far('Notes', {});
   const s = await makeM5Session({
@@ -244,7 +253,7 @@ test('S1: the tool set is read again at every round; S4: the runtime reaches too
     return offer ? harden([late]) : harden([]);
   };
   const s = await makeM5Session({
-    sessionOptions: { toolSources: [source] },
+    sessionOptions: { parts: withProbe({ tools: source }) },
   });
   await s.submit('hi');
   t.false(s.last().tools.some((/** @type {any} */ d) => d.name === 'late'));
@@ -258,7 +267,7 @@ test('S1: the tool set is read again at every round; S4: the runtime reaches too
   const { runtime } = contexts[0];
   t.truthy(runtime.labels);
   t.is(typeof runtime.labels.list, 'function');
-  t.is(runtime.session.queue !== undefined, true);
+  t.is(runtime.packages !== undefined, true);
   t.true(
     runtimes.every(r => r === runtime),
     'one runtime per session',
@@ -272,10 +281,10 @@ test('S1: the tool set is read again at every round; S4: the runtime reaches too
 test('S2, S3: onClaim sees the entry; the note joins every round of that turn only', async t => {
   /** @type {any[]} */
   const claimed = [];
-  const hooks = harden({
-    ...turnHooks,
-    onClaim: harden([
-      (/** @type {any} */ { active, item }) => {
+  // A test part after the table: its onClaim runs after the packages part.
+  const parts = withProbe({
+    hooks: harden({
+      onClaim: (/** @type {any} */ { active }, /** @type {any} */ item) => {
         claimed.push(item);
         if (item?.attachments !== undefined) {
           active.systemNote = textOf.mentionLine(
@@ -284,7 +293,7 @@ test('S2, S3: onClaim sees the entry; the note joins every round of that turn on
           );
         }
       },
-    ]),
+    }),
   });
   // A queue whose entries carry attachments (W5.7 builds that; here the
   // first entry is given two by a wrapper).
@@ -318,7 +327,7 @@ test('S2, S3: onClaim sees the entry; the note joins every round of that turn on
   };
   const s = await makeM5Session({
     config: { systemPrompt: 'You are helpful.' },
-    sessionOptions: { hooks, makeQueue: wrapQueue },
+    sessionOptions: { parts, makeQueue: wrapQueue },
   });
   await s.submit('look');
   const note = textOf.mentionLine(1, ['notes', 'calc']);
@@ -351,13 +360,12 @@ test('S2, S3: onClaim sees the entry; the note joins every round of that turn on
 });
 
 test('S2: a staged prompt, or a joined text over inlineBytes, goes as two parts', async t => {
-  const hooks = harden({
-    ...turnHooks,
-    onClaim: harden([
-      (/** @type {any} */ { active }) => {
+  const parts = withProbe({
+    hooks: harden({
+      onClaim: (/** @type {any} */ { active }) => {
         active.systemNote = 'NOTE';
       },
-    ]),
+    }),
   });
   const staged = harden({
     blob: Far('Blob', {}),
@@ -367,7 +375,7 @@ test('S2: a staged prompt, or a joined text over inlineBytes, goes as two parts'
   });
   const s1 = await makeM5Session({
     config: { systemPrompt: staged },
-    sessionOptions: { hooks },
+    sessionOptions: { parts },
   });
   await s1.submit('a');
   t.deepEqual(s1.last().system, [staged, 'NOTE']);
@@ -375,11 +383,11 @@ test('S2: a staged prompt, or a joined text over inlineBytes, goes as two parts'
   const long = 'x'.repeat(limits.inlineBytes - 2);
   const s2 = await makeM5Session({
     config: { systemPrompt: long },
-    sessionOptions: { hooks },
+    sessionOptions: { parts },
   });
   await s2.submit('a');
   t.deepEqual(s2.last().system, [long, 'NOTE']);
-  const s3 = await makeM5Session({ sessionOptions: { hooks } });
+  const s3 = await makeM5Session({ sessionOptions: { parts } });
   await s3.submit('a');
   t.is(s3.last().system, 'NOTE', 'no stored prompt: the note alone');
 });
@@ -413,7 +421,7 @@ test('systemTextOf joins a two-part system, each part read as before', async t =
   );
 });
 
-test('Session (M5 guard): a runtime without one of its four parts is refused at construction; grants and enqueueMessageOnce forward', async t => {
+test('Session (M5 guard): a runtime without one of its parts is refused at construction; grants forwards; enqueueMessageOnce keeps the attachments', async t => {
   // HR-SYN-23: a missing part is a construction error, never a model- or
   // caller-visible "not built yet".
   await t.throwsAsync(
@@ -439,24 +447,9 @@ test('Session (M5 guard): a runtime without one of its four parts is refused at 
     ),
   );
   const facet = Far('SessionGrants', {});
-  /** @type {any[]} */
-  const calls = [];
   const parts = harden([
-    ...runtimeParts.filter(
-      part => part.name !== 'grants' && part.name !== 'packages',
-    ),
+    ...runtimeParts.filter(part => part.name !== 'grants'),
     { name: 'grants', make: () => harden({ facet }) },
-    {
-      name: 'packages',
-      make: (/** @type {any} */ runtime) =>
-        harden({
-          enqueueMessageOnce: (/** @type {any[]} */ ...args) => {
-            calls.push(args);
-            return runtime.session.queue.enqueueOnce(args[0], args[1], args[2])
-              .receipt;
-          },
-        }),
-    },
   ]);
   const p = await makeM5Session({ sessionOptions: { parts } });
   t.is(p.session.grants(), facet);
@@ -468,8 +461,14 @@ test('Session (M5 guard): a runtime without one of its four parts is refused at 
     attachments,
   );
   t.is(receipt.requestId, id);
-  t.is(calls.length, 1);
-  t.is(calls[0][3][0].label, 'notes');
+  await drain();
+  // The packages part opened the entry's attachments for its turn.
+  t.true(
+    p.last().append.some(
+      (/** @type {any} */ r) =>
+        r.kind === 'turn-started' && r.attachments?.[0] === 'notes',
+    ),
+  );
 });
 
 test('QC shape: a round of 256 store calls stores 64 and refuses the rest', async t => {

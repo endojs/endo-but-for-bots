@@ -29,7 +29,7 @@
  *   through the turn's publisher; outside a turn it is answered (live.js).
  * - The lease: `E(endpoint).holdTurn(turn)`, one per turn and incarnation,
  *   is answered only by `releaseTurn`; a retired break from it is the
- *   restart signal. After `Dispatched` it runs `recoverAfterRestart` (W1a.5)
+ *   restart signal. After `Dispatched` it runs the session's recovery (W1a.5)
  *   at once. Before `Dispatched` the session cannot tell a turn that was in
  *   flight when the adapter died from one it claimed on ports that were
  *   already dead (a session idle across a restart is never told): it opens
@@ -62,20 +62,25 @@ import {
   utf8Bytes,
   messageOf,
 } from '../lib/bounded.js';
-import { makeSessionArchive } from './archive.js';
-import { makeContextSource } from './context-source.js';
 import { makeHistory } from './history.js';
 import { inCallOrder } from './records.js';
 import { isStaged, submissionField } from './staging.js';
-import { toolSetFor, toolSources, toolTable } from './tool-table.js';
+import { toolSetFor, toolTable } from './tool-table.js';
+import { makeRecovery } from './recovery.js';
+import { makeOutbox } from './outbox.js';
+import { makePorts } from './ports.js';
+import { makeTurnImport } from './turn-import.js';
+import { makeTurnIndex } from './turn-index.js';
+import { makeUsage } from './usage.js';
 // The result of a call the turn never ran because it was cancelled first
 // (one text with the exec tool's; tools/exec.js never imports this module).
 import { NOT_RUN_TEXT } from './tools/exec.js';
-import { turnHooks } from './turn-hooks.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { RecordLog } from './records.js' */
 /** @import { LivePublishing } from './live.js' */
+/** @import { ActiveTurn, TurnInfo, RoundCalls } from './turn-types.js' */
+/** @import { HookTurn, Runtime } from './runtime-parts.js' */
 const { E, Fail, defineExoClass, makePromiseKit, matches } =
   /** @type {GuestGlobals} */ (globalThis);
 
@@ -85,77 +90,6 @@ const SETTLED = harden(Error('turn settled'));
 /** @param {string} text */
 const reason = text => previewText(text, limits.reasonUnits);
 
-const zeroUsage = () => ({
-  inputTokens: 0,
-  outputTokens: 0,
-  cachedInputTokens: 0,
-  cacheWriteInputTokens: 0,
-  reasoningOutputTokens: 0,
-});
-
-/**
- * @typedef {object} TurnInfo a plain record kept for the session's life
- *   (history pages, receipts); the Turn exo is minted from it on demand
- * @property {string} turnId
- * @property {any} input a string or a StagedText
- * @property {number} at
- * @property {string} state
- * @property {number} round
- * @property {string} [error]
- * @property {string} [resolution]
- * @property {any} [finished] promise kit while the turn is live
- * @property {boolean} [sealed] the turn's records are archived (M2)
- */
-
-/**
- * @typedef {object} RoundCalls the tool calls of one round
- * @property {any[]} waiting intents in call order that were not issued at
- *   once; only appended to, read from `issued` on (no in-place element
- *   moves: C-16, QC advisory 2)
- * @property {number} issued how many of `waiting` were issued
- * @property {number} inFlight
- * @property {number} unsettled calls without a recorded result
- * @property {boolean} frameLimited
- * @property {any} kit resolves when every call has a result
- * @property {Map<string, { entry: any, context: any }>} running issued
- *   calls without a result, by op id (deadlines reach their entry)
- */
-
-/**
- * @typedef {object} ActiveTurn the current turn (vat-internal, mutable)
- * @property {any} turn
- * @property {any} sink
- * @property {string} turnId
- * @property {number} generation
- * @property {string} state 'running' | 'cancelling', then the settled status
- * @property {number} round
- * @property {boolean} dispatched
- * @property {any} ports TurnPorts, or undefined before crank B, while
- *   reopening, or after recovery
- * @property {number} claimAt the claim's time (`TurnStarted.at`)
- * @property {boolean} reopening the lease broke before Dispatched; fresh
- *   ports decide between in flight (recovery) and stale (round 0 again)
- * @property {boolean} engineStarted
- * @property {any} request the last RoundRequest sent (round 0 is sent again
- *   on fresh ports when the first ones were already dead)
- * @property {() => any[]} openIntents intents of the current round without a result
- * @property {() => void} dropPorts forget the ports (recovery: they are
- *   tombstones), and the held ports when they are the same
- * @property {TurnInfo} info
- * @property {any} tools the tool set for these ports
- * @property {RoundCalls | undefined} calls
- * @property {any} roundKit pending until the round's roundFinal
- * @property {any} usage summed counts, or undefined before any round reported
- * @property {{ round: number, partial: any } | undefined} checkpoint the
- *   latest progress of the streaming round (W1b.1): kept outside the log,
- *   appended as one Partial only if the round ends without roundFinal
- * @property {number} [deadlineMs] the turn deadline fired (M2 seam 4): the
- *   cancel settles `failed` with `textOf.turnDeadline`
- * @property {string | undefined} systemNote M5 S2: a line every round
- *   request of this turn adds to the stored prompt (W5.7's R4-29 line, set
- *   by an `onClaim` hook)
- */
-
 /**
  * @param {object} options
  * @param {any} options.config SessionConfig
@@ -163,14 +97,19 @@ const zeroUsage = () => ({
  * @param {any} options.rowReporter
  * @param {RecordLog} options.records
  * @param {LivePublishing} options.live
- * @param {(core: any, active: ActiveTurn) => boolean} options.recoverAfterRestart
+ * @param {any} options.archive the session's archive (`archive.js`), made
+ *   in session.js with its seal callbacks bound to this runner's
+ *   `onSealed` and `onNotSealed`
+ * @param {any} options.contextSource the session's ContextSource
+ *   (`context-source.js`) over that archive
+ * @param {{ closed: () => boolean }} options.fence the session's delete
+ *   fence (7.1): no claim, no direct start once closed
+ * @param {Runtime} options.runtime the session's runtime parts
+ *   (`runtime-parts.js`): their combined hooks, their tool sources, and
+ *   `ToolContext.runtime`
  * @param {(error: unknown) => boolean} options.isRestartSignal
- * @param {typeof turnHooks} [options.hooks]
  * @param {readonly any[]} [options.table] tool table
  * @param {number} [options.maxToolRounds]
- * @param {readonly any[]} [options.sources] M5 S1: dynamic tool sources
- * @param {() => any} [options.getRuntime] M5 S4: the session's runtime
- *   (`runtime-parts.js`), for the tool set and `ToolContext.runtime`
  */
 export const makeTurnRunner = ({
   config,
@@ -178,14 +117,15 @@ export const makeTurnRunner = ({
   rowReporter,
   records,
   live,
-  recoverAfterRestart,
+  archive,
+  contextSource,
+  fence,
+  runtime,
   isRestartSignal,
-  hooks = turnHooks,
   table = toolTable,
   maxToolRounds = limits.maxToolRounds,
-  sources = toolSources,
-  getRuntime = () => undefined,
 }) => {
+  const { hooks } = runtime;
   /**
    * Records before this index went out in a RoundRequest (W1b.2): per
    * session, not per turn, so a round 0 also carries what the previous turn
@@ -195,8 +135,6 @@ export const makeTurnRunner = ({
   let sentUpTo = 0;
   /** @type {any} */
   let queue;
-  /** @type {any} */
-  let core;
 
   let lastKnownTime = /** @type {number} */ (config.createdAt);
   /** M2 seam 4: the turn deadline (0 or absent: off). */
@@ -206,146 +144,67 @@ export const makeTurnRunner = ({
     if (typeof at === 'number' && at > lastKnownTime) lastKnownTime = at;
   };
 
-  let turnCounter = 0;
   let generation = 0;
   /** @type {ActiveTurn | undefined} */
   let current;
-  /**
-   * turn id -> info (records only; J-9152)
-   * @type {Map<string, TurnInfo>}
-   */
-  const turns = new Map();
-  /**
-   * Turn objects of settled turns, least recently handed out first; at most
-   * `limits.retainedTurnHandles` (a Map keeps insertion order; a hit is
-   * deleted and set again, so no element moves in place).
-   * @type {Map<string, any>}
-   */
-  const handles = new Map();
-  /** the session is being deleted (7.1): no claim, no seal */
-  let deleting = false;
-
-  // ------------------------------------------------------------ the archive
-
-  /**
-   * M2 W2.5 (D-M2-1; m2-interfaces.md 4): settled turns' records leave the
-   * vat in segments. Crank Z drops the sealed turns' infos; an archived
-   * outcome-unknown turn not yet resolved stays resolvable (4.6).
-   */
-  const archive = makeSessionArchive({
-    records,
-    onSealed: dropped => {
-      for (const turnId of dropped) {
-        const info = turns.get(turnId);
-        turns.delete(turnId);
-        if (info !== undefined) {
-          info.sealed = true;
-          if (
-            info.state === 'outcome-unknown' &&
-            info.resolution === undefined
-          ) {
-            archive.keepUnresolved(turnId, info);
-          }
-        }
-      }
-    },
-    onNotSealed: (error, ports) => {
-      // A retired break: the adapter restarted; its ports are tombstones
-      // unless the current turn learns that from its own lease (4.4).
-      if (isRestartSignal(error) && current?.ports !== ports) {
-        dropHeld(ports);
-      }
-    },
+  // Settled turns are records; Turns are minted from them (turn-index.js).
+  const index = makeTurnIndex({
+    limits,
+    archive,
+    mint: info => makeTurn(info),
+    live: () => current,
   });
-  const contextSource = makeContextSource({ records, archive });
+
   const history = makeHistory({
     records,
-    turnInfo: turnId => turns.get(turnId),
-    turnHandle: info => turnHandle(info),
+    turnInfo: index.info,
+    turnHandle: index.handle,
     archive,
   });
 
-  /**
-   * The ports of the current adapter incarnation and their tool set, held
-   * across turns (contract 6.1, J-9151); undefined until the first open
-   * answers and after a retired break showed them dead.
-   * @type {{ ports: any, tools: any } | undefined}
-   */
-  let held;
-  /** an open is in flight */
-  let opening = false;
-  /** opens asked for since the last break (bounded; see onOpened) */
-  let reopens = 0;
-  /**
-   * The latest `since` of ports whose lease broke: an open answered with
-   * ports no newer than that came from the dead incarnation.
-   */
-  let brokenSince = -1;
   /** activity of the row when no turn is current */
   let restActivity = 'passive';
 
-  const totals = {
-    ...zeroUsage(),
-    context: { usedTokens: 0, windowTokens: 0 },
-    turns: 0,
-    incompleteTurns: 0,
-  };
-  const usageTotals = () =>
-    harden({ ...totals, context: harden({ ...totals.context }) });
+  const usage = makeUsage({ contextLength: config.contextLength });
 
   // ------------------------------------------------------------ the outbox
 
+  const outbox = makeOutbox({
+    live,
+    rowReporter,
+    pendingView: () => queue.view(),
+  });
+  const { emit, report, flushRow, flushTo } = outbox;
+
+  /** @param {any} record */
+  const appendRecord = record => {
+    records.append(record);
+  };
   /**
-   * events of this crank, in order
-   * @type {any[]}
+   * What a part's hook gets (runtime-parts.js): frozen, not hardened (the
+   * turn is the runner's mutable record).
+   * @param {ActiveTurn} active
+   * @returns {HookTurn}
    */
-  let outbox = [];
-  /** a `pending` event is owed (added last, with the queue's view at flush) */
-  let pendingOwed = false;
-  /**
-   * the merged row patch of this crank
-   * @type {Record<string, any> | undefined}
-   */
-  let rowPatch;
-  let flushScheduled = false;
+  const hookTurn = active =>
+    Object.freeze({ active, round: active.round, append: appendRecord, emit });
 
-  /** @param {any} event */
-  const emit = event => {
-    outbox.push(harden(event));
-  };
-
-  const takeEvents = () => {
-    const events = outbox;
-    outbox = [];
-    if (pendingOwed) {
-      pendingOwed = false;
-      events.push(harden({ type: 'pending', pending: queue.view() }));
-    }
-    return events;
-  };
-
-  const flushRow = () => {
-    if (rowPatch === undefined) return;
-    const patch = harden({ ...rowPatch });
-    rowPatch = undefined;
-    E.sendOnly(rowReporter).changed(patch);
-  };
-
-  /**
-   * Publish the outbox to these ports (sendOnly) or, without ports, outside
-   * a turn (answered); send the row patch.
-   * @param {any} ports
-   */
-  const flushTo = ports => {
-    flushRow();
-    const events = takeEvents();
-    if (events.length === 0) return;
-    if (ports !== undefined) {
-      live.inTurn(ports, events);
-    } else {
-      void live.outside(events);
-    }
-  };
+  // The session's recovery (recovery.js): steps 1-8 in the crank that saw
+  // the restart signal.
+  const recovery = makeRecovery({
+    records,
+    queue: harden({
+      size: () => queue.size(),
+      hold: (/** @type {any} */ why, /** @type {string} */ message) =>
+        queue.hold(why, message),
+    }),
+    current: () => current,
+    settle: (active, outcome) => {
+      settle(active, outcome);
+    },
+    hooks,
+    hookTurn,
+  });
 
   /**
    * End of a crank's work: publish to the current turn's ports; keep the
@@ -360,20 +219,23 @@ export const makeTurnRunner = ({
     flushTo(current?.ports);
   };
 
-  /** A flush at the end of this crank's synchronous work, for callers outside this module. */
-  const scheduleFlush = () => {
-    if (flushScheduled) return;
-    flushScheduled = true;
-    void Promise.resolve().then(() => {
-      flushScheduled = false;
-      flush();
-    });
-  };
+  // ------------------------------------------------------------ ports
 
-  /** @param {Record<string, any>} patch RowPatch fields */
-  const report = patch => {
-    rowPatch = { ...(rowPatch ?? {}), ...patch };
-  };
+  /**
+   * The ports of the current adapter incarnation and their tool set, held
+   * across turns (contract 6.1, J-9151; ports.js).
+   */
+  const incarnation = makePorts({
+    services,
+    live,
+    toolsFor: ports =>
+      toolSetFor(ports, table, services, runtime),
+    onFresh: (set, since) => onOpened(set, since),
+    onFailed: error => onOpenFailed(error),
+    flush,
+  });
+  const dropHeld = incarnation.drop;
+  const openPorts = incarnation.open;
 
   // ------------------------------------------------------------ status
 
@@ -390,9 +252,6 @@ export const makeTurnRunner = ({
     if (info.resolution !== undefined) status.resolution = info.resolution;
     return harden(status);
   };
-
-  const isLive = (/** @type {string} */ state) =>
-    state === 'running' || state === 'cancelling';
 
   // ------------------------------------------------------------ settle
 
@@ -446,13 +305,12 @@ export const makeTurnRunner = ({
     if (active.usage !== undefined) settled.usage = harden({ ...active.usage });
     records.append(settled);
 
-    totals.turns += 1;
-    if (status !== 'completed') totals.incompleteTurns += 1;
+    usage.settled(status);
 
     if (status === 'completed' && final !== undefined) {
       emit({ type: 'final', turnId: active.turnId, text: final });
     }
-    emit({ type: 'usage', turnId: active.turnId, ...usageTotals() });
+    emit({ type: 'usage', turnId: active.turnId, ...usage.totals() });
     if (status === 'failed') {
       emit({
         type: 'abort',
@@ -462,9 +320,7 @@ export const makeTurnRunner = ({
     } else {
       emit({ type: 'end', turnId: active.turnId, status });
     }
-    for (const hook of hooks.onSettle) {
-      hook({ core, active, round: active.round });
-    }
+    hooks.onSettle(hookTurn(active));
     restActivity = status === 'failed' ? 'error' : 'passive';
     report({
       activity: restActivity,
@@ -474,12 +330,12 @@ export const makeTurnRunner = ({
     info.finished?.resolve(statusOf(info));
     info.finished = undefined;
     // The settled turn is a record now; its Turn stays only as a recent handle.
-    remember(active.turnId, active.turn);
+    index.remember(active.turnId, active.turn);
     // M2 (m2-interfaces.md 4.3): seal before the next entry is claimed, so
     // the range holds only turns settled before this crank.
     try {
       archive.maybeSeal({
-        ports: active.ports ?? held?.ports,
+        ports: active.ports ?? incarnation.held()?.ports,
         context: contextSource,
       });
     } catch {
@@ -560,7 +416,7 @@ export const makeTurnRunner = ({
       services,
       endpoint: active.ports?.endpoint,
       // M5 S4: the session's runtime parts (labels, powers, inspector, ...).
-      runtime: getRuntime(),
+      runtime,
     });
     calls.running.set(intent.opId, { entry, context });
     /** @type {Promise<any>} */
@@ -693,9 +549,9 @@ export const makeTurnRunner = ({
   const onToolError = (active, calls, intent, entry, error) => {
     if (!stillOurs(active, calls)) return;
     // M5 S5: a `'session'` entry is as `'guest'` here (it cannot meet one).
-    if ((entry.site ?? 'adapter') === 'adapter' && isRestartSignal(error)) {
+    if (entry.site === 'adapter' && isRestartSignal(error)) {
       // A restart, never a tool failure (section 7).
-      recoverAfterRestart(core, active);
+      recovery.recover(active);
       flush();
       return;
     }
@@ -864,15 +720,9 @@ export const makeTurnRunner = ({
     active.round = round;
     active.info.round = round;
     if (active.ports === undefined) throw SETTLED;
-    for (const hook of hooks.beforeRound) hook({ core, active, round });
+    hooks.beforeRound(hookTurn(active));
     // M5 S1: the tool set is read again at the start of every round (R3-6).
-    active.tools = toolSetFor(
-      active.ports,
-      table,
-      services,
-      sources,
-      getRuntime(),
-    );
+    active.tools = toolSetFor(active.ports, table, services, runtime);
     if (round > 0) {
       emit({ type: 'phase', turnId: active.turnId, phase: 'thinking' });
     }
@@ -930,41 +780,6 @@ export const makeTurnRunner = ({
     );
   };
 
-  /**
-   * @param {ActiveTurn} active
-   * @param {any} usage
-   */
-  const addUsage = (active, usage) => {
-    if (usage === undefined) return;
-    const sum = active.usage ?? zeroUsage();
-    // Named keys (guest rule no-data-keys, J-9366).
-    for (const into of [sum, totals]) {
-      into.inputTokens += usage.inputTokens;
-      into.outputTokens += usage.outputTokens;
-      into.cachedInputTokens += usage.cachedInputTokens;
-      into.cacheWriteInputTokens += usage.cacheWriteInputTokens;
-      into.reasoningOutputTokens += usage.reasoningOutputTokens;
-    }
-    if (usage.context !== undefined) {
-      sum.context = harden({ ...usage.context });
-      totals.context = { ...usage.context };
-    }
-    // M2 seam 3 (R4-33): the window is the catalogue's, stored at creation.
-    if (config.contextLength !== undefined) {
-      totals.context = {
-        ...totals.context,
-        windowTokens: config.contextLength,
-      };
-      if (sum.context !== undefined) {
-        sum.context = harden({
-          ...sum.context,
-          windowTokens: config.contextLength,
-        });
-      }
-    }
-    active.usage = sum;
-  };
-
   // ------------------------------------------------------------ the sink
 
   /**
@@ -1003,11 +818,11 @@ export const makeTurnRunner = ({
         let failure;
         const seen = new Set();
         const toolCalls = result.toolCalls.map(
-          (/** @type {any} */ call, /** @type {number} */ index) => {
+          (/** @type {any} */ call, /** @type {number} */ ordinal) => {
             if (call.name === '') failure ??= texts.invalidToolCall;
             const callId =
               call.callId === ''
-                ? textOf.synthesizedCallId(result.round, index)
+                ? textOf.synthesizedCallId(result.round, ordinal)
                 : call.callId;
             if (seen.has(callId)) failure ??= texts.duplicateToolCallId;
             seen.add(callId);
@@ -1029,7 +844,7 @@ export const makeTurnRunner = ({
           settled.nativeContext = result.nativeContext;
         }
         records.append(settled);
-        addUsage(active, result.usage);
+        usage.addRound(active, result.usage);
         if (failure !== undefined) {
           kit.reject(SETTLED);
           settle(active, { status: 'failed', error: failure });
@@ -1051,7 +866,7 @@ export const makeTurnRunner = ({
             partial: failure.partial,
           };
         }
-        addUsage(active, failure.usage);
+        usage.addRound(active, failure.usage);
         settle(active, { status: 'failed', error: failure.reason });
       },
       /** @param {{ opId: string }} request */
@@ -1089,15 +904,6 @@ export const makeTurnRunner = ({
   );
 
   // ------------------------------------------------------------ ports
-
-  /**
-   * Ports whose incarnation is gone: stop holding them.
-   * @param {any} ports
-   */
-  const dropHeld = ports => {
-    if (held !== undefined && held.ports === ports) held = undefined;
-    live.forget(ports.publisher);
-  };
 
   /**
    * Start the turn on these ports (crank A with held ports, crank B after an
@@ -1151,45 +957,13 @@ export const makeTurnRunner = ({
     }
   };
 
-  /** Ask the manager for this incarnation's ports (one open at a time). */
-  const openPorts = () => {
-    if (opening) return;
-    opening = true;
-    reopens += 1;
-    E(services.backend)
-      .open(services.host)
-      .then(
-        ports => {
-          opening = false;
-          onOpened(ports);
-          flush();
-        },
-        error => {
-          opening = false;
-          onOpenFailed(error);
-          flush();
-        },
-      );
-  };
-
-  /** @param {any} ports */
-  const onOpened = ports => {
-    const since = /** @type {number} */ (ports.since);
-    if (since <= brokenSince) {
-      // Answered from the incarnation whose lease broke (the open was sent
-      // before the break): ask again, a bounded number of times.
-      if (reopens < 3) {
-        openPorts();
-        return;
-      }
-      onOpenFailed(Error('the backend answered with ports that are gone'));
-      return;
-    }
-    reopens = 0;
-    held = harden({
-      ports,
-      tools: toolSetFor(ports, table, services, sources, getRuntime()),
-    });
+  /**
+   * Fresh ports are held (ports.js): start the current turn on them, or
+   * decide a turn whose lease broke before Dispatched.
+   * @param {{ ports: any, tools: any }} held
+   * @param {number} since
+   */
+  const onOpened = (held, since) => {
     const active = current;
     if (active === undefined || active.ports !== undefined) return;
     if (active.state !== 'running') return;
@@ -1198,7 +972,7 @@ export const makeTurnRunner = ({
       if (active.claimAt < since) {
         // Claimed before this incarnation started: the turn was in flight
         // when the adapter went (R4-66); never sent again.
-        recoverAfterRestart(core, active);
+        recovery.recover(active);
         return;
       }
       // Claimed on ports that were already dead: nothing reached a backend;
@@ -1209,15 +983,17 @@ export const makeTurnRunner = ({
     attachPorts(active, held, false);
   };
 
-  /** @param {unknown} error */
+  /**
+   * No ports came (ports.js).
+   * @param {unknown} error
+   */
   const onOpenFailed = error => {
-    reopens = 0;
     const active = current;
     if (active === undefined || active.ports !== undefined) return;
     if (active.reopening) {
       // The adapter went and no fresh ports came: nothing was dispatched.
       active.reopening = false;
-      recoverAfterRestart(core, active);
+      recovery.recover(active);
       return;
     }
     // The manager is a guest vat: never a restart signal.
@@ -1239,7 +1015,7 @@ export const makeTurnRunner = ({
     if (current !== active || active.ports !== ports) {
       // A settled turn's lease, or ports this turn already gave up: only the
       // generation's recovery may act on it (it does nothing).
-      if (restart) recoverAfterRestart(core, active);
+      if (restart) recovery.recover(active);
       flush();
       return;
     }
@@ -1249,17 +1025,14 @@ export const makeTurnRunner = ({
       return;
     }
     if (active.dispatched) {
-      recoverAfterRestart(core, active);
+      recovery.recover(active);
       flush();
       return;
     }
     // Before Dispatched: fresh ports tell whether the turn was in flight.
-    const since = /** @type {number} */ (ports.since);
-    if (since > brokenSince) brokenSince = since;
     active.ports = undefined;
     active.reopening = true;
-    reopens = 0;
-    openPorts();
+    incarnation.broke(ports);
     flush();
   };
 
@@ -1280,7 +1053,7 @@ export const makeTurnRunner = ({
    */
   const claim = (input, at, take = () => {}, item = undefined) => {
     current === undefined || Fail`a turn is current`;
-    const turnId = `t${turnCounter + 1}`;
+    const turnId = index.nextId();
     /** @type {TurnInfo} */
     const info = {
       turnId,
@@ -1321,7 +1094,7 @@ export const makeTurnRunner = ({
     };
     const turn = makeTurn(info);
     take(info);
-    turnCounter += 1;
+    index.claimed();
     generation += 1;
     /** @type {Record<string, any>} */
     const started = { kind: 'turn-started', turnId, input, at };
@@ -1335,12 +1108,13 @@ export const makeTurnRunner = ({
     records.append(started);
     active.turn = turn;
     active.sink = makeSink(active);
-    turns.set(turnId, info);
+    index.add(info);
     current = active;
     // M5 S3: after TurnStarted (hooks need the turn id), before the first
     // round request is built.
-    for (const hook of hooks.onClaim ?? []) hook({ core, active, item });
+    hooks.onClaim(hookTurn(active), item);
     report({ activity: 'working' });
+    const held = incarnation.held();
     if (held !== undefined) {
       attachPorts(active, held, false);
     } else {
@@ -1357,7 +1131,7 @@ export const makeTurnRunner = ({
    * @returns {ActiveTurn | undefined}
    */
   const claimNext = () => {
-    if (current !== undefined || deleting) return undefined;
+    if (current !== undefined || fence.closed()) return undefined;
     const item = queue.first();
     if (item !== undefined) {
       // The receipt keeps the turn id, not the turn (m2-interfaces.md 5.3).
@@ -1369,10 +1143,8 @@ export const makeTurnRunner = ({
       );
     }
     if (queue.holdReason() !== undefined) return undefined;
-    for (const source of hooks.turnSources) {
-      const next = source(core);
-      if (next !== undefined) return claim(next.text, next.at);
-    }
+    const next = hooks.nextTurn();
+    if (next !== undefined) return claim(next.text, next.at);
     return undefined;
   };
 
@@ -1411,9 +1183,7 @@ export const makeTurnRunner = ({
     if (active.ports !== undefined) {
       E.sendOnly(active.ports.endpoint).cancelRound(active.turn);
     }
-    for (const hook of hooks.onCancel) {
-      hook({ core, active, round: active.round });
-    }
+    hooks.onCancel(hookTurn(active));
     if (active.calls === undefined || active.calls.inFlight === 0) {
       settle(active, cancelledOutcome(active));
     } else {
@@ -1466,7 +1236,7 @@ export const makeTurnRunner = ({
         if (info.resolution !== undefined) {
           throw Error(texts.turnAlreadyResolved);
         }
-        if (info.sealed && archive.unresolved.get(info.turnId) !== info) {
+        if (info.sealed && archive.unresolvedInfo(info.turnId) !== info) {
           throw Error(texts.turnArchivedUnresolvable);
         }
         records.append({
@@ -1476,151 +1246,38 @@ export const makeTurnRunner = ({
           at: lastKnownTime,
         });
         info.resolution = note;
-        archive.unresolved.delete(info.turnId);
+        archive.resolve(info.turnId);
       },
     },
   );
 
-  /**
-   * Keep `handle` as the most recently handed-out Turn of `turnId`; drop
-   * the least recently used beyond `retainedTurnHandles`.
-   * @param {string} turnId
-   * @param {any} handle
-   */
-  const remember = (turnId, handle) => {
-    handles.delete(turnId);
-    handles.set(turnId, handle);
-    if (handles.size > limits.retainedTurnHandles) {
-      const oldest = handles.keys().next().value;
-      if (oldest !== undefined) handles.delete(oldest);
-    }
-  };
-
-  /**
-   * The Turn object of a turn: the current turn's own, else a recent handle,
-   * else one minted from the record (J-9152).
-   * @param {TurnInfo} info
-   */
-  const turnHandle = info => {
-    if (current !== undefined && current.info === info) return current.turn;
-    const known = handles.get(info.turnId);
-    const handle = known ?? makeTurn(info);
-    remember(info.turnId, handle);
-    return handle;
-  };
-
-  /**
-   * The Turn of a turn id while the session keeps the turn (live, kept or
-   * unresolved), else undefined (an archived turn; m2-interfaces.md 2.4,
-   * 5.3). Receipts hand it out.
-   * @param {string} turnId
-   */
-  const turnById = turnId => {
-    const info = turns.get(turnId) ?? archive.unresolved.get(turnId);
-    return info === undefined ? undefined : turnHandle(info);
-  };
-
-  /**
-   * `Session.findTurn` (m2-interfaces.md 4.9): a kept turn's handle, or an
-   * archived unresolved one's; another archived turn throws `turnSealed`,
-   * anything else `unknownTurn`. Turn ids are `t<ordinal>` (F.2 d).
-   * @param {string} turnId
-   */
-  const findTurn = turnId => {
-    const handle = turnById(turnId);
-    if (handle !== undefined) return handle;
-    const match = /^t([1-9][0-9]*)$/.exec(turnId);
-    if (match !== null && Number(match[1]) <= turnCounter) {
-      throw Error(texts.turnSealed);
-    }
-    throw Error(texts.unknownTurn);
-  };
-
   // ------------------------------------------------------------ imported records
 
-  /**
-   * W2.7 (m2-interfaces.md 2.4 item 5): append imported records in log
-   * order, rebuild the turn infos, advance the turn counter, then seal as
-   * section 4.3 allows.
-   * @param {readonly any[]} list
-   */
-  const importTurns = list => {
-    current === undefined || Fail`a turn is current`;
-    for (const record of list) {
-      if (record.kind === 'turn-started') {
-        record.turnId === `t${turnCounter + 1}` ||
-          Fail`imported turn ${record.turnId} is out of order`;
-      } else if (record.kind === 'turn-settled') {
-        // Only the last started turn, once (J-9493): a settle outside its
-        // span would leave a turn running for ever.
-        (record.turnId === `t${turnCounter}` &&
-          turns.get(record.turnId)?.state === 'running') ||
-          Fail`imported settle of ${record.turnId} is out of place`;
-      } else if (record.kind === 'turn-resolved') {
-        turns.get(record.turnId)?.state !== 'running' ||
-          Fail`imported resolution of ${record.turnId} precedes its settle`;
-      }
-      records.append(record);
-      see(record.at);
-      const info =
-        turns.get(record.turnId) ?? archive.unresolved.get(record.turnId);
-      if (record.kind === 'turn-started') {
-        turnCounter += 1;
-        turns.set(record.turnId, {
-          turnId: record.turnId,
-          input: record.input,
-          at: record.at,
-          state: 'running',
-          round: 0,
-        });
-      } else if (info === undefined) {
-        // A resolution of a turn archived before the import: nothing kept.
-      } else if (record.kind === 'turn-settled') {
-        info.state = record.status;
-        if (record.error !== undefined) info.error = record.error;
-      } else if (record.kind === 'turn-resolved') {
-        info.resolution = record.note;
-        archive.unresolved.delete(record.turnId);
-      } else if (typeof record.round === 'number') {
-        info.round = Math.max(info.round, record.round);
-      }
-    }
-    archive.maybeSeal({ ports: held?.ports, context: contextSource });
-  };
-
-  /**
-   * When importing ends (W2.7; J-9493): a turn exported while it ran has
-   * no settle and would never get one (nothing runs it here), so it is
-   * settled `outcome-unknown`, resolvable as after a restart (R4-32, P-14),
-   * and the archive can seal past it.
-   */
-  const importEnd = () => {
-    for (const info of turns.values()) {
-      if (info.state === 'running') {
-        importTurns([
-          harden({
-            kind: 'turn-settled',
-            turnId: info.turnId,
-            status: 'outcome-unknown',
-            at: lastKnownTime,
-          }),
-        ]);
-        totals.turns += 1;
-        totals.incompleteTurns += 1;
-      }
-    }
-  };
+  const { importTurns, importEnd } = makeTurnImport({
+    records,
+    index,
+    archive,
+    usage,
+    see,
+    lastKnownTime: () => lastKnownTime,
+    idle: () => current === undefined,
+    seal: () => {
+      archive.maybeSeal({
+        ports: incarnation.held()?.ports,
+        context: contextSource,
+      });
+    },
+  });
 
   // ------------------------------------------------------------ the runner
 
   return harden({
     /**
      * Late wiring (the queue's onChange needs the runner first).
-     * @param {{ queue: any, core: any }} wiring
+     * @param {{ queue: any }} wiring
      */
     attach: wiring => {
       queue = wiring.queue;
-      core = wiring.core;
     },
     current: () => current,
     /** Cancel the running turn, if any (R6-44 send-now; as Turn.cancel). */
@@ -1637,31 +1294,40 @@ export const makeTurnRunner = ({
     see,
     /** The queue changed (Queue onChange): owe a `pending` event and the count. */
     queueChanged: () => {
-      pendingOwed = true;
+      outbox.owePending();
       report({ queuedCount: queue.size() });
-      scheduleFlush();
+      outbox.schedule(flush);
     },
     /** Open this incarnation's ports (at creation; contract 6.1). */
     openPorts: () => {
-      if (held === undefined) openPorts();
+      if (incarnation.held() === undefined) openPorts();
     },
-    turnHandle,
-    turnById,
-    findTurn,
-    /** The archive's state and index (W2.7's export and session.js). */
-    archive: harden({
-      state: archive.state,
-      segments: archive.segments,
-      entries: archive.entries,
-    }),
+    turnById: index.byId,
+    findTurn: index.find,
     /**
-     * The fence of `SessionInternal.deleteSelf` (7.1): no claim and no seal
-     * from now on; the current turn is cancelled without waiting for its
-     * tool calls.
+     * The archive's crank Z (m2-interfaces.md 4.4): the sealed turns' infos
+     * go; an archived outcome-unknown turn not yet resolved stays
+     * resolvable (4.6).
+     * @param {string[]} dropped
+     */
+    onSealed: index.archived,
+    /**
+     * A seal was rejected or broke. A retired break: the adapter restarted;
+     * its ports are tombstones unless the current turn learns that from its
+     * own lease (4.4).
+     * @param {unknown} error
+     * @param {any} ports
+     */
+    onNotSealed: (error, ports) => {
+      if (isRestartSignal(error) && current?.ports !== ports) {
+        dropHeld(ports);
+      }
+    },
+    /**
+     * `SessionInternal.deleteSelf` after the session's fence closed (7.1):
+     * the current turn is cancelled without waiting for its tool calls.
      */
     beginDelete: () => {
-      deleting = true;
-      archive.fence();
       const active = current;
       if (active !== undefined) {
         cancel(active.info);
@@ -1669,38 +1335,25 @@ export const makeTurnRunner = ({
       }
       flush();
     },
-    deleting: () => deleting,
     importTurns,
     importEnd,
     /** @param {any} imported UsageTotals of an imported session */
-    importUsage: imported => {
-      totals.inputTokens = imported.inputTokens;
-      totals.outputTokens = imported.outputTokens;
-      totals.cachedInputTokens = imported.cachedInputTokens;
-      totals.cacheWriteInputTokens = imported.cacheWriteInputTokens;
-      totals.reasoningOutputTokens = imported.reasoningOutputTokens;
-      totals.context = { ...imported.context };
-      totals.turns = imported.turns;
-      totals.incompleteTurns = imported.incompleteTurns;
-    },
+    importUsage: usage.replace,
     /**
      * An outside publish broke with the retired text: the adapter
      * restarted; ports with this publisher are dead. A turn using them
      * learns it from its lease.
      * @param {any} publisher
      */
-    publisherBroke: publisher => {
-      if (held === undefined || held.ports.publisher !== publisher) return;
-      if (current?.ports === held.ports) return;
-      held = undefined;
-    },
+    publisherBroke: publisher =>
+      incarnation.publisherBroke(publisher, current?.ports),
     /**
      * Section 6.1 direct start; refused while a turn is current (R4-10).
      * @param {any} input a string or a StagedText
      * @param {number} at
      */
     startTurn: (input, at) => {
-      if (deleting) throw Error(texts.sessionDeleting);
+      if (fence.closed()) throw Error(texts.sessionDeleting);
       // Blank and over-inlineBytes text are refused as enqueueOnce refuses
       // them; the frame rule rests on the session (J-9150, J-9369).
       checkSubmission(isStaged(input) ? input : { text: input });
@@ -1720,9 +1373,8 @@ export const makeTurnRunner = ({
       });
     },
     historyPage: history.page,
-    usage: usageTotals,
+    usage: usage.totals,
     activity: () => (current === undefined ? restActivity : 'working'),
-    isLive,
   });
 };
 harden(makeTurnRunner);

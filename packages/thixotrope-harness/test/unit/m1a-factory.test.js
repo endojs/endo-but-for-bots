@@ -19,6 +19,7 @@ import {
   makeFactoryKit,
   stagingSources,
 } from '../../guest/factory/factory.js';
+import { makeStartCount } from '../../guest/factory/starts.js';
 import { make } from '../../guest/factory/main.js';
 import {
   makeHarnessRoot,
@@ -181,6 +182,7 @@ const setup = vatOptions => {
     vats: fakeVats.vats,
     programs,
     rows,
+    starts: makeStartCount(),
   });
   return { ...fakeVats, ...fakeAdmin, rows, programs, kit, loaded };
 };
@@ -297,6 +299,7 @@ test('createSession without a loaded program fails before making a vat', async t
     vats: fakeVats.vats,
     programs: makeProgramStore(),
     rows,
+    starts: makeStartCount(),
   });
   await t.throwsAsync(() => E(kit.factory).createSession(harden({ backend })), {
     message: NO_PROGRAM_TEXT,
@@ -625,7 +628,13 @@ test('start listener: a creation whose make answered is completed', async t => {
   const rows = makeRowTable();
   const programs = makeProgramStore();
   loadProgram(programs);
-  const kit = makeFactoryKit({ admin, vats: fakeVats.vats, programs, rows });
+  const kit = makeFactoryKit({
+    admin,
+    vats: fakeVats.vats,
+    programs,
+    rows,
+    starts: makeStartCount(),
+  });
   const creating = E(kit.factory).createSession(
     harden({ title: 'x', backend }),
   );
@@ -777,4 +786,50 @@ test('the hook tables have M1a entries and the services are attenuated', async t
   t.deepEqual(Object.keys(services).sort(), ['backend', 'host']);
   t.is(services.backend, backend);
   t.is(fakeAdmin.minted(), 1);
+});
+
+test('one start count: the start listener counts a start before the pool reads it (HR-SYN-36)', async t => {
+  const fakeVats = makeFakeVats();
+  const fakeAdmin = makeFakeAdmin();
+  const starts = makeStartCount();
+  /** @type {number[]} */
+  const seen = [];
+  // A pool stand-in: the factory's recovery calls only onStart here.
+  const pool = /** @type {any} */ ({
+    onStart: () => seen.push(starts.current()),
+  });
+  const kit = makeFactoryKit({
+    admin: fakeAdmin.admin,
+    vats: fakeVats.vats,
+    programs: makeProgramStore(),
+    rows: makeRowTable(),
+    pool,
+    starts,
+  });
+  t.is(starts.current(), 0);
+  await E(kit.startListener).started();
+  await settle();
+  await E(kit.startListener).started();
+  await settle();
+  t.deepEqual(seen, [1, 2], 'the pool reads the start already counted');
+  t.is(starts.current(), 2);
+});
+
+test('a failed start-listener registration is reported by status() (HR-GUEST-12)', async t => {
+  const fakeAdmin = makeFakeAdmin();
+  const refusing = Far('AgentHostAdmin', {
+    forSession: () => fakeAdmin.admin.forSession(),
+    bindSession: () => undefined,
+    onStart: () => {
+      throw Error('no lifecycle facet');
+    },
+  });
+  const root = make({ host: refusing, vats: makeFakeVats().vats });
+  await settle();
+  const status = await E(root).status();
+  t.is(status.error, 'no lifecycle facet');
+  t.true(matches(status, shapes.HarnessStatus));
+  const fine = make({ host: fakeAdmin.admin, vats: makeFakeVats().vats });
+  await settle();
+  t.false('error' in (await E(fine).status()));
 });

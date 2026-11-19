@@ -14,9 +14,11 @@
  * `fetch`).
  *
  * The secrets wrapping key must be outside the state directory and the
- * user's own configuration: call `useTestWrappingKey(t)` before the
- * supervisor starts (its child processes inherit
- * `THIX_HARNESS_SECRETS_KEY`, `scripts/serve.mjs` allowlist).
+ * user's own configuration: `useTestWrappingKey(tag)` makes a fresh one;
+ * pass its `file` as `secretsKeyFile` to the supervisor's start
+ * (`startFromTemplate`, `provision`) and to `serveGateway`, which reads the
+ * sign-in file with it. This process's environment is never changed
+ * (HR-SYN-21).
  *
  * The importer must have installed the guest prelude first.
  */
@@ -29,20 +31,20 @@ import { E } from '@endo/far';
 import { gatewayUrl } from '../../scripts/gateway.mjs';
 import { names } from '../../scripts/provision-steps.js';
 import { makeClient } from '../adapter/_m3-captp-client.js';
-import { tmpRoot } from '../template/index.js';
+import { supervisorEnv, tmpRoot } from '../template/index.js';
 
 /**
- * Point `THIX_HARNESS_SECRETS_KEY` at a fresh file under the harness's
- * `tmp/`. Call before starting the supervisor; call the answer's `remove()`
- * when the last supervisor of the file has stopped (a restart reads it).
+ * A fresh wrapping key file under the harness's `tmp/` (not created yet: the
+ * adapter's first use creates it). Pass `file` as `secretsKeyFile`; call
+ * `remove()` when the last supervisor of the file has stopped (a restart
+ * reads it).
  * @param {string} [tag]
  */
 export const useTestWrappingKey = (tag = 'm3') => {
   const dir = path.join(tmpRoot, `${tag}-key-${process.pid}`);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  process.env.THIX_HARNESS_SECRETS_KEY = path.join(dir, 'secrets.key');
   return {
-    file: process.env.THIX_HARNESS_SECRETS_KEY,
+    file: path.join(dir, 'secrets.key'),
     remove: () => rmSync(dir, { recursive: true, force: true }),
   };
 };
@@ -86,9 +88,14 @@ export const secretOf = signInUrl =>
  * Read the sign-in URL of a state (as `scripts/gateway.mjs url`).
  * @param {string} root
  * @param {string} origin
+ * @param {string} [secretsKeyFile] the supervisor's wrapping key file
  */
-export const readSignIn = async (root, origin) => {
-  const signInUrl = await gatewayUrl({ state: root, origin });
+export const readSignIn = async (root, origin, secretsKeyFile) => {
+  const signInUrl = await gatewayUrl({
+    state: root,
+    origin,
+    env: supervisorEnv({ secretsKeyFile }),
+  });
   return { url: signInUrl, secret: secretOf(signInUrl) };
 };
 
@@ -160,15 +167,24 @@ export const connectGateway = async ({
  * @param {string} [options.publicOrigin]
  * @param {string[]} [options.trustedProxies]
  * @param {number} [options.signInFailuresPerMinute]
+ * @param {string} [options.secretsKeyFile] the supervisor's wrapping key
+ *   file (`useTestWrappingKey`), to read the sign-in file
  */
-export const serveGateway = async (state, options = {}) => {
+export const serveGateway = async (
+  state,
+  { secretsKeyFile, ...options } = {},
+) => {
   const { admin, operator } = await gatewayAdminOf(state);
   const status = await E(admin).serve(
     harden({ port: 0, ...options, operator }),
   );
   if (status.state !== 'serving')
     throw Error(`the gateway did not serve: ${JSON.stringify(status)}`);
-  const { url, secret } = await readSignIn(state.root, status.origin);
+  const { url, secret } = await readSignIn(
+    state.root,
+    status.origin,
+    secretsKeyFile,
+  );
   return {
     url,
     origin: status.origin,

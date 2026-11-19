@@ -24,8 +24,9 @@ import {
   textDigest,
 } from '../../resources/agent-host/impl/providers/anthropic.js';
 import { anthropicDelay } from '../../resources/agent-host/impl/providers/retry.js';
+import { PREPARE_REQUIRED } from '../../resources/agent-host/impl/providers/api.js';
 import { NATIVE_CONTEXT_FORMAT } from '../../resources/agent-host/impl/projection.js';
-import { backendKinds } from '../../resources/agent-host/impl/index.js';
+import { backendKinds } from '../../resources/agent-host/impl/providers/kinds.js';
 import {
   anthropicEvents,
   startFakeProviderServer,
@@ -593,4 +594,24 @@ test('messages: tool ids mapped injectively, results follow their calls, a missi
       ],
     },
   ]);
+});
+
+test('HR-SYN-3 (a): a round started without its projection is refused before anything is sent', async t => {
+  const server = await serverFor(t);
+  server.setPlan([{ sse: 'anthropic-text.sse' }]);
+  const provider = makeAnthropicProvider({
+    label: 'api-test',
+    spec: { baseUrl: server.anthropicBaseUrl },
+    readKey: async () => KEY,
+    timers,
+  });
+  await t.throwsAsync(
+    provider.startRound(
+      harden({ turn: {}, turnId: 't1', round: 0, options: { modelId: MODEL } }),
+      undefined,
+      undefined,
+    ),
+    { message: PREPARE_REQUIRED },
+  );
+  t.is(server.requests().length, 0);
 });

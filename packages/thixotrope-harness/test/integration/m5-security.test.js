@@ -8,9 +8,10 @@
  *   membrane: refused in the exec vat with `textOf.membraneTooLarge`, and
  *   the fixture's vat answers its next call (the write never arrived);
  * - a record of 40 keys is refused (`textOf.membraneTooManyKeys`);
- * - a granted tool answering 300 KB yields a staged, cut result or
- *   `texts.inspectTerminated`, and the session keeps working (its next turn
- *   completes and no vat but an exec vat stopped).
+ * - a granted tool answering 300 KB yields a staged, cut result,
+ *   `texts.inspectTerminated`, or (the hub refused the answer for size)
+ *   the inspector's `ANSWER_OVER_FRAME_TEXT`, and the session keeps working
+ *   (its next turn completes and no vat but an exec vat stopped).
  *
  *   THIX_AGENT=W5.5 corepack yarn test:integration test/integration/m5-security.test.js
  */
@@ -19,10 +20,9 @@ import '../unit/_m1a-prelude.js';
 import test from 'ava';
 
 import { E } from '@endo/far';
-import { FRAME_TOO_LARGE } from '@endo/thixotrope';
 
 /* eslint-disable import/no-relative-packages */
-import { textOf, texts } from '../../guest/lib/interfaces.js';
+import { textOf } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { emit, loadAvg, runIdentity } from '../../perf/_harness.mjs';
@@ -41,6 +41,7 @@ import {
   fixturesOf,
   objectsTemplate,
   presetSession,
+  tooBigOutcome,
   turnOf,
 } from './_m5-objects.js';
 
@@ -138,28 +139,25 @@ run('acceptance 10: the membrane and untrusted answers', async t => {
   const big = await runTurn(slice, session, live, 'big answer', 120_000);
   t.is(big.end.status, 'completed');
   const [answer] = await resultsOf(big.turn);
-  const terminated =
-    answer[0] === textOf.errorResult(texts.inspectTerminated) && answer[1];
-  // Since core CC-027 the hub refuses the 300 KB answer's frame toward the exec
-  // vat (over THIXOTROPE_VAT_FRAME_BYTES) before the vat decodes it: the
-  // exec vat's call breaks with FRAME_TOO_LARGE and the tool answers that
-  // error. Also no halt (J-10124).
-  const refused =
-    answer[0] === textOf.errorResult(FRAME_TOO_LARGE) && answer[1];
-  if (!terminated && !refused) {
+  // Since core CC-027 the hub refuses the 300 KB answer's frame toward the
+  // exec vat (over THIXOTROPE_VAT_FRAME_BYTES) before the vat decodes it:
+  // the exec vat's call breaks with the hub's FRAME_TOO_LARGE and the tool
+  // answers ANSWER_OVER_FRAME_TEXT. Also no halt (J-10124).
+  const outcome = tooBigOutcome(answer[0]);
+  t.not(outcome, undefined, JSON.stringify(answer).slice(0, 300));
+  t.not(outcome, 'helpUnavailable', 'a granted answer is not a describe');
+  if (outcome === 'staged') {
     t.false(answer[1], JSON.stringify(answer).slice(0, 300));
     t.true(isStaged(answer[0]), 'the cut answer is staged');
     t.true(Number(answer[0].bytes) <= 3 * limits.toolOutputUnits);
     t.true(answer[0].preview.startsWith('yyy'));
+  } else {
+    t.true(answer[1], 'a stopped vat or a refused answer is a failed result');
   }
   emit({
     metric: 'm5.security.bigGrantedAnswer',
-    outcome: terminated
-      ? 'inspectTerminated'
-      : refused
-        ? 'hubRefused'
-        : 'staged',
-    bytes: terminated || refused ? undefined : answer[0].bytes,
+    outcome,
+    bytes: outcome === 'staged' ? answer[0].bytes : undefined,
     ...identity,
   });
 

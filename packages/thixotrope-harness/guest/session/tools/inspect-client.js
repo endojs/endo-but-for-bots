@@ -7,16 +7,17 @@
  *
  * `inspectFor(context)` (`context` is the tool's `ToolContext`, or for a
  * call outside a turn, such as a grant's schema read, any record with
- * `services`) answers a function `(request) -> Promise<outcome>`. The
+ * `services` and `runtime`) answers a function `(request) -> Promise<outcome>`. The
  * request is the `InspectRequest` fields `{ op, target, writers, args?,
  * method?, content? }` plus, for a call a tool issued, its `opId` (it arms
  * the deadline and lets the tool entry's `deadline` hook find the call: see
  * `inspectDeadline`). `writers` (and `content` for staged `args`) are the
  * round's ports, which the caller holds.
  *
- * It shares `tools/exec.js`' per-session state: the current scope from the
- * session's `ExecHandle`, taken on first use and shared with `exec`; and the
- * cancel and recovery hooks (`execHooks`) settle its calls of the turn.
+ * It shares `tools/exec.js`' per-session state (`runtime.exec.state()`):
+ * the current scope from the session's `ExecHandle`, taken on first use and
+ * shared with `exec`; and the `exec` part's cancel and recovery hooks settle
+ * its calls of the turn.
  * Endings:
  * - the answer, as the exec program built it;
  * - a retired break (the exec vat is lost: a hostile answer halted it, or
@@ -38,7 +39,7 @@
 import { texts, textOf } from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
 import { isRetiredBreak } from '../../lib/retired.js';
-import { NOT_RUN_TEXT, execStateOf, retireScope, takeScope } from './exec.js';
+import { NOT_RUN_TEXT, retireScope, takeScope } from './exec.js';
 import { messageOf } from '../../lib/bounded.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -147,14 +148,16 @@ const start = async call => {
 
 /**
  * The inspector of one tool call (or one call outside a turn).
- * @param {any} context the ToolContext (`services.execVat` at least)
+ * @param {any} context the ToolContext (`services.execVat` and
+ *   `runtime.exec` at least)
  * @returns {(request: any) => Promise<any>}
  */
 export const inspectFor = context => request => {
   const handle = context.services?.execVat;
   if (handle === undefined)
     return Promise.resolve(failed(textOf.execUnavailable('no exec vat')));
-  const state = execStateOf(handle);
+  /** @type {ExecState} */
+  const state = context.runtime.exec.state();
   const { op, target, writers, args, method, content, opId } = request;
   /** @type {Record<string, any>} */
   const sent = { op, target, writers };
@@ -198,7 +201,8 @@ harden(inspectFor);
 export const inspectDeadline = ({ opId }, context) => {
   const handle = context.services?.execVat;
   if (handle === undefined) return false;
-  const state = execStateOf(handle);
+  /** @type {ExecState} */
+  const state = context.runtime.exec.state();
   for (const call of state.inspecting) {
     if (call.opId === opId && call.context.turn === context.turn) {
       retireScope(state, handle, call.scope);

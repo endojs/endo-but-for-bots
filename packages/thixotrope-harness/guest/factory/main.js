@@ -31,6 +31,9 @@ import {
   makeProgramStore,
 } from './root.js';
 import { makeRowTable } from './rows.js';
+import { makeStartCount } from './starts.js';
+import { messageOf, previewText } from '../lib/bounded.js';
+import { limits } from '../lib/limits.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { ListFeed } from './list-feed.js' */
@@ -68,12 +71,16 @@ export const make = ({ host, vats }) => {
       execDeadlineMs: settings.execDeadlineMs(),
     }),
   });
+  // One count of daemon starts for the factory, the pool and the delete
+  // records (HR-SYN-36).
+  const starts = makeStartCount();
   const pool = makePool({
     vats,
     programs: { session: programs, exec: execPrograms },
     settings,
     sessionSources: stagingSources,
     mintHost: () => E(host).forSession(),
+    starts,
   });
   const kit = makeFactoryKit({
     admin: host,
@@ -84,20 +91,23 @@ export const make = ({ host, vats }) => {
     settings,
     listFeed,
     harnessSettings,
+    starts,
   });
   void listFeed.refresh();
   // The Registration is kept for the vat's life. A failure leaves the
-  // factory without restart recovery; the provisioning test checks that a
-  // restart reaches the listener.
-  /** @type {{ registration: any }} */
-  const held = { registration: undefined };
+  // factory without restart recovery: `status()` reports it (HR-GUEST-12);
+  // the provisioning test checks that a restart reaches the listener.
+  /** @type {{ registration: any, failure: string | undefined }} */
+  const held = { registration: undefined, failure: undefined };
   E(host)
     .onStart(kit.startListener)
     .then(
       (/** @type {any} */ value) => {
         held.registration = value;
       },
-      () => undefined,
+      (/** @type {unknown} */ error) => {
+        held.failure = previewText(messageOf(error), limits.reasonUnits);
+      },
     );
   return makeHarnessRoot({
     operator: kit.operator,
@@ -107,6 +117,7 @@ export const make = ({ host, vats }) => {
     pool,
     settings: harnessSettings,
     exports: kit.exports,
+    startListenerFailure: () => held.failure,
   });
 };
 harden(make);

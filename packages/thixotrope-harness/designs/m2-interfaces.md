@@ -208,7 +208,7 @@ by the group B owner of the file; otherwise by W2.9. The known cases:
 | W2.3 read path (`readKey` per backend) | `AH/index.js` `makeProvider` options | W2.2 |
 | W2.1a `openrouter` kind | `backendKinds` (W2.1a's own line) | W2.1a |
 | W2.2 `catalog.js` | `AH/index.js` handlers `listModels`, `resolveModel` | W2.2 |
-| W2.5 `runner.findTurn`, `runner.archive` | `session.js` (W2.7 forwards) | group B, runtime objects |
+| W2.5 `runner.findTurn`, `archive` (as built after step 3: made in `session.js`, passed to the runner) | `session.js` (W2.7 forwards) | group B, runtime objects |
 | W2.6 resolvers | `session-options.js` (W2.6's own lines) | W2.6 |
 | everything | the acceptance tests needing several units (7, 11, 15) | W2.9 |
 
@@ -229,7 +229,8 @@ So that W2.6 and W2.7 never edit `turn.js`, W2.5 builds these, exactly:
    settles the turn `failed` with `textOf.turnDeadline(ms)` instead of `cancelled`; the settle
    disarms it.
 5. **Runner accessors** for W2.7's `session.js` and `export.js` (runtime objects, no imports):
-   `runner.findTurn(turnId) -> Turn` (section 4.9); `runner.archive` = `{ state() ->
+   `runner.findTurn(turnId) -> Turn` (section 4.9); `archive` (as built after step 3: made in
+   `session.js` by `makeSessionArchive` and passed to the runner, not a runner member) = `{ state() ->
    ArchiveState, segments(cursor?) -> SegmentPage, entries() -> SegmentEntry[] }`;
    `runner.beginDelete()` (the fence of `SessionInternal.deleteSelf`, section 7.1);
    `runner.importTurns(records)` (append imported records, rebuild the turn infos, advance the
@@ -1208,6 +1209,22 @@ guest rules; "Node" = adapter or tests.
 | `guest/lib/system-prompt-base.js` (vat) | `composeSystemPrompt({ spoken, presetText? }) -> string` | 10 |
 | `guest/session/prompt.js`, `guest/session/usage.js` (vat) | free (hook entries) | |
 | `guest/lib/journal-usage.js` (vat) | `usageOfRecords(records) -> UsageTotals` (Fae `session/journal-usage.js`) | export and import, tests |
+| `guest/lib/usage-counts.js` (vat and Node; step 3, HR-SYN-24) | `zeroCounts()`, `addCounts(into, next)`, `sessionContext(reading, contextLength)` | the two usage rules below; `guest/session/usage.js` `makeUsage({ contextLength }) -> { addRound(active, usage), settled(status), totals(), replace(imported) }` applies them in the round and settle cranks |
+
+**The two usage rules** (R4-33; one home since step 3, `guest/lib/usage-counts.js`):
+
+1. **Counts add.** A round's five counts (`inputTokens`, `outputTokens`, `cachedInputTokens`,
+   `cacheWriteInputTokens`, `reasoningOutputTokens`) are added, by named key, to the turn's sum
+   (`TurnSettled.usage`, failed rounds included) and to the session's `UsageTotals`; every settle
+   adds one to `turns`, and one to `incompleteTurns` unless `completed`.
+2. **The context reading is whole.** The latest round that reported `context` replaces the previous
+   reading (used and window together, a 0 included); a session whose catalogue entry gave a
+   `contextLength` at creation shows that window instead of the provider's (seam 3). The totals
+   start at `{ usedTokens: 0, windowTokens: 0 }`.
+
+The adapter's `token-usage.js` `addUsage` merges provider frames by another rule on purpose (field
+by field, a 0 never replaces a known figure, counts capped); `journal-usage.js` restates the two
+rules above independently and is the oracle the tests compare `Session.getUsage()` with.
 
 ### W2.7
 
@@ -1216,7 +1233,7 @@ guest rules; "Node" = adapter or tests.
 | `guest/factory/delete.js` (vat) | `makeDeletions({ admin, rows, hooks? }) -> { delete(session), resume(), isDeleting(row), pending(), counts() }`; `onDelete` (hook table) | 7.1. As built (W2.7): the list feed hears of the drop through the row table (`rows.drop`), and the exec vat is closed through `pool.js` `closeExecHandle(handle)`, so neither is passed |
 | `guest/factory/export.js` (vat) | `makeFactoryExport({ rows, settings, create }) -> { exportPage(cursor?), importSession(options) }` | 7.3 |
 | `guest/factory/root.js` (vat) | `makeHarnessSettings({ pool? }) -> { set, backends, defaultBackend, defaultModelId, turnDeadlineMs, current }` | 1.4; resolvers get `defaultBackend`, `defaultModelId`, `turnDeadlineMs` in their context |
-| `guest/session/export.js` (vat) | `makeSessionExport({ records, queue, runner, config, info, rowReporter }) -> { blobPage, deleteSelf, exportState, importState, isDeleting, isImporting }` | 7.1, 7.3 |
+| `guest/session/export.js` (vat) | `makeSessionExport({ records, queue, runner, archive, fence, config, info, rowReporter }) -> { blobPage, deleteSelf, exportState, importState }` | 7.1, 7.3. Since step 3 (HR-SYN-4): the archive and the session's one delete fence `{ close(), closed() }` (made in `session.js`, read by the runner, the archive and the Session methods) are passed in; `isDeleting` and the unused `isImporting` went |
 | `guest/session/queue.js` (vat, W2.4's file) | `Queue.items()`, `Queue.currentHold()` | read by `export.js` |
 | `scripts/export.mjs` (Node) | `exportState({ client, file })`, `importState({ client, file, backends?, onProgress? })`, `treeBytes`, `importAhead`, CLI | 7.3 |
 

@@ -39,10 +39,10 @@ const usage = harden({
 
 /**
  * @param {object} [options]
- * @param {any} [options.hooks]
+ * @param {readonly any[]} [options.parts] runtime parts
  * @param {(options: any) => any} [options.makeQueue]
  */
-export const makeQueueSession = async ({ hooks, makeQueue } = {}) => {
+export const makeQueueSession = async ({ parts, makeQueue } = {}) => {
   /** @type {any[]} */
   const rounds = [];
   /** @type {any[]} */
@@ -100,7 +100,7 @@ export const makeQueueSession = async ({ hooks, makeQueue } = {}) => {
   const { session, internal } = makeSession(
     { config, services: { backend, host }, rowReporter },
     harden({
-      ...(hooks === undefined ? {} : { hooks }),
+      ...(parts === undefined ? {} : { parts }),
       ...(makeQueue === undefined ? {} : { makeQueue }),
     }),
   );

@@ -7,7 +7,8 @@
  * and answers:
  *
  *   { facet, grant(tool, source, label?), schemaRead(grant),
- *     entriesFor(ports, builtIns?), size() }
+ *     entriesFor(ports, builtIns?), tools(ports, services, runtime, builtIns),
+ *     size() }
  *
  * - `facet` is the `SessionGrants` exo `Session.grants()` hands out;
  *   `grantTool(tool)` keeps a grant (`pending`, source `operator`) and, in
@@ -20,7 +21,7 @@
  *   `adoptTool`, source `adopted`, `label` its `toolName`, shown as
  *   `ToolGrantInfo.label`: XC, 2.6); `schemaRead(grant)` answers the grant's
  *   `ToolGrantInfo` once its schema read has settled (at once when it has).
- * - `entriesFor(ports, builtIns)` is what `grantedToolSource` answers at
+ * - `entriesFor(ports, builtIns)` is what the part's `tools` answers at
  *   every round (S1): the dynamic tool-table entries of the described
  *   grants, after this round's states are set: a name in `builtIns` (the
  *   static table and the round's adapter tools) is `refused-builtin`; a name
@@ -348,7 +349,7 @@ export const makeGrants = (
   };
 
   /**
-   * The round's entries (`grantedToolSource`).
+   * The round's entries (the part's `tools`).
    * @param {any} ports
    * @param {Set<string>} [builtIns] default: the ports' adapter tool names
    */
@@ -380,6 +381,16 @@ export const makeGrants = (
     grant,
     schemaRead,
     entriesFor,
+    /**
+     * The part's tool source (S1): the granted tools of the round, under
+     * the round's built-in name set (2.5).
+     * @param {any} ports
+     * @param {any} _services
+     * @param {any} _runtime
+     * @param {Set<string>} builtIns
+     */
+    tools: (ports, _services, _runtime, builtIns) =>
+      harden(entriesFor(ports, builtIns)),
     size: () => kept.size,
   });
 };
@@ -391,19 +402,3 @@ export const grantsPart = harden({
   /** @param {any} runtime */
   make: runtime => makeGrants(runtime),
 });
-
-/**
- * The `toolSources` entry (S1): the granted tools of the round. `builtIns`
- * is the round's built-in name set (`tool-table.js` passes it).
- * @param {any} ports
- * @param {any} _services
- * @param {any} runtime
- * @param {Set<string>} [builtIns]
- * @returns {readonly ToolTableEntry[]}
- */
-export const grantedToolSource = (ports, _services, runtime, builtIns) => {
-  const grants = runtime?.grants;
-  if (grants?.entriesFor === undefined) return harden([]);
-  return harden(grants.entriesFor(ports, builtIns));
-};
-harden(grantedToolSource);

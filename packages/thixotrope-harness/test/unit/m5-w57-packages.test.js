@@ -21,12 +21,8 @@ import {
   makePackages,
   packagesPart,
 } from '../../guest/session/packages.js';
-import {
-  mentionHooks,
-  packageToolEntries,
-} from '../../guest/session/tools/mentions.js';
+import { packageToolEntries } from '../../guest/session/tools/mentions.js';
 import { toolTable } from '../../guest/session/tool-table.js';
-import { turnHooks } from '../../guest/session/turn-hooks.js';
 import { runtimeParts } from '../../guest/session/runtime-parts.js';
 /* eslint-enable import/no-relative-packages */
 
@@ -190,9 +186,8 @@ test('makePackages: numbers from 1, take by turn, closeTurn releases', t => {
 
 test('tables: packages part, hooks and tool entries are registered', t => {
   t.true(runtimeParts.includes(packagesPart));
-  t.true(turnHooks.onClaim.includes(mentionHooks.onClaim));
-  t.true(turnHooks.onSettle.includes(mentionHooks.onSettle));
-  t.true(turnHooks.recoverySteps.includes(mentionHooks.recoverySteps));
+  const { hooks } = packagesPart.make();
+  t.deepEqual(Object.keys(hooks).sort(), ['onClaim', 'onRecover', 'onSettle']);
   for (const entry of packageToolEntries) t.true(toolTable.includes(entry));
   t.deepEqual(
     packageToolEntries.map(e => [e.name, e.site]),
@@ -230,10 +225,22 @@ const makeM5Session = async ({ parts = [], services = {} } = {}) => {
   let since = AT - 60_000;
   /** @type {any} */
   let runtime;
+  /** @type {any} */
+  let queue;
+  /** @type {any} */
+  let active;
+  // A test part: the runtime, and the turn each claim starts.
   const capture = harden({
-    name: 'inbox',
+    name: 'probe',
     make: (/** @type {any} */ rt) => {
       runtime = rt;
+      return harden({
+        hooks: harden({
+          onClaim: (/** @type {any} */ turn) => {
+            active = turn.active;
+          },
+        }),
+      });
     },
   });
   const makeIncarnation = () => {
@@ -283,6 +290,10 @@ const makeM5Session = async ({ parts = [], services = {} } = {}) => {
       rowReporter: Far('RowReporter', { changed: () => {} }),
     },
     harden({
+      makeQueue: (/** @type {any} */ options) => {
+        queue = makeQueue(options);
+        return queue;
+      },
       parts: harden([
         ...runtimeParts.filter(
           part => !parts.some((/** @type {any} */ p) => p.name === part.name),
@@ -299,6 +310,8 @@ const makeM5Session = async ({ parts = [], services = {} } = {}) => {
     rounds,
     last,
     runtime: () => runtime,
+    queue: () => queue,
+    active: () => active,
     /**
      * @param {string} text
      * @param {readonly any[]} [attachments]
@@ -504,7 +517,7 @@ test('queued entries keep their attachments behind a turn and a restart hold; re
   await s.restartAdapter();
   t.is(s.runtime().packages.table.size(), 0);
   t.is(s.session.listPending().hold?.reason, 'restart');
-  const item = /** @type {any} */ (s.runtime().session.queue.items()[0]);
+  const item = /** @type {any} */ (s.queue().items()[0]);
   t.deepEqual(
     item.attachments.map((/** @type {any} */ x) => x.label),
     ['b'],
@@ -515,14 +528,15 @@ test('queued entries keep their attachments behind a turn and a restart hold; re
   t.is(s.runtime().packages.table.size(), 1);
 });
 
-test('recoverySteps closes the turn package (idempotent with onSettle)', async t => {
+test('onRecover closes the turn package (idempotent with onSettle)', async t => {
   const s = await makeM5Session();
   await s.send('first', attach(['a']));
-  const { core } = s.runtime().session;
-  const active = core.current();
-  mentionHooks.recoverySteps({ core, active, round: 0 });
+  const { hooks } = s.runtime().packages;
+  const turn = Object.freeze({ active: s.active(), round: 0 });
+  t.is(s.runtime().packages.table.size(), 1);
+  hooks.onRecover(turn);
   t.is(s.runtime().packages.table.size(), 0);
-  mentionHooks.onSettle({ core, active, round: 0 });
+  hooks.onSettle(turn);
   t.is(s.runtime().packages.table.size(), 0);
 });
 

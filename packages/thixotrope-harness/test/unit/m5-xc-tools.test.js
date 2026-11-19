@@ -25,7 +25,6 @@ import { shapes } from '../../guest/lib/interfaces.js';
 import {
   adapterToolEntries,
   toolSetFor,
-  toolSources,
   toolTable,
 } from '../../guest/session/tool-table.js';
 import { makeGrants } from '../../guest/session/tools/granted.js';
@@ -90,7 +89,7 @@ test('an adapter tool with a description and no static entry is offered and its 
       description: descriptionOf('accountStatus'),
     },
   ]);
-  const set = toolSetFor(ports, toolTable, harden({}), harden([]));
+  const set = toolSetFor(ports, toolTable, harden({}));
   const names = offered(set);
   t.is(names.filter(n => n === 'accountStatus').length, 1);
   // After every available static entry (the adapter tools follow the table).
@@ -112,7 +111,7 @@ test('an adapter tool with a description and no static entry is offered and its 
   t.not(set.byName.get('echo'), undefined);
   t.true(toolTable.includes(/** @type {any} */ (set.byName.get('echo'))));
   // The generic entry is the same object while the ports are.
-  const again = toolSetFor(ports, toolTable, harden({}), harden([]));
+  const again = toolSetFor(ports, toolTable, harden({}));
   t.is(again.byName.get('accountStatus'), entry);
 });
 
@@ -128,7 +127,7 @@ test('no description, a description of another name, or a static name: not offer
     { name: 'echo', tool: echo.tool, description: descriptionOf('echo') },
   ]);
   t.deepEqual(adapterToolEntries(ports, toolTable), []);
-  const set = toolSetFor(ports, toolTable, harden({}), harden([]));
+  const set = toolSetFor(ports, toolTable, harden({}));
   const names = offered(set);
   t.false(names.includes('plain'));
   t.false(names.includes('liar'));
@@ -160,16 +159,19 @@ test('a granted tool named like an offered adapter tool is refused-builtin', asy
     get grants() {
       return part;
     },
+    get toolSources() {
+      return harden([part.tools]);
+    },
   });
   const tool = Far('tool accountStatus', {});
   part = makeGrants(runtime, {
     inspectFor: () => async () =>
       harden({ status: 'ok', description: descriptionOf('accountStatus') }),
   });
-  toolSetFor(ports, toolTable, harden({}), toolSources, runtime);
+  toolSetFor(ports, toolTable, harden({}), runtime);
   part.facet.grantTool(tool);
   await drain();
-  const set = toolSetFor(ports, toolTable, harden({}), toolSources, runtime);
+  const set = toolSetFor(ports, toolTable, harden({}), runtime);
   t.deepEqual(
     set.refused.map((/** @type {any} */ r) => [r.entry.name, r.state]),
     [['accountStatus', 'refused-builtin']],
@@ -215,12 +217,15 @@ test('an adopted grant shows its display label; an operator grant has none (2.6)
     get grants() {
       return part;
     },
+    get toolSources() {
+      return harden([part.tools]);
+    },
   });
   part = makeGrants(runtime, {
     inspectFor: () => async () =>
       harden({ status: 'ok', description: descriptionOf('lookupWeather') }),
   });
-  toolSetFor(portsWith([]), toolTable, harden({}), toolSources, runtime);
+  toolSetFor(portsWith([]), toolTable, harden({}), runtime);
   const adopted = part.grant(Far('tool', {}), 'adopted', 'weather');
   const operator = part.facet.grantTool(Far('tool', {}));
   const info = await part.schemaRead(adopted);

@@ -117,11 +117,11 @@ export const reconnectScript = harden({
 
 /** @type {Awaited<ReturnType<typeof startFromTemplate>> | undefined} */
 let state;
-/** @type {(() => void) | undefined} */
-let removeKey;
+/** @type {ReturnType<typeof useTestWrappingKey> | undefined} */
+let wrappingKey;
 test.after.always(async () => {
   await state?.cleanup();
-  removeKey?.();
+  wrappingKey?.remove();
 });
 
 /** @type {Awaited<ReturnType<typeof serveGateway>>} */
@@ -225,12 +225,17 @@ const echoStarts = (turnId, from) =>
 run(
   'setup: served state, scripted backend, gateway on a fixed port',
   async t => {
-    removeKey = useTestWrappingKey('m3rc').remove;
-    state = await startFromTemplate(await sliceTemplate());
+    wrappingKey = useTestWrappingKey('m3rc');
+    state = await startFromTemplate(await sliceTemplate(), {
+      secretsKeyFile: wrappingKey.file,
+    });
     const slice = await makeSlice(state);
     made = await slice.makeBackend(reconnectScript);
     await E(slice.harness).configure(harden({ backends: [made.backend] }));
-    gateway = await serveGateway(state, { port: await freePort() });
+    gateway = await serveGateway(state, {
+      port: await freePort(),
+      secretsKeyFile: wrappingKey.file,
+    });
     t.is(gateway.status.state, 'serving');
   },
 );

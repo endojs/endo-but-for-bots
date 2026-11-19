@@ -536,8 +536,9 @@ const rows = [
       // S1 in Node: toolSetFor with 32 described grants (fake inspector).
       /* eslint-disable import/no-relative-packages */
       const { makeGrants } = await import('../guest/session/tools/granted.js');
-      const { toolSetFor, toolSources, toolTable } =
-        await import('../guest/session/tool-table.js');
+      const { toolSetFor, toolTable } = await import(
+        '../guest/session/tool-table.js'
+      );
       /* eslint-enable import/no-relative-packages */
       /** @type {any} */
       let part;
@@ -545,6 +546,9 @@ const rows = [
         services: harden({}),
         get grants() {
           return part;
+        },
+        get toolSources() {
+          return harden([part.tools]);
         },
       });
       part = makeGrants(runtime, {
@@ -577,13 +581,7 @@ const rows = [
       const end = performance.now() + Math.min(windowMs, 10_000);
       while (performance.now() < end) {
         const t0 = performance.now();
-        const set = toolSetFor(
-          ports,
-          toolTable,
-          harden({}),
-          toolSources,
-          runtime,
-        );
+        const set = toolSetFor(ports, toolTable, harden({}), runtime);
         sets.push(performance.now() - t0);
         if (set.descriptions.length < limits.maxGrantedTools)
           throw Error('the Node tool set lost grants');

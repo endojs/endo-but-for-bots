@@ -15,6 +15,7 @@ import { texts, textOf } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { RETIRED_TEXT } from '../../guest/lib/retired.js';
 import { makeSession } from '../../guest/session/session.js';
+import { runtimeParts } from '../../guest/session/runtime-parts.js';
 import { makeSpareMaker, ALREADY_MADE } from '../../guest/session/main.js';
 import { makeRecordLog, inCallOrder } from '../../guest/session/records.js';
 import { toolSetFor } from '../../guest/session/tool-table.js';
@@ -86,13 +87,13 @@ const FIRST_SINCE = AT - 60_000;
  * @param {number} [options.maxToolRounds]
  * @param {boolean} [options.manualOpen] answer Backend.open by hand
  * @param {(options: any) => any} [options.makeQueue] wrap the queue
- * @param {any} [options.hooks] turn hooks
+ * @param {readonly any[]} [options.parts] runtime parts
  */
 const setup = async ({
   maxToolRounds,
   manualOpen = false,
   makeQueue: mq,
-  hooks,
+  parts,
 } = {}) => {
   /** @type {any[]} */
   const log = [];
@@ -226,7 +227,7 @@ const setup = async ({
     harden({
       ...(maxToolRounds === undefined ? {} : { maxToolRounds }),
       ...(mq === undefined ? {} : { makeQueue: mq }),
-      ...(hooks === undefined ? {} : { hooks }),
+      ...(parts === undefined ? {} : { parts }),
     }),
   );
   sessionRef = session;
@@ -1561,13 +1562,13 @@ test('turn sources are not asked while the queue is held', async t => {
       queue = makeQueue(options);
       return queue;
     },
-    hooks: harden({
-      beforeRound: [],
-      onCancel: [],
-      onSettle: [],
-      turnSources: [source],
-      recoverySteps: [],
-    }),
+    parts: harden([
+      ...runtimeParts,
+      harden({
+        name: 'probe',
+        make: () => harden({ hooks: harden({ nextTurn: source }) }),
+      }),
+    ]),
   });
   const first = s.session.enqueueOnce(harden({ text: 'one' }), requestId(), AT);
   await drain();

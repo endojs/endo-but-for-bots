@@ -17,8 +17,13 @@
  * of m2-interfaces.md 2.4). A count that does not parse is 0: usage is an
  * observation and a malformed one must not fail the turn it describes.
  *
+ * The counts add by `usage-counts.js` `addCounts`, the session's rule
+ * (HR-SYN-24); `addUsage` keeps its own clamp and its field-by-field
+ * context rule on top (m2-interfaces.md 12).
+ *
  * Vat and Node (guest rules: prelude globals only, fixed record keys).
  */
+import { addCounts, zeroCounts } from './usage-counts.js';
 
 const MAX_COUNT = 9_007_199_254_740_991;
 
@@ -37,15 +42,20 @@ export const tokenCount = value => {
 harden(tokenCount);
 
 /** Zero usage (no context reading). */
-export const emptyUsage = () =>
-  harden({
-    inputTokens: 0,
-    outputTokens: 0,
-    cachedInputTokens: 0,
-    cacheWriteInputTokens: 0,
-    reasoningOutputTokens: 0,
-  });
+export const emptyUsage = () => harden(zeroCounts());
 harden(emptyUsage);
+
+/**
+ * The five counts of a usage, each a token count (0 when malformed).
+ * @param {any} usage
+ */
+const countsOf = usage => ({
+  inputTokens: tokenCount(usage.inputTokens),
+  outputTokens: tokenCount(usage.outputTokens),
+  cachedInputTokens: tokenCount(usage.cachedInputTokens),
+  cacheWriteInputTokens: tokenCount(usage.cacheWriteInputTokens),
+  reasoningOutputTokens: tokenCount(usage.reasoningOutputTokens),
+});
 
 /**
  * @param {{ inputTokens: number, outputTokens: number, cachedInputTokens: number, cacheWriteInputTokens: number, reasoningOutputTokens: number }} counts
@@ -127,15 +137,15 @@ harden(usageFromAnthropic);
 export const addUsage = (sum, next) => {
   const a = sum ?? {};
   const b = next ?? {};
-  /** @param {string} key */
-  const add = key =>
-    Math.min(tokenCount(a[key]) + tokenCount(b[key]), MAX_COUNT);
+  const total = countsOf(a);
+  addCounts(total, countsOf(b));
+  // Capped (a usage is an observation; a sum never leaves the safe range).
   const counts = {
-    inputTokens: add('inputTokens'),
-    outputTokens: add('outputTokens'),
-    cachedInputTokens: add('cachedInputTokens'),
-    cacheWriteInputTokens: add('cacheWriteInputTokens'),
-    reasoningOutputTokens: add('reasoningOutputTokens'),
+    inputTokens: Math.min(total.inputTokens, MAX_COUNT),
+    outputTokens: Math.min(total.outputTokens, MAX_COUNT),
+    cachedInputTokens: Math.min(total.cachedInputTokens, MAX_COUNT),
+    cacheWriteInputTokens: Math.min(total.cacheWriteInputTokens, MAX_COUNT),
+    reasoningOutputTokens: Math.min(total.reasoningOutputTokens, MAX_COUNT),
   };
   const ca = a.context;
   const cb = b.context;

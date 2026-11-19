@@ -34,6 +34,8 @@ installGuestPrelude();
 const { stats, single, harnessRoot } = await import('../../perf/_harness.mjs');
 const { findSecretsFiles, makeSecretStore, SECRETS_KEY_VARIABLE } =
   await import('../../resources/agent-host/impl/secrets/store.js');
+const { makeWrappingKey } =
+  await import('../../resources/agent-host/impl/secrets/wrapping-key.js');
 const { makeSealKeys, sealTo } =
   await import('../../resources/agent-host/impl/secrets/seal.js');
 const { makeSecretsOps } =
@@ -71,10 +73,14 @@ const sink = Far('AgentHostSink', {
 const open = () => {
   const store = makeSecretStore({
     file: files.file,
-    keyFile: files.keyFile,
-    stateDir: files.stateDir,
+    wrappingKey: makeWrappingKey({
+      keyFile: files.keyFile,
+      stateDir: files.stateDir,
+    }),
   });
-  const seal = makeSealKeys({ file: files.keyFile });
+  const seal = makeSealKeys({
+    wrappingKey: makeWrappingKey({ keyFile: files.keyFile }),
+  });
   return { store, ops: makeSecretsOps({ store, seal, sink }) };
 };
 

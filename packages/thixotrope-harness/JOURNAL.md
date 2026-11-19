@@ -13668,3 +13668,440 @@ milestones list 704 s; long-session chain 21:03-22:12 (background); exclusive mi
 process.md, README, milestones.md status parts, the unit reports. No code, test or perf file
 changed. Scratch `tmp/CL-CLOSE` removed.
 Fit: neutral.
+
+### J-10200 2026-11-18 P3 step 3 plan written - decision
+Unit P3 of the review's step 3, at `9bb9f4f2ea`: `designs/arch-review/step3-plan.md` (387 lines),
+read from the code (`guest/session/turn.js`, `session.js`, `recovery.js`, `runtime-parts.js`,
+`packages.js`, `tools/exec.js`, `archive.js`, `export.js`; `AH/index.js`, `providers/anthropic.js`,
+`openrouter.js`, `scripted.js`, `round.js`, `catalog.js`, `subscriptions/provider.js`, `catalog.js`,
+`channels.js`, `list-channel.js`, `secrets/store.js`, `seal.js`, `gateway/signin.js`) and the review.
+Decisions: the turn runner keeps the turn's own life (claim, settle, cancel, tools, rounds, lease
+sends) and gives outbox, usage, ports, turn index, import and recovery their own modules; one
+fence; the archive made in `session.js` with `unresolved` hidden; runtime parts are the one
+per-session extension (`PartHooks` with a `HookTurn`, `tools` sources), `turn-hooks.js` and the
+session `WeakMap`s retired, part order `powers, inspector, grants, exec, packages` to keep hook
+order; one provider shell (`makeProviderShell`) under API, pool and scripted providers, scripted
+still its own round source until plan item (b); `kinds.js` the one place `spec.kind` is matched.
+Build units SESSION, PROVIDERS, HOST with two hand-overs (`AH/index.js`, `record-preview.js`).
+Nothing run but reads; no code changed. Fit: neutral.
+
+### J-10230 2026-11-18 T3-HOST one wrapping key, failures retried (HR-SYN-5 (a)) - built
+`AH/secrets/wrapping-key.js`: `loadWrappingKey` (moved from `secrets/store.js`, in-flight
+dedupe kept) and `makeWrappingKey({ keyFile, stateDir })` -> `{ get() }`, made once per
+incarnation in `AH/index.js` `secrets()` and passed to `makeSecretStore` and `makeSealKeys`
+(both now take `wrappingKey`; the store's `keyFile`/`stateDir` and the seal's `file`/`stateDir`
+options are gone, tests build the object). Behaviour change named by the row: a failed key load,
+and a failed store or sealing-key load over it, is no longer kept until restart (the store's load
+restarts from empty). `gateway/signin.js` changed its import line only and keeps its own retrying
+cache. New test in `m4-key-race`: a group-readable key fails, chmod 600, the next `get`, `ready`
+and `publicKey` succeed; kept once loaded. Commit `bb375e0208` (the hand-over: PROVIDERS' index.js
+work after it). Fit: good.
+
+### J-10231 2026-11-18 T3-HOST one atomic write (HR-SYN-26) - built
+`AH/files.js`: `writeFileAtomic(path, data, { scratch, mode, chmod, sync, syncDirectory,
+removeScratchOnError, trace })`, `writeFileAtomicSync`, `syncDirectory`, `syncDirectorySync`.
+Users, each with its sequence unchanged: secrets.enc (fsync, chmod, rename, dir fsync), audit
+compaction (sync, no dir fsync: the old log is a superset; the audit fd is now closed before the
+scratch write rather than between fsync and rename), segments (`.part`, removed on error, trace
+steps unchanged), manifest (fsync, no dir fsync: rebuilt from segment files by `scanSegments`),
+context file and mirror (caches: no fsync at all, as before). Left, with reason in the module
+comment: the blob store's split write (parts fsynced, named later under one dir fsync; takes
+`syncDirectory` from here), the key file's `link` creation (takes `syncDirectory`),
+`gateway/signin.js` (its own `syncDirectory` copy and writer: outside this unit's files),
+`subscriptions/account-file.js` and the `scripts/*` writers (plan). No real durability gap was
+found among the writers in scope; the review's missing directory fsyncs are all caches or
+rebuildable. New `test/adapter/atomic-write-kill.test.js` (+ child): SIGKILL before each of
+write/fsync/rename/fsync-dir and after, both scratch suffixes: old file or new, at most the
+scratch left. `m2-archive-kill` and `m2-archive-store` pass. Commits `bb375e0208`, `1615ca6e5c`.
+Fit: good.
+
+### J-10232 2026-11-18 T3-HOST one channel subscriber (HR-SYN-25) - built
+`AH/channel-subscriber.js`: `makeSubscriber({ exoName, guard, queueLimit, queueBytes, onClose })`,
+`slowestOf`, `makeRevReorder({ limits, schedule, deliverBatch, deliverHeld })` (held deltas are
+the session channel's only extra) and `unrefSchedule`, the one default timer (still injected).
+`channels.js` 785 -> about 560 lines, `list-channel.js` 353 -> about 160. Wire shapes, bounds and
+`ordering()` unchanged; the session channel's `closes()` now counts by close-reason key, as the
+list channel and `next()` do (plan; `m1a-channel-bounds` asserts keys). `m1a-channels.bench`
+medians before -> after, load 2-3, shared: delta.e2e 32 subs 0.376 -> 0.402 ms, publish 32 0.035
+-> 0.030 ms, fold.perDelta 0.050 -> 0.038 ms, next.batch256 0.155 -> 0.114 ms. Duplicates
+2.99 % -> 2.85 % on the shared tree. Commit `e0a17bfba7`. Fit: good.
+
+### J-10233 2026-11-18 T3-HOST key file per supervisor (HR-SYN-21 rest) - built
+`m2-secrets`, `m2-providers`, `m2-catalog` pass `secretsKeyFile` to `startFromTemplate`;
+`useTestWrappingKey` answers `{ file, remove }` without touching `process.env`; `serveGateway`
+and `readSignIn` take `secretsKeyFile` and read the sign-in file through `supervisorEnv`; the
+`gateway.mjs url` child of `m3-gateway` gets the same env. The helper's callers changed with it
+(`m3-gateway`, `m3-sessions`, `m3-reconnect`, `test/browser/_harness.mjs`, `perf/gateway`,
+`gateway-session`, `gateway-restart`); no file under test or perf sets the variable now.
+Browser harness and the three gateway perf checks were not run. Commit `f85b129709`. Fit: good.
+
+### J-10234 2026-11-18 T3-HOST ws removed, close validated (HR-SYN-35) - built
+`ws` dropped from the package's dependencies; `corepack yarn install` at the root changed one
+line of `yarn.lock`, this workspace's entry (ws stays for ocapn, ocapn-noise, daemon,
+relay-server). Behaviour change named by the row: a one-byte close body or a code a peer may not
+send (below 1000, 1004-1006, 1015-2999, 5000+) is answered 1002; a reason that is not UTF-8
+1007 (`wsCloseCodes.invalidData`); valid codes echoed as before. New case table in
+`m3-w31-http`. Commit `cd7ad65df4`. Fit: good.
+
+### J-10235 2026-11-18 T3-HOST archive History on the vat's preview rule (HR-SYN-28) - built
+After SESSION's `5089ca64db`: `AH/archive/history.js` imports `previewRecord`, `PAGE_SLACK` and
+`TURN_PREVIEW_KEYS_BYTES` from `guest/lib/record-preview.js` (staged = keyed-staged, intent
+bytes of the shown form, `finish` the identity); its 50-line copy and three constants are gone.
+`record-preview.test.js` (SESSION's kept-against-archived test) passes; `m2-history` passes.
+Duplicates 2.02 % on the shared tree after it. Commit `20020bd82a`. Fit: good.
+
+### J-10236 2026-11-18 T3-HOST proofs and time record - verified
+Adapter lane, whole `test/adapter`, 455 passed (63 s). Integration (shared slots): first batch of
+10 files 473 s wall: m2-secrets, m4-secrets, m3-gateway, m3-sessions, m3-reconnect, m2-history
+ok; m1b-live, m2-archive-restart, m2-catalog, m2-providers failed on `Cannot import name
+execHooks`, SESSION's uncommitted guest edits in the shared tree mid-change. Rerun of those four
+after SESSION committed (`89366b1714`): all ok, 371 s wall. Bundles (no guest file changed by
+this unit; SESSION's tree): session 212,483 of 240,000, exec 62,754, factory 156,955. Over 60 s:
+the two integration batches, the adapter lane (63 s). Not run: browser lane, gateway perf
+checks, `m1a-channel-bounds` bench outside the adapter lane, power-loss behaviour (only SIGKILL is
+tested). Fit: neutral.
+
+### J-10220 2026-11-18 T3-PROVIDERS wire goldens before the provider seam - verified
+`test/adapter/provider-wire-golden.test.js` records, against the fake servers, every request the
+Anthropic and OpenRouter providers send for six rounds (rich transcript with tool calls and
+results, two-part system, tools, output limits, effort, a 401, a model without its organisation)
+and both model catalogues' and the pool catalogue's reads: method, path and query, header names
+and values in order (credential values replaced), body text as sent, what the round answered and
+the event-log kinds seen (a set: deferred lines interleave by timing, delta counts follow the
+socket's reads). `m4-provider` gained the same for one round of each pool kind (hand-over after a
+429). Goldens in `test/fixtures/provider-wire-golden.json`, `pool-wire-golden.json`; rewritten
+only with `THIX_WRITE_GOLDEN=1`. Commit `0e5d341e2f`. Fit: neutral.
+
+### J-10221 2026-11-18 T3-PROVIDERS one provider shell, makeApiProvider, the event log - decision
+`providers/shell.js` `makeProviderShell({ timers, runRound })` is the one turn -> control map
+(round.js `makeRoundControl`) under the API, pool and scripted providers, with the one
+`Provider` typedef (4 parameters). `providers/api.js` `makeApiProvider` takes a `wire` record
+(`baseUrl`, `timeoutMs`, `path`, `unreachable`, `model`, `body`, `delay`, `attempt`); Anthropic
+and OpenRouter export `anthropicWire` / `openRouterWire`. The scripted double keeps its round
+source (plan item (b)) but uses round.js's control, `stageResult` and `tailText`; its copies went.
+`providers/event-log.js` holds `makeEventLog`. Commit `624dfc8f9b`. Fit: neutral.
+
+### J-10222 2026-11-18 T3-PROVIDERS kinds.js and the catalogue core - decision
+`providers/kinds.js`: `backendKinds`, `assertBackendKinds`, `kindOf(spec, table)` (the one match
+of `spec.kind`), `BackendKind` with `catalog({ models, pools })`, `readModels?({ spec, fetch })`,
+`acceptsModelId?`. Each kind module exports its complete entry (`scriptedKind` new), so the
+identity tests hold. The readers moved to their kinds (`anthropic.js`, `openrouter.js`) to keep the
+module graph acyclic (catalog.js imports kinds.js). `providers/catalog-core.js`:
+`makeCatalogOwner({ read, readKey?, now, log? })`, `makeOwnerTable`, `readJson`, `boundedJson`
+and the row helpers; the pool catalogue reads Claude lists through `readAnthropicCatalog` with
+its OAuth headers and 8 MB bound and chooses its combination through `providerOfKind`. Owner
+diff: the pool owner had no key and no log; both are options. Commit `74d86b8dca`. Fit: neutral.
+
+### J-10223 2026-11-18 T3-PROVIDERS a commit swept in another unit's staged deletion - issue
+`74d86b8dca` was made with `git commit` after `git add` of explicit paths and also carried
+T3-SESSION's staged deletion of `guest/session/turn-hooks.js` while three committed modules
+still imported it. `078f38b1c7` restored the blob through the index only (working tree left
+deleted); T3-SESSION's `89366b1714` then deleted it with its importers. Every later commit used
+`git commit -- <paths>`. Fit: worse (process: commit with a pathspec in a shared worktree).
+
+### J-10224 2026-11-18 T3-PROVIDERS prepare required; usage on usage-counts.js - verified
+Behaviour change (HR-SYN-3 (a)): an API or pool round without `prepare` rejects with
+`PREPARE_REQUIRED` before any key, credential or request; the Endpoint fails it with the kind's
+fixed text; the `req.append` fallback is gone (`b9f1fcf8d3`). No existing test took that path;
+two tests pin the refusal. `messages.js`/`responses.js` keep a now-dead `?? []` (not this unit's
+files). HR-SYN-24 adapter side: `token-usage.js` `emptyUsage` on `zeroCounts`, `addUsage` on
+`addCounts` with its cap and context rule (`dc8ea804f0`); no bundle includes it. Duplicate
+share 1.80 % (this unit's part 718 -> 478 lines), ceiling 2.05 % (`d94ad96129`). Fit: better.
+
+### J-10225 2026-11-18 T3-PROVIDERS time record - verified
+First command 22:56:13Z. Over 60 s: provider adapter lanes 61 s and 62 s; whole adapter lane;
+integration batch (9 files, 3 jobs) 718 s wall, m1a-slice failed once on its parallel-round
+timing ratio (1,863 against 1,078 ms under load) and passed alone (193 s). Fit: neutral.
+
+### J-10205 2026-11-18 T3-SESSION one record preview rule (HR-SYN-28, vat side) - decision
+`guest/lib/record-preview.js` holds `previewRecord(record, { isStaged, intentBytes, finish })`
+and `PAGE_SLACK`, `PREVIEW_INTENTS_BYTES`, `TURN_PREVIEW_KEYS_BYTES`; `guest/session/history.js`
+uses it (its WeakMap cache kept). What differs between the two readers is passed in: the staged
+form (StagedText or `$staged` key), how one intent is measured (the vat's `plainBytes`, the host's
+bytes of the shown form) and whether cut copies are hardened (`finish`, identity in the host).
+`test/unit/record-preview.test.js` compares a kept turn's page with the same records encoded as
+a segment keys them, every kind and cut included. Committed first (`5089ca64db`) so HOST can
+switch `AH/archive/history.js`. Fit: neutral.
+
+### J-10206 2026-11-18 T3-SESSION usage in one module, two rules written (HR-SYN-24 vat side, HR-GUEST-11) - decision
+`guest/session/turn-types.js` (types only, not bundled) types `ActiveTurn`, `TurnInfo`,
+`RoundCalls`, `ToolIntent` once; `recovery.js`'s second `ActiveTurn` went. `guest/lib/usage-counts.js`
+(`zeroCounts`, `addCounts`, `sessionContext`) and `guest/session/usage.js` (`makeUsage({
+contextLength })` -> `addRound`, `settled`, `totals`, `replace`) take the arithmetic out of
+`turn.js`, same order. `m2-interfaces.md` 12 now states the two rules (counts add by named key;
+the reading whole, the catalogue window when stored). `token-usage.js` `addUsage` was not rebuilt
+on `addCounts`: the file is not SESSION's (an adapter frame merge with clamps, another rule on
+purpose) and another unit had it open. `journal-usage.js`: comment only. Fit: neutral.
+
+### J-10207 2026-11-18 T3-SESSION golden trace of the turn runner - verified
+`test/unit/turn-runner-golden.test.js`: one `makeSession` session over fakes runs a two-round turn
+with two tool calls answered out of order, a cancel while a call runs with an entry waiting, a
+turn deadline, a restart after Dispatched (outcome unknown, then `resolve`), a held queue
+released, 165 plain turns and one seal answered by the fake archive; a second session's export
+(a turn still running) is imported into a third, which is then deleted. Every vat call in
+delivery order (endpoint, publisher, outside publisher, row reporter, archive), the records,
+history and export pages, usage, `findTurn` answers: 1,413 lines, sha256
+`eed428b3b8c7c558...`. Taken with `T3_GUEST_ROOT` on the guest tree of `70d7f1486a` (extracted with
+`git archive` under `tmp/T3-SESSION/orig`, since removed) and equal on every later commit of this
+unit. Fit: neutral.
+
+### J-10208 2026-11-18 T3-SESSION turn runner split (HR-SYN-4) - verified
+Extraction order of step3-plan 1.4, unit lane and golden trace green after each commit:
+`outbox.js` (`19ad358149`); one delete fence `{ close, closed }` made in `session.js`, the archive
+and ContextSource made there with `onSealed`/`onNotSealed` bound to the runner, the archive's
+`unresolved` behind `keepUnresolved`/`unresolvedInfo`/`resolve`, `export.js` given `archive` and
+`fence`, runner members `archive`, `deleting`, `turnHandle`, `isLive` gone and export's unused
+`isImporting` too (`c554e80661`; the archive test asserts no claim after `deleteSelf` instead of
+`runner.deleting()`); `turn-index.js` and `turn-import.js` (`31dc091ee7`); `ports.js`
+(`5116a87fab`). `turn.js` 1,728 -> 1,380 lines; each new module has a unit test at its interface
+(`session-outbox`, `session-ports`, `turn-index`, `session-usage`, the archive module test).
+Recovery (`makeRecovery`) moved with section 2. Fit: neutral.
+
+### J-10209 2026-11-18 T3-SESSION runtime parts the one extension (HR-SYN-15) - decision
+`89366b1714`: `turn-hooks.js` deleted; the exec state (module `WeakMap` by ExecHandle; checked
+first: the factory makes one handle per session, `pool.js` `makeExecHandle`) is the `exec` part
+(`state()`, hooks `onCancel`, `onRecover`; `abandon` keeps its early return when the turn has no
+running call); the package hooks are the `packages` part's (`partOf` gone); granted tools are the
+`grants` part's `tools`, and `toolSetFor(ports, table, services, runtime)` passes the round's
+built-in names to each source (computed from the table given; the product passes `toolTable`, as
+the old source assumed). Table `powers, inspector, grants, exec, packages`; `makeRuntime` combines
+hooks once (`onRecover` guarded per part, `nextTurn` first source wins), `runtime.session` and
+`part(name)` gone. `makeRecovery` per session (own generation, no WeakMap); `SessionCore` gone.
+One `enqueue` in `session.js` for both exo methods (`checkAttachments` first). Session options
+`hooks`, `toolSources`, `recoverAfterRestart` gone; tests pass a part; `perf/tools.perf.mjs`
+follows the `toolSetFor` signature. Session bundle 214,932 -> 212,477. Fit: neutral.
+
+### J-10210 2026-11-18 T3-SESSION factory start count and start-listener failure (HR-SYN-36, HR-GUEST-12) - decision
+`63f4168d04`: `guest/factory/starts.js` `makeStartCount()` made in `main.js`, given to the pool
+and the factory kit (and its delete records); `recover` counts the start first, then `onStart`
+and `resume` read it. Fields `epoch` -> `start` (heap only). Unit test: the pool reads the start
+already counted. HR-GUEST-12 (behaviour change): a rejected `onStart` registration is kept as a
+bounded message and `status()` reports it in the optional `HarnessStatus.error`; the key `error`
+was chosen because it is already in the gateway's vocabulary (`guards-split` vocabulary test
+unchanged); `test/fixtures/guard-fold-map.json` records `shapes.HarnessStatus` and
+`interfaces.HarnessRoot` as changed. Factory bundle 155,427 -> 156,955. Fit: neutral.
+
+### J-10211 2026-11-18 T3-SESSION hub-refused answers told to the model - decision
+`1e833c0a82` (model-facing text, behaviour change): `guest/exec/inspect.js` answers
+`failed(ANSWER_OVER_FRAME_TEXT)` when a granted tool's `execute` or a `help()` behind
+`describeCapability` breaks with exactly `HUB_FRAME_TOO_LARGE` (the guest copy of the core's
+`FRAME_TOO_LARGE`, pinned by `test/unit/inspector-frame-refusal.test.js`); before, the tool showed
+the hub's raw text and describe showed documentation `unavailable`. Text in the M5 texts table
+and acceptance items 5 and 10 of `m5-interfaces.md`. `test/integration/_m5-objects.js`
+`tooBigOutcome` is the one predicate of `m5-objects`, `m5-security` and perf `exec-m5` probe b.
+Exec bundle 61,688 -> 62,754. Fit: neutral.
+
+### J-10212 2026-11-18 T3-SESSION HR-SYN-23 guest seams - decision
+Done here: `site ?? 'adapter'` (every entry names its site; `site` required, `e5edbed850`),
+export's unused `isImporting`. Left, and why: `queue.release`/`assertNoActiveTurn` (`queue.js`
+is outside SESSION's files); `context-source.js` archive option (left alone by the plan); the
+factory's optional pool and settings and the root's no-pool branches (about 20 test call sites
+build a kit or root without a pool; needs the fakes of step 5's test-support layer).
+Fit: neutral.
+
+### J-10213 2026-11-18 T3-SESSION a staged deletion crossed units - finding
+SESSION staged `git rm guest/session/turn-hooks.js` while editing section 2; PROVIDERS' commit
+`74d86b8dca` took the staged deletion with its own paths, leaving HEAD unable to import
+`turn-hooks.js` until PROVIDERS restored it in `078f38b1c7`; SESSION's `89366b1714` then deleted it
+together with its importers. The index is shared by every unit in a worktree: a deletion should
+be staged in the same command as its commit (`git rm` inside the commit command), never ahead.
+Fit: worse (process).
+
+### J-10214 2026-11-18 T3-SESSION proof on the final tree - verified
+Unit lane (`test/unit/`, about 6 s) green after every commit: 676 tests at the start, 702 at the
+end (`m2-queue-heap` failed once under load and passed alone twice; `m2-w28-fake-archive` failed
+once on another unit's half-saved `blobs.js`, green after it committed). Golden digest equal on
+every commit. `lint:duplicates` 3.00 % at the start, 1.80 % at the end (ceiling lowered by other
+units to 2.05 %). Bundles (`scripts/bundle-guest.mjs`): session 206,907 -> 212,477 of 240,000,
+exec 61,688 -> 62,754, factory 155,427 -> 156,955. Integration (`--jobs 5`, shared slots, from
+`e5edbed850`, 23:29-23:40Z, 669.7 s wall, 3,052 s held, load 2.6-4.5): 14 of 15 green
+(m1a-slice-restart, m1b-followups, m2-turns, m2-queue, m2-history, m2-archive-restart and -2,
+m2-lifecycle, m2-lifecycle-export, m5-objects, m5-security, m5-grants-restart, m5-mentions,
+m5-snapshot); `m1a-slice` failed its timing bound (two parallel calls 1,922 ms against one 1,065
+ms, ratio 1.80 over 1.6; echo itself ran both in 1,058 ms) and passed alone (`--jobs 1`, 150 s,
+ratio 1.13). Not run: `test:regression:core` and `:milestones`, the perf rows (the delivery
+counts of perf/turn, session, exec, mentions and archive are for the PM's mini-pass). Fit: neutral.
+
+### J-10215 2026-11-18 T3-SESSION time record - verified
+Time: first command 22:56:13Z. Over 60 s: the integration batch 670 s (background), the `m1a-slice`
+rerun 151 s. Everything else under 60 s (unit lane about 13 s with tsc and duplicates). Read
+only: harness.md rows 4, 15, 23, 24, 28, 36 and 3.2/3.3, step3-plan.md, process.md 1-3 and 6, the
+adapter's `archive/history.js` and `segment.js`, `packages/thixotrope/src/net/hub.js`
+`FRAME_TOO_LARGE`. Scratch `tmp/T3-SESSION` removed. Fit: neutral.
+
+### J-10240 2026-11-18 T3-QC review of step 3: the turn runner split (HR-SYN-4, HR-SYN-15, HR-GUEST-11) - verified
+Read the diff `9bb9f4f2ea..66172e887d` of `guest/session/` against the old code: outbox, usage,
+ports, turn-index, turn-import and per-session recovery hold the same statements in the same order
+(no await moved, no record reordered, no send added; `held` is still set before the current turn
+is decided; `reopens` reset on every failure as before). The one fence closes in `deleteSelf`
+before `beginDelete`, as the three flags did. Runtime parts keep the old hook order (cancel: exec;
+settle: packages; recovery: exec then packages, each guarded). The golden trace digest
+`eed428b3...` was reproduced against the extracted `9bb9f4f2ea` guest and the current one. New
+test `test/unit/turn-runner-fence-order.test.js` (`582085f5ad`): delete at the very settle that
+would seal while a tool call runs, and a lease broken before Dispatched answered by stale ports
+(twice, then fresh; newer than the claim; three times in a row). Its digest was taken on the old
+guest and matches the new one. Fit: neutral.
+
+### J-10241 2026-11-18 T3-QC kill points three times - verified
+m2-archive-restart, m2-archive-restart-2, m2-lifecycle, m1b-pool-restart, m5-grants-restart and
+m5-mentions-restart, `--jobs 6` in shared slots, three rounds (216.5 s, 228.4 s and 208.7 s wall):
+all green each time. No duplicated request, no tool run twice, no lost or duplicated record was
+reported (each file asserts these). Fit: neutral.
+
+### J-10242 2026-11-18 T3-QC providers and single homes - verified
+The wire goldens were committed before the seam moved (`0e5d341e2f`) and pass. The stream order
+(model check, key, system, body) and retry wiring are as before. `makeEventLog` is byte-equal to
+the old one. The kind strings left are the pool provider map (`subscriptions/catalog.js:473`,
+`:550`, `provider.js:109`, `index.js:381`, plus the unused `handles`). The plan allows them.
+`files.js` keeps each writer's steps (segment `.part` with cleanup, the caches without fsync). Key
+loads: a failure is no longer kept, and `store.load` starts empty on a retry. Every refusal the old
+code made still refuses. No write happens before a successful load. Adapter lane 455 passed; unit
+lane 703 passed; `lint:duplicates` 1.80 % of 2.05 %. Fit: neutral.
+
+### J-10243 2026-11-18 T3-QC findings - finding
+(1) milestones.md (23-24, 1454, 1588-1589, 1846-1848, 1875) and architecture.md:612 still tell
+M6, M8, M9 and M11 to register in the deleted `turn-hooks.js`. The same goes for m5-interfaces
+1088-1112 (extender columns) and m2-interfaces 211/232 (`runner.archive`). (2) The model text
+change in `guest/exec/inspect.js` describe: a help() the hub refuses now fails the whole describe.
+Before, it kept the methods with documentation unavailable, and no row of step3-plan names this
+change. (3) Stale `SessionCore.claimNext` comments in queue.js:21, :114 and submissions.js:14.
+(4) Dead code: `subscriptions/index.js` `handles` and the `projection?.transcript ?? []`
+fallbacks in subscriptions/messages.js:210 and responses.js:451. Bundles: session
+206,907 -> 212,483, exec 61,688 -> 62,754, factory 155,427 -> 156,955. Fit: worse (docs).
+
+### J-10244 2026-11-18 T3-QC time record - verified
+First command 23:44:11Z. Over 60 s: the three kill-point rounds (217 s, 228 s, 209 s, in the
+background) and the adapter lane (63 s). Not run: the browser lane, perf rows, regression lists,
+m1a-channels bench, integration m2-secrets/providers/catalog and m3-gateway. Scratch tmp/T3-QC
+removed. Fit: neutral.
+
+### J-10245 2026-11-18 T3-FIX extension-point docs - fixed
+T3-QC finding 1 (HR-SYN-15 docs). milestones.md (shared-file rules, M6, M8 and M9 owns, the
+ownership check, the review's ownership row), architecture.md section 4, the m5-interfaces
+hook-table and exports rows and m2-interfaces 2.3/2.4 now send later milestones to the runtime
+part of step3-plan section 2 (one name in `PartName` and `requiredParts`, one getter, one entry
+in `runtimeParts`; `hooks` { onClaim, beforeRound, onCancel, onSettle, onRecover, nextTurn } and
+`tools`; turnSources -> nextTurn, recoverySteps -> onRecover) and say `archive` is made in
+session.js. Historical M1a-M5 work-unit rows keep the file they edited. New
+test/unit/extension-point-docs.test.js pins it. Commits cd38c2368c and 861622d6d3 (the
+m5-interfaces rows went in the second; the docs test is green from it on). Fit: better.
+
+### J-10246 2026-11-18 T3-FIX describe of a refused help() - fixed
+T3-QC finding 2 (rule 1). No PM sign-off exists for the describe change of 1e833c0a82, so it is
+reverted: a help() the hub refuses for size is like any other help() failure, the methods with
+documentation `unavailable`. `ANSWER_OVER_FRAME_TEXT` stays on the granted-tool execute path.
+`tooBigOutcome` gains `helpUnavailable` (ok result); m5-security refuses it for a granted answer.
+Unit test inspector-frame-refusal rewritten for the old outcome; integration m5-objects
+(bigHelp outcome helpUnavailable) and m5-security (hubRefused) passed, 137.9 s wall, the
+templates rebuilt. Finding 3 rides the same commit (861622d6d3): queue.js and submissions.js
+comments name the runner's `claimNext()` (turn.js). Bundles: exec 62,754 -> 62,623, session
+212,483 -> 212,484, factory 156,955. Fit: better.
+
+### J-10247 2026-11-18 T3-FIX pool dead code - fixed
+T3-QC finding 4 (HR-SYN-3 (a)). `subscriptions.handles` and its type line removed; claudeAttempt
+and codexAttempt read `projection.transcript` (always given, PREPARE_REQUIRED). Pool wire golden
+byte-equal (m4-provider passes). New tests: subscriptions has no `handles` and `kindOf` routes the
+pool spec; an attempt without a projection sends nothing. Commit d23d464cab. Fit: better.
+
+### J-10248 2026-11-18 T3-FIX the pools' kind table - decided
+T3-QC finding 5. Putting `provider` on the pool kinds and reading `kindOf(spec).provider` in
+subscriptions/ would import providers/kinds.js, which imports subscriptions/provider.js: a cycle.
+Taken instead the finding's second option: kinds.js and m4-interfaces record that the adapter's
+provider code matches a kind only through `kindOf`, `providerOfKind`/`poolKinds` are the pools'
+own table (pinned by m4-interfaces.test.js), and later kinds add no other table. Commit
+ec3212168f. Fit: neutral.
+
+### J-10249 2026-11-18 T3-FIX time record - verified
+First command 23:56:27Z. Ran: unit lane 707 passed, adapter lane 458 passed (63 s), tsc,
+eslint and prettier on changed files, lint:duplicates 1.80 % of 2.05 %, bundle-guest, integration
+m5-objects + m5-security (`--jobs 2`, 137.9 s wall, over 60 s, background). Not run: perf rows
+(exec-m5 probe b uses the changed predicate), browser lane, regression lists, kill points. No
+manager-part file touched. No scratch left. Fit: neutral.
+
+### J-10250 2026-11-19 T3-CLOSE templates rebuilt after step 3 - measured
+Every template key changed with step 3 (session, exec and factory bundles; adapter sources).
+Bundles (`scripts/bundle-guest.mjs`) at `804398c4d9`: session 212,484 of 240,000, exec 62,623,
+factory 156,955; before step 3 (`9bb9f4f2ea`, J-10193) 206,907, 61,688, 155,427 (+5,577, +935,
++1,528 bytes). Milestone templates, six parallel shared wrappers (`node perf/_pass.mjs templates
+<name>`), 00:06:00-00:08:49, 169 s wall: held `m1a` 124 s, `exec` 128, `pool` 131, `m4` 118,
+`m3-300` 169 (builds 67, 70, 73, 59, 110 s); `m5o` was current (T3-FIX's run). Long-session
+chain (`node perf/_long-template.mjs history journal throughput`, background, one shared slot
+beside the regression lists and the perf pass), 00:08:52-01:20:07: held long 200 / 1,000 / 5,000
+89 / 153 / 469 s, busy 10..50 393, 355, 357, 360, 361 s (2,537 s held; CL-CLOSE 2,558 s).
+Fit: neutral: one rebuild per bundle change, as designed.
+
+### J-10251 2026-11-19 T3-CLOSE regression run on the restructured tree - measured
+At `804398c4d9` (documents edited only), 6 jobs, shared slots, load 2.0-4.3, the long chain holding
+one slot. `corepack yarn test:regression:core` 00:09:04-00:25:34: unit and adapter lanes 1,328
+passed, 116 skipped, 67.3 s; 25 files, 4,344 s held, 922 s wall (989 s, 16.5 min, with the lanes);
+all pass (`m1b-exec-tool`, CL-CLOSE's load flake, passed, 182 s held; `m1a-slice`, which failed
+its timing ratio twice in the build units, passed, 236 s). `corepack yarn
+test:regression:milestones` (browser files included) 00:25:59-00:37:04: 31 files, 3,326 s held,
+665 s wall (11.1 min), all pass; slot waits up to 191 s (`m4-wire`). Longest held `m1b-followups`
+297 s. Both lists fit the 20-minute rule; 56 files, 7,670 s held against CL-CLOSE's 7,494 s
+(+2.3 %, inside the load range of the two runs). Per file: `process.md` 3.1.
+Fit: good: the restructure moved no behaviour any file sees.
+
+### J-10252 2026-11-19 T3-CLOSE exclusive perf mini-pass - measured
+00:37:28-01:14:06 UTC, `804398c4d9`-dirty (documents), load 1.6-4.3, back to back exclusive (as
+`perf:pass` runs each file; the six chosen by hand): session 160 s held, turn 129, exec 110,
+history 240 (exit 1), archive 245, exec-m5 275; 1,159 s held, 2,198 s wall (1,038 s waiting for
+the long chain's steps). Against CL-CLOSE (J-10192) and K2 (J-10082, J-10083):
+deliveries: `turn.start.deliveries` 2 per start (2), `turn.round` 3 (3), `turn.lease` 1 (1),
+`turn.delta` 0 (0), `turn.start` daemon deliveries 6.027 per turn (M1a-M2 6.02-6.03): no
+delivery count moved. `session.createCold` 38.6 deliveries per create: no recorded value at
+CL-CLOSE; the program is staged in 10 pieces now (`pieces` in the row) and the count follows the
+pieces (34.6 at 8, 40.6 at 11, J-9697), so unchanged [inferred]. `exec.trivial` 10.2 deliveries per
+op: no recorded baseline. Times: `session.program` 212,484 (206,907); `session.createCold` 6,379
+ms median, p99 6,607, n 5 (6,095, p99 6,331): +284 ms for +5,577 bytes, about 51 ms per KB against
+the 20-26 ms per KB of earlier growth; n 5 and under 1.25 x the 6,000 budget, but larger than the
+bytes explain; `install.factory` 6.56 s (6.32); `turn.start` 114 ms, p99 312 (118, p99 462);
+`turn.delta` 0.19 ms (0.20); `exec.first` 309 ms (295); `exec.trivial` 59 ms (66);
+`exec.sends.answered` 1,143 ms (1,089). History: stall at 200 / 1,000 / 5,000 976 / 1,009 / 899
+ms (K2 965 / 975 / 1,011); `archive.flat.turnStart.at1000` 1.83 x (258 against 141; K2 1.99 x,
+261 against 131): the carried miss, not step 3; hub row 9,104 / 9,084 / 9,323 (9,292 / 9,408 /
+8,825), slots 1.05 / 1.05 x. Archive: `archive.stall.at200` p99 1,233 ms (1,239), median 646
+(630); history page 280 ms, archived page 53 ms; context rebuild 90 ms. exec-m5:
+`exec.powersLookup` 55 ms (53.5), `exec.membrane` -12.2 ms (-9.9), `exec.scope1000` 63 ms (58),
+probe b `helpUnavailable`, passes (CL-CLOSE's failure was the check, fixed by the shared
+`tooBigOutcome`), probes a, c, f1, f2 pass.
+Fit: good, with one open reading: `session.createCold` grew more per KB than before.
+
+### J-10253 2026-11-19 T3-CLOSE what step 3 achieved; documents - decision
+From `9bb9f4f2ea` to `804398c4d9`, 37 commits by P3, T3-SESSION, T3-PROVIDERS, T3-HOST, T3-QC and
+T3-FIX. Largest closures (top-level function spans, lines): `makeTurnRunner` 1,553 -> 1,266
+(`turn.js` 1,728 -> 1,380 lines); `makeChannel` 310 -> 176, `makeListChannel` 178 -> 82;
+`makeScriptedProvider` 553 -> 450; `makeAnthropicProvider` 108 and `makeOpenRouterProvider` 110
+-> one `makeApiProvider` 78 plus `makeProviderShell` 20; two catalogue owners (96 + 55) -> one
+`makeCatalogOwner` 102; `makeHistory` 427 -> 382. About unchanged: `makeArchiveStore` 1,237 -> 1,240,
+`makeBlobStore` 732, `makeContextCache` 569 (not step 3's). Modules: 17 added (guest: `outbox`,
+`usage`, `ports`, `turn-index`, `turn-import`, `turn-types`, `factory/starts`,
+`lib/usage-counts`, `lib/record-preview`; adapter: `providers/shell`, `api`, `kinds`,
+`catalog-core`, `event-log`, `channel-subscriber`, `files`, `secrets/wrapping-key`), 1 deleted
+(`turn-hooks.js`); guest and adapter 4,006 lines added, 3,395 deleted. Duplicate share 3.00 % ->
+1.80 % (478 of 26,614 lines, 23 clusters), ceiling 3.25 -> 2.05 %. Bundles J-10250. Deliveries
+per turn unchanged (J-10252). Rows: done HR-SYN-4, -15, -17, -21, -24, -25, -26, -28, -30, -35,
+-36, HR-GUEST-11, -12; partly -3 ((b) plan), -5 ((b) plan; the store's error contract), -23, -32,
+-33. Documents (`a42d3b63a8`): ARCH 4.7-4.9, D-6, D-8, D-18 as built; the nine drifted places of
+HR-SYN-30 (`open(host) -> TurnPorts`, content methods, `ExecHandle.scope`, the sign-in file, 240,000
+bytes, `SessionRow.state`, `PresetCatalog`, binary frames, the union key guard stated as weaker);
+ARCH 14, a glossary of 50 terms; `harness.md` 8; `README.md`; `process.md` 3.1, 3.2, 6 (ceiling,
+shared index); `milestones.md` rule 3 and where later jobs go. For the M6-M11 contracts, beyond
+the plan: a part's `beforeRound` returns nothing and `HookTurn` has no way to change the round
+request, so M8's tool-less summary round needs a contract addition (a returned round option or a
+`HookTurn` member) and a runner change; `nextTurn` answers `{ text, at }` only, so M9 mail with
+attachments must go through the `packages` part or widen it; a pool kind adds a line to
+`guest/lib/subscription-texts.js`, a guest file, so its templates rebuild; the granted-tool
+`ANSWER_OVER_FRAME_TEXT` (model text, T3-SESSION) stays without a recorded PM sign-off.
+Fit: better.
+
+### J-10254 2026-11-19 T3-CLOSE time record - verified
+First command 00:05:26Z. Over 60 s: milestone templates 169 s (parallel); long-session chain
+00:08:52-01:20:07 (background); core list 989 s; milestones list 665 s; perf mini-pass 2,198 s;
+the adapter and unit lanes inside the core list 67 s. Ran: bundle-guest, lint:duplicates,
+the closure measure (a TypeScript-parser script over `guest` and `AH/impl`, now and at
+`9bb9f4f2ea` from `git archive`, scratch), the docs tests, prettier on the documents. Read only:
+`harness.md`, `harness-ontology.md` 5, `core-ontology.md` 5, `harness-edge.md` HR-EDGE-11,
+`step3-plan.md` 2, the journal J-10077..J-10249, the code headers of the step 3 modules. Not run:
+browser perf, gateway perf, the other perf files, a perf run of the old tree (createCold and
+exec.trivial delivery baselines). Scratch `tmp/T3-CLOSE` removed. Fit: neutral.

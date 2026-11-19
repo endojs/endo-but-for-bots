@@ -19,6 +19,7 @@ import {
 import { limits } from '../../guest/lib/limits.js';
 import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 import { makeFactoryKit, stagingSources } from '../../guest/factory/factory.js';
+import { makeStartCount } from '../../guest/factory/starts.js';
 import { makeProgramStore } from '../../guest/factory/root.js';
 import { makeRowTable } from '../../guest/factory/rows.js';
 import { serviceBuilders } from '../../guest/factory/services.js';
@@ -74,7 +75,13 @@ const setup = ({ beforeMake } = {}) => {
     .digest('hex');
   programs.load({ digest, index: 0, count: 1, text: PROGRAM_SOURCE });
   const rows = makeRowTable();
-  const kit = makeFactoryKit({ admin, vats, programs, rows });
+  const kit = makeFactoryKit({
+    admin,
+    vats,
+    programs,
+    rows,
+    starts: makeStartCount(),
+  });
   return { kit, made, rows, retired: () => retired };
 };
 

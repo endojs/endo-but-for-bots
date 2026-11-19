@@ -363,7 +363,7 @@ test('toolSetFor: dynamic sources after the table; built-in and duplicate names 
       dynamic('t', log),
       dynamic('t', log),
     ]);
-  const set = toolSetFor(portsWith, toolTable, {}, harden([source]));
+  const set = toolSetFor(portsWith, toolTable, {}, harden({ toolSources: [source] }));
   t.deepEqual(
     set.descriptions.map((/** @type {any} */ d) => d.name),
     ['list', 'lookup', 'store', 'remove', 'adopt', 'echo2'],
@@ -382,7 +382,12 @@ test('toolSetFor: dynamic sources after the table; built-in and duplicate names 
   t.is(set.refused.length, 4);
   // On ports without the adapter tool, accountStatus is offered.
   log.length = 0;
-  const other = toolSetFor(portsWithout, toolTable, {}, harden([source]));
+  const other = toolSetFor(
+    portsWithout,
+    toolTable,
+    {},
+    harden({ toolSources: [source] }),
+  );
   t.true(other.byName.has('accountStatus'));
   t.deepEqual(
     log.map(([name]) => name),
@@ -404,28 +409,33 @@ test('toolSetFor: dynamic sources after the table; built-in and duplicate names 
       'accountStatus',
     ],
   );
-  // The runtime reaches the source.
-  const runtime = harden({ marker: 1 });
+  // The runtime reaches the source, with the round's built-in names.
   /** @type {any} */
   let seen;
-  toolSetFor(
-    portsWithout,
-    toolTable,
-    {},
-    harden([
-      (_p, _s, r) => {
+  /** @type {any} */
+  let names;
+  const runtime = harden({
+    toolSources: [
+      (/** @type {any} */ _p, /** @type {any} */ _s, /** @type {any} */ r, /** @type {Set<string>} */ b) => {
         seen = r;
+        names = b;
         return [];
       },
-    ]),
-    runtime,
-  );
+    ],
+  });
+  toolSetFor(portsWithout, toolTable, {}, runtime);
   t.is(seen, runtime);
+  t.deepEqual([...names], [...builtInToolNames(portsWithout)]);
 });
 
 test('toolSetFor keeps at most maxToolsPerRound descriptions', t => {
   const many = () =>
     harden(Array.from({ length: 200 }, (_, i) => dynamic(`g${i}`)));
-  const set = toolSetFor(harden({ tools: [] }), toolTable, {}, harden([many]));
+  const set = toolSetFor(
+    harden({ tools: [] }),
+    toolTable,
+    {},
+    harden({ toolSources: [many] }),
+  );
   t.is(set.descriptions.length, limits.maxToolsPerRound);
 });
