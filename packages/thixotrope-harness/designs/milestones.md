@@ -1933,10 +1933,13 @@ at `1881601aab`, load 1.9-3.2, 690.9 s held, 786 s of wall for the files; J-1226
 
 ## M9. Mail and subagents
 
-**Status: integrated, group acceptance in progress.** The inbox and subagent runtime parts and their ten session tools are registered. Reference: `m9-interfaces.md` (seams 6, work units 7,
-acceptance 8, restart files 9, perf 10, probes 11, fold 12); guards and limits in
-`guest/lib/guards/mail.js` (session vat), `guest/lib/guards/post-office.js` (factory) and
-`guest/lib/mail-limits.js`, until W9.F.
+**Status: integrated with open performance gates.** The five daemon regression files passed
+12 tests across the recorded runs (J-12544). The combined branch also passed the stopped-mail
+and child-environment cases. The ten mail, request and subagent tools are registered. The
+like-for-like M9 byte growth exceeded its lane allocation (J-12541). The session and factory
+guard tables now own the corresponding mail interfaces; the limits are in `guest/lib/limits.js`.
+The contract is `m9-interfaces.md` (seams 6, work units 7, acceptance 8, restart files 9,
+perf 10, probes 11, fold 12).
 
 **Goal.** Agents talk to each other and to the operator: mail with packages and typed requests,
 mail-started turns, and subagents with tree and depth limits that survive restart.
@@ -2076,7 +2079,11 @@ read-only static site (P-64).
 
 ## M11. Voice
 
-**Status: integrated, group acceptance in progress.** The speech service, shortcut preset and browser controls are wired. Reference: `m11-interfaces.md` (seams 11, work units 12,
+**Status: integrated with open performance gates.** Talk and the pinned voice preset passed
+with and without the environments runner (J-12725). The spoken-turn delivery gate passed
+on all 66 turns. Pooled startup and the exact cold-settings delivery count missed their
+targets. The transport, browser and restart evidence is in the group journal. Reference:
+`m11-interfaces.md` (seams 11, work units 12,
 acceptance 13, perf and probes 14, fold 17, appendix A for WX.1, appendix C item by item); fixed
 files `AH/speech/{audio-protocol,engine-protocol,engine-types}.js`,
 `guest/lib/{voice-preferences,speech-guards}.js`, `UI/src/voice/{endpointing-defaults,texts}.js`.

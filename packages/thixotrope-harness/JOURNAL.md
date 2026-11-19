@@ -17412,3 +17412,20 @@ files also passed across the runs. Together those five regression files cover tw
 tests. The first multi-file run had one repeated-recipient failure; its corrected file passed
 on rerun. The child environment daemon check passed on the combined tree. These cases do not
 exercise every intermediate crash point in the M9 design.
+
+### J-1445 2026-11-19 WX.F real-worker acceptance and regressions
+
+Three cross-lane files on the combined checkout passed. The stopped session received its
+package and woke after resume (107.9 s held). A child ran in its own workspace with its
+parent stopped (117.5 s). Talk refused without a runner, then started the pinned voice
+session and ran its shell command with the runner attached (281.3 s). Their 506.6 s of
+total slot use occupied 1,752.0 s of elapsed time including queueing. The first combined
+workspace-image run delivered the exact 2 MiB PNG to the loopback Anthropic endpoint. Its
+frame audit could not read the old manager journal after idle checkpointing. The fixture
+now retains both worker journals through the turn.
+
+The full unit and adapter run including the smaller manager passed 1,997 tests, with 167
+skips and three TODOs. The legacy 200-turn context case passed its clean and SIGKILL
+restarts after template preparation moved outside the timed case. The M3 history and
+reconnect browser suites passed their bounded retries. J-12544 records the 12 lane-specific
+mail daemon checks including the corrected repeated-recipient case.
