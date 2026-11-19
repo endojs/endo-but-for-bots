@@ -20,9 +20,9 @@ import { makeSession } from '../../guest/session/session.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
-const { Far, makeExo, makePromiseKit } = /** @type {GuestGlobals} */ (
-  globalThis
-);
+const { Far, makePromiseKit } = /** @type {GuestGlobals} */ (globalThis);
+// Typed loosely, as session.js does: the guards check the values.
+const { makeExo } = /** @type {any} */ (globalThis);
 
 /** Let every pending microtask and eventual send run. */
 export const drain = async () => {
@@ -209,7 +209,7 @@ export const makeEnvironmentSession = async ({
     open: () => ports,
   });
   const host = Far('SessionHostFacet', { liveChannel: () => publisher });
-  /** @type {Record<string, any>} */
+  /** @type {any} */
   const services = { backend, host };
   if (environment !== undefined) {
     services.environment = environment.control;
