@@ -720,7 +720,11 @@ impl Interp {
                     Payload::Reference(function)
                         if then.kind == Kind::Reference
                             && self.method_of(function) == Some(NativeMethod::PromiseThen));
-                if self.promises.contains_key(&obj) && intrinsic_then {
+                // A subclass instance's intrinsic `then` constructs its
+                // derived promise through the observable species constructor,
+                // so only a `%Promise.prototype%` instance adopts natively.
+                let intrinsic_proto = self.instance_prototype(obj) == self.promise_proto;
+                if self.promises.contains_key(&obj) && intrinsic_then && intrinsic_proto {
                     // Promise adoption is a native `then` registration whose
                     // pass-through reaction forwards the source settlement to
                     // the target promise. An own `.then` override still goes
@@ -1313,7 +1317,15 @@ impl Interp {
         let intrinsic_then = matches!(then.value,
             Payload::Reference(function)
                 if self.method_of(function) == Some(NativeMethod::PromiseThen));
-        if self.promises.contains_key(&promise_inst) && intrinsic_then {
+        // The native reaction elides the `thenFinally` closures and the
+        // promises `then` and `PromiseResolve` would construct. That is only
+        // unobservable when the selected constructor is the intrinsic
+        // `%Promise%`; a subclass counts every construction.
+        let intrinsic_constructor = matches!(constructor.value,
+            Payload::Reference(inst)
+                if constructor.kind == Kind::Reference
+                    && self.intrinsics.get("Promise") == Some(&inst));
+        if self.promises.contains_key(&promise_inst) && intrinsic_then && intrinsic_constructor {
             return self.promise_finally(code, promise_inst, on_finally, constructor);
         }
         self.meter.tick_raw(PROMISE_FINALLY_FRAME_METERING);
@@ -1380,9 +1392,9 @@ impl Interp {
     /// Perform the default-native `PromiseResolve(C, result)` and
     /// `resultPromise.then(valueThunk, thrower)` portion of `finally` without
     /// allocating non-persisted closure state. Native promises use a
-    /// `FinallyAwait` reaction directly. An observable custom `then` is called
-    /// with a private resolving pair whose bridge promise carries that same
-    /// reaction, retaining one-shot behavior and snapshot resumability.
+    /// `FinallyAwait` reaction directly. An observable custom `then` is invoked
+    /// with a persisted value thunk, as `thenFinally` specifies, and its result
+    /// resolves the derived promise.
     fn await_finally_result(
         &mut self,
         code: &[u8],
@@ -1518,20 +1530,19 @@ impl Interp {
                 return Ok(());
             }
 
-            let (bridge, bridge_resolve, bridge_reject) = self.new_promise_capability();
-            self.register_native_reaction(bridge, await_reaction);
-            // A callable proxy can discard its argument array before throwing.
-            // The argument list alone therefore cannot keep the bridge alive
-            // until we use its reject function after the call.
-            self.stack.extend([bridge_resolve, bridge_reject]);
-            match self.call_any_catching_throw(
-                code,
-                then,
-                awaited_slot,
-                &[bridge_resolve, bridge_reject],
-            )? {
-                Ok(_) => Ok(()),
-                Err(error) => self.reject_via_function(bridge_reject, error),
+            // An observable `then` sees exactly what `thenFinally` passes:
+            // `Invoke(promise, "then", « valueThunk »)`, whose result then
+            // resolves the derived promise.
+            let value_thunk =
+                self.make_promise_finally_value(self.stack[root_sp + 1], original_rejected);
+            self.stack.push(value_thunk);
+            match self.call_any_catching_throw(code, then, awaited_slot, &[value_thunk])? {
+                Ok(next) => {
+                    self.settle_capability(code, reaction.resolve, reaction.reject, next, false)
+                }
+                Err(error) => {
+                    self.settle_capability(code, reaction.resolve, reaction.reject, error, true)
+                }
             }
         })();
         // Host halts preserve the failed activation and its operands. Keep
@@ -1900,9 +1911,11 @@ impl Interp {
         Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
     }
 
-    /// Settle a combinator whose iterable was empty: `all`/`allSettled` resolve
-    /// with the empty results Array; `any` rejects with a zero-error
-    /// `AggregateError`; `race` stays pending forever (no settlement).
+    /// Settle a combinator whose count reached zero when its iterable was
+    /// exhausted: the iterable was empty, or every element settled
+    /// synchronously through a custom `then`. `all`/`allSettled` resolve with
+    /// the results Array; `any` rejects with an `AggregateError` over the
+    /// recorded reasons; `race` stays pending forever (no settlement).
     fn settle_empty_combinator(&mut self, code: &[u8], ci: usize) -> Result<(), Step> {
         let kind = self.combinators[ci].kind;
         let completion = match kind {
@@ -1914,10 +1927,10 @@ impl Interp {
                 ))
             }
             CombinatorKind::Race => None,
-            CombinatorKind::Any => {
-                let agg = self.new_aggregate_error(Vec::new());
-                Some((agg, true))
-            }
+            // Element callbacks invoked synchronously by a custom `then` may
+            // already have recorded every rejection before the iterator
+            // finished, so the final decrement reports those errors.
+            CombinatorKind::Any => Some((self.combinator_aggregate_error(ci), true)),
         };
         if let Some((value, rejected)) = completion {
             let resolve = self.combinators[ci].resolve;
@@ -1925,6 +1938,24 @@ impl Interp {
             self.settle_capability(code, resolve, reject, value, rejected)?;
         }
         Ok(())
+    }
+
+    /// The `AggregateError` rejecting `any`, over the reasons recorded in the
+    /// combinator's results Array (holes read as `undefined`).
+    fn combinator_aggregate_error(&mut self, ci: usize) -> Slot {
+        let results = self.combinators[ci].results;
+        let errs: Vec<Slot> = {
+            let data = &self.arrays[&results];
+            (0..data.length)
+                .map(|i| {
+                    data.items()
+                        .get(&i)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined)
+                })
+                .collect()
+        };
+        self.new_aggregate_error(errs)
     }
 
     /// The drain behavior of one combinator element reaction (XS's per-element
@@ -1993,18 +2024,7 @@ impl Interp {
                     self.array_set_dense(results, ei as u32, value);
                     self.combinators[ci].remaining -= 1;
                     if self.combinators[ci].remaining == 0 {
-                        let errs: Vec<Slot> = {
-                            let data = &self.arrays[&results];
-                            (0..data.length)
-                                .map(|i| {
-                                    data.items()
-                                        .get(&i)
-                                        .copied()
-                                        .unwrap_or_else(Slot::undefined)
-                                })
-                                .collect()
-                        };
-                        let agg = self.new_aggregate_error(errs);
+                        let agg = self.combinator_aggregate_error(ci);
                         self.settle_capability(code, resolve, reject, agg, true)
                     } else {
                         Ok(())

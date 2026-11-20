@@ -1,8 +1,8 @@
 # engine=ironhorse features=default corpus=built-ins/Promise/any tip=be13516fb6441b950ba8a3df97eb34062c186972
-built-ins/Promise/any/call-reject-element-after-return.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: errorArray after call to any() Expected SameValue(«undefined», «\"onRejectedValue\"») to be true"
-built-ins/Promise/any/call-reject-element-after-return.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: errorArray after call to any() Expected SameValue(«undefined», «\"onRejectedValue\"») to be true"
-built-ins/Promise/any/call-reject-element-items.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: error.errors is array"
-built-ins/Promise/any/call-reject-element-items.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: error.errors is array"
+built-ins/Promise/any/call-reject-element-after-return.js sloppy pass
+built-ins/Promise/any/call-reject-element-after-return.js strict pass
+built-ins/Promise/any/call-reject-element-items.js sloppy pass
+built-ins/Promise/any/call-reject-element-items.js strict pass
 built-ins/Promise/any/capability-executor-called-twice.js sloppy pass
 built-ins/Promise/any/capability-executor-called-twice.js strict pass
 built-ins/Promise/any/capability-executor-not-callable.js sloppy pass
@@ -153,8 +153,8 @@ built-ins/Promise/any/reject-immed.js sloppy pass
 built-ins/Promise/any/reject-immed.js strict pass
 built-ins/Promise/any/resolve-before-loop-exit-from-same.js sloppy pass
 built-ins/Promise/any/resolve-before-loop-exit-from-same.js strict pass
-built-ins/Promise/any/resolve-before-loop-exit.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: error is array"
-built-ins/Promise/any/resolve-before-loop-exit.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: error is array"
+built-ins/Promise/any/resolve-before-loop-exit.js sloppy pass
+built-ins/Promise/any/resolve-before-loop-exit.js strict pass
 built-ins/Promise/any/resolve-from-reject-catch.js sloppy pass
 built-ins/Promise/any/resolve-from-reject-catch.js strict pass
 built-ins/Promise/any/resolve-from-resolve-reject-catch.js sloppy pass

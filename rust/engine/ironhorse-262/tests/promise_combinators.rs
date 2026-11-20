@@ -151,15 +151,18 @@ fn finally_returned_rejection_overrides_the_original_settlement() {
     );
 }
 
+// `thenFinally` returns `Invoke(promise, "then", « valueThunk »)` itself
+// (xsPromise.c `fx_Promise_prototype_finallyAux`): a custom `then` receives
+// only the value thunk, and its own return value settles the derived promise.
 #[test]
 fn finally_observes_a_returned_promises_custom_then() {
     assert_drains_to(
         "var g,calls=0,p=Promise.resolve(11); p.then=function(resolve){calls++;resolve(12);}; Promise.resolve(7).finally(function(){return p;}).then(function(v){g=calls+':F'+v;},function(e){g=calls+':R'+e;}); undefined",
-        "1:F7",
+        "1:Fundefined",
     );
     assert_drains_to(
         "var g,calls=0,p=Promise.resolve(11); p.then=function(resolve,reject){calls++;reject(12);resolve(13);}; Promise.resolve(7).finally(function(){return p;}).then(function(v){g=calls+':F'+v;},function(e){g=calls+':R'+e;}); undefined",
-        "1:R12",
+        "1:RTypeError: call: not a function",
     );
 }
 
@@ -191,7 +194,7 @@ fn finally_rejects_when_returned_promise_observation_throws() {
 fn finally_uses_the_selected_species_for_result_resolution() {
     assert_drains_to(
         "var g='',calls=0;function C(executor){var n=++calls;executor(function(v){g+=n+'r'+v+','},function(e){g+=n+'j'+e+','});return {tag:n,then:function(resolve){resolve('ok')}}}var p=Promise.resolve(7);p.constructor={};p.constructor[Symbol.species]=C;var q=p.finally(function(){return 11});var same=q.tag===1;undefined",
-        "2r11,1r7,",
+        "2r11,1rundefined,",
     );
 }
 
