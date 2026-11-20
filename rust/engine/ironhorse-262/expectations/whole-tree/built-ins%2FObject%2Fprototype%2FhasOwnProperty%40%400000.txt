@@ -123,5 +123,5 @@ built-ins/Object/prototype/hasOwnProperty/symbol_property_toString.js sloppy pas
 built-ins/Object/prototype/hasOwnProperty/symbol_property_toString.js strict pass
 built-ins/Object/prototype/hasOwnProperty/symbol_property_valueOf.js sloppy pass
 built-ins/Object/prototype/hasOwnProperty/symbol_property_valueOf.js strict pass
-built-ins/Object/prototype/hasOwnProperty/topropertykey_before_toobject.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error but got a TypeError"
-built-ins/Object/prototype/hasOwnProperty/topropertykey_before_toobject.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error but got a TypeError"
+built-ins/Object/prototype/hasOwnProperty/topropertykey_before_toobject.js sloppy pass
+built-ins/Object/prototype/hasOwnProperty/topropertykey_before_toobject.js strict pass
