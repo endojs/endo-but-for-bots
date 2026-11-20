@@ -2760,6 +2760,33 @@ pub struct Interp {
     /// `%IteratorPrototype%[@@iterator]`. See `segments_iterator_method`
     /// for why this is a boot field rather than a link-time mint.
     iterator_identity: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[gc_root(index)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// `%IteratorPrototype%[@@dispose]`, minted at BOOT like
+    /// `iterator_identity` and installed under the program's symbol id at link.
+    iterator_dispose_method: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[gc_root(index)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// `%AsyncIteratorPrototype%[@@asyncDispose]`, minted at BOOT like
+    /// `async_iterator_identity` and installed under the program's symbol id
+    /// at link.
+    async_iterator_dispose_method: crate::value::SlotIndex,
     #[boot_new(Vec::new())]
     #[gc_root(generators)]
     #[quiescent(empty)]

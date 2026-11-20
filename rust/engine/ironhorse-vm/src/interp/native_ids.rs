@@ -302,11 +302,15 @@ pub enum NativeMethod {
     DisposableStackDefer,
     DisposableStackMove,
     DisposableStackDispose,
+    /// `get DisposableStack.prototype.disposed`.
+    DisposableStackDisposedGetter,
     AsyncDisposableStackUse,
     AsyncDisposableStackAdopt,
     AsyncDisposableStackDefer,
     AsyncDisposableStackMove,
     AsyncDisposableStackDisposeAsync,
+    /// `get AsyncDisposableStack.prototype.disposed`.
+    AsyncDisposableStackDisposedGetter,
     /// `Boolean.prototype.valueOf`/`toString`, `Number.prototype.valueOf`
     /// and `String.prototype.valueOf`/`toString`: the receiver's primitive,
     /// which a primitive of the type is itself and a wrapper of the type
@@ -932,6 +936,13 @@ pub enum NativeMethod {
     AsyncGeneratorReturn,
     AsyncGeneratorThrow,
     AsyncIteratorIdentity,
+    /// `%IteratorPrototype%[@@dispose]()`: call the receiver's `return`
+    /// method, when it has one, and answer `undefined`.
+    IteratorDispose,
+    /// `%AsyncIteratorPrototype%[@@asyncDispose]()`: call the receiver's
+    /// `return` method, when it has one, and answer a promise that fulfills
+    /// with `undefined` once that result settles.
+    AsyncIteratorAsyncDispose,
     /// `Promise.resolve(value)` (`fx_Promise_resolve`): a promise resolved
     /// with `value` (returned as-is when already a native promise).
     PromiseResolveStatic,

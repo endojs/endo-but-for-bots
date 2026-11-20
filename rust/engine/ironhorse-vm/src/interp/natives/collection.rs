@@ -831,6 +831,35 @@ impl Interp {
         self.call_any(code, return_method, iterator, &[])
     }
 
+    /// `%IteratorPrototype%[@@dispose]()`, as XS's
+    /// `fx_Iterator_prototype_dispose`: `fxIteratorReturn` with `abrupt`
+    /// set, so the receiver's `return` (unless `undefined` or `null`) is
+    /// called with no arguments and every exception along the way, including
+    /// a non-object result, is swallowed. The answer is always `undefined`.
+    pub(in crate::interp) fn iterator_dispose(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+    ) -> Result<Slot, Step> {
+        let _swallowed = self.array_from_try(|vm| {
+            let object = vm.array_to_object(this)?;
+            let Payload::Reference(inst) = object.value else {
+                unreachable!("ToObject result")
+            };
+            let return_id = vm.intern_static_key("return");
+            let return_method = vm.mop_get(code, inst, return_id, this)?;
+            if matches!(return_method.kind, Kind::Undefined | Kind::Null) {
+                return Ok(());
+            }
+            if !vm.is_callable_value(return_method) {
+                return Err(vm.catchable_type_error_msg("call: not a function".into()));
+            }
+            vm.call_any(code, return_method, this, &[])?;
+            Ok(())
+        })?;
+        Ok(Slot::undefined())
+    }
+
     /// The lazy Iterator helpers' shared holder layout. A helper's
     /// [`IterState::result`] names an internal Array whose items carry the
     /// captured iterator record and per-helper state; an Array keeps the

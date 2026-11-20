@@ -202,6 +202,8 @@ const FRESH_ORDER: &[&str] = &[
     "async_generator_function_proto",
     "async_iterator_identity",
     "iterator_identity",
+    "iterator_dispose_method",
+    "async_iterator_dispose_method",
     "async_gen_run_stack",
     "resume_status",
     "promise_functions",

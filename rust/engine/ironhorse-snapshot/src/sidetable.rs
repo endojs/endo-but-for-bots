@@ -839,6 +839,11 @@ mod tests {
             // fresh boot reproduces them at identical indices.
             "iterator_identity",
             "segments_iterator_method",
+            // `%IteratorPrototype%[@@dispose]` and
+            // `%AsyncIteratorPrototype%[@@asyncDispose]`, minted at boot
+            // beside `iterator_identity` for the same reason.
+            "iterator_dispose_method",
+            "async_iterator_dispose_method",
             "segment_iterator_identity",
             // `%Error.prototype%`'s `stack` host accessor pair. Both
             // function slots are minted in `create_intrinsics`, so a
