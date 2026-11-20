@@ -1,7 +1,7 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { ToolInvocationContext, ToolSpec, ToolRecord } from './types.js' */
+/** @import { ToolInvocationContext, ToolSpec, ToolRecord, ToolResultPolicy } from './types.js' */
 
 import { mustMatch } from '@endo/patterns';
 
@@ -85,6 +85,28 @@ const copyHardenArgsRecord = argsRecord => {
 };
 
 /**
+ * @param {ToolResultPolicy | undefined} policy
+ * @returns {ToolResultPolicy | undefined}
+ */
+const normalizeResultPolicy = policy => {
+  if (policy === undefined) return undefined;
+  if (policy === null || typeof policy !== 'object') {
+    throw new TypeError('resultPolicy must be an object');
+  }
+  const { maxBytes } = policy;
+  if (
+    typeof maxBytes !== 'number' ||
+    !Number.isSafeInteger(maxBytes) ||
+    maxBytes < 1
+  ) {
+    throw new TypeError(
+      'resultPolicy.maxBytes must be a positive safe integer',
+    );
+  }
+  return harden({ maxBytes });
+};
+
+/**
  * Build a tool record from its JSON Schema, optional positional guards, and
  * dispatch function. The schema is advertised to callers; the guards enforce
  * the same positional argument contract at runtime.
@@ -98,7 +120,8 @@ const copyHardenArgsRecord = argsRecord => {
  * @returns {ToolRecord}
  */
 export const makeTool = spec => {
-  const { name, description, parameters, argGuards, execute } = spec;
+  const { name, description, parameters, argGuards, resultPolicy, execute } =
+    spec;
   // Avoid retaining a mutable caller-owned schema object.
   const hardenedParameters = harden(parameters);
   const paramNames = getParamNames(hardenedParameters);
@@ -106,6 +129,7 @@ export const makeTool = spec => {
     hardenedParameters,
     paramNames,
   );
+  const normalizedResultPolicy = normalizeResultPolicy(resultPolicy);
   // Required slots must be the leading positional arguments, so arity counts up
   // to the last required declared property.
   let requiredCount = 0;
@@ -119,6 +143,7 @@ export const makeTool = spec => {
     description,
     parameters: hardenedParameters,
     inputSchema: hardenedParameters,
+    resultPolicy: normalizedResultPolicy,
     /**
      * @param {Record<string, unknown>} argsRecord
      * @param {ToolInvocationContext} [context]

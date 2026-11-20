@@ -99,6 +99,20 @@ test('grants compose into one flat catalog with distinct names', t => {
   t.is(catalog.length, nameSet(catalog).size, 'no name is repeated');
 });
 
+test('workspace composition forwards one result policy to every tool group', t => {
+  const resultPolicy = { maxBytes: 128 };
+  const catalog = makeWorkspaceTools({
+    filesystem: grant('Filesystem'),
+    git: grant('Git'),
+    remote: grant('GitRemote'),
+    resultPolicy,
+  });
+  t.true(catalog.length > 0);
+  for (const tool of catalog) {
+    t.deepEqual(tool.resultPolicy, resultPolicy);
+  }
+});
+
 test('a shell + remote catalog fails closed on the shared "inspect" name', t => {
   // Both makeShellTool and makeGitRemoteTool emit a bounds-legibility `inspect`
   // tool. A flat catalog with two identically-named tools is ambiguous the

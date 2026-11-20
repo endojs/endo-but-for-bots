@@ -97,7 +97,7 @@ export const makeWorkspaceTools = ({
   remote,
   shell,
   readOnly = false,
-  maxChars,
+  resultPolicy,
   shellOptions,
 } = {}) => {
   /** @type {{ group: string, records: ToolRecord[] }[]} */
@@ -105,23 +105,32 @@ export const makeWorkspaceTools = ({
   if (filesystem !== undefined) {
     groups.push({
       group: 'file',
-      records: makeMountFsTools(filesystem, { readOnly, maxChars }),
+      records: makeMountFsTools(filesystem, { readOnly, resultPolicy }),
     });
   }
   if (git !== undefined) {
     // The versioning layer: the JSON-safe git slice (staging / commit / log /
     // diff / branch navigation) plus status's agent-facing default, both over
     // the same granted `Git` whose formula-owned identity attributes commits.
-    groups.push({ group: 'git', records: makeGitTool(git) });
-    groups.push({ group: 'gitMount', records: makeGitMountTools(git) });
+    groups.push({
+      group: 'git',
+      records: makeGitTool(git, { resultPolicy }),
+    });
+    groups.push({
+      group: 'gitMount',
+      records: makeGitMountTools(git, { resultPolicy }),
+    });
   }
   if (remote !== undefined) {
-    groups.push({ group: 'gitRemote', records: makeGitRemoteTool(remote) });
+    groups.push({
+      group: 'gitRemote',
+      records: makeGitRemoteTool(remote, { resultPolicy }),
+    });
   }
   if (shell !== undefined) {
     groups.push({
       group: 'shell',
-      records: makeShellTool(shell, shellOptions),
+      records: makeShellTool(shell, { ...shellOptions, resultPolicy }),
     });
   }
   return concatDistinctTools(groups);
@@ -146,7 +155,7 @@ export const provisionWorkspaceTools = async ({
   shell,
   filesystem,
   readOnly = false,
-  maxChars,
+  resultPolicy,
   shellOptions,
 } = {}) => {
   await null; // safe-await separator before any boundary round-trip
@@ -161,7 +170,7 @@ export const provisionWorkspaceTools = async ({
     remote,
     shell,
     readOnly,
-    maxChars,
+    resultPolicy,
     shellOptions,
   });
 };
@@ -178,12 +187,12 @@ harden(provisionWorkspaceTools);
  * @param {HistoryToolsGrant} grant
  * @returns {Promise<ToolRecord[]>}
  */
-export const provisionHistoryTools = async ({ git, ref, maxChars }) => {
+export const provisionHistoryTools = async ({ git, ref, resultPolicy }) => {
   await null; // safe-await separator before any boundary round-trip
   const filesystem = await E(git).filesystemAt(ref);
   return makeMountFsTools(/** @type {ERef<Filesystem>} */ (filesystem), {
     readOnly: true,
-    maxChars,
+    resultPolicy,
   });
 };
 harden(provisionHistoryTools);
