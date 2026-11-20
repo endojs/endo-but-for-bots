@@ -37,8 +37,8 @@ built-ins/TypedArray/prototype/sort/return-abrupt-from-this-out-of-bounds.js slo
 built-ins/TypedArray/prototype/sort/return-abrupt-from-this-out-of-bounds.js strict pass
 built-ins/TypedArray/prototype/sort/return-same-instance.js sloppy pass
 built-ins/TypedArray/prototype/sort/return-same-instance.js strict pass
-built-ins/TypedArray/prototype/sort/sort-tonumber.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: detached buffer (Testing with Float64Array and makePassthrough.)"
-built-ins/TypedArray/prototype/sort/sort-tonumber.js strict fail:"ironhorse threw where the oracle completed: TypeError: detached buffer (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/sort/sort-tonumber.js sloppy pass
+built-ins/TypedArray/prototype/sort/sort-tonumber.js strict pass
 built-ins/TypedArray/prototype/sort/sortcompare-with-no-tostring.js sloppy pass
 built-ins/TypedArray/prototype/sort/sortcompare-with-no-tostring.js strict pass
 built-ins/TypedArray/prototype/sort/sorted-values-nan.js sloppy pass

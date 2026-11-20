@@ -24,15 +24,13 @@
 //! attempt to break it: every construct that can nest a declaration inside a
 //! parameter default without opening a function body.
 //!
-//! **What these probes do and do not establish.** Most of the static-block
-//! roster ends as `Unsupported`, at the CODER's deferred-static-block fold
-//! (coder.rs:3498). That fold runs after the scoper, so the scoper walks
-//! every one of these sources to completion and the audit is not vacuous —
-//! but the reach is asserted below rather than assumed, because a roster that
-//! is refused before the pass under audit is the way this kind of test passes
-//! while testing nothing. `a_static_block_is_still_deferred_by_the_coder`
-//! pins that premise: when static blocks are implemented, it fails, and the
-//! window audit has to be re-run against sources that reach the back end.
+//! **What these probes do and do not establish.** The static-block roster
+//! used to end as `Unsupported`, at the coder's deferred-static-block fold,
+//! after the scoper had walked it. Static blocks now compile end to end, so
+//! the roster reaches the back end; the reach is asserted below rather than
+//! assumed, because a roster that is refused before the pass under audit is
+//! the way this kind of test passes while testing nothing
+//! (`a_static_block_reaches_the_back_end`).
 //!
 //! This file is not a closure of the finding. It pins the shapes that are
 //! known; the gate that does not depend on someone thinking of a shape is
@@ -202,23 +200,20 @@ fn every_scope_bearing_statement_answers() {
 ///
 /// A class static block is the only way to put a STATEMENT into an expression
 /// position without an intervening function body, so it is the only way to
-/// put a declarator into the `body_scope == None` window. The scoper handles
-/// these sources — it is the coder that refuses them, at its deferred
-/// static-block fold (coder.rs:3498), after the scoper has already walked
-/// them — so the audit above is a real exercise of the scoper.
-///
-/// It is NOT a real exercise of anything downstream. When static blocks stop
-/// being deferred this test fails, which is the intent: the window audit then
-/// has to be re-run against sources that reach the back end.
+/// put a declarator into the `body_scope == None` window. Static blocks used
+/// to stop at a deferred coder fold after the scoper had walked them; each
+/// block is now its own BODY scope and compiles end to end, so the roster
+/// above exercises the back end too. This pins that it keeps doing so.
 #[test]
-fn a_static_block_is_still_deferred_by_the_coder() {
+fn a_static_block_reaches_the_back_end() {
     for source in [
         "class C { static { var x; } }",
         "function f(a = class { static { var x; } }) {}",
+        "function f(a = class { static { let x; } static { let x; } }) {}",
     ] {
         assert_eq!(
             outcome(source, Goal::Script, false),
-            Ok("unsupported"),
+            Ok("compiled"),
             "{source}"
         );
     }

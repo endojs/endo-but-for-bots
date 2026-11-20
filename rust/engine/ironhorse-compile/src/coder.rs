@@ -3545,18 +3545,16 @@ impl Coder<'_, '_> {
         // `RESERVE`/`RETRIEVE` (`scopeCount == scopeMaximum` = closures + peak
         // value-temporary depth) and the closure-slot access indices.
         // A field-init function scope holds only member-access / value
-        // use-closure aliases; a real (non-alias) declare means a
-        // `static { … }` block hoisted a lexical declaration into it (its
-        // own frame reservation + block coding is the remaining class-tail
-        // fold). Keep it a loud, named fold rather than a mis-emit.
+        // use-closure aliases: a `static { … }` block's declarations live in
+        // that block's own BODY scope. A real (non-alias) declare here would
+        // be a shape this coder does not reserve a frame for, so keep it a
+        // loud, named fold rather than a mis-emit.
         if self.tree.scopes[fi]
             .declares
             .iter()
             .any(|d| d.flags & crate::scoper::dflags::USE_CLOSURE == 0)
         {
-            // A deliberate fold, not an invariant violation: this compiler
-            // has not ported a static block's own frame reservation. Reported
-            // as `Unsupported` so it reads as the coverage gap it is, rather
+            // Reported as `Unsupported` so it reads as a coverage gap rather
             // than as a compiler that died (F063).
             // The fold is per-class, so the first field's line is the
             // closest source position available here.
@@ -3564,7 +3562,7 @@ impl Coder<'_, '_> {
             self.report_kind(
                 line,
                 crate::parser::ParseErrorKind::Unsupported,
-                "static block with lexical declarations deferred",
+                "field-init function with a lexical declaration deferred",
             );
         }
         let reserve = *self
@@ -3647,10 +3645,11 @@ impl Coder<'_, '_> {
     #[inline(never)]
     fn code_field(&mut self, p: &Node, plan: &FieldPlan) {
         use crate::ast::flags as f;
-        // A `static { … }` block runs its statements directly (no
-        // `this`/property install), with `this` bound to the constructor.
+        // A `static { … }` block codes as its BODY node (`fxBodyNodeCode`,
+        // its own scope; no `this`/property install), with `this` bound to
+        // the constructor.
         if p.token == Token::Body {
-            self.code(&p.children[0]);
+            self.code_node(p);
             return;
         }
         self.add_byte(1, XS_CODE_THIS);
