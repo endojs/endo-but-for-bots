@@ -173,14 +173,13 @@ export const readStagedArgs = async (spec, args, ports, context) => {
   }
   const parsed = parseClosedArgs(json, spec);
   if (!parsed.ok) return { outcome: failed(parsed.text) };
+  if (staged.length === 0) return { values: parsed.values };
   /** @type {Map<string, any>} */
   const values = new Map();
   for (const [key, value] of parsed.values) {
     values.set(
       key,
-      staged.length > 0 &&
-        typeof value === 'string' &&
-        value.startsWith(PLACEHOLDER)
+      typeof value === 'string' && value.startsWith(PLACEHOLDER)
         ? staged[Number(value.slice(PLACEHOLDER.length))]
         : value,
     );
@@ -361,12 +360,11 @@ const askEntry = harden({
   available,
   execute: withName('askSubagent', (values, name, part, request, context) => {
     const task = values.get('task');
-    const bytes = /** @type {number} */ (fieldBytes(task ?? ''));
     // A staged task's length in units is not known in this vat: it is
     // refused only when its bytes prove it longer (3 bytes a unit at most).
     if (
       isStaged(task)
-        ? bytes > 3 * ML.taskUnits
+        ? task.bytes > 3 * ML.taskUnits
         : typeof task !== 'string' ||
           task.length === 0 ||
           task.length > ML.taskUnits
