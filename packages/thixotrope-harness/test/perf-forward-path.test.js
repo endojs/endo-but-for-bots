@@ -147,3 +147,17 @@ test('reads the selector and scalar mail identity from short and batched Syrup f
     message: /Unrecognized native dispatch/,
   });
 });
+
+test('pairs simultaneous factory posts with their observed forward and reverse recipients', t => {
+  const rows = graph();
+  const reverse = row(rows[1].vat, 'post', 'deliverMail', 102);
+  reverse.outgoingDetails.push({ method: 'deliverMail', postmark: 36 });
+  const previous = row(rows[0].vat, 'deliverMail', 'fulfill', 122);
+  previous.incomingDetails.push({ method: 'deliverMail', postmark: 36 });
+  const overlapping = [reverse, previous, ...rows];
+  t.is(analyzeForwards([sample], overlapping)[0].postmark, 37);
+  previous.incomingDetails[0].postmark = 35;
+  t.throws(() => analyzeForwards([sample], overlapping), {
+    message: /Unclassified overlapping/,
+  });
+});

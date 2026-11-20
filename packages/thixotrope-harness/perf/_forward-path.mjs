@@ -39,27 +39,30 @@ export const forwardPath = (sample, rows) => {
     into('roundFinal', 'session').filter(r => r.outbound.includes('post')),
     'sender roundFinal emitting post',
   );
-  const factory = only(
-    into('post', 'factory').filter(r => r.outbound.includes('deliverMail')),
-    'factory post emitting deliverMail',
-  );
-  const postmark = detail(
-    factory,
-    'outgoingDetails',
-    'deliverMail',
-    'postmark',
-  );
-  if (!Number.isSafeInteger(postmark) || postmark <= 0)
-    throw Error('Invalid postmark');
   const recipient = only(
     into('deliverMail', 'session').filter(
       r =>
-        detail(r, 'incomingDetails', 'deliverMail', 'postmark') === postmark &&
         r.outbound.includes('startRound') &&
         detail(r, 'outgoingDetails', 'startRound', 'turnId') ===
           sample.recipientTurn,
     ),
     'recipient delivery starting the requested turn',
+  );
+  const postmark = detail(
+    recipient,
+    'incomingDetails',
+    'deliverMail',
+    'postmark',
+  );
+  if (!Number.isSafeInteger(postmark) || postmark <= 0)
+    throw Error('Invalid postmark');
+  const factory = only(
+    into('post', 'factory').filter(
+      r =>
+        r.outbound.includes('deliverMail') &&
+        detail(r, 'outgoingDetails', 'deliverMail', 'postmark') === postmark,
+    ),
+    'factory post emitting deliverMail for the recipient delivery',
   );
   const dispatch = only(
     into('dispatching', 'session').filter(
@@ -157,9 +160,40 @@ export const forwardPath = (sample, rows) => {
     const outgoing = crank.outbound.filter(m => !m.startsWith('op:gc-')).join();
     if (!incoming && !outgoing) return;
     if (identity(crank.vat) === identity(factory.vat)) {
+      if (incoming === 'post' && outgoing === 'deliverMail') {
+        const older = detail(
+          crank,
+          'outgoingDetails',
+          'deliverMail',
+          'postmark',
+        );
+        if (
+          older < postmark &&
+          rows.some(
+            row =>
+              identity(row.vat) === identity(sender.vat) &&
+              row.methods.includes('deliverMail') &&
+              row.incomingDetails.some(
+                entry =>
+                  entry.method === 'deliverMail' && entry.postmark === older,
+              ) &&
+              row.outbound.filter(m => !m.startsWith('op:gc-')).join() ===
+                'fulfill',
+          )
+        )
+          return;
+      }
       if (incoming === 'changed' && outgoing === 'publish') return;
       if (incoming === 'fulfill' && ['', 'fulfill'].includes(outgoing)) return;
     }
+    // A receipt from an earlier mail can finish in the receiver before this turn.
+    if (
+      identity(crank.vat) === identity(recipient.vat) &&
+      crank.ended <= recipient.began &&
+      incoming === 'fulfill' &&
+      !outgoing
+    )
+      return;
     if (identity(crank.vat) === identity(sender.vat)) {
       // The driver's waiter, the post receipt, the sender's next round, or
       // an older mail reply received by the sender.
