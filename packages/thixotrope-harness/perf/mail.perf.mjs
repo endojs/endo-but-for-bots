@@ -69,6 +69,24 @@ await runPerf('mail', async ({ provision }) => {
     return elapsed;
   };
   await one();
+  if (process.env.THIX_MAIL_FORWARD_TRACE) {
+    const { readFile } = await import('node:fs/promises');
+    const rows = (await readFile(process.env.THIX_MAIL_FORWARD_TRACE, 'utf8'))
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line));
+    if (
+      !rows.some(row => row.methods.includes('deliverMail')) ||
+      !rows.some(
+        row =>
+          row.timing?.policy === 'allocation' &&
+          row.outbound.includes('startRound'),
+      )
+    )
+      throw Error(
+        'Forward diagnostic did not observe the warm-up delivery and native outbound startRound',
+      );
+  }
   const op = await runWindow(one, { ms: window });
   await stats('mail.post.operator', op.results, {
     budget: { median: 200 },
@@ -117,6 +135,7 @@ await runPerf('mail', async ({ provision }) => {
     'remember',
   );
   await dismissReplies(mailbox, [receipt.postmark]);
+  const forwardSamples = process.env.THIX_MAIL_FORWARD_TRACE ? [] : undefined;
   const between = await runWindow(
     async () => {
       const before = made.log().length;
@@ -140,6 +159,26 @@ await runPerf('mail', async ({ provision }) => {
         60_000,
         'recipient provider request',
       );
+      if (forwardSamples) {
+        const receipt = made.log().slice(before);
+        const roundStart = receipt.find(
+          line =>
+            line.kind === 'round-start' &&
+            line.turnId === end.turnId &&
+            line.round === end.round,
+        );
+        const sample = {
+          type: 'forward',
+          senderTurn: turnId,
+          recipientTurn: end.turnId,
+          recipientRound: end.round,
+          start: Number(start.at),
+          end: Number(end.at),
+          recipientRoundStart: roundStart && Number(roundStart.at),
+        };
+        forwardSamples.push(sample);
+        console.log(JSON.stringify(sample));
+      }
       return Number(end.at) - Number(start.at);
     },
     { ms: window },
@@ -148,6 +187,38 @@ await runPerf('mail', async ({ provision }) => {
     budget: { median: 300 },
     extra: windowFields(between),
   });
+
+  if (forwardSamples && process.env.THIX_MAIL_FORWARD_TRACE) {
+    const { readFile, writeFile } = await import('node:fs/promises');
+    const { analyzeForwards } = await import('./_forward-path.mjs');
+    const file = process.env.THIX_MAIL_FORWARD_TRACE;
+    await writeFile(
+      path.join(path.dirname(file), 'forwards.json'),
+      JSON.stringify(forwardSamples),
+      { mode: 0o600 },
+    );
+    const rows = (await readFile(file, 'utf8'))
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line));
+    const results = analyzeForwards(forwardSamples, rows);
+    const counts = results.map(result => result.path.length);
+    const maximum = Math.max(...counts);
+    await stats('mail.forwardDeliveries', counts, {
+      budget: { deliveriesPerOp: 4 },
+      extra: {
+        ...windowFields(between),
+        unit: 'deliveries',
+        maximum,
+        deliveries: {
+          perOp: counts.reduce((sum, count) => sum + count, 0) / counts.length,
+        },
+      },
+    });
+    if (maximum > 4)
+      throw Error('A forwarded mail exceeded four causal deliveries');
+    return;
+  }
 
   // Import the kept messages in bounded pages. Every sampled delivery starts with 255 kept rows.
   const full = await E(slice.harness).importSession(

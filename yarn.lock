@@ -3710,6 +3710,7 @@ __metadata:
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/marshal": "workspace:^"
+    "@endo/ocapn": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/thixotrope": "workspace:^"
     "@playwright/test": "npm:^1.64.1"

@@ -1,0 +1,217 @@
+// Reconstruct the sequential forwarded-mail interval from native request/response
+// pairs. A crank is one native delivery; held OCapN GC frames share its budget.
+const only = (items, label) => {
+  if (items.length !== 1)
+    throw Error(label + ': expected one, observed ' + items.length);
+  return items[0];
+};
+const group = vat =>
+  vat.startsWith('vat-app-harness-')
+    ? 'factory'
+    : vat.startsWith('vat-session-')
+      ? 'session'
+      : 'other';
+const app = row => row.methods.filter(method => !method.startsWith('op:gc-'));
+const detail = (row, side, method, key) =>
+  only(
+    row[side].filter(entry => entry.method === method),
+    method + ' metadata',
+  )[key];
+
+const identity = vat => vat.replace(/-[^-]+$/, '');
+
+export const forwardPath = (sample, rows) => {
+  if (
+    sample.recipientRound !== 0 ||
+    !sample.senderTurn ||
+    !sample.recipientTurn ||
+    !Number.isSafeInteger(sample.start) ||
+    !Number.isSafeInteger(sample.end) ||
+    sample.end < sample.start
+  )
+    throw Error('Invalid provider endpoints');
+  const within = rows.filter(
+    r => r.began >= sample.start && r.ended <= sample.end,
+  );
+  const into = (method, role) =>
+    within.filter(r => group(r.vat) === role && app(r).includes(method));
+  const sender = only(
+    into('roundFinal', 'session').filter(r => r.outbound.includes('post')),
+    'sender roundFinal emitting post',
+  );
+  const factory = only(
+    into('post', 'factory').filter(r => r.outbound.includes('deliverMail')),
+    'factory post emitting deliverMail',
+  );
+  const postmark = detail(
+    factory,
+    'outgoingDetails',
+    'deliverMail',
+    'postmark',
+  );
+  if (!Number.isSafeInteger(postmark) || postmark <= 0)
+    throw Error('Invalid postmark');
+  const recipient = only(
+    into('deliverMail', 'session').filter(
+      r =>
+        detail(r, 'incomingDetails', 'deliverMail', 'postmark') === postmark &&
+        r.outbound.includes('startRound') &&
+        detail(r, 'outgoingDetails', 'startRound', 'turnId') ===
+          sample.recipientTurn,
+    ),
+    'recipient delivery starting the requested turn',
+  );
+  const dispatch = only(
+    into('dispatching', 'session').filter(
+      r =>
+        identity(r.vat) === identity(recipient.vat) &&
+        r.outbound.includes('fulfill'),
+    ),
+    'recipient dispatch permission',
+  );
+  const started = rows
+    .filter(
+      r =>
+        identity(r.vat) === identity(sender.vat) &&
+        r.ended <= sample.start &&
+        r.outgoingDetails.some(
+          entry =>
+            entry.method === 'startRound' && entry.turnId === sample.senderTurn,
+        ),
+    )
+    .at(-1);
+  if (!started) throw Error('Missing sender turn start');
+  const senderSink = detail(
+    started,
+    'outgoingDetails',
+    'startRound',
+    'sinkSlot',
+  );
+  const recipientSink = detail(
+    recipient,
+    'outgoingDetails',
+    'startRound',
+    'sinkSlot',
+  );
+  if (
+    !senderSink ||
+    !recipientSink ||
+    detail(sender, 'incomingDetails', 'roundFinal', 'targetSlot') !==
+      senderSink ||
+    detail(sender, 'incomingDetails', 'roundFinal', 'round') !== 0 ||
+    detail(dispatch, 'incomingDetails', 'dispatching', 'targetSlot') !==
+      recipientSink ||
+    detail(dispatch, 'incomingDetails', 'dispatching', 'round') !== 0 ||
+    !dispatch.outgoingDetails.some(
+      entry => entry.method === 'fulfill' && entry.boolean === true,
+    )
+  )
+    throw Error(
+      'Turn sink or dispatch permission does not match the provider endpoints',
+    );
+  const path = [sender, factory, recipient, dispatch];
+  const required = ['roundFinal', 'post', 'deliverMail', 'dispatching'];
+  const emitted = [
+    'publish,post',
+    'deliverMail',
+    'changed,publish,holdTurn,fulfill,startRound',
+    'fulfill',
+  ];
+  for (const [i, crank] of path.entries()) {
+    const methods = app(crank);
+    if (
+      methods.length !== 1 ||
+      methods[0] !== required[i] ||
+      crank.outbound.filter(m => !m.startsWith('op:gc-')).join() !== emitted[i]
+    )
+      throw Error(
+        'Unexpected application frame in required ' + required[i] + ' crank',
+      );
+  }
+  if (
+    identity(sender.vat) === identity(recipient.vat) ||
+    path.some((r, i) => i && r.began < path[i - 1].ended)
+  )
+    throw Error('Broken causal order');
+  // A new context pull between startRound and the request contributes another
+  // receiver delivery. An unknown path fails closed, including another reply.
+  const extra = within.filter(
+    r =>
+      identity(r.vat) === identity(recipient.vat) &&
+      r !== dispatch &&
+      r !== recipient &&
+      r.began >= recipient.ended &&
+      app(r).length,
+  );
+  if (extra.length)
+    throw Error(
+      'Additional recipient work before request: ' +
+        extra.map(r => app(r).join('+')).join(', '),
+    );
+  // Certify this known direct route. Traffic that we cannot place on a
+  // documented side branch invalidates a sample rather than being omitted.
+  const other = within.filter(r => !path.includes(r));
+  for (const crank of other) {
+    const incoming = app(crank).join();
+    const outgoing = crank.outbound.filter(m => !m.startsWith('op:gc-')).join();
+    if (!incoming && !outgoing) continue;
+    if (identity(crank.vat) === identity(factory.vat)) {
+      if (incoming === 'changed' && outgoing === 'publish') continue;
+      if (incoming === 'fulfill' && ['', 'fulfill'].includes(outgoing))
+        continue;
+    }
+    if (identity(crank.vat) === identity(sender.vat)) {
+      // The driver's waiter, the post receipt, the sender's next round, or
+      // an older mail reply received by the sender.
+      if (incoming === 'whenFinished' && !outgoing) continue;
+      if (incoming === 'fulfill' && !outgoing) continue;
+      if (
+        incoming === 'fulfill' &&
+        outgoing === 'publish,startRound' &&
+        detail(crank, 'outgoingDetails', 'startRound', 'turnId') ===
+          sample.senderTurn &&
+        detail(crank, 'outgoingDetails', 'startRound', 'sinkSlot') ===
+          senderSink
+      )
+        continue;
+      if (
+        incoming === 'roundFinal' &&
+        outgoing === 'changed,publish,releaseTurn,fulfill' &&
+        detail(crank, 'incomingDetails', 'roundFinal', 'round') === 1 &&
+        detail(crank, 'incomingDetails', 'roundFinal', 'targetSlot') ===
+          senderSink
+      )
+        continue;
+      if (
+        incoming === 'deliverMail' &&
+        outgoing === 'fulfill' &&
+        detail(crank, 'incomingDetails', 'deliverMail', 'postmark') < postmark
+      )
+        continue;
+    }
+    throw Error(
+      'Unclassified overlapping delivery: ' + incoming + ' -> ' + outgoing,
+    );
+  }
+  return { postmark, path, other };
+};
+
+export const analyzeForwards = (samples, rows) => {
+  if (!samples.length) throw Error('No forwarded mail samples');
+  const senderTurns = new Set();
+  const recipientTurns = new Set();
+  const postmarks = new Set();
+  return samples.map(sample => {
+    const result = forwardPath(sample, rows);
+    if (
+      postmarks.has(result.postmark) ||
+      senderTurns.has(sample.senderTurn) ||
+      recipientTurns.has(sample.recipientTurn)
+    )
+      throw Error('Duplicate forwarded-mail identity');
+    postmarks.add(result.postmark);
+    senderTurns.add(sample.senderTurn);
+    recipientTurns.add(sample.recipientTurn);
+    return result;
+  });
+};

@@ -104,6 +104,8 @@ export const ENV_ALLOWLIST = Object.freeze([
   // in the daemon a perf run serves (impl/channels.js; HR-SYN-13). Unset,
   // there is no probe.
   'THIX_HARNESS_LIVE_PROBE_DIR',
+  // Explicit opt-in for the forwarded-mail diagnostic's selector-only worker trace.
+  'THIX_HARNESS_FORWARD_PROBE_DIR',
 ]);
 
 /** Set by the wrapper itself, besides the allowlist. */
@@ -596,8 +598,16 @@ const serveInProcess = async ({
     maxDeliveryAttempts,
   });
   const powers = makeNodePowers();
+  const probeDir = allowed.THIX_HARNESS_FORWARD_PROBE_DIR;
+  if (probeDir && !path.isAbsolute(probeDir))
+    throw Error('The forward probe directory must be absolute');
   const platform = {
     ...powers,
+    ...(probeDir && {
+      processes: (
+        await import('../perf/_forward-worker.mjs')
+      ).observeForwardWorkers(powers.processes, probeDir),
+    }),
     environment: harden({ get: (/** @type {string} */ name) => allowed[name] }),
   };
   const startedAt = new Date().toISOString();
