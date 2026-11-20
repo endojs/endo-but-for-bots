@@ -629,7 +629,10 @@ impl Interp {
                 }
                 self.meter.tick_builtin();
             } else {
-                let _ = self.ordinary_set(code, inst, id, value, obj)?;
+                let accepted = self.ordinary_set(code, inst, id, value, obj)?;
+                if !accepted && self.strict {
+                    return Err(self.failed_set_error(inst, id, "set"));
+                }
             }
             return Ok(());
         }
@@ -798,7 +801,14 @@ impl Interp {
                 }
                 self.meter.tick_builtin();
             } else {
-                let _ = self.ordinary_set(code, inst, id, value, obj)?;
+                // A strict computed-key store that `[[Set]]` rejects (a
+                // frozen / non-writable property, or a new key on a
+                // non-extensible object) throws, as the named-key
+                // `SET_PROPERTY` path does.
+                let accepted = self.ordinary_set(code, inst, id, value, obj)?;
+                if !accepted && self.strict {
+                    return Err(self.failed_set_error(inst, id, "set"));
+                }
             }
             Ok(())
         }

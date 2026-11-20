@@ -74,6 +74,6 @@ built-ins/Object/preventExtensions/name.js strict pass
 built-ins/Object/preventExtensions/not-a-constructor.js sloppy pass
 built-ins/Object/preventExtensions/not-a-constructor.js strict pass
 built-ins/Object/preventExtensions/symbol-object-contains-symbol-properties-non-strict.js sloppy pass
-built-ins/Object/preventExtensions/symbol-object-contains-symbol-properties-strict.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Object/preventExtensions/symbol-object-contains-symbol-properties-strict.js strict pass
 built-ins/Object/preventExtensions/throws-when-false.js sloppy pass
 built-ins/Object/preventExtensions/throws-when-false.js strict pass
