@@ -18896,3 +18896,39 @@ forwards with no collection in these four cranks took 203 ms median.
 The other 46 took 447.5 ms median. A collection in one crank can reclaim work
 allocated earlier. These cohorts locate the cost without attributing all of
 it to its triggering method. J-12553 gives the uninstrumented full-file run.
+
+### J-12569 2026-11-20 M9 delegation classes and forwarded-mail candidates
+
+On the pinned worker, `9ea9f68132` shares the guarded class definitions for
+child handles and parent delegation capabilities. Each instance still holds
+its own row or child. Its session also reuses parsed inline argument maps.
+In the full subagent file, spawn improved from 1,543 to 1,452 ms median
+(12 samples each, limit 1,500 ms). Ask changed from 316 to 312 ms median
+(53 and 57 samples, limit 300 ms). All three eight-child bursts finished in
+13.588–14.432 s. Each subtree stop removed three sessions in 1.688–2.675 s.
+The measured candidate passed 32 focused tests. The combined session occupied
+145,960 bytes. The isolated M9 program added 21,433 bytes, 67 below its cap.
+The follow-up `f05eea3546` changes a type annotation.
+
+A separate instrumented ask window on that guest measured 330 ms median
+overhead over 55 asks. Parent tool-call arrival to child turn start took
+99 ms median. Child turn end to parent tool-result arrival took 83 ms median.
+The budget compares the sum for each ask. Across the factory ask, child
+delivery, factory reply post and parent receipt, the 24 asks without a
+collection took 171.5 ms median overhead. The other 31 took 387 ms.
+This workload still arms and disarms the parent deadline and preserves reply
+correlation, cancellation and restart handling.
+
+Three separate stock-worker trials used the usual 60 s operator prefix and
+60 s forwarded-session window. All missed the 300 ms target.
+
+| Candidate | Session median | Operator ACK median | Forwarded samples |
+|---|---:|---:|---:|
+| `1df8471046`, reuse byte sizes of unchanged tool descriptions | 348 ms | 159.983 ms | 71 |
+| `64adca684f`, share the string reader and size fitting live event batches once | 431 ms | 164.051 ms | 68 |
+| `3a7d76e7eb`, reuse the static tool catalogue and refresh dynamic sources | 380 ms | 260.142 ms | 68 |
+
+The two catalogue candidates also exceeded M9's isolated allocation by
+69 and 158 bytes. The shared decoder alone passed 32 parser and tool tests
+and reduced the isolated session by 28 bytes. The 431 ms trial combined it
+with live batching, so it gives no separate latency estimate for the decoder.

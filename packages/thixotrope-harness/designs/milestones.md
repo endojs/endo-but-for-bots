@@ -2026,13 +2026,14 @@ interrupted turn’s error reply. The integrated suite also passed 2,006 unit an
 adapter tests (J-12902 and J-12563). All 71 forwarded packages in the pinned
 trace used four causal deliveries, including the recipient's dispatch
 authorization. The median was 203 ms without collection in those four cranks
-and 447.5 ms with collection (J-12568). On the pinned baseline `c9e559e27a`,
-ask overhead was 316 ms against 300 ms and spawn was 1,543 ms against 1,500 ms.
-All three eight-child bursts and three subtree stops passed (J-12567).
+and 447.5 ms with collection (J-12568). Sharing the child and delegation class
+definitions brought spawn to 1,452 ms against 1,500 ms on the pinned worker.
+Ask overhead was 312 ms against 300 ms. Three eight-child bursts and three
+subtree stops passed. The baseline and candidate are in J-12567 and J-12569.
 The ten mail, request and subagent tools are registered. With the production session
-linker, the isolated M9 session adds 21,419 bytes to the WX.1 base of 115,502,
-leaving 81 bytes of its 21,500-byte allocation. The combined session is 145,946
-bytes. J-12902 gives the final measurements and J-1460 gives the original fixed
+linker, the delegation change adds 21,433 bytes to the WX.1 base of 115,502,
+leaving 67 bytes of M9's 21,500-byte allocation. The combined session is 145,960
+bytes. J-12569 and J-12902 give the measurements and J-1460 gives the original fixed
 inputs and the earlier J-12541 miss.
 The session and factory guard tables own the corresponding mail interfaces. The
 limits are in `guest/lib/limits.js`.
