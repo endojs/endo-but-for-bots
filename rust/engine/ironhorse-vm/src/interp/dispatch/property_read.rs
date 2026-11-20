@@ -215,30 +215,22 @@ impl Interp {
                 if (obj.kind == Kind::Reference && self.regexps.contains_key(&inst)) =>
             {
                 // The RegExp accessor getters (`fx_RegExp_prototype_
-                // get_*`). `source`/`flags` return strings (a fresh
-                // chunk); the per-flag getters read `code[0]` and
-                // return a boolean. The ordinary `lastIndex` data
-                // property falls through to `instance_get` below.
-                // Any other name (`exec`/`test`/`toString`/
-                // `constructor`) resolves up the prototype chain.
+                // get_*`), while the read would reach the intrinsic one.
+                // `source`/`flags` return strings (a fresh chunk); the
+                // per-flag getters read `code[0]` and return a boolean.
+                // Any other name, or an overridden getter, resolves up the
+                // prototype chain.
                 let g = self.regexp_getter_ids;
-                if Some(id) == g.source {
-                    self.meter.tick_raw(REGEXP_GETTER_METERING);
-                    let (bytes, allocated) = (self.regexp_source_units_metered(inst))?;
-                    if allocated {
-                        self.new_string_units(&bytes)
-                    } else {
-                        // XS returns the constructor's existing
-                        // source key when no escaping is needed;
-                        // materialize the equivalent primitive in
-                        // our arena without charging a new chunk.
-                        let offset = self.chunks.alloc(&units_to_be16(&bytes));
-                        Slot::of(Kind::String, Payload::String(offset))
-                    }
+                if !self.regexp_getter_uses_default(inst, id) {
+                    self.mop_get(code, inst, id, obj)?
+                } else if Some(id) == g.source {
+                    self.regexp_source_value(inst)?
                 } else if Some(id) == g.flags {
-                    self.meter.tick_raw(REGEXP_FLAGS_GETTER_METERING);
-                    let flags = self.regexps[&inst].flags.clone();
-                    self.new_string_metered(flags.as_bytes())
+                    // Each flag read still observes a guest override; the
+                    // units are already charged as one string chunk.
+                    let units = self.regexp_flag_property_units(code, inst, obj)?;
+                    let offset = self.chunks.alloc(&units_to_be16(&units));
+                    Slot::of(Kind::String, Payload::String(offset))
                 } else if let Some(bit) = regexp_flag_bit_for(g, id) {
                     self.meter.tick_raw(REGEXP_GETTER_METERING);
                     let f = self.regexps[&inst].program.flags();

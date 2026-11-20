@@ -2454,7 +2454,10 @@ impl Interp {
             | NativeMethod::RegExpSearch
             | NativeMethod::RegExpSplit
             | NativeMethod::RegExpReplace
-            | NativeMethod::RegExpToString => {
+            | NativeMethod::RegExpToString
+            | NativeMethod::RegExpSourceGetter
+            | NativeMethod::RegExpFlagsGetter
+            | NativeMethod::RegExpFlagGetter(..) => {
                 self.native_method_regexp(m, base, argc, code, this, arg0)?
             }
             NativeMethod::StringCharCodeAt
@@ -5983,6 +5986,9 @@ impl Interp {
                 self.regexp_test(code, inst, this, arg0)?
             }
             NativeMethod::RegExpCompile => this,
+            NativeMethod::RegExpSourceGetter
+            | NativeMethod::RegExpFlagsGetter
+            | NativeMethod::RegExpFlagGetter(..) => self.regexp_accessor_getter(m, code, this)?,
             NativeMethod::RegExpEscape => self.regexp_escape(argc, arg0)?,
             NativeMethod::RegExpMatch
             | NativeMethod::RegExpMatchAll

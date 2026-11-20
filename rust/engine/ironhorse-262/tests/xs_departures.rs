@@ -696,18 +696,11 @@ const SHARED: &[Row] = &[
 /// [`Halt`] label: these are guest-reachable `NotImplemented` halts.
 const GAPS: &[Row] = &[
     Row {
-        program: "typeof Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags')",
-        ironhorse: "undefined",
-        xs: "object",
-        v8: "object",
-        why: "%RegExp.prototype% has the flag accessors (`flags`, `global`, `source`, ...); Ironhorse has none",
-    },
-    Row {
-        program: "[RegExp.prototype.source, RegExp.prototype.flags, RegExp.prototype.toString()].join(' ')",
-        ironhorse: "  /undefined/undefined",
-        xs: "(?:)  /(?:)/",
-        v8: "(?:)  /(?:)/",
-        why: "on %RegExp.prototype% the flag accessors answer `(?:)` and the empty string, so toString renders `/(?:)/`",
+        program: "delete RegExp.prototype.global; [/a/g.global, /a/g.flags].join()",
+        ironhorse: "true,g",
+        xs: ",",
+        v8: ",",
+        why: "Ironhorse installs %RegExp.prototype%'s flag accessors only for a program that names them, so an absent one still reads as the intrinsic getter after a guest deletes it",
     },
     Row {
         program: "Object.prototype.toString.call(globalThis)",

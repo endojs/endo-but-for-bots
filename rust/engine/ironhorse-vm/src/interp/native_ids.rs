@@ -1007,6 +1007,18 @@ pub enum NativeMethod {
     RegExpStringIteratorNext,
     /// `get RegExp[Symbol.species]`: the standard accessor returns its receiver.
     RegExpSpeciesGetter,
+    /// `get RegExp.prototype.source` (`fx_RegExp_prototype_get_source`):
+    /// `"(?:)"` for `%RegExp.prototype%` itself, the escaped pattern for a
+    /// RegExp instance, and a `TypeError` for any other receiver.
+    RegExpSourceGetter,
+    /// `get RegExp.prototype.flags` (`fx_RegExp_prototype_get_flags`): the
+    /// flag letters of the receiver's eight flag properties that read truthy,
+    /// in `dgimsuvy` order. Any object receiver is accepted.
+    RegExpFlagsGetter,
+    /// `get RegExp.prototype.<flag>` (`fx_RegExp_prototype_get_flag`), for the
+    /// flag bit it carries: `undefined` for `%RegExp.prototype%` itself, the
+    /// bit for a RegExp instance, and a `TypeError` for any other receiver.
+    RegExpFlagGetter(u32),
     /// `get Error.prototype.stack` (`fx_Error_prototype_get_stack`): for an
     /// error instance, `name[: message]` plus one `\n at <fn> ()` line per
     /// construction-time frame; `undefined` for a non-error object; a

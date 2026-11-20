@@ -177,27 +177,28 @@ impl Interp {
             return self.to_string_units(code, flags);
         }
 
-        use ironhorse_regexp::{
-            XS_REGEXP_D, XS_REGEXP_G, XS_REGEXP_I, XS_REGEXP_M, XS_REGEXP_S, XS_REGEXP_U,
-            XS_REGEXP_V, XS_REGEXP_Y,
-        };
+        self.regexp_flag_property_units(code, inst, receiver)
+    }
+
+    /// The body of `get RegExp.prototype.flags`: read the eight flag
+    /// properties of `inst` in order and collect the letters of those that
+    /// read truthy. A read that would reach a RegExp instance's intrinsic
+    /// getter takes the flag bit from the side table instead.
+    pub(in crate::interp) fn regexp_flag_property_units(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        receiver: Slot,
+    ) -> Result<Vec<u16>, Step> {
         let mut units = Vec::with_capacity(8);
-        for (name, flag, unit) in [
-            ("hasIndices", XS_REGEXP_D, b'd' as u16),
-            ("global", XS_REGEXP_G, b'g' as u16),
-            ("ignoreCase", XS_REGEXP_I, b'i' as u16),
-            ("multiline", XS_REGEXP_M, b'm' as u16),
-            ("dotAll", XS_REGEXP_S, b's' as u16),
-            ("unicode", XS_REGEXP_U, b'u' as u16),
-            ("unicodeSets", XS_REGEXP_V, b'v' as u16),
-            ("sticky", XS_REGEXP_Y, b'y' as u16),
-        ] {
+        for (name, flag, unit) in REGEXP_FLAG_PROPERTIES {
             let id = self.intern_static_key(name);
-            let value = if self.regexp_getter_uses_default(inst, id) {
-                Slot::boolean(self.regexps[&inst].program.flags() & flag != 0)
-            } else {
-                self.mop_get(code, inst, id, receiver)?
-            };
+            let value =
+                if self.regexps.contains_key(&inst) && self.regexp_getter_uses_default(inst, id) {
+                    Slot::boolean(self.regexps[&inst].program.flags() & flag != 0)
+                } else {
+                    self.mop_get(code, inst, id, receiver)?
+                };
             if self.truthy(&value) {
                 units.push(unit);
             }
@@ -227,20 +228,7 @@ impl Interp {
             let Some(&id) = self.symbol_ids.get(name) else {
                 return true;
             };
-            let mut current = inst;
-            while !current.is_null() {
-                if self.proxies.contains_key(&current) {
-                    return false;
-                }
-                if self.find_property(current, id).is_some() {
-                    return false;
-                }
-                if current == self.regexp_proto {
-                    return true;
-                }
-                current = self.instance_prototype(current);
-            }
-            false
+            self.regexp_getter_uses_default(inst, id)
         };
         if ![
             "flags",
@@ -2434,6 +2422,71 @@ impl Interp {
         out.extend_from_slice(&flags);
         let off = self.chunks.alloc(&units_to_be16(&out));
         Ok(Slot::of(Kind::String, Payload::String(off)))
+    }
+
+    /// The `source` of RegExp instance `inst`, as the intrinsic getter
+    /// answers it.
+    pub(in crate::interp) fn regexp_source_value(
+        &mut self,
+        inst: crate::value::SlotIndex,
+    ) -> Result<Slot, Step> {
+        self.meter.tick_raw(REGEXP_GETTER_METERING);
+        let (units, allocated) = self.regexp_source_units_metered(inst)?;
+        if allocated {
+            Ok(self.new_string_units(&units))
+        } else {
+            // XS returns the constructor's existing source key when no
+            // escaping is needed; materialize the equivalent primitive in our
+            // arena without charging a new chunk.
+            let offset = self.chunks.alloc(&units_to_be16(&units));
+            Ok(Slot::of(Kind::String, Payload::String(offset)))
+        }
+    }
+
+    /// The intrinsic `source`, `flags` and flag getters of
+    /// `%RegExp.prototype%` (`fx_RegExp_prototype_get_source`, `_get_flags`
+    /// and `_get_flag`), called with `this`.
+    pub(in crate::interp) fn regexp_accessor_getter(
+        &mut self,
+        m: NativeMethod,
+        code: &[u8],
+        this: Slot,
+    ) -> Result<Slot, Step> {
+        let inst = match this.value {
+            Payload::Reference(inst) if this.kind == Kind::Reference => inst,
+            _ => return Err(self.catchable_type_error_msg("this: not an object".into())),
+        };
+        match m {
+            NativeMethod::RegExpFlagsGetter => {
+                // The units are already charged as one string chunk.
+                let units = self.regexp_flag_property_units(code, inst, this)?;
+                let offset = self.chunks.alloc(&units_to_be16(&units));
+                return Ok(Slot::of(Kind::String, Payload::String(offset)));
+            }
+            NativeMethod::RegExpSourceGetter if inst == self.regexp_proto => {
+                let offset = self
+                    .chunks
+                    .alloc(&units_to_be16(&"(?:)".encode_utf16().collect::<Vec<u16>>()));
+                return Ok(Slot::of(Kind::String, Payload::String(offset)));
+            }
+            NativeMethod::RegExpFlagGetter(_) if inst == self.regexp_proto => {
+                return Ok(Slot::undefined());
+            }
+            _ => {}
+        }
+        if !self.regexps.contains_key(&inst) {
+            return Err(self.catchable_type_error_msg("this: not an object".into()));
+        }
+        match m {
+            NativeMethod::RegExpSourceGetter => self.regexp_source_value(inst),
+            NativeMethod::RegExpFlagGetter(bit) => {
+                self.meter.tick_raw(REGEXP_GETTER_METERING);
+                Ok(Slot::boolean(
+                    self.regexps[&inst].program.flags() & bit != 0,
+                ))
+            }
+            _ => unreachable!("not one of the RegExp accessor getters"),
+        }
     }
 
     /// Render the source as UTF-16, escaping ECMAScript line terminators and

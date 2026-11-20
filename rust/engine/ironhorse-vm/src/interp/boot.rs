@@ -1426,8 +1426,9 @@ impl Interp {
         }
         // `%RegExp.prototype%`: `exec`/`test`/`toString`, bound at link time
         // only when the program references the name. The per-instance compiled
-        // program lives in the `regexps` side table; the `source`/`flags`/
-        // per-flag accessor getters are special-cased by id in `GET_PROPERTY`.
+        // program lives in the `regexps` side table. The `source`/`flags`/
+        // per-flag getters are real accessors, but while one is still the
+        // intrinsic `GET_PROPERTY` reads the side table directly.
         self.regexp_proto = self
             .intrinsics
             .get("RegExp")
@@ -1454,6 +1455,31 @@ impl Interp {
             self.alloc_named_method(NativeMethod::RegExpSplit, "[Symbol.split]", 2);
         let _ =
             self.alloc_named_method(NativeMethod::RegExpSpeciesGetter, "get [Symbol.species]", 0);
+        let source = self.alloc_named_method(NativeMethod::RegExpSourceGetter, "get source", 0);
+        let flags = self.alloc_named_method(NativeMethod::RegExpFlagsGetter, "get flags", 0);
+        for (name, getter) in [("source", source), ("flags", flags)] {
+            self.proto_accessors.push((
+                self.regexp_proto,
+                ProtoAccessorKey::String(name),
+                getter,
+                None,
+                "RegExp",
+            ));
+        }
+        for (name, bit, _) in REGEXP_FLAG_PROPERTIES {
+            let getter = self.alloc_named_method(
+                NativeMethod::RegExpFlagGetter(bit),
+                &format!("get {name}"),
+                0,
+            );
+            self.proto_accessors.push((
+                self.regexp_proto,
+                ProtoAccessorKey::String(name),
+                getter,
+                None,
+                "RegExp",
+            ));
+        }
         if let Some(&regexp_ctor) = self.intrinsics.get("RegExp") {
             let escape = self.alloc_named_method(NativeMethod::RegExpEscape, "escape", 1);
             self.proto_methods.push((regexp_ctor, "escape", escape));
