@@ -16,6 +16,7 @@ const { makeSlice, sliceTemplate, waitFor } =
   await import('../test/integration/_m1a-slice.js');
 const { names } = await import('../scripts/provision-steps.js');
 
+const forwardTrace = process.env.THIX_MAIL_FORWARD_TRACE;
 const window = windowMs('MAIL_WINDOW_MS', 60_000);
 const growthWindow = windowMs('MAIL_GROWTH_WINDOW_MS', 120_000);
 
@@ -57,7 +58,8 @@ const call = (name, args) => ({
   toolCalls: [{ name, args: JSON.stringify(args) }],
 });
 
-await runPerf('mail', async ({ provision }) => {
+const feature = forwardTrace ? 'mail.forwardTrace' : 'mail';
+await runPerf(feature, async ({ provision }) => {
   const run = await provision({ template: await sliceTemplate() });
   const slice = await makeSlice(run);
   const made = await slice.makeBackend(harden(sliceScript));
@@ -69,9 +71,9 @@ await runPerf('mail', async ({ provision }) => {
     return elapsed;
   };
   await one();
-  if (process.env.THIX_MAIL_FORWARD_TRACE) {
+  if (forwardTrace) {
     const { readFile } = await import('node:fs/promises');
-    const rows = (await readFile(process.env.THIX_MAIL_FORWARD_TRACE, 'utf8'))
+    const rows = (await readFile(forwardTrace, 'utf8'))
       .trim()
       .split('\n')
       .map(line => JSON.parse(line));
@@ -88,10 +90,14 @@ await runPerf('mail', async ({ provision }) => {
       );
   }
   const op = await runWindow(one, { ms: window });
-  await stats('mail.post.operator', op.results, {
-    budget: { median: 200 },
-    extra: windowFields(op),
-  });
+  await stats(
+    forwardTrace ? 'mail.forwardTrace.operatorAck' : 'mail.post.operator',
+    op.results,
+    {
+      ...(forwardTrace ? {} : { budget: { median: 200 } }),
+      extra: windowFields(op),
+    },
+  );
 
   const senderBackend = await slice.makeBackend(
     harden({
@@ -136,7 +142,7 @@ await runPerf('mail', async ({ provision }) => {
   );
   await dismissReplies(mailbox, [receipt.postmark]);
   /** @type {Array<Record<string, unknown>> | undefined} */
-  const forwardSamples = process.env.THIX_MAIL_FORWARD_TRACE ? [] : undefined;
+  const forwardSamples = forwardTrace ? [] : undefined;
   const between = await runWindow(
     async () => {
       const before = made.log().length;
@@ -184,15 +190,19 @@ await runPerf('mail', async ({ provision }) => {
     },
     { ms: window },
   );
-  await stats('mail.sessionToSession', between.results, {
-    budget: { median: 300 },
-    extra: windowFields(between),
-  });
+  await stats(
+    forwardTrace ? 'mail.forwardTrace.sessionLatency' : 'mail.sessionToSession',
+    between.results,
+    {
+      ...(forwardTrace ? {} : { budget: { median: 300 } }),
+      extra: windowFields(between),
+    },
+  );
 
-  if (forwardSamples && process.env.THIX_MAIL_FORWARD_TRACE) {
+  if (forwardSamples && forwardTrace) {
     const { readFile, writeFile } = await import('node:fs/promises');
     const { analyzeForwards } = await import('./_forward-path.mjs');
-    const file = process.env.THIX_MAIL_FORWARD_TRACE;
+    const file = forwardTrace;
     await writeFile(
       path.join(path.dirname(file), 'forwards.json'),
       JSON.stringify(forwardSamples),
