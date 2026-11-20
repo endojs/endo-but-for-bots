@@ -476,6 +476,14 @@ pub const XS_DONT_MARSHALL_FLAG: u8 = 64;
 /// `fxNewEnvironmentInstance` stamps it so the instance is never mistaken for an
 /// ordinary object; ironhorse's `with`-environment head carries it for fidelity.
 pub const XS_EXOTIC_FLAG: u8 = 1;
+/// XS instance-slot flag bits (`xsAll.h` `XS_CAN_CALL_FLAG = 2`,
+/// `XS_CAN_CONSTRUCT_FLAG = 4`): `fx_Proxy` stamps them on a Proxy's head slot
+/// from its target when it creates the Proxy, so the Proxy keeps `[[Call]]` and
+/// `[[Construct]]` after revocation drops the target (ECMA-262 10.5.14
+/// ProxyCreate steps 6-7). Ironhorse reads them only for a revoked Proxy; a
+/// live one still answers through its target.
+pub const XS_CAN_CALL_FLAG: u8 = 2;
+pub const XS_CAN_CONSTRUCT_FLAG: u8 = 4;
 /// XS property-slot flag bit (`xsAll.h` `XS_INTERNAL_FLAG = 1`): an instance's
 /// internal (non-JS-visible) slot. The environment behavior slot carries it.
 pub const XS_INTERNAL_FLAG: u8 = 1;

@@ -731,13 +731,6 @@ const GAPS: &[Row] = &[
         why: "%TypedArray.prototype% lacks ES2023's toSorted, toReversed and with",
     },
     Row {
-        program: "var r = Proxy.revocable(() => 1, {}); r.revoke(); try { new r.proxy(); 'constructed' } catch (e) { e.message }",
-        ironhorse: "(proxy).construct: no handler",
-        xs: "new: proxy is not a constructor",
-        v8: "r.proxy is not a constructor",
-        why: "a Proxy keeps [[Construct]] from its target through revocation; Ironhorse drops the target on revocation and throws the revocation error",
-    },
-    Row {
         program: "var n = 0; try { Array.prototype.findLast.call(new Proxy({ length: 2 ** 53 - 1 }, { get(t, k) { if (k === 'length') return t.length; if (++n === 70000) throw 'stop ' + String(k) } }), function () { return false }) } catch (e) { e.constructor.name + ' after ' + (n > 60000 && n < 70000) }",
         ironhorse: "RangeError after true",
         xs: "String after false",

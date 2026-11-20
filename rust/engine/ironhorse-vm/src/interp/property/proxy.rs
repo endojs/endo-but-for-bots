@@ -38,9 +38,19 @@ impl Interp {
         };
         // A proxy instance has no identity prototype of its own (null proto);
         // its `[[Get]]`/`[[GetPrototypeOf]]` come from the traps/target.
+        // ProxyCreate steps 6-7: the Proxy has `[[Call]]`/`[[Construct]]`
+        // exactly when its target does, fixed now so revocation keeps them.
+        let mut flag = 0;
+        if self.slot_has_call(target_inst) {
+            flag |= XS_CAN_CALL_FLAG;
+        }
+        if self.slot_is_constructor(target_inst) {
+            flag |= XS_CAN_CONSTRUCT_FLAG;
+        }
         let inst = self
             .slots
             .alloc(Slot::instance(crate::value::SlotIndex::NULL));
+        self.slots.get_mut(inst).flag |= flag;
         self.proxies.insert(
             inst,
             ProxyData {
@@ -1271,10 +1281,10 @@ impl Interp {
     }
 
     /// Whether `new` on `proxy` throws before any trap: its innermost target
-    /// is not a constructor. A revoked layer has lost its target, so it is
-    /// not refused here and its construct step throws the revocation error.
-    /// (XS keeps the capability through revocation: there, `new` on a revoked
-    /// Proxy over an arrow still says "new: proxy is not a constructor".)
+    /// is not a constructor. A revoked layer has lost its target but keeps the
+    /// `XS_CAN_CONSTRUCT_FLAG` it was created with: without it, `new` says
+    /// "new: proxy is not a constructor" as XS does; with it, the construct
+    /// step throws the revocation error.
     #[inline(never)]
     pub(in crate::interp) fn proxy_construct_refused(
         &self,
@@ -1283,7 +1293,7 @@ impl Interp {
         let mut current = proxy;
         while let Some(data) = self.proxies.get(&current) {
             if data.revoked {
-                return false;
+                return self.slots.get(current).flag & XS_CAN_CONSTRUCT_FLAG == 0;
             }
             current = data.target;
         }

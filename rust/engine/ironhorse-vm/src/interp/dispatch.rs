@@ -3245,9 +3245,10 @@ impl Interp {
             Kind::Integer | Kind::Number => self.static_str.number,
             Kind::String => self.static_str.string,
             Kind::Reference => match top.value {
-                // A callable proxy (target is callable) is a
-                // function for `typeof`; any function instance is.
-                Payload::Reference(r) if self.slot_is_callable(r) => self.static_str.function,
+                // A callable proxy (one whose target was callable when
+                // it was created, revoked or not) is a function for
+                // `typeof`; any function instance is.
+                Payload::Reference(r) if self.slot_has_call(r) => self.static_str.function,
                 _ => self.static_str.object,
             },
             Kind::Symbol => self.static_str.symbol,
