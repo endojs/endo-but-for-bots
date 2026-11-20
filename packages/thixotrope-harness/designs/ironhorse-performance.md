@@ -185,4 +185,11 @@ For a repeatable starting point in the harness package, `corepack yarn exec node
 
 For bulk data that a vat forwards untouched, the reference prototype sent about 230 bytes per hop into the first vat at payload sizes from 1 KiB to 64 MiB. Its three-hop vat journals grew by 0.7–0.9 KB. The hub still wrote 30–36 KB of bookkeeping for the three hops. The producer wrote the payload and the consumer read it. This points to hub row writes for forwarding, and to the VM's inbound byte handling when a vat actually reads a page. The ordinary mail trace used small messages and still incurred repeated collections without attachments. [Data-reference measurements and engine options](spike-data-references.md#31-on-the-shared-benchmark)
 
+A separate ordinary-mail experiment kept one tool catalog on the open endpoint.
+The stock worker emitted one full round request followed by two compact requests
+on three installed package turns. Across the timed 60 s forwarding window the
+median was still 346 ms (71 samples). Operator ACK was 268.251 ms (103 samples).
+This workload retained the same durable dispatch check and the same provider tools.
+[Negotiated schema measurements](../JOURNAL.md#j-12576-2026-11-20-m9-held-round-tools-on-the-pinned-worker)
+
 There is also a smaller byte cost inside a vat. The harness uses `TextEncoder.encode(text).length` to count exact UTF-8 bytes in strings and record keys. Ironhorse already calculates that length, then encodes the data and creates a guest byte array. Count-only callers discard that array. A guest-side experiment returned the length directly for short ASCII strings after a regular-expression test. Although its Unicode boundary tests passed, the measured 60 s traffic window fell from 179 posts in 62.141 s (2.881/s) to 165 in 61.592 s (2.679/s). Across all factory cranks, guest execution rose from 64.69 to 88.43 ms per completed post. Host load also rose. The experiment was set aside. A native count-only operation would need separate workload measurements, the existing input metering and the unpaired-surrogate rules. [Harness byte accounting](../guest/lib/bounded.js) · [Ironhorse UTF-8 implementation](../../../rust/engine/ironhorse-vm/src/interp/natives/utf8.rs)

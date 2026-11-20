@@ -19045,3 +19045,23 @@ median (103 sends, p95 504.186). Both missed their strict targets. Reducing the
 repeated schema bytes preserves the data sent to the provider, but the workload
 still does the same four durable deliveries. The wire change is isolated on
 `codex/thix-forward-wire`.
+
+### J-12577 2026-11-20 M9 tool registration size and delegation timing
+
+Sharing construction of the mail, typed-request and subagent tool entries saved
+609 emitted bytes (`1780a8a0df`; integrated experiment `eebaf98aee`). The
+selected guest's isolated M9 program fell from 136,935 to 136,326 bytes.
+The fixed WX.1 input emitted 115,502 bytes. That leaves 676 bytes under the
+21,500-byte allocation. With the negotiated wire experiment applied too,
+the corresponding sizes were 137,323 and 136,714 bytes, leaving 288 bytes.
+The factored combined session without the negotiated wire emitted 145,351 bytes.
+All ten tools retained the same serialized descriptions, schemas, entry keys,
+execution sites and availability in four service configurations. The 32 focused
+tests and type check passed. Inputs, output hashes and comparisons are archived
+at `ed6b9b4ba2:packages/thixotrope-harness/designs/mail-tool-registration-size.json`.
+
+On integrated experiment `eebaf98aee`, the unscaled default subagent file
+measured spawn at 1,513 ms (n=12, p95 1,851) and ask at 326 ms (n=55, p95 590).
+All three bursts completed in 13.476–16.122 s and all three stops removed three
+descendants each in 1.783–1.810 s. The file exited 0 with both strict medians
+above target.
