@@ -19026,3 +19026,22 @@ and stopped-session cases. Its shared reservation expired after 13 cases. The
 remaining file passed on its own: the child kept its separate workspace and shell
 while the parent was stopped. This gives 14 passes across seven installed files.
 The owner-run real backend, real runtime and speech/device journeys remain open.
+
+### J-12576 2026-11-20 M9 held round tools on the pinned worker
+
+The wire experiment at `c25248a062` negotiates tool-catalog reuse once per held
+endpoint. Each installed adapter generation completed three ordinary package turns.
+The legacy endpoint advertised only the full method. The modern session worker
+emitted one full `startRound` and then two `startRoundWithHeldTools` calls. All
+68 focused cases passed, including a changed catalog, a queued round and reopened
+ports. The isolated wire guest added 21,807 bytes versus the fixed WX.1 base,
+307 bytes over M9's allocation before the separate registration factoring.
+
+The uninstrumented 60 s operator prefix and 60 s forwarding window used the pinned
+worker and negotiated guest, with a benchmark-only stop after the forward window. The source
+label has the dirty suffix from that short driver. The wire observer was absent.
+Forwarding took 346 ms median (71 packages, p95 615). Operator ACK was 268.251 ms
+median (103 sends, p95 504.186). Both missed their strict targets. Reducing the
+repeated schema bytes preserves the data sent to the provider, but the workload
+still does the same four durable deliveries. The wire change is isolated on
+`codex/thix-forward-wire`.
