@@ -14,8 +14,8 @@ const row = (vat, method, outbound, began) => ({
   outbound: [outbound],
   began,
   ended: began + 1,
-  incomingDetails: [],
-  outgoingDetails: [],
+  incomingDetails: /** @type {Array<Record<string, any>>} */ ([]),
+  outgoingDetails: /** @type {Array<Record<string, any>>} */ ([]),
 });
 const graph = () => {
   const sender = row('vat-session-s3-X', 'roundFinal', 'post', 105);
@@ -132,7 +132,7 @@ test('reads the selector and scalar mail identity from short and batched Syrup f
     '<10\'op:deliver<11\'desc:export1+>[10\'startRound{6"append[1+2+]6"turnId2"t7}]ff>',
   );
   const call = msg =>
-    'thixotropeDispatch(' + JSON.stringify(JSON.stringify(msg)) + ');';
+    `thixotropeDispatch(${JSON.stringify(JSON.stringify(msg))});`;
   const metadata = [];
   t.deepEqual(dispatchMethods(call(gc) + call(delivery), metadata), [
     'op:gc-answers',
@@ -143,7 +143,7 @@ test('reads the selector and scalar mail identity from short and batched Syrup f
     { method: 'deliverMail', postmark: 33 },
     { method: 'startRound', turnId: 't7' },
   ]);
-  t.throws(() => dispatchMethods(call(gc) + 'unexpected()', []), {
+  t.throws(() => dispatchMethods(`${call(gc)}unexpected()`, []), {
     message: /Unrecognized native dispatch/,
   });
 });

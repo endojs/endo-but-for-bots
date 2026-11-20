@@ -52,6 +52,7 @@
     "@endo/harden": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/marshal": "workspace:^",
+    "@endo/ocapn": "workspace:^",
     "@endo/thixotrope": "workspace:^",
     "preact": "^10.29.8",
     "rollup": "^4.65.0",
@@ -59,7 +60,6 @@
     "terser": "^5.51.2"
   },
   "devDependencies": {
-    "@endo/ocapn": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@playwright/test": "^1.64.1",
     "@types/ws": "^8",

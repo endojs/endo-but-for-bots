@@ -2,7 +2,7 @@
 // pairs. A crank is one native delivery; held OCapN GC frames share its budget.
 const only = (items, label) => {
   if (items.length !== 1)
-    throw Error(label + ': expected one, observed ' + items.length);
+    throw Error(`${label}: expected one, observed ${items.length}`);
   return items[0];
 };
 const group = vat =>
@@ -15,7 +15,7 @@ const app = row => row.methods.filter(method => !method.startsWith('op:gc-'));
 const detail = (row, side, method, key) =>
   only(
     row[side].filter(entry => entry.method === method),
-    method + ' metadata',
+    `${method} metadata`,
   )[key];
 
 const identity = vat => vat.replace(/-[^-]+$/, '');
@@ -125,7 +125,7 @@ export const forwardPath = (sample, rows) => {
       crank.outbound.filter(m => !m.startsWith('op:gc-')).join() !== emitted[i]
     )
       throw Error(
-        'Unexpected application frame in required ' + required[i] + ' crank',
+        `Unexpected application frame in required ${required[i]} crank`,
       );
   }
   if (
@@ -145,26 +145,26 @@ export const forwardPath = (sample, rows) => {
   );
   if (extra.length)
     throw Error(
-      'Additional recipient work before request: ' +
-        extra.map(r => app(r).join('+')).join(', '),
+      `Additional recipient work before request: ${extra
+        .map(r => app(r).join('+'))
+        .join(', ')}`,
     );
   // Certify this known direct route. Traffic that we cannot place on a
   // documented side branch invalidates a sample rather than being omitted.
   const other = within.filter(r => !path.includes(r));
-  for (const crank of other) {
+  other.forEach(crank => {
     const incoming = app(crank).join();
     const outgoing = crank.outbound.filter(m => !m.startsWith('op:gc-')).join();
-    if (!incoming && !outgoing) continue;
+    if (!incoming && !outgoing) return;
     if (identity(crank.vat) === identity(factory.vat)) {
-      if (incoming === 'changed' && outgoing === 'publish') continue;
-      if (incoming === 'fulfill' && ['', 'fulfill'].includes(outgoing))
-        continue;
+      if (incoming === 'changed' && outgoing === 'publish') return;
+      if (incoming === 'fulfill' && ['', 'fulfill'].includes(outgoing)) return;
     }
     if (identity(crank.vat) === identity(sender.vat)) {
       // The driver's waiter, the post receipt, the sender's next round, or
       // an older mail reply received by the sender.
-      if (incoming === 'whenFinished' && !outgoing) continue;
-      if (incoming === 'fulfill' && !outgoing) continue;
+      if (incoming === 'whenFinished' && !outgoing) return;
+      if (incoming === 'fulfill' && !outgoing) return;
       if (
         incoming === 'fulfill' &&
         outgoing === 'publish,startRound' &&
@@ -173,7 +173,7 @@ export const forwardPath = (sample, rows) => {
         detail(crank, 'outgoingDetails', 'startRound', 'sinkSlot') ===
           senderSink
       )
-        continue;
+        return;
       if (
         incoming === 'roundFinal' &&
         outgoing === 'changed,publish,releaseTurn,fulfill' &&
@@ -181,18 +181,18 @@ export const forwardPath = (sample, rows) => {
         detail(crank, 'incomingDetails', 'roundFinal', 'targetSlot') ===
           senderSink
       )
-        continue;
+        return;
       if (
         incoming === 'deliverMail' &&
         outgoing === 'fulfill' &&
         detail(crank, 'incomingDetails', 'deliverMail', 'postmark') < postmark
       )
-        continue;
+        return;
     }
     throw Error(
-      'Unclassified overlapping delivery: ' + incoming + ' -> ' + outgoing,
+      `Unclassified overlapping delivery: ${incoming} -> ${outgoing}`,
     );
-  }
+  });
   return { postmark, path, other };
 };
 

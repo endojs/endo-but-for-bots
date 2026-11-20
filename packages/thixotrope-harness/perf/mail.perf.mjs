@@ -135,6 +135,7 @@ await runPerf('mail', async ({ provision }) => {
     'remember',
   );
   await dismissReplies(mailbox, [receipt.postmark]);
+  /** @type {Array<Record<string, unknown>> | undefined} */
   const forwardSamples = process.env.THIX_MAIL_FORWARD_TRACE ? [] : undefined;
   const between = await runWindow(
     async () => {
@@ -160,8 +161,8 @@ await runPerf('mail', async ({ provision }) => {
         'recipient provider request',
       );
       if (forwardSamples) {
-        const receipt = made.log().slice(before);
-        const roundStart = receipt.find(
+        const receivedLines = made.log().slice(before);
+        const roundStart = receivedLines.find(
           line =>
             line.kind === 'round-start' &&
             line.turnId === end.turnId &&

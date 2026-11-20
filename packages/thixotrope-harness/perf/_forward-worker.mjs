@@ -17,9 +17,9 @@ const skipValue = reader => {
     reader.readTypeAndMaybeValue();
     return;
   }
-  reader['enter' + container]();
-  while (!reader['peek' + container + 'End']()) skipValue(reader);
-  reader['exit' + container]();
+  reader[`enter${container}`]();
+  while (!reader[`peek${container}End`]()) skipValue(reader);
+  reader[`exit${container}`]();
 };
 
 const readMethod = (envelope, details) => {
@@ -95,7 +95,7 @@ export const dispatchMethods = (source, details) => {
   let offset = 0;
   while (offset < source.length) {
     const found = call.exec(source);
-    if (!found) throw Error('Unrecognized native dispatch at offset ' + offset);
+    if (!found) throw Error(`Unrecognized native dispatch at offset ${offset}`);
     names.push(methodOf(JSON.parse(JSON.parse(found[1])), details));
     offset = call.lastIndex;
   }
@@ -126,7 +126,7 @@ export const observeForwardWorkers = (processes, directory) => {
               const methods = dispatchMethods(message.source, incomingDetails);
               pending = { vat, methods, incomingDetails, began: Date.now() };
               return input.write(
-                JSON.stringify({ ...message, timing: true }) + '\n',
+                `${JSON.stringify({ ...message, timing: true })}\n`,
               );
             },
           });
@@ -151,13 +151,13 @@ export const observeForwardWorkers = (processes, directory) => {
                   );
                   appendFileSync(
                     file,
-                    JSON.stringify({
+                    `${JSON.stringify({
                       ...pending,
                       ended,
                       outbound,
                       outgoingDetails,
                       timing: answer.timing,
-                    }) + '\n',
+                    })}\n`,
                     { mode: 0o600 },
                   );
                   pending = undefined;
