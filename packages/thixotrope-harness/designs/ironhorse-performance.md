@@ -30,6 +30,25 @@ git show 59369d4afee4:rust/engine/benches/results/thixotrope-warm-factory-gc.jso
 git show --stat 419e73c1b471
 ```
 
+## Collections in the four-delivery forwarding path
+
+All 71 forwards in a pinned-worker trace took four causal vat deliveries from sender round
+final to recipient provider request. The fourth was the recipient's permission to dispatch
+round zero. It durably distinguishes a turn interrupted before dispatch from one whose
+provider outcome is unknown. The sender's receipt and the recipient's eventual reply can
+consume queue time independently. Counting every worker delivery between the two clocks
+would mix that traffic with the four prerequisites.
+
+On this workload the median rose from 203 ms for 25 forwards with no collection in those
+cranks to 447.5 ms for the 46 with at least one. Median guest execution was highest in
+the recipient's delivery (46.42 ms) and the sender's round final (32.45 ms). The
+factory post had only 11.63 ms of median guest execution, yet its 15 collecting
+cranks spent 220.15 ms median in collection. For an engine experiment, inspect allocations
+in the preceding cranks of the same vat, then compare the collector frequency, conditional
+cost, endpoint median and p95 on the full warmed sequence. The host queue observer
+independently matched all 142 transitions between the sender, factory and recipient.
+[Forwarding trace and cohort sizes](../JOURNAL.md#j-12568-2026-11-20-m9-four-deliveries-on-the-pinned-forwarding-path)
+
 ## A return trip the application could remove
 
 The automatic reply to a completed package sent a checked `Outbox.post` and discarded both the answer and any rejection. On this one path, `E.sendOnly(mail).post(...)` sends the same ordered reply with its body, attachments and postmark, without allocating an answer route back to the recipient. An application refusal is still handled by the receiving method. Unexpected receiver rejections use the ordinary one-way receiver diagnostic. Operator sends and the model's send/reply tools still need and receive their receipts. [Package settlement](../guest/session/inbox.js) · [Mail contract](m9-interfaces.md#31-factory-vat-guestfactorypost-officejs-operator-mailjs-subagentsjs)

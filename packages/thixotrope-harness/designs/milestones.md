@@ -2023,8 +2023,10 @@ cases. The factory revision passed all eight installed mail tests, both
 restart files and four list/live tests (J-12561). After the automatic-reply change,
 all ten installed mail and restart tests passed, including single delivery of an
 interrupted turn’s error reply. The integrated suite also passed 2,006 unit and
-adapter tests (J-12902 and J-12563). The four-deliveries-per-forwarded-mail
-gate still needs a causally attributed count. On the current pinned baseline `c9e559e27a`,
+adapter tests (J-12902 and J-12563). All 71 forwarded packages in the pinned
+trace used four causal deliveries, including the recipient's dispatch
+authorization. The median was 203 ms without collection in those four cranks
+and 447.5 ms with collection (J-12568). On the pinned baseline `c9e559e27a`,
 ask overhead was 316 ms against 300 ms and spawn was 1,543 ms against 1,500 ms.
 All three eight-child bursts and three subtree stops passed (J-12567).
 The ten mail, request and subagent tools are registered. With the production session

@@ -18868,3 +18868,31 @@ It measured 375 ms median and 709 ms p95 over 72 forwards.
 The supervisor filtered the pilot's diagnostic environment setting, so it
 captured provider endpoints only. A second attempt stopped at a decoder
 import before the supervisor served. Neither provides a causal delivery count.
+
+### J-12568 2026-11-20 M9 four deliveries on the pinned forwarding path
+
+The instrumented run on guest `c9e559e27a` used the pinned release worker, the
+full 60 s operator prefix and a 60 s sequential forwarding window.
+All 71 forwarded packages used four causal vat deliveries. The sender's round
+final issued `post`. The factory post issued `deliverMail`. The recipient
+accepted the same postmark and started the measured turn. Its session then
+answered the adapter's `dispatching(0)` before the recipient provider request.
+The provider turn and sink identities and the recipient postmark agreed.
+The separate host queue observer matched the original vat and worker request
+on all 142 sender-to-factory and factory-to-recipient edges.
+Receipt settlement, automatic replies and independent list updates share the
+system, and can delay an endpoint without adding a prerequisite to this chain.
+
+| Pinned worker phase | Sender round final | Factory post | Recipient delivery | Recipient dispatch authorization |
+|---|---:|---:|---:|---:|
+| Median guest execution (ms) | 32.45 | 11.63 | 46.42 | 7.65 |
+| Median host crank (ms) | 50 | 23 | 68 | 15 |
+| Median ready-queue delay (ms) | 0 | 5 | 0 | 0 |
+| Cranks with collection out of 71 | 25 | 15 | 19 | 16 |
+| Median collection time when it ran (ms) | 136.49 | 220.15 | 156.50 | 132.93 |
+
+The instrumented endpoint median was 352 ms and p95 was 703 ms. The 25
+forwards with no collection in these four cranks took 203 ms median.
+The other 46 took 447.5 ms median. A collection in one crank can reclaim work
+allocated earlier. These cohorts locate the cost without attributing all of
+it to its triggering method. J-12553 gives the uninstrumented full-file run.
