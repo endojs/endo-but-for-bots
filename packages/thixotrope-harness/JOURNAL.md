@@ -18958,3 +18958,15 @@ run on the same original `c9e559e27a` guest saw ask rise from 316 to 348 ms
 (n=53 and 60) and spawn from 1,543 to 1,587 ms (n=12 and 13). A fresh-state
 schedule can change the frequency and cost of a pause differently in each
 workflow. The release defaults are the baseline for the integrated stack.
+
+### J-12572 2026-11-20 M9 integrated default mail benchmark
+
+The uninstrumented `perf/mail.perf.mjs` at `5304a16b72` used the pinned worker,
+the production guest from J-12569, default allocation settings and unscaled
+windows. Operator ACK was 156.099 ms median (n=99, p95 534.722, limit 200).
+Session-to-session was 354 ms median (n=69, p95 823, limit 300). The 255-message
+inbox had a 500 ms p95 upper bound over 55 samples (limit 550). Four clients
+completed and dismissed 194 posts in 61.110 s, 3.174597/s (target 3).
+The fresh hub growth run posted 365 packages with two attachments each in
+120.831 s and finished at 0.515× (limit 1.25×). Exit 0 follows the existing
+timing tolerance. The 354 ms median misses the milestone target by 54 ms.

@@ -2003,13 +2003,13 @@ at `1881601aab`, load 1.9-3.2, 690.9 s held, 786 s of wall for the files; J-1226
 ## M9. Mail and subagents
 
 **Operator ACK and throughput passed together on the pinned worker.** In the
-unscaled release run at `e4dafe639d`, median operator acknowledgment was
-160.827 ms over 102 sends (limit 200 ms). Four clients and eight recipients
-completed and dismissed 196 posts in 61.059 s, or 3.210 posts/s (target 3).
+unscaled release run at `5304a16b72`, median operator acknowledgment was
+156.099 ms over 99 sends (limit 200 ms). Four clients and eight recipients
+completed and dismissed 194 posts in 61.110 s, or 3.175 posts/s (target 3).
 The automatic package reply sends its checked message without requesting a
 return receipt. Callers of the operator and model mail tools still get receipts.
 The fresh hub-growth and inbox gates passed and the file exited 0.
-Session-to-session delivery remains above its strict 300 ms target (J-12553).
+Session-to-session delivery measured 354 ms against its strict 300 ms target (J-12572).
 
 | Full run on the pinned worker | Operator ACK median (limit 200 ms) | Completed posts / elapsed | Posts/s (target 3) | Session delivery (limit 300 ms) | Fresh hub growth (limit 1.25×) |
 |---|---:|---:|---:|---:|---:|
@@ -2017,10 +2017,11 @@ Session-to-session delivery remains above its strict 300 ms target (J-12553).
 | `ecc7171aa2` (J-12550) | 205.186 ms, n=104 | 182 / 60.786 s | 2.994131 | 335 ms | 1.101× |
 | `d333ba1833` (J-12551) | 196.128 ms, n=98 | 176 / 61.369 s | 2.867906 | 345 ms | 2.103× |
 | `69997bd0c5` (J-12552) | 216.441 ms, n=98 | 168 / 61.282 s | 2.741411 | 328 ms | 3.051× |
-| **`e4dafe639d`** (J-12553) | **160.827 ms, n=102** | **196 / 61.059 s** | **3.210019** | 359 ms | 0.968× |
+| `e4dafe639d` (J-12553) | 160.827 ms, n=102 | 196 / 61.059 s | 3.210019 | 359 ms | 0.968× |
+| **`5304a16b72`** (J-12572) | **156.099 ms, n=99** | **194 / 61.110 s** | **3.174597** | 354 ms | 0.515× |
 
 A collector microbenchmark shared the host during part of the second run's ACK
-window. All five inbox p95 upper bounds were 500 ms (limit 550 ms). J-12549
+window. All six inbox p95 upper bounds were 500 ms (limit 550 ms). J-12549
 corrected the fresh hub denominator used in J-12547. J-1478 compares the
 single-recipient diagnostic with the full run. The factory revision at `69997bd0c5` completed
 193 posts in 61.359 s in an instrumented fresh-daemon comparison. The release

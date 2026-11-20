@@ -550,8 +550,12 @@ is made fresh per recipient, never shared.
 5. B: the receipt crank records the tool result (`mailTextOf.sent(label)` per recipient, or the
    refusals).
 
-Deliveries on the critical path from B's round final to A's provider request: B (D) -> factory (P)
--> A (M, turn start), about 2 x 33 + 118 ms (`mail.sessionToSession`, 10).
+For an inline package to an idle recipient, four vat deliveries precede A's provider
+request. B's round final (D) issues the post, the factory (P) routes it, and A's
+delivery (M) claims the turn and sends `startRound`. A then receives
+`dispatching(0)` from the adapter and durably authorizes that turn's provider
+request. The receipt to B can overlap this sequence. Section 10.1 retains the
+original 184 ms planning estimate and links to the measurements.
 
 ### 4.2 A's mail turn settles; the reply goes back
 
