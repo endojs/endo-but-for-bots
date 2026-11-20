@@ -63,7 +63,9 @@ import { stagePrompt } from '../session/prompt.js';
 /** @import { Row, RowTable } from './rows.js' */
 /** @import { StartCount } from './starts.js' */
 /** @import { PostOffice } from './post-office.js' */
-const { makeExo, makePromiseKit } = /** @type {GuestGlobals} */ (globalThis);
+const { defineExoClass, makePromiseKit } = /** @type {GuestGlobals} */ (
+  globalThis
+);
 
 const ML = limits;
 const NAME = RegExp(subagentNameSource);
@@ -152,6 +154,10 @@ export const makeSubagents = ({
     return typeof value === 'number' ? value : ML[name];
   };
 
+  /** @type {((node: Node) => any) | undefined} */
+  let makeHandle;
+  /** @type {((row: Row) => any) | undefined} */
+  let makeDelegation;
   /** @type {WeakMap<Row, Node>} */
   const nodes = new WeakMap();
   /** @type {WeakMap<Row, Set<Node>>} a row's children, in spawn order */
@@ -338,7 +344,8 @@ export const makeSubagents = ({
       answerOf(node, reply).then(
         answer => {
           if (open.closed) {
-            if (typeof answer.text === 'object') postOffice.release(answer.text);
+            if (typeof answer.text === 'object')
+              postOffice.release(answer.text);
             return;
           }
           finish();
@@ -428,20 +435,35 @@ export const makeSubagents = ({
       ask: undefined,
       stopping: false,
     };
-    node.handle = makeExo('SubagentHandle', I.SubagentHandle, {
-      describe: () =>
-        harden({ name, state: stateOf(node), depth: depthOf(row) }),
-      /** @param {any} request */
-      ask: request => ask(node, request),
-      cancelAsk: () => {
-        endAsk(node, mailTexts.askAbandoned);
-        return undefined;
+    makeHandle ??= defineExoClass(
+      'SubagentHandle',
+      I.SubagentHandle,
+      /** @param {Node} child */
+      child => ({ child }),
+      {
+        describe() {
+          const { child } = this.state;
+          return harden({
+            name: child.name,
+            state: stateOf(child),
+            depth: depthOf(child.row),
+          });
+        },
+        /** @param {any} request */
+        ask(request) {
+          return ask(this.state.child, request);
+        },
+        cancelAsk() {
+          endAsk(this.state.child, mailTexts.askAbandoned);
+          return undefined;
+        },
+        async stop() {
+          await deleteSubtree(this.state.child);
+          return undefined;
+        },
       },
-      stop: async () => {
-        await deleteSubtree(node);
-        return undefined;
-      },
-    });
+    );
+    node.handle = makeHandle(node);
     postOffice.bindAddress(node.handle, row);
     nodes.set(row, node);
     let set = childrenOf.get(parent);
@@ -566,22 +588,32 @@ export const makeSubagents = ({
     }
     let delegation = delegations.get(row);
     if (delegation === undefined) {
-      delegation = makeExo('Delegation', I.Delegation, {
-        /** @param {any} request */
-        spawn: request => spawn(row, request),
-        children: () =>
-          harden(
-            liveChildren(row)
-              .slice(0, LISTED_CHILDREN)
-              .map(node =>
-                harden({
-                  name: node.name,
-                  handle: node.handle,
-                  state: stateOf(node),
-                }),
-              ),
-          ),
-      });
+      makeDelegation ??= defineExoClass(
+        'Delegation',
+        I.Delegation,
+        /** @param {Row} parent */
+        parent => ({ parent }),
+        {
+          /** @param {any} request */
+          spawn(request) {
+            return spawn(this.state.parent, request);
+          },
+          children() {
+            return harden(
+              liveChildren(this.state.parent)
+                .slice(0, LISTED_CHILDREN)
+                .map(node =>
+                  harden({
+                    name: node.name,
+                    handle: node.handle,
+                    state: stateOf(node),
+                  }),
+                ),
+            );
+          },
+        },
+      );
+      delegation = makeDelegation(row);
       delegations.set(row, delegation);
     }
     return delegation;
