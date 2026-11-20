@@ -280,7 +280,7 @@ for (const [name, overrides, message] of refused) {
           harden({ sessionId: 'session-a', ...overrides }),
           makeToolSet(),
         ),
-      { message },
+      { message: new RegExp(message) },
     );
     t.deepEqual(log, []);
   });

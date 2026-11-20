@@ -1273,6 +1273,15 @@ export type MakeDirectoryNode = (
   ) => Promise<ContentSourceHint[]>,
 ) => EndoDirectory & ContentLocatable;
 
+/** The answer of `submitOnce`. */
+export type SubmitOnceResult = {
+  /** The message id of the value message that answers the form. */
+  messageId: FormulaNumber;
+  attempt: string;
+  /** Whether this call is the one that sent it. */
+  first: boolean;
+};
+
 export interface Mail {
   handle: () => Handle;
   // Partial inheritance from StoreController:
@@ -1330,6 +1339,18 @@ export interface Mail {
     guestHandleId: string;
   };
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
+  /**
+   * Submit values for a form at most once per `attempt`. The attempt is
+   * kept in this mailbox, durably, before the answer is delivered, and marked
+   * answered once the form's sender has received it. A call with a known
+   * attempt sends no new answer and returns the first call's message id.
+   * Attempts are kept until the form is dismissed, at most 64 per form.
+   */
+  submitOnce(
+    messageNumber: bigint,
+    values: Record<string, unknown>,
+    attempt: string,
+  ): Promise<SubmitOnceResult>;
   sendValue(
     messageNumber: bigint,
     petNameOrPath: string | string[],
@@ -1787,6 +1808,18 @@ export interface EndoGuest extends EndoAgent {
     petName: string | string[],
   ): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
+  /**
+   * Submit values for a form at most once per `attempt`. The attempt is
+   * kept in this mailbox, durably, before the answer is delivered, and marked
+   * answered once the form's sender has received it. A call with a known
+   * attempt sends no new answer and returns the first call's message id.
+   * Attempts are kept until the form is dismissed, at most 64 per form.
+   */
+  submitOnce(
+    messageNumber: bigint,
+    values: Record<string, unknown>,
+    attempt: string,
+  ): Promise<SubmitOnceResult>;
   sendValue: Mail['sendValue'];
   /**
    * Mint a single-use invitation whose locator's `from` names this guest's
@@ -2233,6 +2266,18 @@ export interface EndoHost extends EndoAgent {
     resultName?: string | string[],
   ): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
+  /**
+   * Submit values for a form at most once per `attempt`. The attempt is
+   * kept in this mailbox, durably, before the answer is delivered, and marked
+   * answered once the form's sender has received it. A call with a known
+   * attempt sends no new answer and returns the first call's message id.
+   * Attempts are kept until the form is dismissed, at most 64 per form.
+   */
+  submitOnce(
+    messageNumber: bigint,
+    values: Record<string, unknown>,
+    attempt: string,
+  ): Promise<SubmitOnceResult>;
   sendValue: Mail['sendValue'];
   /**
    * Returns the privileged read-only diagnostics facet: formula

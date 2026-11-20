@@ -209,6 +209,7 @@ export const makeGuestMaker = ({
       define: mailboxDefine,
       form: mailboxForm,
       submit: mailboxSubmit,
+      submitOnce: mailboxSubmitOnce,
       sendValue: mailboxSendValue,
     } = mailbox;
 
@@ -324,6 +325,10 @@ export const makeGuestMaker = ({
     /** @type {EndoGuest['submit']} */
     const submit = (messageNumber, values) =>
       mailboxSubmit(messageNumber, values);
+
+    /** @type {EndoGuest['submitOnce']} */
+    const submitOnce = (messageNumber, values, attempt) =>
+      mailboxSubmitOnce(messageNumber, values, attempt);
 
     /** @type {EndoGuest['sendValue']} */
     const sendValue = (messageNumber, petNameOrPath) =>
@@ -507,6 +512,7 @@ export const makeGuestMaker = ({
       storeBlob,
       storeValue,
       submit,
+      submitOnce,
       sendValue,
       invite,
       accept,

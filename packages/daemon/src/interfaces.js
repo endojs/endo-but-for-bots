@@ -340,6 +340,12 @@ export const GuestInterface = M.interface('EndoGuest', {
     MessageNumberShape, // messageNumber
     M.record(), // values
   ).returns(M.promise()),
+  // Submit values for a form at most once per attempt
+  submitOnce: M.call(
+    MessageNumberShape, // messageNumber
+    M.record(), // values
+    M.string(), // attempt
+  ).returns(M.promise()),
   // Send a retained value as a reply
   sendValue: M.call(
     MessageNumberShape, // messageNumber
@@ -616,6 +622,12 @@ export const HostInterface = M.interface('EndoHost', {
   submit: M.call(
     MessageNumberShape, // messageNumber
     M.record(), // values
+  ).returns(M.promise()),
+  // Submit values for a form at most once per attempt
+  submitOnce: M.call(
+    MessageNumberShape, // messageNumber
+    M.record(), // values
+    M.string(), // attempt
   ).returns(M.promise()),
   // Send a retained value as a reply
   sendValue: M.call(

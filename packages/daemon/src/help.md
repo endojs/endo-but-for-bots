@@ -371,6 +371,20 @@ in reply to the form, allowing multiple submissions.
 
 Example: submit(0, { name: "Alice", age: 30 })
 
+## submitOnce(messageNumber, values, attempt) -> Promise<{ messageId, attempt, first }>
+
+Submit values for a form message at most once per attempt. Retrying with
+the same attempt sends no second answer; it returns the first call's
+messageId with first: false.
+
+- messageNumber: The inbox message number of the form
+- values: A record with keys matching the form's field definitions
+- attempt: A retry key, 1 to 128 letters, digits, "-" or "_"
+
+Attempts are kept until the form is dismissed, at most 64 per form.
+
+Example: submitOnce(0, { name: "Alice" }, "a1b2c3")
+
 ## sendValue(messageNumber, petNameOrPath) -> Promise<void>
 
 Reply to any message with a retained value from your pet store.
@@ -635,6 +649,20 @@ Each value must match the pattern specified by the form field (if any).
 Fields without explicit patterns default to M.string().
 
 Example: submit(0, { name: "Alice", age: 30 })
+
+## submitOnce(messageNumber, values, attempt) -> Promise<{ messageId, attempt, first }>
+
+Submit values for a form message at most once per attempt. Retrying with
+the same attempt sends no second answer; it returns the first call's
+messageId with first: false.
+
+- messageNumber: The inbox message number of the form
+- values: A record with keys matching the form's field definitions
+- attempt: A retry key, 1 to 128 letters, digits, "-" or "_"
+
+Attempts are kept until the form is dismissed, at most 64 per form.
+
+Example: submitOnce(0, { name: "Alice" }, "a1b2c3")
 
 ## sendValue(messageNumber, petNameOrPath) -> Promise<void>
 

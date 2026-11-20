@@ -2923,6 +2923,7 @@ export const makeHostMaker = ({
       deliver,
       form,
       submit,
+      submitOnce,
       sendValue,
       deliverValueById,
       editMessage,
@@ -3218,6 +3219,7 @@ export const makeHostMaker = ({
       accept,
       endow,
       submit,
+      submitOnce,
       sendValue,
       // Diagnostics (formula records, dependency graph, error traces)
       diagnostics,

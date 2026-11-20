@@ -7006,6 +7006,267 @@ test('form multi-submission: same form submitted twice produces two value messag
   t.is(value2.replyTo, formMsg.messageId);
 });
 
+/**
+ * @param {any} agent
+ */
+const listValueMessages = async agent => {
+  const messages = await E(agent).listMessages();
+  return messages.filter(message => message.type === 'value');
+};
+
+/**
+ * Guest sends the host a one-field form; returns the host's form message.
+ *
+ * @param {any} host
+ * @param {any} guest
+ */
+const sendAnswerForm = async (host, guest) => {
+  const hostIterator = iterateReader(E(host).followMessages());
+  await E(guest).form(
+    '@host',
+    'Once',
+    harden([{ name: 'answer', label: 'Answer' }]),
+  );
+  const { value: formMsg } = await hostIterator.next();
+  return formMsg;
+};
+
+test('submitOnce sends one answer per attempt', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  const formMsg = await sendAnswerForm(host, guest);
+
+  const first = await E(host).submitOnce(
+    formMsg.number,
+    harden({ answer: 'first' }),
+    'attempt-1',
+  );
+  t.true(first.first);
+  t.is(typeof first.messageId, 'string');
+
+  // Same attempt, even with other values: the first answer, nothing sent.
+  const again = await E(host).submitOnce(
+    formMsg.number,
+    harden({ answer: 'changed' }),
+    'attempt-1',
+  );
+  t.false(again.first);
+  t.is(again.messageId, first.messageId);
+
+  const guestValues = await listValueMessages(guest);
+  t.is(guestValues.length, 1);
+  t.is(guestValues[0].messageId, first.messageId);
+  t.is(guestValues[0].replyTo, formMsg.messageId);
+  t.is((await listValueMessages(host)).length, 1);
+
+  // Another attempt is another answer.
+  const other = await E(host).submitOnce(
+    formMsg.number,
+    harden({ answer: 'second' }),
+    'attempt-2',
+  );
+  t.true(other.first);
+  t.not(other.messageId, first.messageId);
+  t.is((await listValueMessages(guest)).length, 2);
+});
+
+test('submitOnce with concurrent calls of one attempt sends once', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  const formMsg = await sendAnswerForm(host, guest);
+
+  const results = await Promise.all(
+    [1, 2, 3].map(() =>
+      E(host).submitOnce(formMsg.number, harden({ answer: 'x' }), 'same'),
+    ),
+  );
+  t.is(results.filter(result => result.first).length, 1);
+  t.is(new Set(results.map(result => result.messageId)).size, 1);
+  t.is((await listValueMessages(guest)).length, 1);
+});
+
+test('submitOnce retry after the sent copy is lost delivers no second answer', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  const formMsg = await sendAnswerForm(host, guest);
+
+  const first = await E(host).submitOnce(
+    formMsg.number,
+    harden({ answer: 'only' }),
+    'cut',
+  );
+
+  // The state a crash between delivery and the sent copy leaves: the attempt
+  // is kept and the form's sender holds the answer, but the member's mailbox
+  // has no sent copy.
+  const [sentCopy] = await listValueMessages(host);
+  await E(host).dismiss(sentCopy.number);
+  t.is((await listValueMessages(host)).length, 0);
+
+  const retry = await E(host).submitOnce(
+    formMsg.number,
+    harden({ answer: 'only' }),
+    'cut',
+  );
+  t.false(retry.first);
+  t.is(retry.messageId, first.messageId);
+
+  const guestValues = await listValueMessages(guest);
+  t.is(guestValues.length, 1, 'the sender holds one answer');
+  const hostValues = await listValueMessages(host);
+  t.is(hostValues.length, 1, 'the member holds its sent copy again');
+  t.is(hostValues[0].messageId, first.messageId);
+});
+
+test('submitOnce retry after the sender dismissed the answer sends nothing', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  const formMsg = await sendAnswerForm(host, guest);
+
+  const first = await E(host).submitOnce(
+    formMsg.number,
+    harden({ answer: 'only' }),
+    'read',
+  );
+  const [received] = await listValueMessages(guest);
+  await E(guest).dismiss(received.number);
+  // And the member's sent copy is missing, as after a crash between
+  // delivery and the sent copy.
+  const [sentCopy] = await listValueMessages(host);
+  await E(host).dismiss(sentCopy.number);
+
+  const retry = await E(host).submitOnce(
+    formMsg.number,
+    harden({ answer: 'only' }),
+    'read',
+  );
+  t.false(retry.first);
+  t.is(retry.messageId, first.messageId);
+  t.is(
+    (await listValueMessages(guest)).length,
+    0,
+    'the dismissed answer is not delivered again',
+  );
+  t.is((await listValueMessages(host)).length, 1);
+});
+
+test('submitOnce attempts survive a daemon restart', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+
+  /** @type {bigint} */
+  let formNumber;
+  /** @type {string} */
+  let messageId;
+  {
+    const { host } = await makeHost(config, cancelled);
+    const guest = await E(host).provideGuest('guest', {
+      agentName: 'guest-agent',
+    });
+    const formMsg = await sendAnswerForm(host, guest);
+    formNumber = formMsg.number;
+    ({ messageId } = await E(host).submitOnce(
+      formNumber,
+      harden({ answer: 'before' }),
+      'durable',
+    ));
+  }
+
+  await restart(config);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    const retry = await E(host).submitOnce(
+      formNumber,
+      harden({ answer: 'after' }),
+      'durable',
+    );
+    t.false(retry.first);
+    t.is(retry.messageId, messageId);
+    const guest = await E(host).lookup('guest-agent');
+    const guestValues = await listValueMessages(guest);
+    t.is(guestValues.length, 1);
+    t.is(guestValues[0].messageId, messageId);
+  }
+});
+
+test('submitOnce refuses a malformed attempt', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  const formMsg = await sendAnswerForm(host, guest);
+
+  for (const attempt of ['', 'a/b', 'x'.repeat(129), 'sp ace']) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        E(host).submitOnce(formMsg.number, harden({ answer: 'a' }), attempt),
+      { message: /Invalid attempt/ },
+    );
+  }
+  t.is((await listValueMessages(guest)).length, 0);
+});
+
+test('submitOnce refuses an attempt that already answered another form', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  const formA = await sendAnswerForm(host, guest);
+  await E(guest).form(
+    '@host',
+    'Twice',
+    harden([{ name: 'answer', label: 'Answer' }]),
+  );
+  const forms = (await E(host).listMessages()).filter(
+    message => message.type === 'form',
+  );
+  t.is(forms.length, 2);
+  const formB = forms[1];
+  t.not(formB.messageId, formA.messageId);
+
+  const first = await E(host).submitOnce(
+    formA.number,
+    harden({ answer: 'a' }),
+    'shared',
+  );
+  t.true(first.first);
+  await t.throwsAsync(
+    () => E(host).submitOnce(formB.number, harden({ answer: 'b' }), 'shared'),
+    { message: /already answered another form/ },
+  );
+  const guestValues = await listValueMessages(guest);
+  t.is(guestValues.length, 1);
+  t.is(guestValues[0].replyTo, formA.messageId);
+});
+
+test('submitOnce attempts go with their dismissed form, and are bounded per form', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  const formMsg = await sendAnswerForm(host, guest);
+
+  for (let i = 0; i < 64; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await E(host).submitOnce(formMsg.number, harden({ answer: 'a' }), `a${i}`);
+  }
+  await t.throwsAsync(
+    () => E(host).submitOnce(formMsg.number, harden({ answer: 'a' }), 'a64'),
+    { message: /already holds 64 attempts/ },
+  );
+  // A known attempt still answers at the bound.
+  const known = await E(host).submitOnce(
+    formMsg.number,
+    harden({ answer: 'a' }),
+    'a0',
+  );
+  t.false(known.first);
+  t.is((await listValueMessages(guest)).length, 64);
+
+  await E(host).dismiss(formMsg.number);
+  // The attempt went with the form: a retry finds neither.
+  await t.throwsAsync(
+    () => E(host).submitOnce(formMsg.number, harden({ answer: 'a' }), 'a0'),
+    { message: /No such message/ },
+  );
+  t.is((await listValueMessages(guest)).length, 64);
+});
+
 test('form field patterns survive a daemon restart', async t => {
   const { cancelled, config } = await prepareConfig(t);
 

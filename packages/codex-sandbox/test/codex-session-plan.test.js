@@ -101,7 +101,7 @@ for (const [change, message] of refused) {
   test(`Codex refuses invalid recorded plan ${JSON.stringify(change)}`, t => {
     t.throws(
       () => readCodexSessionPlan(JSON.stringify({ ...plan, ...change })),
-      { message },
+      { message: new RegExp(message) },
     );
   });
 }
