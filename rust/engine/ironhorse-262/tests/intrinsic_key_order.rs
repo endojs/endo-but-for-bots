@@ -124,11 +124,6 @@ const KEY_SET_DIFFERENCES: &[(&str, &[&str], &[&str])] = &[
         &["Symbol(Symbol.asyncDispose)"],
     ),
     (
-        "%TypedArray%.prototype",
-        &[],
-        &["toReversed", "toSorted", "with"],
-    ),
-    (
         "globalThis",
         &["Intl", "Temporal"],
         &[

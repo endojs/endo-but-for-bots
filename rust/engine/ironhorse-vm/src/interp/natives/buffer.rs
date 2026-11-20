@@ -1397,6 +1397,149 @@ impl Interp {
         Ok(this)
     }
 
+    /// `TypedArrayCreateSameType(exemplar, « length »)`: construct the
+    /// exemplar's concrete intrinsic constructor directly, never consulting
+    /// `constructor` or `@@species`.
+    fn typed_array_create_same_type(
+        &mut self,
+        code: &[u8],
+        source: TypedArrayData,
+        length: u32,
+    ) -> Result<(Slot, TypedArrayData), Step> {
+        let constructor = self
+            .intrinsics
+            .get(TYPED_ARRAY_TYPES[source.kind as usize].name)
+            .copied()
+            .expect("concrete TypedArray constructor");
+        let constructor = Slot::of(Kind::Reference, Payload::Reference(constructor));
+        let result = self.construct_value(
+            code,
+            constructor,
+            &[Slot::number(length as f64)],
+            constructor,
+        )?;
+        let (target, _) = self.validate_typed_array(result)?;
+        Ok((result, target))
+    }
+
+    /// Copy `count` elements of `source` starting at `from` into `target`
+    /// starting at `to`, as raw bytes: both views have the same element type,
+    /// so this preserves NaN payloads exactly as `Get` then `Set` would in
+    /// XS.
+    fn typed_array_copy_same_type(
+        &mut self,
+        source: TypedArrayData,
+        from: u32,
+        target: TypedArrayData,
+        to: u32,
+        count: u32,
+    ) {
+        if count == 0 {
+            return;
+        }
+        let size = TYPED_ARRAY_TYPES[source.kind as usize].size as usize;
+        let source_buffer = self.array_buffers[&source.buffer];
+        let source_start = source.offset as usize + from as usize * size;
+        let byte_count = count as usize * size;
+        let bytes = self.chunks.payload(source_buffer.data)
+            [source_start..source_start + byte_count]
+            .to_vec();
+        let target_buffer = self.array_buffers[&target.buffer];
+        let target_start = target.offset as usize + to as usize * size;
+        let out = self
+            .chunks
+            .slice_mut(target_buffer.data, target_start + byte_count);
+        out[target_start..target_start + byte_count].copy_from_slice(&bytes);
+    }
+
+    /// The change-array-by-copy family on `%TypedArray%.prototype`
+    /// (ECMA-262 23.2.3.32-23.2.3.36): `toReversed`, `toSorted` and `with`
+    /// leave the receiver untouched and return a fresh view of the same
+    /// element type and the receiver's captured length.
+    pub(in crate::interp) fn typed_array_change_by_copy(
+        &mut self,
+        method: NativeMethod,
+        this: Slot,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Step> {
+        let arg = |this: &Self, i: usize| {
+            this.stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        };
+        match method {
+            NativeMethod::TypedArrayToReversed => {
+                let (source, length) = self.validate_typed_array(this)?;
+                let (result, target) = self.typed_array_create_same_type(code, source, length)?;
+                // Constructing the intrinsic runs no guest code, so the
+                // receiver still has every element.
+                for index in 0..length {
+                    self.typed_array_copy_same_type(source, length - 1 - index, target, index, 1);
+                }
+                Ok(result)
+            }
+            NativeMethod::TypedArrayToSorted => {
+                // The comparator is checked before the receiver.
+                let compare = arg(self, 0);
+                if argc > 0 && compare.kind != Kind::Undefined && !self.is_callable_value(compare) {
+                    return Err(self.catchable_type_error_msg("compare: not a function".into()));
+                }
+                let (source, length) = self.validate_typed_array(this)?;
+                let (result, target) = self.typed_array_create_same_type(code, source, length)?;
+                self.typed_array_copy_same_type(source, 0, target, 0, length);
+                // Sorting the copy reads the same values in the same order
+                // as sorting a list read from the receiver, and only writes
+                // the result.
+                self.typed_array_sort(result, base, argc, code)?;
+                Ok(result)
+            }
+            NativeMethod::TypedArrayWith => {
+                let (source, length) = self.validate_typed_array(this)?;
+                let relative = self.array_to_integer_or_infinity(code, arg(self, 0))?;
+                let actual = if relative >= 0.0 {
+                    relative
+                } else {
+                    length as f64 + relative
+                };
+                // `numericValue` is ToBigInt or ToNumber of the value, once.
+                let bytes = self.typed_array_element_bytes(code, source.kind, arg(self, 1))?;
+                // IsValidIntegerIndex reads the live length: the coercions
+                // above are guest code that can detach or shrink the view.
+                let current = self.ta_length(source);
+                let valid = actual.is_finite()
+                    && actual >= 0.0
+                    && current.is_some_and(|current| actual < current as f64);
+                if !valid {
+                    return Err(self.catchable_range_error_msg("invalid index".into()));
+                }
+                let actual = actual as u32;
+                let current = current.unwrap_or(0).min(length);
+                let (result, target) = self.typed_array_create_same_type(code, source, length)?;
+                self.typed_array_copy_same_type(source, 0, target, 0, current);
+                // Elements a shrink removed read `undefined`, which a BigInt
+                // view rejects and a Number view stores as NaN (or 0).
+                for index in current..length {
+                    self.typed_array_element_set(code, target, index, Slot::undefined())?;
+                }
+                // A view that grew during the coercions can make the index
+                // valid yet past the captured length, which the copy loop
+                // never reaches.
+                if actual < length {
+                    let size = bytes.len();
+                    let buffer = self.array_buffers[&target.buffer];
+                    let position = target.offset as usize + actual as usize * size;
+                    let out = self.chunks.slice_mut(buffer.data, position + size);
+                    out[position..position + size].copy_from_slice(&bytes);
+                }
+                Ok(result)
+            }
+            _ => unreachable!("not a TypedArray change-array-by-copy method"),
+        }
+    }
+
     /// The non-allocating `%TypedArray%.prototype` iteration/search/fold
     /// family. These algorithms validate the integer-indexed receiver once,
     /// capture its length, and then `Get` every index (TypedArrays have no
