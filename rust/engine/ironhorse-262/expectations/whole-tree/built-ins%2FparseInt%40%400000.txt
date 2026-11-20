@@ -101,8 +101,8 @@ built-ins/parseInt/S15.1.2.2_A7.3_T3.js sloppy pass
 built-ins/parseInt/S15.1.2.2_A7.3_T3.js strict pass
 built-ins/parseInt/S15.1.2.2_A8.js sloppy pass
 built-ins/parseInt/S15.1.2.2_A8.js strict pass
-built-ins/parseInt/S15.1.2.2_A9.5.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
-built-ins/parseInt/S15.1.2.2_A9.5.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/parseInt/S15.1.2.2_A9.5.js sloppy pass
+built-ins/parseInt/S15.1.2.2_A9.5.js strict pass
 built-ins/parseInt/S15.1.2.2_A9.6.js sloppy pass
 built-ins/parseInt/S15.1.2.2_A9.6.js strict pass
 built-ins/parseInt/not-a-constructor.js sloppy pass

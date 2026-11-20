@@ -189,6 +189,23 @@ impl Interp {
         Ok(())
     }
 
+    /// The global object's [[Prototype]] when `name` is an inherited (not
+    /// own) global binding: `HasProperty` on the global walks its chain, so
+    /// the question goes to the global's actual prototype rather than a fixed
+    /// `%Object.prototype%`. `None` when the global has a null prototype or
+    /// the chain does not have `name`.
+    pub(super) fn global_inherits(
+        &mut self,
+        code: &[u8],
+        name: u16,
+    ) -> Result<Option<crate::value::SlotIndex>, Step> {
+        let proto = self.instance_prototype(self.environment.global_obj);
+        if proto.is_null() || !self.mop_has(code, proto, name)? {
+            return Ok(None);
+        }
+        Ok(Some(proto))
+    }
+
     /// The nearest caller variable environment used by a direct eval inside a
     /// function. The compiler publishes function scopes as declarative
     /// environment instances: a `null` behavior marks the variable environment

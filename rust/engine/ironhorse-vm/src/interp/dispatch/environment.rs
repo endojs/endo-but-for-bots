@@ -111,7 +111,7 @@ impl Interp {
                 Payload::Reference(self.environment.global_obj),
             );
             Some((self.mop_get(code, self.environment.global_obj, name, global))?)
-        } else if self.mop_has(code, self.object_proto, name)? {
+        } else if let Some(proto) = self.global_inherits(code, name)? {
             // `global_props` is the OWN-property index of the
             // global object, but a bare name resolves through
             // `HasProperty`, which walks the prototype chain: every
@@ -121,24 +121,21 @@ impl Interp {
             // faulting — XS answers `typeof toString` with
             // `"function"`. This is the read-side twin of the
             // `SET_VARIABLE` unresolvable guard below, asked and
-            // answered the same way: ironhorse's global object
-            // carries a NULL prototype (a separate, pre-existing
-            // divergence: `Object.getPrototypeOf(globalThis)` is
-            // `null` here and `%Object.prototype%` in XS), so the
-            // inherited half of the question is put to
-            // `%Object.prototype%` directly. The `instance_has`
-            // probe is read-only and unmetered — XS's own chain
-            // walk is already folded into this arm's measured cost
-            // — and the value comes back through the same full
-            // `[[Get]]` the own-global read uses, receiver still
-            // the global object, so an inherited accessor runs
-            // with the `this` XS gives it and its abrupt
-            // completion is observed.
+            // answered the same way: the inherited half of the
+            // question is put to the global object's own
+            // [[Prototype]] (`%Object.prototype%` unless a program
+            // replaced it). The probe is read-only and unmetered —
+            // XS's own chain walk is already folded into this arm's
+            // measured cost — and the value comes back through the
+            // same full `[[Get]]` the own-global read uses, receiver
+            // still the global object, so an inherited accessor runs
+            // with the `this` XS gives it and its abrupt completion
+            // is observed.
             let global = Slot::of(
                 Kind::Reference,
                 Payload::Reference(self.environment.global_obj),
             );
-            Some((self.mop_get(code, self.object_proto, name, global))?)
+            Some((self.mop_get(code, proto, name, global))?)
         } else {
             None
         };
@@ -351,7 +348,7 @@ impl Interp {
                 return Ok(());
             }
             let own_global = self.environment.global_props.contains_key(&name);
-            let resolvable = own_global || self.mop_has(code, self.object_proto, name)?;
+            let resolvable = own_global || self.global_inherits(code, name)?.is_some();
             if !resolvable && self.strict {
                 // XS's `SET_VARIABLE` strict arm:
                 // `mxRunDebugID(XS_REFERENCE_ERROR, "set %s:

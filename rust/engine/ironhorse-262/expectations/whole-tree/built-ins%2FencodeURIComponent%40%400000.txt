@@ -47,8 +47,8 @@ built-ins/encodeURIComponent/S15.1.3.4_A5.3.js sloppy pass
 built-ins/encodeURIComponent/S15.1.3.4_A5.3.js strict pass
 built-ins/encodeURIComponent/S15.1.3.4_A5.4.js sloppy pass
 built-ins/encodeURIComponent/S15.1.3.4_A5.4.js strict pass
-built-ins/encodeURIComponent/S15.1.3.4_A5.5.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
-built-ins/encodeURIComponent/S15.1.3.4_A5.5.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/encodeURIComponent/S15.1.3.4_A5.5.js sloppy pass
+built-ins/encodeURIComponent/S15.1.3.4_A5.5.js strict pass
 built-ins/encodeURIComponent/S15.1.3.4_A5.6.js sloppy pass
 built-ins/encodeURIComponent/S15.1.3.4_A5.6.js strict pass
 built-ins/encodeURIComponent/S15.1.3.4_A5.7.js sloppy pass

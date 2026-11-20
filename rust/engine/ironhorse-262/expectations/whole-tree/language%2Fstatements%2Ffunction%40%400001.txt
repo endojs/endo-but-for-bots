@@ -4,7 +4,7 @@ language/statements/function/S13.2.2_A19_T3.js sloppy pass
 language/statements/function/S13.2.2_A19_T4.js sloppy pass
 language/statements/function/S13.2.2_A19_T5.js sloppy pass
 language/statements/function/S13.2.2_A19_T6.js sloppy pass
-language/statements/function/S13.2.2_A19_T7.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+language/statements/function/S13.2.2_A19_T7.js sloppy pass
 language/statements/function/S13.2.2_A19_T8.js sloppy pass
 language/statements/function/S13.2.2_A1_T1.js sloppy pass
 language/statements/function/S13.2.2_A1_T1.js strict pass
