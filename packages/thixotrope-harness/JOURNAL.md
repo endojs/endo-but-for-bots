@@ -18829,3 +18829,23 @@ The smaller synthetic reclamation workload and the warmed phase comparison
 are in J-12564. The complete experiment at `7f3ac522cbfc` is on the local
 branch `codex/mail-batch-early-gc`. The harness branch keeps the existing
 release worker digest.
+
+### J-12566 2026-11-20 M9 forwarding baseline and guided user acceptance
+
+At `c9e559e27a` the emitted guest and pinned worker match the J-12553 release run.
+The unscaled mail file measured 359 ms from the sender's round-zero final to the
+recipient provider request. The M9 contract allows 300 ms and four causal vat deliveries
+per forwarded package. The existing row times the interval but emits no delivery count.
+The receiver's round-zero provider request waits for the session to durably answer
+`TurnSink.dispatching(0)`. The causal count must include that decision, tie each
+message to the same forwarded package, and distinguish other messages sharing the queue.
+J-12549's 363 ms ask overhead and 1,513 ms spawn precede the automatic-reply change.
+
+The milestone register now includes the guided user journeys and their setup.
+On the recorded integrated runs the four cross-lane cases passed, including the
+workspace image through a loopback provider, and all 54 milestone regression files
+passed across runs. J-12563 gives the latest integrated unit evidence.
+The original mixed core file remains open alongside the separate passing retirement test.
+The Home inbox and operator mail CLI are M12 work. The M6 real-runtime isolation,
+M8 live-provider image and compaction, and M11 real speech engine and device checks
+belong in the owner trial. No human acceptance verdict has been recorded here.

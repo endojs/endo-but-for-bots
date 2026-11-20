@@ -1500,6 +1500,30 @@ disagree, the contract wins. Paths in these sections: `EV/` = `H/resources/envir
 Test files in the tables are named without their directory and `.test.js` suffix where the
 column says which kind they are.
 
+### Guided user acceptance on the integrated stack
+
+The four integrated milestones are ready for an operator-led trial on a fresh state directory.
+The installed daemon and Chromium runs provide a baseline for the user journeys below.
+The human trial and the real-service repeats still need recorded outcomes.
+
+| Journey | What the tester should observe |
+|---|---|
+| Chat and reconnect | Sign in through the gateway, create a session on a configured backend, send a turn, and reload while it streams. The transcript should contain the input once and show its completed answer. |
+| Mail and delegation | From an operator client using `getMail()`, give a sender the recipient's address. Have the sender forward a package, then spawn, ask and stop a named child. Check the recipient's turn, the correlated reply, the child's answer and its removal. The operator Home inbox and mail CLI belong to M12. |
+| Workspace and images | With a configured runner, create a development session, inspect its Git workspace and ask it to view a known image there. Verify what the live backend sees. Stop the parent and confirm that its child can still use its own workspace. |
+| Voice and context | With speech engines, a runner and the pinned voice backend configured, start Talk, speak, interrupt playback and replay the answer. On a live provider, cross the context threshold and check that the next answer uses the compacted history coherently. |
+
+Use the package's `scripts/serve.mjs`, `scripts/provision.mjs` and
+`scripts/gateway.mjs` for a guided installation. Build the browser assets with
+`corepack yarn build:ui`. The default provision command installs the base harness.
+The operator supplies a backend and configures the runner and speech services for the
+corresponding journeys. Record the worker digest, backend/model, runner or audio device,
+observed outcome and any failing turn for each journey.
+Automated coverage includes all four cross-lane cases and 54 milestone files across runs.
+The combined core record covers 25 of 26 files and the separate worker-retirement case.
+The M6 real-runtime checks, M8 live-provider checks and M11 real-engine, provider and
+microphone checks have their own acceptance rows. J-12566 records the scope of this assessment.
+
 **Two units outside the lanes.**
 
 - **WX.1, the cross-lane seam unit** (the PM's; one agent, after step 3 merges, before any lane
