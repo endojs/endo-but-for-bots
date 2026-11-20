@@ -114,11 +114,6 @@ __walk.length + '\n' + (__walk[PAGE] || []).join('\n')
 const KEY_SET_DIFFERENCES: &[(&str, &[&str], &[&str])] = &[
     ("Iterator.prototype", &[], &["Symbol(Symbol.dispose)"]),
     (
-        "%ArrayIteratorPrototype%",
-        &[],
-        &["Symbol(Symbol.toStringTag)"],
-    ),
-    (
         "%AsyncIteratorPrototype%",
         &[],
         &["Symbol(Symbol.asyncDispose)"],
@@ -201,11 +196,9 @@ const COMPARTMENT_GLOBAL_DIFFERENCES: (&[&str], &[&str]) = (
 );
 
 /// Objects only one engine has, by path prefix: Ironhorse's Intl and
-/// Temporal, and XS's own `ModuleSource`, separate
-/// `%StringIteratorPrototype%` and oracle host functions.
+/// Temporal, and XS's own `ModuleSource` and oracle host functions.
 const IRONHORSE_ONLY: &[&str] = &["globalThis.Intl", "globalThis.Temporal"];
 const XS_ONLY: &[&str] = &[
-    "%StringIteratorPrototype%",
     "globalThis.ModuleSource",
     "globalThis.ModuleStuff",
     "globalThis.trace",

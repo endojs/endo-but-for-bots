@@ -49,8 +49,8 @@ built-ins/Object/prototype/toString/proxy-revoked-during-get-call.js sloppy pass
 built-ins/Object/prototype/toString/proxy-revoked-during-get-call.js strict pass
 built-ins/Object/prototype/toString/proxy-revoked.js sloppy pass
 built-ins/Object/prototype/toString/proxy-revoked.js strict pass
-built-ins/Object/prototype/toString/symbol-tag-array-builtin.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"[object Iterator]\"», «\"[object Array Iterator]\"») to be true"
-built-ins/Object/prototype/toString/symbol-tag-array-builtin.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"[object Iterator]\"», «\"[object Array Iterator]\"») to be true"
+built-ins/Object/prototype/toString/symbol-tag-array-builtin.js sloppy pass
+built-ins/Object/prototype/toString/symbol-tag-array-builtin.js strict pass
 built-ins/Object/prototype/toString/symbol-tag-generators-builtin.js sloppy pass
 built-ins/Object/prototype/toString/symbol-tag-generators-builtin.js strict pass
 built-ins/Object/prototype/toString/symbol-tag-map-builtin.js sloppy pass
@@ -75,8 +75,8 @@ built-ins/Object/prototype/toString/symbol-tag-set-builtin.js sloppy pass
 built-ins/Object/prototype/toString/symbol-tag-set-builtin.js strict pass
 built-ins/Object/prototype/toString/symbol-tag-str.js sloppy pass
 built-ins/Object/prototype/toString/symbol-tag-str.js strict pass
-built-ins/Object/prototype/toString/symbol-tag-string-builtin.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"[object Iterator]\"», «\"[object String Iterator]\"») to be true"
-built-ins/Object/prototype/toString/symbol-tag-string-builtin.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"[object Iterator]\"», «\"[object String Iterator]\"») to be true"
+built-ins/Object/prototype/toString/symbol-tag-string-builtin.js sloppy pass
+built-ins/Object/prototype/toString/symbol-tag-string-builtin.js strict pass
 built-ins/Object/prototype/toString/symbol-tag-weakmap-builtin.js sloppy pass
 built-ins/Object/prototype/toString/symbol-tag-weakmap-builtin.js strict pass
 built-ins/Object/prototype/toString/symbol-tag-weakset-builtin.js sloppy pass

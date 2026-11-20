@@ -2362,6 +2362,7 @@ impl Interp {
                 self.native_async_generator_method(m, code, this, arg0)?
             }
             NativeMethod::ArrayIteratorNext
+            | NativeMethod::StringIteratorNext
             | NativeMethod::EnumeratorNext
             | NativeMethod::MapIteratorNext
             | NativeMethod::SetIteratorNext
@@ -5467,16 +5468,26 @@ impl Interp {
             NativeMethod::ArrayIteratorNext => {
                 let iter = match this.value {
                     Payload::Reference(i)
-                        if self
-                            .iterators
-                            .get(&i)
-                            .is_some_and(|state| state.kind <= 4 && state.kind != 3) =>
+                        if self.iterators.get(&i).is_some_and(|state| state.kind <= 2) =>
                     {
                         i
                     }
                     _ => return Err(self.catchable_type_error_msg("this: not an iterator".into())),
                 };
                 self.array_iterator_next(code, iter)?
+            }
+            // `%StringIteratorPrototype%.next()`, branded on the String
+            // Iterator cursor kind.
+            NativeMethod::StringIteratorNext => {
+                let iter = match this.value {
+                    Payload::Reference(i)
+                        if self.iterators.get(&i).is_some_and(|state| state.kind == 4) =>
+                    {
+                        i
+                    }
+                    _ => return Err(self.catchable_type_error_msg("this: not an iterator".into())),
+                };
+                self.string_iterator_next(iter)?
             }
             // The for-in enumerator's own `next`, which only an enumerator a
             // program captured (through `%IteratorPrototype%.return`) can

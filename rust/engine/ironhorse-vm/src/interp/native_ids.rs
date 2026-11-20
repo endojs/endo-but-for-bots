@@ -533,6 +533,9 @@ pub enum NativeMethod {
     /// yield the next `{value, done}` (mutating and returning the iterator's
     /// reused result object).
     ArrayIteratorNext,
+    /// `%StringIteratorPrototype%.next()` (`fx_StringIterator_prototype_next`):
+    /// yield the next code point of a String Iterator.
+    StringIteratorNext,
     /// The for-in enumerator's `next` (`fx_Enumerator_prototype_next`), owned
     /// by its private prototype.
     EnumeratorNext,

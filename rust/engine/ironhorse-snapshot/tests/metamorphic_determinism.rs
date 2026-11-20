@@ -167,13 +167,13 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "99c2f62888ec0493da54bc07000f8571ada4e07cd43bf77c5b586210716b9300"
+        "6b2a25bec3b42a06d806f97a5f9906c23a95bfb8fa0033f5292913fcd10f5f96"
     );
     previous.meter.cost_table_version = "ironhorse-meter-5".into();
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "2d8e34072278bb4276a2bfa9e0b0cf4a122583644f8cb85d691d938fdd736ceb"
+        "0094849e57235307db19f51d611f4788af7ba1ed079ad13eee292702e198f9de"
     );
 
     let mut format19 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -181,7 +181,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
     format19.version.format_version = 19;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format19)),
-        "8ebf202fee98c33b831b19bb849a95f0f2685860c81246274ec963e343c64261"
+        "3b0a977c5d546d0df82bf7aaba9992ef5277a752c32168c3f9e84262610522bd"
     );
 
     let mut format20 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -189,7 +189,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
     format20.version.format_version = 20;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format20)),
-        "5cf7d71654fe85e122f31cee8f28920d1f30616fbd52bd712b85ea476e6ecd50"
+        "511c048c703901fb4dba36c70a1adf031819f72e6c32ce77fabe119d59a15ab7"
     );
 
     let mut format21 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -197,7 +197,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
     format21.version.format_version = 21;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format21)),
-        "bab57c1123995b131d92752756078fb7ffbdbab068e4dcede0a560330d5e9a09"
+        "29b78b948a2e98c31c9e0e048c14c72b5493cf1e22a99474a6dfc6be26312bd2"
     );
 
     let blob = session
@@ -452,7 +452,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
             // (`FNRG`). This fixture holds neither, so the atoms are absent
             // and only the VERS payload moves; the manifest's schema below
             // moves with it.
-            "d3bde6d205fad3aed9c9b638ab76767471cde2217e13457c640c4ac8d788d3ee"
+            "09ca6be36f60c32e7a96260a197538cbdb336b52f76f8766d851ef665145af8e"
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
             // Re-pinned for format version 23 alongside the platform pin,
@@ -472,7 +472,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
             // `deterministic-math` is on, and the final blob (unlike the
             // markers above) is not signature-normalized. Re-pinned for
             // format version 25 / store schema 37 with the platform arm.
-            "b3aef9e1d375ed545c18a3969c5264050933074f445a62db18dfa846a652f5ea"
+            "66ede610a354d9c170296f4100196c14149b8982698d2f8d112114bec755e3e5"
         },
         "canonical final blob hash"
     );
@@ -524,7 +524,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
         ),
         // The same under both math providers: the boot heap's shape does
         // not depend on the provider, only the signature's fingerprint does.
-        (1100, 17184, 1100, 1100, 17184, 0),
+        (1105, 17262, 1105, 1105, 17262, 0),
         "epoch-3 manifest geometry"
     );
 }

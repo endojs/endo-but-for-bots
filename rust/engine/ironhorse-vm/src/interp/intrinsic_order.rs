@@ -897,6 +897,7 @@ pub(super) const INTRINSIC_KEY_ORDER: &[(&str, &[&str])] = &[
         ],
     ),
     ("%ArrayIteratorPrototype%", &["next", "@@toStringTag"]),
+    ("%StringIteratorPrototype%", &["next", "@@toStringTag"]),
     ("%MapIteratorPrototype%", &["next", "@@toStringTag"]),
     ("%SetIteratorPrototype%", &["next", "@@toStringTag"]),
     (
@@ -1244,6 +1245,7 @@ impl Interp {
                 (info.native == Some(Native::TypedArrayBase)).then_some(function)
             })?,
             "%ArrayIteratorPrototype%" => self.array_iterator_proto,
+            "%StringIteratorPrototype%" => self.string_iterator_proto,
             "%MapIteratorPrototype%" => self.map_iterator_proto,
             "%SetIteratorPrototype%" => self.set_iterator_proto,
             "%RegExpStringIteratorPrototype%" => self.regexp_string_iterator_proto,

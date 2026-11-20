@@ -1416,9 +1416,6 @@ impl Interp {
         code: &[u8],
         iter: crate::value::SlotIndex,
     ) -> Result<Slot, Step> {
-        if self.iterators[&iter].kind == 4 {
-            return self.string_iterator_next(iter);
-        }
         if (5..=7).contains(&self.iterators[&iter].kind) {
             return Ok(self.collection_iterator_next(iter));
         }

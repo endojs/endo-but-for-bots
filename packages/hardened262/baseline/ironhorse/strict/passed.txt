@@ -11,6 +11,7 @@ test/Compartment/prototype/Symbol.toStringTag.js
 test/Compartment/prototype/evaluate/environments.js
 test/Compartment/prototype/globalThis/defaults.js
 test/intrinsics/ArrayBuffer/prototype-slice.js
+test/intrinsics/ArrayIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/AsyncFunction/intrinsic-metadata.js
 test/intrinsics/AsyncGeneratorFunction/intrinsic-metadata.js
 test/intrinsics/AsyncGeneratorPrototype/intrinsic-metadata.js
@@ -29,6 +30,7 @@ test/intrinsics/Reflect/intrinsic-metadata.js
 test/intrinsics/RegExpStringIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/SetIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/SetPrototype/intrinsic-metadata.js
+test/intrinsics/StringIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/ThrowTypeError/intrinsic-metadata.js
 test/intrinsics/TypedArray/copying-methods.js
 test/intrinsics/TypedArray/in-place-methods.js
