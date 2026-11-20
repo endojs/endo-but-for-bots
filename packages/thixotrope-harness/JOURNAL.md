@@ -19065,3 +19065,20 @@ measured spawn at 1,513 ms (n=12, p95 1,851) and ask at 326 ms (n=55, p95 590).
 All three bursts completed in 13.476–16.122 s and all three stops removed three
 descendants each in 1.783–1.810 s. The file exited 0 with both strict medians
 above target.
+
+### J-12578 2026-11-20 M9 release choice after the full registration comparison
+
+The full uninstrumented default mail run on the smaller guest `eebaf98aee` measured
+147.367 ms operator ACK (n=102, p95 511.724) and 420 ms forwarded latency
+(n=68, p95 650). The inbox p95 upper bound was 500 ms (57 samples). The driver
+completed 197 posts in 61.182 s, or 3.219897/s. The fresh hub growth run posted
+389 packages with two attachments each in 121.720 s and ended at 1.132×.
+The file exited 1 on session forwarding. The subagent file is J-12577.
+
+Keep the J-12572 production guest and default pinned worker for guided acceptance.
+It passed the strict ACK, throughput and spawn medians in its full files, fits the
+M9 allocation by 67 bytes, and passed the functional preflight in J-12575. Its two
+open M9 latency targets are 354 ms session forwarding and 312 ms ask overhead,
+both against 300 ms. Each latency is one unscaled measured window. The leaner
+guest and negotiated protocol remain available on their local experiment branches.
+The original seven M6 worktree edits and the saved copies still match the checkpoint.

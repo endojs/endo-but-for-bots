@@ -642,3 +642,21 @@ a nonzero exit even when the actual test or benchmark collected no samples.
 | Session snapshot preparation | 4 | 1706 | 535 | 1 | 0 |
 | Session and environment class diagnostics | 8 | 368 | 1856 | 2 | 0 |
 | Isolated Ironhorse worker comparison | 8 | 563 | 2119 | 2 | 0 |
+
+## Mail forwarding, delegation and guided acceptance
+
+Machine reservations requested since 2026-11-20 01:24 UTC and completed by 03:11 UTC.
+The same machine lock protects all lanes. Wait and hold totals sum reservations and can
+overlap. Standalone benchmark exits are in J-12567–J-12578 when the release record has
+no exit code. The grouped installed UAT reached its ten-minute limit and its remaining
+file ran separately.
+
+| Checkout and work | Finished | Waited (s) | Held (s) | Nonzero exits | Releases without an exit code |
+|---|---:|---:|---:|---:|---:|
+| Integrated mail, Chromium and package checks | 8 | 5096 | 1568 | 0 | 3 |
+| Canonical install and diagnostic verification | 1 | 0 | 9 | 0 | 0 |
+| Causal trace, collector schedule and fixed size comparison | 14 | 2907 | 1893 | 6 | 0 |
+| Tool catalog and negotiated wire screens | 12 | 6615 | 938 | 5 | 1 |
+| Delegation baselines and installed UAT | 5 | 1995 | 1255 | 1 | 2 |
+| Ask phase attribution and endpoint compatibility | 2 | 1349 | 388 | 1 | 1 |
+| Delegation and registration timing candidates | 4 | 1298 | 879 | 0 | 3 |

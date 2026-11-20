@@ -2052,12 +2052,17 @@ authorization. The median was 203 ms without collection in those four cranks
 and 447.5 ms with collection (J-12568). Sharing the child and delegation class
 definitions brought spawn to 1,452 ms against 1,500 ms on the pinned worker.
 Ask overhead was 312 ms against 300 ms. Three eight-child bursts and three
-subtree stops passed. The baseline and candidate are in J-12567 and J-12569.
+subtree stops passed. The baseline and candidate are in J-12567 and J-12569. The two additional
+delegation candidates in J-12574 missed both strict medians.
 The ten mail, request and subagent tools are registered. With the production session
 linker, the delegation change adds 21,433 bytes to the WX.1 base of 115,502,
 leaving 67 bytes of M9's 21,500-byte allocation. The combined session is 145,960
 bytes. J-12569 and J-12902 give the measurements and J-1460 gives the original fixed
-inputs and the earlier J-12541 miss.
+inputs and the earlier J-12541 miss. J-12576 records the separate negotiated
+tool-catalog trial. Factoring the existing tool registrations saved a further
+609 bytes, but measured 420 ms session delivery, 326 ms ask and 1,513 ms spawn
+on the pinned worker. That smaller implementation is saved separately
+(J-12577 and J-12578).
 The session and factory guard tables own the corresponding mail interfaces. The
 limits are in `guest/lib/limits.js`.
 The contract is `m9-interfaces.md` (seams 6, work units 7, acceptance 8, restart files 9,
