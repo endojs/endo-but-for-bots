@@ -51,6 +51,16 @@ Paths below are relative to this package unless they start with the repository r
 The corresponding regression lists are `environments`, `context`, `mail` and `voice`.
 For example, run `corepack yarn test:integration --list context` from this package.
 See the [milestone outcomes](designs/milestones.md) for measured results and outstanding gates.
+Operators can use the [guided user acceptance checklist](designs/milestones.md#guided-user-acceptance-on-the-integrated-stack)
+for chat, mail, delegation, workspace images and voice.
+
+To reproduce the four-delivery mail check, run
+`corepack yarn exec node perf/mail-forward-trace.perf.mjs` from this package.
+It uses the release worker, a 60 s operator prefix and a 60 s sequential forwarding window.
+The observer matches worker frames to sender and recipient turns, sink slots and envelope
+postmarks. It fails if a forward exceeds four deliveries or if it cannot verify the path.
+Set `THIX_FORWARD_OUTPUT_PARENT` to an existing absolute directory to keep the local trace.
+Use `corepack yarn exec node perf/mail.perf.mjs` for the full uninstrumented release timings.
 
 ## Build what the tests run
 

@@ -18932,3 +18932,29 @@ The two catalogue candidates also exceeded M9's isolated allocation by
 69 and 158 bytes. The shared decoder alone passed 32 parser and tool tests
 and reduced the isolated session by 28 bytes. The 431 ms trial combined it
 with live batching, so it gives no separate latency estimate for the decoder.
+
+### J-12570 2026-11-20 M9 instrumented gate status
+
+The first complete diagnostic in J-12568 emitted a passing delivery-count row.
+Its enclosing command exited 1 because the instrumented operator warm-up also
+inherited the release latency budget (276.172 ms median ACK). The uninstrumented
+release file is the reference for operator ACK and forwarded latency.
+The portable check now reports its instrumented warm-up and elapsed times under
+separate diagnostic metric names. Its path and delivery budget still fail the command.
+Replaying the postmark join on the comparison traces matched all 71 and 69 forwards,
+including concurrent reverse replies. The independent host observer verified both
+routing edges for every forward. The per-forward evidence and reproduction instructions
+are at `5d2ec76d63:packages/thixotrope-harness/perf/evidence/forwarded-mail/`.
+
+### J-12571 2026-11-20 M9 fresh-state allocation allowance comparison
+
+With only `THIXOTROPE_GC_SLOT_ALLOWANCE` increased from 131,072 to 262,144 on fresh
+state, the same pinned release worker and guest completed 69 instrumented forwards.
+Median fell from 352 to 216 ms, p95 from 703 to 685 ms, and p99 rose from 721 to
+1,042 ms. The forward had a collection in 22 of 69 cases, compared with 46 of 71
+on defaults. Peak occupied factory slots rose from 200,520 to 335,492. Both
+profiles kept the four-million-slot hard ceiling. A full uninstrumented subagent
+run on the same original `c9e559e27a` guest saw ask rise from 316 to 348 ms
+(n=53 and 60) and spawn from 1,543 to 1,587 ms (n=12 and 13). A fresh-state
+schedule can change the frequency and cost of a pause differently in each
+workflow. The release defaults are the baseline for the integrated stack.

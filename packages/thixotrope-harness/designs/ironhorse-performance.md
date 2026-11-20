@@ -49,6 +49,17 @@ cost, endpoint median and p95 on the full warmed sequence. The host queue observ
 independently matched all 142 transitions between the sender, factory and recipient.
 [Forwarding trace and cohort sizes](../JOURNAL.md#j-12568-2026-11-20-m9-four-deliveries-on-the-pinned-forwarding-path)
 
+Asking a child shows a similar split. The parent's tool-call to result overhead excludes
+the child's own live turn. Across 55 asks on the guarded delegation-class guest, 24 had no
+collection in the factory ask, child delivery, factory reply post or parent receipt.
+Their median overhead was 171.5 ms. The other 31 measured 387 ms.
+In the spawn prefix, the spare's session initialization averaged 731.8 ms of host crank
+time across 12 spawns, including 326.4 ms guest execution and 379.5 ms collection.
+Time the creation of the spare and its user-specific initialization separately when
+testing an optimization. The per-ask and per-spawn observations are available locally
+at `45e764f2eb:packages/thixotrope-harness/designs/subagent-performance/`.
+[Subagent control and candidate](../JOURNAL.md#j-12569-2026-11-20-m9-delegation-classes-and-forwarded-mail-candidates)
+
 ## A return trip the application could remove
 
 The automatic reply to a completed package sent a checked `Outbox.post` and discarded both the answer and any rejection. On this one path, `E.sendOnly(mail).post(...)` sends the same ordered reply with its body, attachments and postmark, without allocating an answer route back to the recipient. An application refusal is still handled by the receiving method. Unexpected receiver rejections use the ordinary one-way receiver diagnostic. Operator sends and the model's send/reply tools still need and receive their receipts. [Package settlement](../guest/session/inbox.js) · [Mail contract](m9-interfaces.md#31-factory-vat-guestfactorypost-officejs-operator-mailjs-subagentsjs)

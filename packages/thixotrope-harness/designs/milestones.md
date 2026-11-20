@@ -1483,8 +1483,8 @@ core verification gap and elapsed-time misses. Performance and lifecycle follow-
 at `53ce64395a` (J-1453). The full pool lifecycle and the dedicated real-daemon
 exec-retirement test passed. A deadline removed the old worker and the next task in the
 same session saw a fresh scope (J-1473). M8 cold context rebuild met its 359 ms target
-(J-1454). M9 now adds 21,419 bytes against its 21,500-byte allocation with the same
-emitter on both inputs (J-1460 and the M9 outcome below). The unscaled pinned-worker
+(J-1454). M9 now adds 21,433 bytes against its 21,500-byte allocation with the same
+emitter on both inputs (J-12569 and the M9 outcome below). The unscaled pinned-worker
 run passed the 200 ms operator ACK and 3 posts/s throughput targets together
 (J-12553). Two further full-file passes bring core regression
 coverage to 25 of the current 26 files across runs (J-1456). The remaining file is
@@ -1513,11 +1513,26 @@ The human trial and the real-service repeats still need recorded outcomes.
 | Workspace and images | With a configured runner, create a development session, inspect its Git workspace and ask it to view a known image there. Verify what the live backend sees. Stop the parent and confirm that its child can still use its own workspace. |
 | Voice and context | With speech engines, a runner and the pinned voice backend configured, start Talk, speak, interrupt playback and replay the answer. On a live provider, cross the context threshold and check that the next answer uses the compacted history coherently. |
 
-Use the package's `scripts/serve.mjs`, `scripts/provision.mjs` and
-`scripts/gateway.mjs` for a guided installation. Build the browser assets with
-`corepack yarn build:ui`. The default provision command installs the base harness.
-The operator supplies a backend and configures the runner and speech services for the
-corresponding journeys. Record the worker digest, backend/model, runner or audio device,
+From the harness package, with the [workspace dependencies and pinned worker installed](../README.md#build-what-the-tests-run),
+build the browser assets and start the supervisor on a short, fresh local state path.
+This example uses `/tmp/thix-uat` and loopback port 7831.
+
+```sh
+corepack yarn build:ui
+node scripts/serve.mjs /tmp/thix-uat
+```
+
+In a second terminal in the same package, provision the running state and obtain the
+operator's private sign-in link. Open that link in the tester's browser.
+
+```sh
+node scripts/provision.mjs /tmp/thix-uat
+node scripts/gateway.mjs serve /tmp/thix-uat --port 7831
+node scripts/gateway.mjs url /tmp/thix-uat
+```
+
+Default provisioning installs the base harness. The operator supplies a backend and
+configures the runner and speech services for the corresponding journeys. Record the worker digest, backend/model, runner or audio device,
 observed outcome and any failing turn for each journey.
 Automated coverage includes all four cross-lane cases and 54 milestone files across runs.
 The combined core record covers 25 of 26 files and the separate worker-retirement case.

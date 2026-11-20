@@ -879,6 +879,14 @@ minutes (acceptance items as `test.serial` cases on one provisioned state).
 | `subagent.spawn` with a settled pool of 2 | `perf/subagents.perf.mjs` | 60 s, one spawn at a time, `whenSettled()` between | median <= 1.5 s | spare take 864 ms + 2 hops (J-9382) |
 | `subagent.ask` overhead: parent's ask tool time minus the child's turn time | `perf/subagents.perf.mjs` | 60 s | median <= 300 ms | 4 deliveries x 33 ms + one adapter copy 70 ms = 202 ms |
 
+The 184 ms estimate predates the measured forwarding path. For each of 71 packages,
+four deliveries preceded the recipient's provider request. The sender received its round
+final and issued the post. The factory received the post and sent the envelope. The
+recipient received that envelope and claimed the turn. The recipient then received
+the adapter's request for durable dispatch authorization. The diagnostic checks the whole path against
+four deliveries. The uninstrumented file above measures release latency.
+[Forwarding trace and phase timings](../JOURNAL.md#j-12568-2026-11-20-m9-four-deliveries-on-the-pinned-forwarding-path)
+
 ### 10.2 Gate rows (counts or single runs: pass or fail, recorded, not rates; WX X-14)
 
 | gate | file | run | pass when | basis |
