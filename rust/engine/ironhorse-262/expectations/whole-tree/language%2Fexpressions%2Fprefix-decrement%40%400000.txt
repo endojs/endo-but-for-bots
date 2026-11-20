@@ -44,7 +44,7 @@ language/expressions/prefix-decrement/bigint.js strict pass
 language/expressions/prefix-decrement/eval-nostrict.js sloppy pass
 language/expressions/prefix-decrement/eval.js strict pass
 language/expressions/prefix-decrement/operator-prefix-decrement-x-calls-putvalue-lhs-newvalue--1.js sloppy pass
-language/expressions/prefix-decrement/operator-prefix-decrement-x-calls-putvalue-lhs-newvalue-.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/expressions/prefix-decrement/operator-prefix-decrement-x-calls-putvalue-lhs-newvalue-.js sloppy pass
 language/expressions/prefix-decrement/target-cover-id.js sloppy pass
 language/expressions/prefix-decrement/target-cover-id.js strict pass
 language/expressions/prefix-decrement/target-cover-newtarget.js sloppy pass

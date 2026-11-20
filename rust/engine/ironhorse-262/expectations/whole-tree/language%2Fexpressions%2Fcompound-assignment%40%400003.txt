@@ -96,27 +96,27 @@ language/expressions/compound-assignment/btws-or-non-simple.js strict pass
 language/expressions/compound-assignment/btws-xor-non-simple.js sloppy pass
 language/expressions/compound-assignment/btws-xor-non-simple.js strict pass
 language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--1.js sloppy pass
-language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--10.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--10.js sloppy pass
 language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--11.js sloppy pass
-language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--12.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--12.js sloppy pass
 language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--13.js sloppy pass
-language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--14.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--14.js sloppy pass
 language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--15.js sloppy pass
-language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--16.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--16.js sloppy pass
 language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--17.js sloppy pass
-language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--18.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--18.js sloppy pass
 language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--19.js sloppy pass
-language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--20.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--2.js sloppy pass
+language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--20.js sloppy pass
 language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--21.js sloppy pass
 language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--3.js sloppy pass
-language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--4.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--4.js sloppy pass
 language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--5.js sloppy pass
-language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--6.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--6.js sloppy pass
 language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--7.js sloppy pass
-language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--8.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--8.js sloppy pass
 language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--9.js sloppy pass
-language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v-.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v-.js sloppy pass
 language/expressions/compound-assignment/div-arguments-strict.js strict pass
 language/expressions/compound-assignment/div-eval-strict.js strict pass
 language/expressions/compound-assignment/div-non-simple.js sloppy pass

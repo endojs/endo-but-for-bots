@@ -53,8 +53,8 @@ language/statements/with/decl-gen.js sloppy pass
 language/statements/with/decl-let.js sloppy pass
 language/statements/with/get-binding-value-call-with-proxy-env.js sloppy skip:shared-test262-failure
 language/statements/with/get-binding-value-idref-with-proxy-env.js sloppy skip:shared-test262-failure
-language/statements/with/get-mutable-binding-binding-deleted-in-get-unscopables-strict-mode.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
-language/statements/with/get-mutable-binding-binding-deleted-in-get-unscopables.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: ReferenceError: get binding: undefined variable"
+language/statements/with/get-mutable-binding-binding-deleted-in-get-unscopables-strict-mode.js sloppy pass
+language/statements/with/get-mutable-binding-binding-deleted-in-get-unscopables.js sloppy skip:shared-positive-test-failure
 language/statements/with/has-binding-call-with-proxy-env.js sloppy pass
 language/statements/with/has-binding-idref-with-proxy-env.js sloppy pass
 language/statements/with/has-property-err.js sloppy pass
@@ -65,9 +65,9 @@ language/statements/with/let-block-with-newline.js sloppy pass
 language/statements/with/let-identifier-with-newline.js sloppy pass
 language/statements/with/scope-var-close.js sloppy pass
 language/statements/with/scope-var-open.js sloppy pass
-language/statements/with/set-mutable-binding-binding-deleted-in-get-unscopables-strict-mode.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/statements/with/set-mutable-binding-binding-deleted-in-get-unscopables-strict-mode.js sloppy pass
 language/statements/with/set-mutable-binding-binding-deleted-in-get-unscopables.js sloppy pass
-language/statements/with/set-mutable-binding-binding-deleted-with-typed-array-in-proto-chain-strict-mode.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/statements/with/set-mutable-binding-binding-deleted-with-typed-array-in-proto-chain-strict-mode.js sloppy pass
 language/statements/with/set-mutable-binding-binding-deleted-with-typed-array-in-proto-chain.js sloppy pass
 language/statements/with/set-mutable-binding-idref-compound-assign-with-proxy-env.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Actual [has:p, get:Symbol(Symbol.unscopables), get:p, has:p, set:p, getOwnPropertyDescriptor:p, defineProperty:p] and expected [has:p, get:Symbol(Symbol.unscopables), has:p, get:p, has:p, set:p, getOwnPropertyDescriptor:p, defineProperty:p] \" ironhorse=\"Test262Error: Actual [has:p, get:Symbol(Symbol.unscopables), get:p, has:p, set:p, getOwnPropertyDescriptor:p, defineProperty:p] and expected [has:p, get:Symbol(Symbol.unscopables), has:p, get:p, has:p, set:p, getOwnPropertyDescriptor:p, defineProperty:p] should have the same contents. \""
 language/statements/with/set-mutable-binding-idref-with-proxy-env.js sloppy pass

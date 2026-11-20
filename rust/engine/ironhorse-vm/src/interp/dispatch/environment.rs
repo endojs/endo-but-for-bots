@@ -1,6 +1,7 @@
 //! Environment opcode semantics.
 //! Return transfers unchanged; only the dispatch loop owns catch resumption.
 use super::super::*;
+use crate::interp::property::HasLevels;
 
 impl Interp {
     pub(super) fn dispatch_eval_reference(
@@ -83,7 +84,27 @@ impl Interp {
                     self.push(v);
                     return Ok(());
                 }
+                // XS's `GET_VARIABLE` reads through `mxBehaviorGetProperty`,
+                // whose ordinary walk answers no slot when the binding has
+                // vanished since `EVAL_REFERENCE` resolved it (a getter or
+                // `@@unscopables` getter deleted it), and a missing slot is a
+                // `ReferenceError` in both modes unless `typeof` follows. A
+                // Proxy anywhere on the chain always answers a slot, so only
+                // a proxy-free miss throws. The presence probe is the
+                // unmetered ordinary walk; the `[[Get]]` still runs so its
+                // metering matches XS's walk before the throw.
+                let absent = matches!(
+                    self.mop_has_ordinary_levels(code, inst, name)?,
+                    HasLevels::Answered(false, _)
+                );
                 let v = (self.mop_get(code, inst, name, envref))?;
+                if absent && next_opcode != Some(Opcode::XS_CODE_TYPEOF as u8) {
+                    let error = self.internal_error(
+                        "ReferenceError",
+                        format!("get {}: undefined variable", self.id_name(name)),
+                    );
+                    return Err(self.raise_js(error));
+                }
                 self.push(v);
                 return Ok(());
             }
@@ -248,20 +269,22 @@ impl Interp {
                         EnvironmentSet::Missing => {}
                     }
                 }
-                // The `HasProperty` half of `SetMutableBinding`.
-                // Its result is deliberately NOT consulted: step 3's
-                // `stillExists` ReferenceError (the binding vanished
-                // between `HasBinding` and the store) is a pinned
-                // ORACLE-DEFECT EXCLUSION in this repo — see
-                // `ironhorse-262/src/xst.rs` `oracle_loses_with_reference`,
-                // which records XS's `ReferenceError: set x: undefined
-                // property` as the divergence to exclude rather than
-                // to reproduce. Implementing step 3 here would break
-                // that pin deliberately, so the call is kept for its
-                // observable trap and its metered chain walk only.
-                let (_still_exists, frames) = (self.mop_has_with_recursions(code, inst, name))?;
+                // The `HasProperty` half of `SetMutableBinding`: step 3's
+                // `stillExists` check. A strict store whose binding vanished
+                // between `HasBinding` and the store (a getter or the RHS
+                // deleted it) is a `ReferenceError`, thrown before the
+                // `[[Set]]` as XS's `set %s: undefined property` is; a sloppy
+                // one falls through and recreates the property.
+                let (still_exists, frames) = (self.mop_has_with_recursions(code, inst, name))?;
                 self.meter
                     .tick_raw(frames * ORDINARY_HAS_PROPERTY_FRAME_METERING);
+                if !still_exists && self.strict {
+                    let error = self.internal_error(
+                        "ReferenceError",
+                        format!("set {}: undefined property", self.id_name(name)),
+                    );
+                    return Err(self.raise_js(error));
+                }
                 let accepted = (self.mop_set(code, inst, name, value, envref))?;
                 if !accepted && self.strict {
                     // A rejected store (frozen or non-writable
