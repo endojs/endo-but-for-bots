@@ -364,7 +364,7 @@ const askEntry = harden({
     // refused only when its bytes prove it longer (3 bytes a unit at most).
     if (
       isStaged(task)
-        ? task.bytes > 3 * ML.taskUnits
+        ? /** @type {number} */ (task.bytes) > 3 * ML.taskUnits
         : typeof task !== 'string' ||
           task.length === 0 ||
           task.length > ML.taskUnits
