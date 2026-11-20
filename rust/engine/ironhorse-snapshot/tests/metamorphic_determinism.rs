@@ -156,6 +156,12 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
     // move, so all five markers, both blob arms and the epoch-3 geometry
     // (992 -> 1100 slots) move together, each arm measured under its own
     // provider. Format unchanged.
+    // The `constructor` of `%GeneratorFunction.prototype%`,
+    // `%AsyncGeneratorFunction.prototype%` and `%AsyncFunction.prototype%`
+    // became non-writable, and `%AsyncGeneratorFunction.prototype%.prototype`
+    // configurable, as ECMA-262 and XS have them: property flags in the
+    // linked heap, so all five markers and both blob arms move; each arm was
+    // re-measured under its own provider. Format and geometry unchanged.
     let mut previous = session.machine().snapshot_image(&sig).unwrap().into_image();
     // Historical hashes describe the platform profile. Normalize only SIGN.
     let mut platform_signature = sig.encode();
@@ -167,13 +173,13 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "99c2f62888ec0493da54bc07000f8571ada4e07cd43bf77c5b586210716b9300"
+        "ac2a5c33f2d64efa2bc75b7886395271a2c103eec31ee0027facfccd1fa792da"
     );
     previous.meter.cost_table_version = "ironhorse-meter-5".into();
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "2d8e34072278bb4276a2bfa9e0b0cf4a122583644f8cb85d691d938fdd736ceb"
+        "2e0a14e487b15d82dd2f25408fe6a406bff510ff9344cf0d8cb151b7bebbc8fa"
     );
 
     let mut format19 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -181,7 +187,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
     format19.version.format_version = 19;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format19)),
-        "8ebf202fee98c33b831b19bb849a95f0f2685860c81246274ec963e343c64261"
+        "1fe5d097e3ee44814b1fc50046e7b869b8f9ba08c40bc09352f293be8512fa3e"
     );
 
     let mut format20 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -189,7 +195,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
     format20.version.format_version = 20;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format20)),
-        "5cf7d71654fe85e122f31cee8f28920d1f30616fbd52bd712b85ea476e6ecd50"
+        "7a764e819fd3f4df888bfe987d07c7d4087f233d5102e4a33b0d3039bc29205b"
     );
 
     let mut format21 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -197,7 +203,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
     format21.version.format_version = 21;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format21)),
-        "bab57c1123995b131d92752756078fb7ffbdbab068e4dcede0a560330d5e9a09"
+        "17ef32718f7b04c4a452e021844452a5f9fa01faca80d0fb7e235f6d628085ed"
     );
 
     let blob = session
@@ -452,7 +458,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
             // (`FNRG`). This fixture holds neither, so the atoms are absent
             // and only the VERS payload moves; the manifest's schema below
             // moves with it.
-            "d3bde6d205fad3aed9c9b638ab76767471cde2217e13457c640c4ac8d788d3ee"
+            "8657d351718ad3abffda33d6af9e3f52274a93b2b5b46496bb36cad3beeb2dfb"
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
             // Re-pinned for format version 23 alongside the platform pin,
@@ -472,7 +478,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
             // `deterministic-math` is on, and the final blob (unlike the
             // markers above) is not signature-normalized. Re-pinned for
             // format version 25 / store schema 37 with the platform arm.
-            "b3aef9e1d375ed545c18a3969c5264050933074f445a62db18dfa846a652f5ea"
+            "d0c125595886974e5c3f2b59d1031d80e86752d08b918ba573b9f541d5d09cea"
         },
         "canonical final blob hash"
     );

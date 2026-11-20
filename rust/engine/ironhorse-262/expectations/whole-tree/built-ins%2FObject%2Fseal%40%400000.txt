@@ -182,6 +182,6 @@ built-ins/Object/seal/seal-weakref.js strict pass
 built-ins/Object/seal/seal-weakset.js sloppy pass
 built-ins/Object/seal/seal-weakset.js strict pass
 built-ins/Object/seal/symbol-object-contains-symbol-properties-non-strict.js sloppy pass
-built-ins/Object/seal/symbol-object-contains-symbol-properties-strict.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Object/seal/symbol-object-contains-symbol-properties-strict.js strict pass
 built-ins/Object/seal/throws-when-false.js sloppy pass
 built-ins/Object/seal/throws-when-false.js strict pass

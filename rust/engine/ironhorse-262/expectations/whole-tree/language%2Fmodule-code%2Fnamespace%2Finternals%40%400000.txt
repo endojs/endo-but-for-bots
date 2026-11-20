@@ -28,7 +28,7 @@ language/module-code/namespace/internals/object-hasOwnProperty-binding-uninit.js
 language/module-code/namespace/internals/object-keys-binding-uninit.js sloppy skip:unsupported-opcode:module:static-linking
 language/module-code/namespace/internals/object-propertyIsEnumerable-binding-uninit.js sloppy skip:unsupported-opcode:module:static-linking
 language/module-code/namespace/internals/own-property-keys-binding-types.js sloppy skip:unsupported-opcode:module:static-linking
-language/module-code/namespace/internals/own-property-keys-sort.js sloppy skip:unsupported-opcode:module:static-linking
+language/module-code/namespace/internals/own-property-keys-sort.js sloppy skip:module:compiler-byte-divergence
 language/module-code/namespace/internals/prevent-extensions.js sloppy skip:unsupported-opcode:module:static-linking
 language/module-code/namespace/internals/set-prototype-of-null.js sloppy skip:unsupported-opcode:module:static-linking
 language/module-code/namespace/internals/set-prototype-of.js sloppy skip:unsupported-opcode:module:static-linking
