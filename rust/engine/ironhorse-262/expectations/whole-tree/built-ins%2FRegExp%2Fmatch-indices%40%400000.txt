@@ -15,8 +15,8 @@ built-ins/RegExp/match-indices/indices-array-unmatched.js sloppy pass
 built-ins/RegExp/match-indices/indices-array-unmatched.js strict pass
 built-ins/RegExp/match-indices/indices-array.js sloppy pass
 built-ins/RegExp/match-indices/indices-array.js strict pass
-built-ins/RegExp/match-indices/indices-groups-object-undefined.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: groups should be an own property"
-built-ins/RegExp/match-indices/indices-groups-object-undefined.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: groups should be an own property"
+built-ins/RegExp/match-indices/indices-groups-object-undefined.js sloppy pass
+built-ins/RegExp/match-indices/indices-groups-object-undefined.js strict pass
 built-ins/RegExp/match-indices/indices-groups-object-unmatched.js sloppy pass
 built-ins/RegExp/match-indices/indices-groups-object-unmatched.js strict pass
 built-ins/RegExp/match-indices/indices-groups-object.js sloppy pass

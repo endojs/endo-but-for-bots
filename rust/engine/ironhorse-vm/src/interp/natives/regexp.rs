@@ -1095,6 +1095,12 @@ impl Interp {
             }
             a.length = captures.len() as u32;
         }
+        // `RegExpBuiltinExec` defines `index`/`input`/`groups` (and, under the
+        // `d` flag, `indices`) whether or not the guest source spells them, so
+        // seed any id the sparse realm left unassigned before the first result
+        // is built; otherwise a reflective read (`Object.keys`, a computed key,
+        // `verifyProperty`) finds the property missing.
+        self.regexp_seed_result_ids(has_indices);
         // The three named own properties `index`/`input`/`groups`, each a
         // `fxNewSlot` on the result array.
         self.meter.tick_slot_alloc(); // index
@@ -1158,6 +1164,24 @@ impl Interp {
             Slot::of(Kind::Reference, Payload::Reference(result)),
             Some(match_start),
         ))
+    }
+
+    /// Assign the exec result's standard property ids (`index`, `input`,
+    /// `groups`, and `indices` when `has_indices`) that link left unassigned
+    /// because the program never names them.
+    fn regexp_seed_result_ids(&mut self, has_indices: bool) {
+        if self.regexp_result_ids.index.is_none() {
+            self.regexp_result_ids.index = Some(self.intern_static_key("index"));
+        }
+        if self.regexp_result_ids.input.is_none() {
+            self.regexp_result_ids.input = Some(self.intern_static_key("input"));
+        }
+        if self.regexp_result_ids.groups.is_none() {
+            self.regexp_result_ids.groups = Some(self.intern_static_key("groups"));
+        }
+        if has_indices && self.regexp_result_ids.indices.is_none() {
+            self.regexp_result_ids.indices = Some(self.intern_static_key("indices"));
+        }
     }
 
     /// Build the `d`-flag `.indices` array + its `.groups` object, mirroring the

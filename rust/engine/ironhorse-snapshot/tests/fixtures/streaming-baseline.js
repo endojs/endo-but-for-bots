@@ -15,7 +15,6 @@ var buffer = new ArrayBuffer(16);
 var view = new DataView(buffer, 4, 8);
 var bytes = new Uint16Array(buffer, 2, 4); view.setUint16(0, 258, true); // ABUF, TARR, DVIW
 var boxed = [new Number(5), new String('str'), new Boolean(true)]; // WRAP
-var re = /a(b)/g; re.exec('xab');                           // REGX
 var args; (function () { args = arguments; })(10, 32);      // ARGB
 var dur = Temporal.Duration.from({ hours: 2, minutes: 5 });
 var inst = Temporal.Instant.fromEpochMilliseconds(86400000); // TMPR
@@ -54,6 +53,10 @@ var sg = new Intl.Segmenter('en'); var seg = sg.segment('ab');
 var segIt = seg[Symbol.iterator](); segIt.next();
 var coll = new Intl.Collator('en'); var pr = new Intl.PluralRules('en');
 var loc = new Intl.Locale('en-US'); var dtf = new Intl.DateTimeFormat('en');
+// REGX sits after the Intl lines: exec interns its result keys, and run
+// earlier those interns move the install pass so the floor reaches the
+// table and NFLR is omitted.
+var re = /a(b)/g; re.exec('xab');                           // REGX
 var weakTarget = { v: 1 }; var weakToken = {};
 var weak = new WeakRef(weakTarget);                         // WREF
 var registry = new FinalizationRegistry(function (held) { count += held; });
