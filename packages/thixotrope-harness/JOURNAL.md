@@ -18849,3 +18849,22 @@ The original mixed core file remains open alongside the separate passing retirem
 The Home inbox and operator mail CLI are M12 work. The M6 real-runtime isolation,
 M8 live-provider image and compaction, and M11 real speech engine and device checks
 belong in the owner trial. No human acceptance verdict has been recorded here.
+
+### J-12567 2026-11-20 M9 current subagent baseline and forwarding pilot
+
+The full `perf/subagents.perf.mjs` at clean `c9e559e27a` ran exclusively with
+worker `367e78ad1d`, two settled session spares and default 60 s windows.
+Spawn took 1,543 ms median (12 samples in 63.081 s, target 1,500 ms).
+Ask overhead was 316 ms median (53 samples in 60.899 s, target 300 ms).
+The parent live tool interval had a median of 482 ms, the child live interval
+149 ms and child provider time 4 ms. The budget uses per-sample subtraction.
+Eight-child bursts took 13.623, 15.106 and 15.002 s against 30 s.
+Each subtree stop removed three sessions (2.043, 1.990 and 2.302 s).
+The wrapper exited 0 with both strict latency targets open.
+
+A separate stock-guest forwarding pilot on the same worker retained matching
+provider turn IDs through a 60 s operator prefix and 60 s session interval.
+It measured 375 ms median and 709 ms p95 over 72 forwards.
+The supervisor filtered the pilot's diagnostic environment setting, so it
+captured provider endpoints only. A second attempt stopped at a decoder
+import before the supervisor served. Neither provides a causal delivery count.

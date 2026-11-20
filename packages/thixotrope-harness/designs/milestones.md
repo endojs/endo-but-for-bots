@@ -1521,8 +1521,10 @@ corresponding journeys. Record the worker digest, backend/model, runner or audio
 observed outcome and any failing turn for each journey.
 Automated coverage includes all four cross-lane cases and 54 milestone files across runs.
 The combined core record covers 25 of 26 files and the separate worker-retirement case.
-The M6 real-runtime checks, M8 live-provider checks and M11 real-engine, provider and
-microphone checks have their own acceptance rows. J-12566 records the scope of this assessment.
+M6 assigns isolation to a real runtime. M8 assigns image and compaction checks to live
+providers. M9 calls for live repeats of attachment adoption, forwarding and asking a child.
+M11 assigns speech engines, providers and microphone checks to the owner.
+J-12566 records the scope of this assessment.
 
 **Two units outside the lanes.**
 
@@ -2022,9 +2024,9 @@ restart files and four list/live tests (J-12561). After the automatic-reply chan
 all ten installed mail and restart tests passed, including single delivery of an
 interrupted turn’s error reply. The integrated suite also passed 2,006 unit and
 adapter tests (J-12902 and J-12563). The four-deliveries-per-forwarded-mail
-gate still needs a causally attributed count. All three eight-child bursts and subtree stops passed. Ask
-overhead was 363 ms against 300 ms and spawn was 1,513 ms against 1,500 ms
-(J-12549).
+gate still needs a causally attributed count. On the current pinned baseline `c9e559e27a`,
+ask overhead was 316 ms against 300 ms and spawn was 1,543 ms against 1,500 ms.
+All three eight-child bursts and three subtree stops passed (J-12567).
 The ten mail, request and subagent tools are registered. With the production session
 linker, the isolated M9 session adds 21,419 bytes to the WX.1 base of 115,502,
 leaving 81 bytes of its 21,500-byte allocation. The combined session is 145,946
