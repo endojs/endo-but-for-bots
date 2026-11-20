@@ -1534,12 +1534,16 @@ node scripts/gateway.mjs url /tmp/thix-uat
 Default provisioning installs the base harness. The operator supplies a backend and
 configures the runner and speech services for the corresponding journeys. Record the worker digest, backend/model, runner or audio device,
 observed outcome and any failing turn for each journey.
-Automated coverage includes all four cross-lane cases and 54 milestone files across runs.
-The combined core record covers 25 of 26 files and the separate worker-retirement case.
+A fresh Chromium run on the selected guest passed gateway sign-in, session reload,
+stream close, usage, Stop and exactly-once submission after a socket drop. Its
+provider was scripted. Automated coverage includes all four cross-lane cases and
+54 milestone files across runs. The combined core record covers 25 of 26 files and
+the separate worker-retirement case.
 M6 assigns isolation to a real runtime. M8 assigns image and compaction checks to live
 providers. M9 calls for live repeats of attachment adoption, forwarding and asking a child.
 M11 assigns speech engines, providers and microphone checks to the owner.
-J-12566 records the scope of this assessment.
+J-12566 records the trial scope. J-12575 records the Chromium preflight, 14 installed
+mail and delegation cases and 2,011 package tests on the selected guest.
 
 **Two units outside the lanes.**
 

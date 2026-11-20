@@ -18995,3 +18995,34 @@ at 131,072 was refused, preserved the manifest bytes, and allowed a further rest
 at its original allowance. The integrated stack retains its default. The release
 timings, manifest pair, per-forward traces and replay script are available at
 `3c8f8ad164:packages/thixotrope-harness/perf/evidence/forwarded-mail/`.
+
+### J-12574 2026-11-20 M9 delegation follow-up candidates
+
+Two further candidates completed the full default subagent benchmark on the pinned
+worker. Sharing three more per-spawn capability classes (`27e27de230`) yielded
+1,531 ms spawn median (n=12) and 341 ms ask overhead (n=56). Avoiding an encoding
+and empty-list allocation for small inline child replies (`c447e3c397`) passed 32
+focused tests and measured 2,032 ms spawn (n=10) and 374 ms ask (n=50). Its
+parent tool span had median 532 ms, the child's live turn 149 ms, and child
+provider time 5 ms. Per-ask subtraction supplies the 374 ms figure. Both candidates
+completed all three eight-child bursts in under 30 s and removed three descendants
+in each of three subtree stops. Neither improved on the selected guest's 1,452 ms
+spawn and 312 ms ask. The short-reply change runs when an ask receives its answer,
+so the spawn difference cannot identify a direct saving or cost on its own.
+
+### J-12575 2026-11-20 Integrated guided UAT preflight
+
+A fresh installed daemon and Chromium passed three selected cases on the J-12572
+production guest: gateway sign-in, the combined disconnect/reload/close/usage/Stop
+journey, and exactly one transcript entry for an input whose socket dropped. The
+provider was scripted. The standard package test run on the integrated source
+passed 2,011 tests, skipped 168 and reported three TODOs. The package type,
+lint and duplicate checks passed (zero errors, 925 warnings, 1.52% duplication).
+A clean immutable workspace install and eight diagnostic and performance-registration
+tests passed directly in the canonical checkout.
+
+The installed M9 run passed the public mailbox, parent/child, supervisor restart
+and stopped-session cases. Its shared reservation expired after 13 cases. The
+remaining file passed on its own: the child kept its separate workspace and shell
+while the parent was stopped. This gives 14 passes across seven installed files.
+The owner-run real backend, real runtime and speech/device journeys remain open.

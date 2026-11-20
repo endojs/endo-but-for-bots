@@ -59,6 +59,7 @@ To reproduce the four-delivery mail check, run
 It uses the release worker, a 60 s operator prefix and a 60 s sequential forwarding window.
 The observer matches worker frames to sender and recipient turns, sink slots and envelope
 postmarks. It fails if a forward exceeds four deliveries or if it cannot verify the path.
+For a deep checkout, give `THIX_HARNESS_TMP` a short private path so the control socket fits.
 Set `THIX_FORWARD_OUTPUT_PARENT` to an existing absolute directory to keep the local trace.
 Use `corepack yarn exec node perf/mail.perf.mjs` for the full uninstrumented release timings.
 
