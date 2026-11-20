@@ -9,10 +9,10 @@ built-ins/AsyncDisposableStack/prototype/disposeAsync/does-not-reinvoke-disposer
 built-ins/AsyncDisposableStack/prototype/disposeAsync/does-not-reinvoke-disposers-if-dispose-already-started.js strict pass
 built-ins/AsyncDisposableStack/prototype/disposeAsync/does-not-reject-if-already-disposed.js sloppy pass
 built-ins/AsyncDisposableStack/prototype/disposeAsync/does-not-reject-if-already-disposed.js strict pass
-built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-null.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [dispose, job 1, job 2] and expected [job 1, dispose, job 2] should have the same contents.  (the oracle completed)"
-built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-null.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [dispose, job 1, job 2] and expected [job 1, dispose, job 2] should have the same contents.  (the oracle completed)"
-built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-undefined.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [dispose, job 1, job 2] and expected [job 1, dispose, job 2] should have the same contents.  (the oracle completed)"
-built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-undefined.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [dispose, job 1, job 2] and expected [job 1, dispose, job 2] should have the same contents.  (the oracle completed)"
+built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-null.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-null.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-undefined.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-undefined.js strict pass
 built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-skipped-when-empty.js sloppy pass
 built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-skipped-when-empty.js strict pass
 built-ins/AsyncDisposableStack/prototype/disposeAsync/length.js sloppy pass
