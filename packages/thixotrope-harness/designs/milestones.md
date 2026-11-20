@@ -2010,6 +2010,9 @@ The automatic package reply sends its checked message without requesting a
 return receipt. Callers of the operator and model mail tools still get receipts.
 The fresh hub-growth and inbox gates passed and the file exited 0.
 Session-to-session delivery measured 354 ms against its strict 300 ms target (J-12572).
+The portable path check passed on the same production guest, with exactly four deliveries
+on all 69 forwards. A fresh state with twice the slot-growth allowance measured 331 ms,
+a 750 ms inbox p95 and 2.792 posts/s. The guided trial uses the default profile (J-12573).
 
 | Full run on the pinned worker | Operator ACK median (limit 200 ms) | Completed posts / elapsed | Posts/s (target 3) | Session delivery (limit 300 ms) | Fresh hub growth (limit 1.25×) |
 |---|---:|---:|---:|---:|---:|

@@ -18970,3 +18970,28 @@ completed and dismissed 194 posts in 61.110 s, 3.174597/s (target 3).
 The fresh hub growth run posted 365 packages with two attachments each in
 120.831 s and finished at 0.515× (limit 1.25×). Exit 0 follows the existing
 timing tolerance. The 354 ms median misses the milestone target by 54 ms.
+
+### J-12573 2026-11-20 M9 selected guest path, schedule and restart
+
+The portable diagnostic on the selected production guest, with its own timing rows,
+exited 0. All 69 forwarded packages used four causal cranks. The instrumented
+session median was 378 ms and p95 was 640 ms. Twelve forwards without a collection
+on those cranks took 216 ms median, the remaining 57 took 433 ms. The uninstrumented
+default benchmark on the same guest is J-12572.
+
+| Full mail on the selected guest | Default allowance 131,072 | Fresh allowance 262,144 |
+|---|---:|---:|
+| Operator ACK median | 156.099 ms (99) | 172.369 ms (95) |
+| Session median / p95 / p99 | 354 / 823 / 1,032 ms (69) | 331 / 862 / 2,459 ms (57) |
+| Inbox p95 upper bound (limit 550 ms) | 500 ms | 750 ms |
+| Completed posts / elapsed | 194 / 61.110 s | 173 / 61.953 s |
+| Completed posts per second | 3.175 | 2.792 |
+| Hub growth after 120 s | 0.515× (365 posts) | 1.019× (341 posts) |
+| Stock file exit | 0 | 1 |
+
+Only the slot-growth allowance differed in the saved runtime manifests. A clean
+shutdown and restart at 262,144 preserved the workspace value. Starting that state
+at 131,072 was refused, preserved the manifest bytes, and allowed a further restart
+at its original allowance. The integrated stack retains its default. The release
+timings, manifest pair, per-forward traces and replay script are available at
+`3c8f8ad164:packages/thixotrope-harness/perf/evidence/forwarded-mail/`.

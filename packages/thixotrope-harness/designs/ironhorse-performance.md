@@ -60,6 +60,17 @@ testing an optimization. The per-ask and per-spawn observations are available lo
 at `45e764f2eb:packages/thixotrope-harness/designs/subagent-performance/`.
 [Subagent control and candidate](../JOURNAL.md#j-12569-2026-11-20-m9-delegation-classes-and-forwarded-mail-candidates)
 
+On the pinned binary, increasing the slot-growth allowance on fresh state from 131,072
+to 262,144 illustrates the tradeoff. In the paired forwarding traces, collections on the
+four cranks fell from 46/71 forwards to 22/69. Median latency fell from 352 to 216 ms.
+At p99 the interval rose from 721 to 1,042 ms, and peak occupied factory slots rose from
+200,520 to 335,492. The original guest's uninstrumented child ask median rose from 316
+to 348 ms. Compare collection frequency, pause duration, peak occupied slots and capacity
+alongside the full release workloads before choosing a schedule. On the integrated guest, the larger allowance yielded
+331 ms forwarding, a 750 ms inbox p95 and 2.792 completed posts/s across the uninstrumented
+file. This lost two gates that the default passed. A state persists its schedule across restarts.
+[Selected guest, full files and restart](../JOURNAL.md#j-12573-2026-11-20-m9-selected-guest-path-schedule-and-restart) · [Fresh-state measurements](../JOURNAL.md#j-12571-2026-11-20-m9-fresh-state-allocation-allowance-comparison)
+
 ## A return trip the application could remove
 
 The automatic reply to a completed package sent a checked `Outbox.post` and discarded both the answer and any rejection. On this one path, `E.sendOnly(mail).post(...)` sends the same ordered reply with its body, attachments and postmark, without allocating an answer route back to the recipient. An application refusal is still handled by the receiving method. Unexpected receiver rejections use the ordinary one-way receiver diagnostic. Operator sends and the model's send/reply tools still need and receive their receipts. [Package settlement](../guest/session/inbox.js) · [Mail contract](m9-interfaces.md#31-factory-vat-guestfactorypost-officejs-operator-mailjs-subagentsjs)
