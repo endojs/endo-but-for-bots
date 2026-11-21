@@ -1606,6 +1606,13 @@ weekly allowance. An undated secondary entry at 0% in an earlier turn reading
 did not establish another active limit.
 [Account check](../JOURNAL.md#j-12593-2026-11-21-confirmed-the-connected-pro-accounts-weekly-allowance).
 
+The status bar now keeps only confirmed quota windows across inference responses.
+On the pinned Pro account, `weekly 67% used` became `weekly 68% used` after a
+live turn and survived reload. A two-window account showed both its weekly and
+five-hour allowances, including a confirmed 0% reading. Each assistant message
+now has an individual Play button.
+[Quota and playback UAT](../JOURNAL.md#j-12594-2026-11-21-confirmed-quota-windows-and-per-message-playback).
+
 If a turn fails while Subscriptions shows current usage, open the failed
 conversation. Its durable session history retains the provider error on the
 `turn-settled` record. An operator with local control access can call
@@ -1638,7 +1645,8 @@ M11 passed live local speech recognition, automatic reply playback and manual
 Replay in Chromium, including replay after a restart and a fragmentless reconnect.
 Refresh the signed-in tab, choose **Start listening** and allow microphone access
 to check the physical input. **Speak replies** enables audio for new replies on
-that page. **Replay** plays a saved answer. The physical microphone and speaker
+that page. The **Play message** button at the lower right of an assistant reply plays that reply.
+The physical microphone and speaker
 check remains with the operator.
 [Speech run](../JOURNAL.md#j-12591-2026-11-21-live-dictation-spoken-replies-and-replay).
 J-12566 records the trial scope. J-12575 records the Chromium preflight, 14 installed
@@ -1797,11 +1805,11 @@ M11 J-1310..J-1329). A unit that runs out asks the PM for twenty from its lane's
 | M9 O-M9-12 | Should an M13 upgrade re-bind imported mail through postmarks? | imported mail is read-only in M9; M13 decides |
 | M11 O-1 | Build the `openai-audio` kind now, with partials by re-transcription? | build; partials on every 1.5 s, interval in the settings |
 | M11 O-2 | Speak only voice-started sessions (R5-52 says every UI session)? | voice-started only |
-| M11 O-3 | Replay per turn or per message? | per turn |
+| M11 O-3 | Replay per turn or per message? | per assistant message, updated in UAT (J-12594) |
 | M11 O-4 | Harness downloads of Piper voices or Moonshine weights (R8-43)? | none; the operator and `uv` do it |
 | M11 O-5 | Audio on its own binary `/audio` route instead of CapTP? | binary route |
 | M11 O-6 | A warm spare Piper process (R5-66 improved) | on |
-| M11 O-7 | Re-speak a running turn after a reconnect? | no; the page offers Replay |
+| M11 O-7 | Re-speak a running turn after a reconnect? | the page offers manual playback on each saved assistant message |
 | M11 O-8 | A launch interrupted inside the creation window may leave one extra session (K11-4) | accept |
 | M11 O-9 | Where the voice-shortcut preset is chosen | the Voice panel |
 | M11 O-10 | Speech keys from API-key `Secret`s only | API keys only |
@@ -2374,7 +2382,7 @@ W11.8 after WX.1; journal ranges PM assigns, 30 or more each)
 8. Preferences shared between connections; a stale shortcut revision refused; Talk uses the chosen preset. `voice-session.test.js`, `voice-ui.test.mjs`.
 9. Only voice-started sessions get the spoken introduction. `voice-session.test.js`.
 10. Timeouts: engine, `sttIdle`, a hanging TTS sentence skipped, no HELLO, token expiry. `speech-timeouts.test.js`.
-11. Replay of a finished turn (inline and staged pieces); the level meter moves. `speech-audio-route.test.js`, `voice-ui.test.mjs`.
+11. Play an individual assistant message, including inline and staged content. The level meter moves during capture. `speech-audio-route.test.js`, `voice-ui.test.mjs`.
 12. Auto-speak on the sending page only, also for a queued message. `voice-ui.test.mjs`.
 13. Launch claims: one session per invocation id, 32 kept, survives a restart. `voice-session.test.js`, `voice-restart.test.js`.
 14. G-11: a pinned model missing from the catalogue falls back with `voiceModelUnavailable`. `voice-session.test.js`.

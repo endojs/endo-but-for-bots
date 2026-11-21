@@ -19308,3 +19308,29 @@ at 09:43 JST. The earlier secondary entry did not establish a second active
 limit for this account. OpenAI documents both five-hour and weekly allowances
 for some other plans.
 [OpenAI's plan-specific reset guide](https://help.openai.com/en/articles/20001498-how-resets-work-in-codex).
+
+### J-12594 2026-11-21 Confirmed quota windows and per-message playback
+
+The next saved turn reading reproduced the discrepancy in J-12593.
+The weekly primary still showed 67% used.
+The secondary entry showed 0% and carried neither a duration nor a reset time.
+The operator requested confirmed quota windows in the status bar and a Play
+button beside each assistant message. This supersedes M11's original O-3
+choice of one Replay button per turn.
+
+After the idle restart, the pinned worker displayed the previously saved
+Pro reading as `weekly 67% used` with its remembered timestamp.
+One new Terra low turn (`s8/t8`) updated it to `weekly 68% used`.
+The secondary chip stayed hidden throughout the turn and after a browser reload.
+An isolated Codex session with two confirmed windows displayed both
+`weekly 67% used` and `5h quota 0% used` after refreshing its account.
+On a two-member Claude fixture, a turn updated one chip with both weekly and
+five-hour usage. Declared-only windows remain visible with their source in
+Subscriptions and do not contribute percentages or exhaustion coloring to a chip.
+
+At widths of 390 and 1,150 pixels, Chromium found the Play button inside
+the lower-right corner of the assistant bubble. Playing the saved message
+after a reload delivered 31,709 nonzero samples and completed without a new turn.
+The obsolete live-reply notice never appeared. A separate Chromium test
+played two assistant messages from one turn in reverse order and verified
+the speech engine received exactly the selected text on each click.
