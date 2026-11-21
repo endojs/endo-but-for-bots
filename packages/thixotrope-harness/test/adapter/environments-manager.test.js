@@ -249,7 +249,9 @@ const makeKit = (t, { checkOk = true, real = false } = {}) => {
       harden({
         kind: 'podman',
         check: async () =>
-          checkOk ? { ok: true } : { ok: false, reason: 'absent' },
+          checkOk
+            ? { ok: true }
+            : { ok: false, reason: `absent at ${stateDir}` },
       }),
   });
 

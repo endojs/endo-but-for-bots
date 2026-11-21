@@ -19752,3 +19752,27 @@ The shell startup wrapper falls back to `start failed` when its error
 has no code. A follow-up check for the development milestone should stop
 the engine after a successful bind and verify the operator and session
 receive an actionable engine-offline status. [Adapter readiness](resources/environments/impl/attach.js) · [Shell startup](resources/environments/impl/runner.js)
+
+### J-13009 2026-11-21 Development runner recovery and retry of Broken Session A
+
+Docker Desktop restarted with an empty local image store. Rebuilt the project
+image from the published source revision `491ecbe14d`, checked the worker and
+prepare command in a disposable offline container, and updated the pinned
+worker to `thix-selfdev@sha256:a668edd7eabad827afde0a73f7111b490436b13eab91ab6ba1c1ecfc8b1501f0`.
+
+An explicit environments status request now checks the local engine and image.
+Shell startup and execution preserve the adapter’s public engine-offline error.
+On one disposable adapter bound to real Docker, removing its private socket
+alias changed status from ready to refused in 15 ms. The shell reported
+“the docker engine is not reachable”. Restoring the alias returned status to
+ready in 28 ms. A command in the same environment exited successfully in
+37 ms. The main unit and adapter suites passed 1,883 tests with eight gated
+tests skipped. A separate real-Docker OCI run passed all 37 cases.
+
+New session `s18` received `s17/t1`’s exact prompt, preset, ChatGPT model
+(`gpt-5.6-sol`) and low effort in a fresh checkout. Its first turn ran shell and
+Git commands and asked which versioned Astra IDs the provider exposes. Its
+cold dependency preparation hit the model’s chosen two-minute timeout.
+The published preset instructions now request ten minutes for that command.
+The previous stock instructions upgrade on republishing. Custom instructions
+are preserved. [Environment contract](designs/m6-interfaces.md#53-runtime-contract)

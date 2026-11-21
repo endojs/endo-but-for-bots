@@ -766,6 +766,13 @@ SIGKILL after `killGraceMs`; other commands keep running. The image is never pul
 `image exists` (podman) or `image inspect` (docker) and the pin form; `run` passes `--pull never`.
 Environment variables are exactly A.3's list (no host variable, no credential, R3-45).
 
+Operator `status()` repeats the local engine and image check. Concurrent
+requests share a check. When the engine has stopped, status returns `refused`
+with an engine-specific error. Both shell paths return that public reason.
+The next shell request after a refused check probes again, so restarting the
+engine can restore the same environment. Healthy commands reuse the successful
+check. Git workspace operations remain available independently of the engine.
+
 ### 5.4 What a docker-backed run can and cannot show
 
 Can (with the daemon running and the pinned image present locally): the argv the runner builds, pin

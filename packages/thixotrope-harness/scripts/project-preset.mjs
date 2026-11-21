@@ -33,12 +33,22 @@ const projectWorkflow = [
   'Run package commands from /workspace/packages/thixotrope-harness. For example, run corepack yarn test test/unit/m5-w58-presets.test.js.',
   'Reproduce the issue with a focused test, edit the checkout and rerun the test. Return git diff HEAD for review.',
 ].join(' ');
-const instructions = `${projectWorkflow} For nested integration tests set THIX_HARNESS_TMP=/tmp/thix. For a separate supervisor create a short private state directory on that same Linux scratch mount.`;
+const scratchInstructions =
+  'For nested integration tests set THIX_HARNESS_TMP=/tmp/thix. For a separate supervisor create a short private state directory on that same Linux scratch mount.';
+const instructions = `${projectWorkflow} For the first thix-selfdev-prepare command, set the shell tool's timeoutMs to 600000 (10 minutes) for the cold build. ${scratchInstructions}`;
 // Upgrade our earlier published defaults while preserving operator edits.
 const earlierInstructions = [
   'Use a separate short /tmp state path for nested supervisors.',
   'For a nested supervisor use a short private state directory under /home/node, where its staged Linux worker can execute.',
+  scratchInstructions,
 ].map(suffix => `${projectWorkflow} ${suffix}`);
+
+/** @param {string | undefined} prior */
+export const projectInstructions = prior =>
+  prior === undefined || earlierInstructions.includes(prior)
+    ? instructions
+    : prior;
+harden(projectInstructions);
 
 /**
  * @param {string} state
@@ -158,11 +168,7 @@ const savePreset = async (catalog, admin, seed, legacy) => {
     (prior.template !== 'development' || previousSeed?.project !== seed.project)
   )
     throw Error('The project preset name is already in use');
-  const prompt =
-    prior?.instructions === undefined ||
-    earlierInstructions.includes(prior.instructions)
-      ? instructions
-      : prior.instructions;
+  const prompt = projectInstructions(prior?.instructions);
   if (
     previousSeed?.commit === seed.commit &&
     Boolean(marker) === legacy &&

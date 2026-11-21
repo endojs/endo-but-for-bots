@@ -43,6 +43,11 @@ import {
   makeOciRuntime,
 } from '../../resources/environments/impl/runtime-oci.js';
 
+import { makeEnvironmentsImpl } from '../../resources/environments/impl/index.js';
+
+/** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
+const { E, Far } = /** @type {GuestGlobals} */ (globalThis);
+
 const fakeCli = join(
   dirname(fileURLToPath(import.meta.url)),
   '../fixtures/fake-bin/oci-cli.mjs',
@@ -502,6 +507,14 @@ for (const binary of /** @type {const} */ (['podman', 'docker'])) {
     });
     const stopped = envOf('e2');
     await runtime.start(stopped);
+    const message = 'Error response from daemon: container is not running';
+    const ownFailure = await runtime.exec(
+      stopped,
+      ['sh', '-c', 'echo "$1" >&2; exit 1', 'sh', message],
+      execOptions,
+    );
+    t.is(ownFailure.exitCode, 1);
+    t.is(decode(ownFailure.stderr).trim(), message);
     const file = join(engine, 'containers', `${stopped.name}.json`);
     const record = JSON.parse(readFileSync(file, 'utf8'));
     writeFileSync(file, JSON.stringify({ ...record, running: false }));
@@ -604,6 +617,51 @@ for (const binary of /** @type {const} */ (['podman', 'docker'])) {
     });
   });
 }
+
+test('a bound Docker adapter reports a later outage to status and both shell paths, then recovers', async t => {
+  const { runtime, root, engine } = setUp(t, 'docker');
+  const impl = makeEnvironmentsImpl({
+    incarnation: 'i1',
+    stateDir: root,
+    runtimes: { docker: () => runtime },
+  });
+  /** @type {any} */
+  let ops;
+  const sink = Far('Sink', {
+    attach: (/** @type {any} */ facet) => {
+      ops = facet;
+      return harden({ withdrawn: [], stops: [], releases: [] });
+    },
+  });
+  await impl.bind('environments', {
+    sink,
+    settings: { runtime: 'docker', image: pin, allowedCommands: ['true'] },
+  });
+  t.is((await E(ops).status()).state, 'ready');
+  const run = () => E(ops).runCommand('e1', 'true', harden([]), harden({}));
+  t.is((await run()).exitCode, 0);
+  const port = await E(ops).port('e2');
+  const command = harden({
+    opId: 'op1',
+    args: '{"command":"true","args":[]}',
+    writers: Far('Writers', {}),
+  });
+  const offline = environmentTextOf.runtimeFailed(
+    'the docker engine is not reachable',
+  );
+  writeFileSync(join(engine, 'down'), '');
+  t.deepEqual(await E(port).runCommand(command), {
+    status: 'failed',
+    text: offline,
+  });
+  await t.throwsAsync(run(), { message: offline });
+  t.like(await E(ops).status(), { state: 'refused', error: offline });
+  rmSync(join(engine, 'down'));
+  t.is((await run()).exitCode, 0);
+  t.is((await E(port).runCommand(command)).status, 'ok');
+  t.is((await E(ops).status()).state, 'ready');
+  await impl.unbind({}, 'environments');
+});
 
 test('checkImagePin leaves the fake runtime its own check', async t => {
   const seen = [];

@@ -116,14 +116,28 @@ const groupSignaller =
 const namePattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const tagPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 
+/** Only errors constructed from this module's fixed public vocabulary. */
+const publicErrors = new WeakSet();
+/** @param {string} message */
+const publicError = message => {
+  const error = Error(message);
+  publicErrors.add(error);
+  return error;
+};
+/** @param {unknown} error */
+export const isOciError = error =>
+  error instanceof Error && publicErrors.has(error);
+harden(isOciError);
+
 /** The CLI's messages for an engine it cannot reach. */
 const unreachablePattern =
-  /cannot connect|unable to connect|is the docker daemon running|connection refused/i;
+  /cannot connect|failed to connect|unable to connect|is the docker daemon running|connection refused/i;
 /** The CLI's messages for an image absent locally under `--pull never`. */
 const imageMissingPattern =
   /unable to find image|image not known|no such image|failed to resolve image/i;
 const nameInUsePattern = /already in use/i;
-const noContainerPattern = /no such container|no container with/i;
+const noContainerPattern =
+  /no such container|no such object|no container with/i;
 /** `exec` into a container that is gone or stopped (the CLI's own error). */
 const containerGonePattern =
   /^error(?: response from daemon)?:.*(?:no such container|no container with|is not running|container state improper)/im;
@@ -221,7 +235,7 @@ const mountable = path => {
   // `-v source:target:mode` splits on `:`; the state directory is the
   // operator's, so a path the CLI would misread is refused, never escaped.
   if (!path.startsWith('/') || /[:,\n\0]/.test(path)) {
-    throw Error(
+    throw publicError(
       environmentTextOf.runtimeFailed('the state directory cannot be mounted'),
     );
   }
@@ -231,7 +245,9 @@ const mountable = path => {
 /** @param {string} name */
 const checkedName = name => {
   if (!namePattern.test(name)) {
-    throw Error(environmentTextOf.runtimeFailed('invalid container name'));
+    throw publicError(
+      environmentTextOf.runtimeFailed('invalid container name'),
+    );
   }
   return name;
 };
@@ -262,7 +278,7 @@ export const makeOciRuntime = ({
    * @param {unknown} error
    */
   const spawnFailure = error =>
-    Error(
+    publicError(
       environmentTextOf.runtimeFailed(
         /** @type {any} */ (error)?.code === 'ENOENT'
           ? `${binary} is not installed`
@@ -276,9 +292,10 @@ export const makeOciRuntime = ({
    * @returns {Promise<CliResult>}
    */
   const control = async args => {
-    const call = exec(args, { streamBytes: controlBytes });
-    const timer = setTimeout(call.kill, controlTimeoutMs);
+    let timer;
     try {
+      const call = exec(args, { streamBytes: controlBytes });
+      timer = setTimeout(call.kill, controlTimeoutMs);
       return await call.done;
     } catch (error) {
       throw spawnFailure(error);
@@ -295,7 +312,7 @@ export const makeOciRuntime = ({
   const failure = (what, result) => {
     const stderr = textOf(result.stderr);
     if (unreachablePattern.test(stderr)) {
-      return Error(
+      return publicError(
         environmentTextOf.runtimeFailed(
           `the ${binary} engine is not reachable`,
         ),
@@ -305,7 +322,7 @@ export const makeOciRuntime = ({
       result.exitCode === null
         ? `signal ${result.signal}`
         : `exit ${result.exitCode}`;
-    return Error(
+    return publicError(
       environmentTextOf.runtimeFailed(`${binary} ${what} failed (${how})`),
     );
   };
@@ -331,9 +348,9 @@ export const makeOciRuntime = ({
     const settings = env.settings ?? {};
     const L = environmentLimits;
     if (!isDigestPin(settings.image))
-      throw Error(environmentTexts.imageRefused);
+      throw publicError(environmentTexts.imageRefused);
     if (!tagPattern.test(env.tag)) {
-      throw Error(environmentTextOf.runtimeFailed('invalid state tag'));
+      throw publicError(environmentTextOf.runtimeFailed('invalid state tag'));
     }
     return [
       'run',
@@ -386,15 +403,8 @@ export const makeOciRuntime = ({
   };
 
   /** @param {string} name */
-  const isRunning = async name => {
-    const result = await control([
-      'inspect',
-      '--format',
-      '{{.State.Running}}',
-      name,
-    ]);
-    return result.exitCode === 0 && textOf(result.stdout).trim() === 'true';
-  };
+  const inspectRunning = name =>
+    control(['inspect', '--format', '{{.State.Running}}', name]);
 
   /** @type {Runtime['start']} */
   const start = async env => {
@@ -405,7 +415,7 @@ export const makeOciRuntime = ({
       if (result.exitCode === 0) return;
       const stderr = textOf(result.stderr);
       if (imageMissingPattern.test(stderr)) {
-        throw Error(environmentTexts.imageRefused);
+        throw publicError(environmentTexts.imageRefused);
       }
       if (attempt > 0 || !nameInUsePattern.test(stderr)) {
         throw failure('run', result);
@@ -413,7 +423,12 @@ export const makeOciRuntime = ({
       // A container of this name is left from this state (the name holds
       // the state's tag): a running one is the environment, else replace it.
       // eslint-disable-next-line no-await-in-loop -- in order
-      if (await isRunning(env.name)) return;
+      const inspected = await inspectRunning(env.name);
+      if (
+        inspected.exitCode === 0 &&
+        textOf(inspected.stdout).trim() === 'true'
+      )
+        return;
       // eslint-disable-next-line no-await-in-loop -- in order
       await removeNames([env.name]);
     }
@@ -498,16 +513,32 @@ export const makeOciRuntime = ({
     } finally {
       for (const timer of timers) clearTimeout(timer);
     }
-    if (
-      !timedOut &&
-      result.exitCode !== 0 &&
-      result.stdout.length === 0 &&
-      result.stderr.length < 1024 &&
-      containerGonePattern.test(textOf(result.stderr))
-    ) {
-      throw Error(
-        environmentTextOf.runtimeFailed('the container is not running'),
-      );
+    if (!timedOut && result.exitCode !== 0 && result.stdout.length === 0) {
+      const stderr = textOf(result.stderr);
+      // A command can print these words itself. Check the container before
+      // discarding a live runner entry or suppressing command output.
+      if (
+        unreachablePattern.test(stderr) ||
+        containerGonePattern.test(stderr)
+      ) {
+        const inspected = await inspectRunning(name);
+        if (
+          inspected.exitCode !== 0 &&
+          unreachablePattern.test(textOf(inspected.stderr))
+        ) {
+          throw failure('exec', inspected);
+        }
+        if (
+          (inspected.exitCode === 0 &&
+            textOf(inspected.stdout).trim() === 'false') ||
+          (inspected.exitCode !== 0 &&
+            noContainerPattern.test(textOf(inspected.stderr)))
+        ) {
+          throw publicError(
+            environmentTextOf.runtimeFailed('the container is not running'),
+          );
+        }
+      }
     }
     /** @type {RawResult} */
     const raw = {
@@ -535,7 +566,7 @@ export const makeOciRuntime = ({
   /** @type {Runtime['sweep']} */
   const sweep = async tag => {
     if (!tagPattern.test(tag)) {
-      throw Error(environmentTextOf.runtimeFailed('invalid state tag'));
+      throw publicError(environmentTextOf.runtimeFailed('invalid state tag'));
     }
     let stopped = 0;
     for (;;) {

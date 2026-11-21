@@ -12,7 +12,10 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { publishSource } from '../../scripts/project-preset.mjs';
+import {
+  projectInstructions,
+  publishSource,
+} from '../../scripts/project-preset.mjs';
 
 const git = promisify(execFile);
 
@@ -68,4 +71,27 @@ test('publishing pins committed source, leaves the operator checkout alone, and 
   const original = await readFile(bundle);
   await writeFile(bundle, original.subarray(0, original.length - 12));
   await t.throwsAsync(publishSource(state, repo, 'HEAD'));
+});
+
+test('all published defaults upgrade to a ten-minute cold build, preserving operator edits', t => {
+  const workflow = [
+    'You are developing the Thixotrope harness in your own persistent Git checkout at /workspace.',
+    'On first use, run sh -c "cd /workspace && thix-selfdev-prepare" to install the locked Linux dependencies and build the worker boot bundles offline.',
+    'Run package commands from /workspace/packages/thixotrope-harness. For example, run corepack yarn test test/unit/m5-w58-presets.test.js.',
+    'Reproduce the issue with a focused test, edit the checkout and rerun the test. Return git diff HEAD for review.',
+  ].join(' ');
+  const current = projectInstructions(undefined);
+  t.regex(current, /first thix-selfdev-prepare command.*timeoutMs to 600000/);
+  t.is(projectInstructions(current), current);
+  for (const suffix of [
+    'Use a separate short /tmp state path for nested supervisors.',
+    'For a nested supervisor use a short private state directory under /home/node, where its staged Linux worker can execute.',
+    'For nested integration tests set THIX_HARNESS_TMP=/tmp/thix. For a separate supervisor create a short private state directory on that same Linux scratch mount.',
+  ]) {
+    const old = `${workflow} ${suffix}`;
+    t.is(projectInstructions(old), current);
+    const customized = `${old} Run my local checks.`;
+    t.is(projectInstructions(customized), customized);
+  }
+  t.is(projectInstructions(''), '');
 });

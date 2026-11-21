@@ -23,8 +23,8 @@
  *
  * Retained state: one entry per started key (removed at stop), and the keys
  * owed a stop (removed when the stop succeeds); both bounded by the
- * manager's `maxEnvironments`. Errors of the start phase are rewritten to
- * `runtimeFailed` with the error code only: no host path reaches a vat
+ * manager's `maxEnvironments`. Startup failures carry the OCI runtime’s public error or
+ * a filesystem error code: no host path reaches a vat
  * (D-M6-14).
  *
  * Node only (adapter).
@@ -39,6 +39,7 @@ import {
   environmentTexts,
 } from '../../../guest/lib/guards/environments.js';
 /* eslint-enable import/no-relative-packages */
+import { isOciError } from './runtime-oci.js';
 
 /** @import { Timers } from '../../agent-host/impl/timers.js' */
 /** @import { Runtime, RuntimeEnv, RawResult } from './runtime-fake.js' */
@@ -68,8 +69,17 @@ const L = environmentLimits;
 const keyPattern = /^e[0-9]+$/;
 
 /** @param {unknown} error */
-const reasonOf = error =>
-  String(/** @type {any} */ (error)?.code ?? 'start failed');
+const lifecycleError = error => {
+  if (isOciError(error)) return error;
+  const code = /** @type {any} */ (error)?.code;
+  return Error(
+    environmentTextOf.runtimeFailed(
+      typeof code === 'string' && /^E[A-Z0-9]{1,24}$/.test(code)
+        ? code
+        : 'start failed',
+    ),
+  );
+};
 
 /**
  * A timeout a command may ask (exo-shell's rule, R3-47).
@@ -145,8 +155,7 @@ export const makeRunner = ({ runtime, settings, layout, timers }) => {
       await mkdir(env.home, { recursive: true, mode: 0o700 });
       await runtime.start(env);
     } catch (error) {
-      // eslint-disable-next-line preserve-caught-error -- a cause would carry the host path to the vat
-      throw Error(environmentTextOf.runtimeFailed(reasonOf(error)));
+      throw lifecycleError(error);
     }
   };
 
@@ -198,8 +207,7 @@ export const makeRunner = ({ runtime, settings, layout, timers }) => {
         owed.delete(key);
       } catch (error) {
         owed.add(key);
-        // eslint-disable-next-line preserve-caught-error -- a cause would carry the host path to the vat
-        throw Error(environmentTextOf.runtimeFailed(reasonOf(error)));
+        throw lifecycleError(error);
       }
     })();
     stopping.set(key, done);
@@ -229,6 +237,13 @@ export const makeRunner = ({ runtime, settings, layout, timers }) => {
         killGraceMs: L.killGraceMs,
         streamBytes: L.streamBytes,
       });
+    } catch (error) {
+      if (isOciError(error) && entries.get(key) === entry) {
+        // Reconcile the container before the next independent command.
+        entries.delete(key);
+        owed.add(key);
+      }
+      throw error;
     } finally {
       entry.inFlight -= 1;
       if (entry.inFlight === 0 && entries.get(key) === entry) {
@@ -243,8 +258,7 @@ export const makeRunner = ({ runtime, settings, layout, timers }) => {
     try {
       await runtime.remove(envOf(key));
     } catch (error) {
-      // eslint-disable-next-line preserve-caught-error -- a cause would carry the host path to the vat
-      throw Error(environmentTextOf.runtimeFailed(reasonOf(error)));
+      throw lifecycleError(error);
     }
   };
 

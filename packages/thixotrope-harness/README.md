@@ -62,7 +62,8 @@ show its revision, and run the session inventory unit test.” Each session has
 a private Git repository at `/workspace`. Shell commands, edits and commits
 use that same checkout. The package is `/workspace/packages/thixotrope-harness`.
 The preset tells the model how to set up the locked Linux dependencies on
-first use. Reopen the session to resume an edit. Ask for `git diff HEAD` to
+first use. Allow ten minutes for the first `thix-selfdev-prepare` shell call
+(`timeoutMs: 600000`). Reopen the session to resume an edit. Ask for `git diff HEAD` to
 review tracked changes, and stage new files before requesting the diff.
 For integration debugging, set `THIX_HARNESS_TMP=/tmp/thix`. For a manually
 started supervisor, create a state directory under that path. This private

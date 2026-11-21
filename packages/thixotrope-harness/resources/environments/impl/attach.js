@@ -28,7 +28,10 @@ import { E } from '@endo/far';
 import { existsSync, realpathSync } from 'node:fs';
 
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
-import { environmentTexts as T } from '../../../guest/lib/guards/environments.js';
+import {
+  environmentTextOf,
+  environmentTexts as T,
+} from '../../../guest/lib/guards/environments.js';
 /* eslint-enable import/no-relative-packages */
 import { findStateDir } from '../../native-layout.js';
 import { makeTimers } from '../../agent-host/impl/timers.js';
@@ -146,10 +149,43 @@ export const makeEnvironmentsBinding = ({
     if (makeRuntime === undefined)
       throw Error(`environments have no runtime ${settings.runtime}`);
     const runtime = makeRuntime();
-    /** @type {{ ok: boolean, reason?: string }} */
-    const checked = await Promise.resolve()
-      .then(() => runtime.check(settings))
-      .catch(() => ({ ok: false, reason: T.imageRefused }));
+    const publicReasons = new Set([
+      environmentTextOf.runtimeFailed(
+        `the ${settings.runtime} engine is not reachable`,
+      ),
+      environmentTextOf.runtimeFailed(`${settings.runtime} is not installed`),
+      environmentTextOf.runtimeFailed(
+        `${settings.runtime} could not be started`,
+      ),
+    ]);
+    const probe = async () => {
+      try {
+        const result = await runtime.check(settings);
+        if (result.ok) return { ok: true };
+        return {
+          ok: false,
+          reason: publicReasons.has(result.reason)
+            ? result.reason
+            : T.imageRefused,
+        };
+      } catch {
+        return { ok: false, reason: T.imageRefused };
+      }
+    };
+    let checked = await probe();
+    /** @type {ReturnType<typeof probe> | undefined} */
+    let pending;
+    /** @param {boolean} refresh */
+    const check = refresh => {
+      if (pending) return pending;
+      if (!refresh && checked.ok) return checked;
+      pending = probe().then(result => {
+        checked = result;
+        pending = undefined;
+        return result;
+      });
+      return pending;
+    };
     trace({ type: 'bind', runtime: settings.runtime, ok: checked.ok });
     const built = parts({
       settings,
@@ -182,7 +218,7 @@ export const makeEnvironmentsBinding = ({
       ports: built.ports,
       images: built.images,
       commandRecord: built.commandRecord,
-      check: () => checked,
+      check,
       withdrawn,
       ready,
       hiddenPaths,

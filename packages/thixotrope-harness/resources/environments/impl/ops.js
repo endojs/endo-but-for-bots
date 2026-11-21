@@ -75,7 +75,7 @@ const { makeExo } = /** @type {any} */ (globalThis);
  *   the file checked first)
  * @property {(raw: any) => any} commandRecord the exec-path `CommandResult`
  *   (`command-output.js` `boundCommandRecord`)
- * @property {() => { ok: boolean }} check the binding's image check
+ * @property {(refresh: boolean) => PromiseLike<{ ok: boolean, reason?: string }> | { ok: boolean, reason?: string }} check the binding's image check
  * @property {Set<string>} withdrawn the keys refused here (filled from
  *   `PendingWork.withdrawn`, then by `stop(key, { withdraw: true })`)
  * @property {Promise<unknown>} [ready] settles once `attach` answered
@@ -172,7 +172,7 @@ export const makeOps = ({
   return makeExo('EnvironmentsOps', I.EnvironmentsOps, {
     status: async () => {
       await ready;
-      const ok = check().ok;
+      const { ok, reason } = await check(true);
       return harden({
         state: ok ? 'ready' : 'refused',
         environments: 0,
@@ -180,7 +180,7 @@ export const makeOps = ({
         pendingReleases: 0,
         runtime: settings.runtime,
         running: runner.runningCount(),
-        ...(ok ? {} : { error: T.imageRefused }),
+        ...(ok ? {} : { error: reason ?? T.imageRefused }),
       });
     },
     /**
@@ -201,7 +201,8 @@ export const makeOps = ({
       serve(
         key,
         async () => {
-          if (!check().ok) throw Error(T.imageRefused);
+          const checked = await check(false);
+          if (!checked.ok) throw Error(checked.reason ?? T.imageRefused);
           // The runner checks the allowlist and the timeout (exo-shell's
           // rules) on every path; a timeout rejects as exo-shell does, the
           // partial output dropped (5.5).
