@@ -1532,8 +1532,20 @@ node scripts/gateway.mjs url /tmp/thix-uat
 ```
 
 The provisioning command preloads SES for the standalone CLI (J-12579). The gateway
-sign-in link grants access to the local harness. The selected backend separately uses
-an API key or a subscription account to reach its model.
+sign-in link opens the local harness. The harness owns the conversation, tool execution
+and transcript. For the subscription trial, the operator registers a provider with a
+pool of matching accounts. For example, register two Claude subscription members in
+one `claude-pool` backend labelled **Anthropic Messages**. In **New Session**, select
+**Anthropic Messages**, explicitly select a model available to both members, and choose
+**Chat only**. The harness selects an account from the pool for each provider round
+and sends the request to the Anthropic Messages API. A warm session normally keeps its
+last successful member. [Subscription provisioning](../scripts/provision-steps/40-subscriptions.js)
+and the [pool contract](m4-interfaces.md#52-one-round-on-a-pool-w46-providerjs) describe this path.
+
+For the first live turn, send “Write eight numbered, one-sentence observations about
+the moon.” Reload once text starts appearing. Check that the same conversation shows
+one copy of the prompt and one completed reply. Record the provider label and model
+ID with the outcome.
 
 Default provisioning installs the base harness. The operator supplies a backend and
 configures the runner and speech services for the corresponding journeys. Record the worker digest, backend/model, runner or audio device,

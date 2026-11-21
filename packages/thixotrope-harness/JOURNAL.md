@@ -19094,3 +19094,17 @@ Preloading `./scripts/_init.mjs` let the same CLI provision the running state.
 The local gateway reported serving on loopback port 7831, returned HTTP 200
 and its private sign-in link opened in the tester's browser. The first
 live-provider chat and reconnect verdict are pending.
+
+### J-12580 2026-11-21 Guided UAT provider and subscription-pool routing
+
+The owner clarified the first live journey: one harness owns each session and routes
+model requests through a provider backed by a matching pool of subscription accounts.
+For Anthropic Messages, `makePool` accepts Claude members and returns the backend the
+factory lists. A session selects that backend and a model. The adapter obtains the
+selected member's credential at dispatch. The separate API-key `anthropic` backend
+reads its own key grant. A Claude pool advertises the union of its members' model IDs;
+the member selector does not filter by requested model. The guide therefore uses a
+model available to every member for this trial.
+
+A local control query of the running UAT workspace returned zero registered backends,
+zero pools and zero members. No live prompt was sent in this check.
