@@ -1526,10 +1526,14 @@ In a second terminal in the same package, provision the running state and obtain
 operator's private sign-in link. Open that link in the tester's browser.
 
 ```sh
-node scripts/provision.mjs /tmp/thix-uat
+node --import ./scripts/_init.mjs scripts/provision.mjs /tmp/thix-uat
 node scripts/gateway.mjs serve /tmp/thix-uat --port 7831
 node scripts/gateway.mjs url /tmp/thix-uat
 ```
+
+The provisioning command preloads SES for the standalone CLI (J-12579). The gateway
+sign-in link grants access to the local harness. The selected backend separately uses
+an API key or a subscription account to reach its model.
 
 Default provisioning installs the base harness. The operator supplies a backend and
 configures the runner and speech services for the corresponding journeys. Record the worker digest, backend/model, runner or audio device,

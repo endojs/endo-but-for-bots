@@ -19082,3 +19082,15 @@ open M9 latency targets are 354 ms session forwarding and 312 ms ask overhead,
 both against 300 ms. Each latency is one unscaled measured window. The leaner
 guest and negotiated protocol remain available on their local experiment branches.
 The original seven M6 worktree edits and the saved copies still match the checkpoint.
+
+### J-12579 2026-11-21 Guided UAT local startup
+
+Started a fresh operator UAT on checkout `66de3e81a7`. Its persisted runtime
+manifest matched the pinned worker `367e78ad1d`, 50 M crank budget, 4 M slot
+ceiling and 131,072 slot allocation allowance. Built the browser assets and
+provisioned the base harness. On Node 22.23.4, the standalone provisioning
+command encountered an undefined SES `assert` during module initialization.
+Preloading `./scripts/_init.mjs` let the same CLI provision the running state.
+The local gateway reported serving on loopback port 7831, returned HTTP 200
+and its private sign-in link opened in the tester's browser. The first
+live-provider chat and reconnect verdict are pending.
