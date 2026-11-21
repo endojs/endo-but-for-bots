@@ -19297,3 +19297,14 @@ before the sole submission. Both received the same completion event. The
 scripted provider recorded its two expected requests (rounds 0 and 1), and
 the echo tool started and finished exactly once with the same operation ID.
 The isolated case passed in 6.5 seconds.
+
+### J-12593 2026-11-21 Confirmed the connected Pro account's weekly allowance
+
+The last saved reading after a turn included a 10,080-minute primary window
+at 67% used and a secondary entry at 0% with no duration or reset time.
+A targeted refresh of the ChatGPT pool at 12:02 JST returned plan Pro and
+only one window, the weekly allowance at 67% used, resetting on 26 November
+at 09:43 JST. The earlier secondary entry did not establish a second active
+limit for this account. OpenAI documents both five-hour and weekly allowances
+for some other plans.
+[OpenAI's plan-specific reset guide](https://help.openai.com/en/articles/20001498-how-resets-work-in-codex).

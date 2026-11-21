@@ -1601,6 +1601,11 @@ indicates thinking. Subscription chips show percent used per provider
 window, with the duration when available.
 [UI changes](../JOURNAL.md#j-12589-2026-11-21-session-list-activity-bubble-and-subscription-quota).
 
+For the connected Pro account, **Subscriptions → Refresh** confirmed one
+weekly allowance. An undated secondary entry at 0% in an earlier turn reading
+did not establish another active limit.
+[Account check](../JOURNAL.md#j-12593-2026-11-21-confirmed-the-connected-pro-accounts-weekly-allowance).
+
 If a turn fails while Subscriptions shows current usage, open the failed
 conversation. Its durable session history retains the provider error on the
 `turn-settled` record. An operator with local control access can call
