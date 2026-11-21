@@ -558,7 +558,7 @@ export const makeSubagents = ({
       throw Error(postOfficeTextOf.subagentLost(name));
     }
     const node = linkChild(parent, row, name);
-    return harden({ handle: node.handle, title: row.title });
+    return harden({ handle: node.handle, title: row.title, childKey: row.key });
   };
 
   /**
@@ -606,6 +606,7 @@ export const makeSubagents = ({
                   harden({
                     name: node.name,
                     handle: node.handle,
+                    childKey: node.row.key,
                     state: stateOf(node),
                   }),
                 ),
@@ -665,6 +666,25 @@ export const makeSubagents = ({
 
   return harden({
     delegationFor,
+    /**
+     * @param {any} parentSession
+     * @param {string} name
+     * @param {string} [expectedKey]
+     */
+    findSubagentSession(parentSession, name, expectedKey) {
+      const parent = rows.ofSession(parentSession);
+      if (parent === undefined || closed(parent)) return undefined;
+      const node = liveChildren(parent).find(child => child.name === name);
+      if (
+        !node ||
+        node.stopping ||
+        closed(node.row) ||
+        node.row.state === 'lost' ||
+        (expectedKey !== undefined && node.row.key !== expectedKey)
+      )
+        return undefined;
+      return node.row.session;
+    },
     deleteChildren,
     restart,
     /** @param {Row} row the child's node, if `row` is a live child */

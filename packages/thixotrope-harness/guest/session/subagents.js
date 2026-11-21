@@ -69,7 +69,7 @@ export const subagentsPart = harden({
   name: /** @type {const} */ ('subagents'),
   /** @param {{ services: any, inventoryChanged?: () => void }} runtime */
   make: runtime => {
-    /** @type {Map<string, any>} name -> SubagentHandle */
+    /** @type {Map<string, {handle: any, childKey?: string}>} */
     const handles = new Map();
     /** @type {Map<string, any>} name -> the Turn whose spawn is out */
     const spawning = new Map();
@@ -104,9 +104,14 @@ export const subagentsPart = harden({
         .then(list => {
           const changed =
             list.length !== handles.size ||
-            list.some(({ name }) => !handles.has(name));
+            list.some(
+              ({ name, handle, childKey }) =>
+                handles.get(name)?.handle !== handle ||
+                handles.get(name)?.childKey !== childKey,
+            );
           handles.clear();
-          for (const { name, handle } of list) handles.set(name, handle);
+          for (const { name, handle, childKey } of list)
+            handles.set(name, { handle, childKey });
           if (changed) runtime.inventoryChanged?.();
         });
     };
@@ -119,7 +124,9 @@ export const subagentsPart = harden({
       /** The claim time of the current turn (spawn and ask `at`). */
       at: () => at,
       /** @param {string} name */
-      handleOf: name => handles.get(name),
+      handleOf: name => handles.get(name)?.handle,
+      /** @param {string} name */
+      childKeyOf: name => handles.get(name)?.childKey,
       /**
        * Whether `name` is held or being spawned (the uniqueness check).
        * @param {string} name
@@ -138,11 +145,12 @@ export const subagentsPart = harden({
        * or, with no handle, give the name back.
        * @param {string} name
        * @param {any} [handle]
+       * @param {string} [childKey]
        */
-      spawned: (name, handle) => {
+      spawned: (name, handle, childKey) => {
         spawning.delete(name);
         if (handle !== undefined && !handles.has(name)) {
-          handles.set(name, handle);
+          handles.set(name, { handle, childKey });
           runtime.inventoryChanged?.();
         }
       },
@@ -158,7 +166,7 @@ export const subagentsPart = harden({
        * @returns {{ entry: CallEntry, handle: any } | { refused: string }}
        */
       openAsk: (name, { opId, turn, generation, endpoint, seconds }) => {
-        const handle = handles.get(name);
+        const handle = handles.get(name)?.handle;
         if (handle === undefined)
           return { refused: mailTextOf.noSubagent(name) };
         for (const ask of asks.values()) {

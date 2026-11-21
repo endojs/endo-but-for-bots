@@ -107,3 +107,32 @@
 .thix-inventory-status {
   margin: 0 0.85rem 0.65rem;
 }
+
+.thix-subagent-link,
+.thix-session-path button {
+  border: 0;
+  padding: 0;
+  color: var(--fl-accent);
+  background: transparent;
+  cursor: pointer;
+  text-align: start;
+  font: inherit;
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+.thix-session-path {
+  display: flex;
+  align-items: baseline;
+  flex: 1;
+  min-width: 0;
+  gap: 0.4rem;
+  overflow-x: auto;
+}
+.thix-session-path > * {
+  flex: none;
+}
+.thix-session-path > * + *::before {
+  content: '›';
+  color: var(--fl-text-muted);
+  margin-right: 0.4rem;
+}

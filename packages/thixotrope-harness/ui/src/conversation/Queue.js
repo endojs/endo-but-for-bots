@@ -139,12 +139,22 @@ export const Queue = ({ state, controller }) => {
         )
       : null,
     view.pending.map((/** @type {Record<string, any>} */ row, index) =>
-      h(QueueRow, {
-        key: row.key,
-        row,
-        controller,
-        sendNow: index === 0 && (view.busy || held) ? headLabel : undefined,
-      }),
+      state.sessionPath?.[1]
+        ? h(
+            'div',
+            {
+              key: row.key,
+              class: 'floot-msg-row user pending',
+              'data-entry': row.key,
+            },
+            h('div', { class: 'floot-msg' }, ...linkify(row.preview)),
+          )
+        : h(QueueRow, {
+            key: row.key,
+            row,
+            controller,
+            sendNow: index === 0 && (view.busy || held) ? headLabel : undefined,
+          }),
     ),
   );
 };

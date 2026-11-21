@@ -27,7 +27,13 @@ export const inventoryPage = (labels, rev, cursor) => {
   const rows = names.slice(start, end).map(label => {
     const binding = /** @type {Binding} */ (labels.get(label));
     if (binding.kind === 'object' && binding.source === 'subagent')
-      return { label, kind: 'subagent' };
+      return {
+        label,
+        kind: 'subagent',
+        ...(binding.childKey === undefined
+          ? {}
+          : { childKey: binding.childKey }),
+      };
     if (binding.kind !== 'json') return { label, kind: binding.kind };
     const preview = cutText(binding.text, limits.inventoryPreviewBytes);
     return {

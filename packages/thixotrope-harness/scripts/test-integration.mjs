@@ -169,7 +169,9 @@ export const regressionLists = Object.freeze({
       'subagents',
       'subagents-restart',
       'subagents-environment',
-    ].map(name => `test/integration/${name}.test.js`),
+    ]
+      .map(name => `test/integration/${name}.test.js`)
+      .concat('test/browser/subagent-inspection.test.mjs'),
   ),
   voice: Object.freeze([
     'test/integration/voice-session.test.js',

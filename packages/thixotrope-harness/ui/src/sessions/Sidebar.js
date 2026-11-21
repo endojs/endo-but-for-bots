@@ -91,7 +91,7 @@ export const Sidebar = ({ state, controller, open }) => {
       'div',
       {
         key: row.key,
-        class: `floot-session-item${row.key === state.activeKey ? ' active' : ''}`,
+        class: `floot-session-item${row.key === (state.sessionPath?.[0]?.key ?? state.activeKey) ? ' active' : ''}`,
         'data-key': row.key,
         onClick: () => {
           if (!isEditing) controller.selectSession(row.key);

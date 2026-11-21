@@ -866,6 +866,9 @@ const m2Versions = {
       getMail: M.call().returns(R('OperatorMailbox')),
       // Voice (m11-interfaces.md appendix A, H1; WX.1).
       getVoice: M.call().returns(R('Voice')),
+      findSubagentSession: M.call(R('Session'), text(limits.subagentNameUnits))
+        .optional(S.Id)
+        .returns(R('Session')),
     }),
 };
 
@@ -898,6 +901,7 @@ export const m2VersionMethodNames = harden({
     // WX.1: mail (m9-interfaces.md F6), voice (m11-interfaces.md H1).
     ...postOfficeMethodNames.Operator,
     'getVoice',
+    'findSubagentSession',
   ],
 });
 
@@ -955,7 +959,10 @@ const postOfficeShapeBuilders = {
       { systemPrompt: text(limits.inlineBytes) },
     ),
   SpawnAnswer: () =>
-    record({ handle: R('SubagentHandle'), title: text(limits.titleUnits) }),
+    record(
+      { handle: R('SubagentHandle'), title: text(limits.titleUnits) },
+      { childKey: S.Id },
+    ),
   /** `SubagentHandle.ask` argument (R4-72). */
   AskRequest: () =>
     record({
@@ -978,11 +985,14 @@ const postOfficeShapeBuilders = {
     ),
   SubagentState: () => M.or('ready', 'asking', 'lost', 'stopping'),
   SubagentInfo: () =>
-    record({
-      name: text(limits.subagentNameUnits),
-      handle: R('SubagentHandle'),
-      state: S.SubagentState,
-    }),
+    record(
+      {
+        name: text(limits.subagentNameUnits),
+        handle: R('SubagentHandle'),
+        state: S.SubagentState,
+      },
+      { childKey: S.Id },
+    ),
   /** `Delegation.children()`: a parent's live children (<= 64 by guard). */
   SubagentList: () => list(S.SubagentInfo, 64),
   AddressKind: () => M.or(...addressKinds),

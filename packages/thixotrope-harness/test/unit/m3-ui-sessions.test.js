@@ -10,6 +10,7 @@ import { options as preactOptions } from 'preact';
 import { makeController } from '../../ui/src/controller/index.js';
 import { mount } from '../../ui/src/shell/index.js';
 import * as sessionViews from '../../ui/src/sessions/index.js';
+import { Conversation } from '../../ui/src/conversation/Conversation.js';
 import {
   uiTexts,
   uiTextOf,
@@ -54,8 +55,9 @@ const fire = (window, element, type, init = {}) => {
 /**
  * @param {any} fake
  * @param {number} [width]
+ * @param {boolean} [transcript]
  */
-const setup = async (fake, width = 1024) => {
+const setup = async (fake, width = 1024, transcript = false) => {
   const dom = makeTestDom({ width });
   const { powers, control } = fake;
   const controller = makeController({
@@ -67,7 +69,10 @@ const setup = async (fake, width = 1024) => {
     root: dom.root,
     controller,
     features: [],
-    views: { sessions: sessionViews },
+    views: {
+      sessions: sessionViews,
+      ...(transcript && { conversation: { Conversation } }),
+    },
     window: dom.window,
     schedule: fn => fn(),
   });
@@ -547,6 +552,214 @@ test.serial(
       t.truthy(dom.document.querySelector('[data-label="newBinding"]'));
       t.is(first.control.callsOf('Session', 'getInventoryPage').length, 1);
     } finally {
+      await close();
+    }
+  },
+);
+
+test.serial(
+  'inspection follows child identities across levels and reconnects, preserving the root draft',
+  async t => {
+    const children = (/** @type {string} */ childKey) =>
+      makeFakePowers({
+        sessions: [
+          {
+            key: 'root',
+            title: 'Research',
+            inventoryPage: () =>
+              harden({
+                rev: 0,
+                rows: [
+                  { label: 'subagents/scout', kind: 'subagent', childKey },
+                ],
+              }),
+          },
+          {
+            key: childKey,
+            title: 'A distinct child title',
+            parent: { key: 'root', name: 'scout' },
+            turns: 1,
+            inventoryPage: () =>
+              harden({
+                rev: 0,
+                rows: [
+                  {
+                    label: 'subagents/reader',
+                    kind: 'subagent',
+                    childKey: 'deep',
+                  },
+                ],
+              }),
+          },
+          {
+            key: 'deep',
+            title: 'Nested',
+            parent: { key: childKey, name: 'reader' },
+            turns: 2,
+          },
+          { key: 'other', title: 'Other root' },
+        ],
+      });
+    const fake = children('child');
+    const { controller, dom, close } = await setup(fake);
+    try {
+      await controller.selectSession('root');
+      controller.setInput('saved root text', 4);
+      const click = (/** @type {string} */ selector) =>
+        fire(dom.window, dom.document.querySelector(selector), 'click');
+      click('.thix-inventory-toggle');
+      await flush();
+      click('[aria-label="Inspect scout"]');
+      await flush();
+      t.is(controller.getState().activeKey, 'child');
+      t.is(controller.getState().view?.messages.length, 1);
+      t.deepEqual(
+        controller.getState().sessions.map(r => r.key),
+        ['root', 'other'],
+      );
+      t.is(dom.document.querySelector('[aria-label="Settings"]'), null);
+      await controller.send('ignored');
+      await controller.stop();
+      await controller.deleteSession('child');
+      t.is(fake.control.callsOf('Composer', 'submit').length, 0);
+      t.is(fake.control.callsOf('SessionFactory', 'deleteSession').length, 0);
+      click('[aria-label="Inspect reader"]');
+      await flush();
+      t.is(controller.getState().view?.messages.length, 2);
+      t.is(
+        dom.document.querySelectorAll('.thix-session-path button').length,
+        2,
+      );
+      controller.setConnection('reconnecting');
+      const again = children('child');
+      await controller.attach(again.powers);
+      t.is(controller.getState().activeKey, 'deep');
+      t.deepEqual(
+        again.control
+          .callsOf('Operator', 'findSubagentSession')
+          .map(args => args.slice(3)),
+        [
+          ['scout', 'child'],
+          ['reader', 'deep'],
+        ],
+      );
+      await controller.openAncestor('child');
+      t.is(controller.getState().activeKey, 'child');
+      controller.setConnection('reconnecting');
+      await controller.attach(children('replacement').powers);
+      t.is(controller.getState().activeKey, 'root');
+      t.deepEqual(controller.getState().view?.input, {
+        text: 'saved root text',
+        caret: 4,
+      });
+      t.truthy(dom.document.querySelector('[aria-label="Settings"]'));
+    } finally {
+      await close();
+    }
+  },
+);
+
+test.serial(
+  'switching roots while a child lookup is outstanding discards its answer',
+  async t => {
+    let finish = () => {};
+    const fake = makeFakePowers({
+      beforeChildLookup: () =>
+        new Promise(resolve => {
+          finish = () => resolve();
+        }),
+      sessions: [
+        { key: 'one' },
+        { key: 'child', parent: { key: 'one', name: 'scout' } },
+        { key: 'two' },
+      ],
+    });
+    const { controller, close } = await setup(fake);
+    try {
+      await controller.selectSession('one');
+      const opening = controller.openSubagent('one', 'scout', 'child');
+      await flush();
+      await controller.selectSession('two');
+      finish();
+      await opening;
+      t.is(controller.getState().activeKey, 'two');
+      t.deepEqual(
+        controller.getState().sessionPath.map(s => s.key),
+        ['two'],
+      );
+      t.is(controller.getState().view?.info.key, 'two');
+      t.is(controller.getState().status, '');
+    } finally {
+      await close();
+    }
+  },
+);
+
+test.serial(
+  'a breadcrumb restores the same turn and offset from older transcript pages',
+  async t => {
+    const { controller, dom, close } = await setup(
+      makeFakePowers({
+        pageTurns: 2,
+        sessions: [
+          { key: 'root', turns: 8 },
+          { key: 'child', parent: { key: 'root', name: 'scout' } },
+        ],
+      }),
+      1024,
+      true,
+    );
+    const proto = dom.window.HTMLElement.prototype;
+    const original = Object.getOwnPropertyDescriptor(
+      proto,
+      'getBoundingClientRect',
+    );
+    // Happy DOM has no layout. Lay turns out in 100px blocks relative to
+    // the transcript scrollport so offset assertions exercise the real component.
+    Object.defineProperty(proto, 'getBoundingClientRect', {
+      configurable: true,
+      value() {
+        const el = this.closest('.thix-conversation');
+        const index = el
+          ? [...el.querySelectorAll('[data-turn]')].indexOf(this)
+          : -1;
+        const top = index < 0 ? 0 : index * 100 - el.scrollTop;
+        return { top, bottom: top + 100 };
+      },
+    });
+    try {
+      await controller.selectSession('root');
+      await controller.loadEarlier();
+      await controller.loadEarlier();
+      await flush();
+      const scroller = dom.document.querySelector('.thix-conversation');
+      Object.defineProperties(scroller, {
+        scrollHeight: { value: 600 },
+        clientHeight: { value: 150 },
+      });
+      scroller.scrollTop = 125;
+      const target = scroller.querySelectorAll('[data-turn]')[1];
+      const turn = target.getAttribute('data-turn');
+      t.is(target.getBoundingClientRect().top, -25);
+      await controller.openSubagent('root', 'scout', 'child');
+      await controller.openAncestor('root');
+      await flush();
+      const restored = dom.document.querySelector('.thix-conversation');
+      t.deepEqual(controller.getState().view?.readingPosition, {
+        turnId: turn,
+        offset: -25,
+        raw: false,
+      });
+      const targetAgain = [...restored.querySelectorAll('[data-turn]')].find(
+        row => row.getAttribute('data-turn') === turn,
+      );
+      t.truthy(targetAgain);
+      t.is(targetAgain?.getBoundingClientRect().top, -25);
+      t.is(controller.getState().view?.messages.length, 6);
+    } finally {
+      if (original)
+        Object.defineProperty(proto, 'getBoundingClientRect', original);
+      else delete proto.getBoundingClientRect;
       await close();
     }
   },

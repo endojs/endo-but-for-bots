@@ -226,7 +226,7 @@ export const seamLater = harden({
   methods: harden({
     Session: harden(['emergencyStop', 'resume', 'getExecutionState']),
     SessionInternal: harden(['deliverMail', 'cancelMail']),
-    Operator: harden(['getMail', 'getVoice']),
+    Operator: harden(['getMail', 'getVoice', 'findSubagentSession']),
     HarnessRoot: harden(['configureSpeech']),
     TurnSink: harden(['compacted']),
   }),

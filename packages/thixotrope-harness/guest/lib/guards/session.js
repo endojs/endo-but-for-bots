@@ -1358,6 +1358,7 @@ export const methodsOf = harden({
                 {
                   preview: text(limits.inventoryPreviewBytes),
                   truncated: M.boolean(),
+                  childKey: S.Id,
                 },
               ),
               limits.inventoryPageRows,

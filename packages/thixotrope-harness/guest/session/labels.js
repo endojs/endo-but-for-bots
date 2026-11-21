@@ -44,7 +44,7 @@ const copyField = harden({
 /**
  * @typedef {'preset' | 'endowment' | 'adopted' | 'stored' | 'subagent'} BindingSource
  *
- * @typedef {{ kind: 'object', value: any, source: BindingSource }
+ * @typedef {{ kind: 'object', value: any, source: BindingSource, childKey?: string }
  *   | { kind: 'json', text: string, bytes: number }} Binding
  *
  * @typedef {object} LabelSeed
@@ -88,7 +88,7 @@ harden(isValidLabel);
 
 /**
  * @param {{ seeds?: readonly LabelSeed[], onChange?: () => void,
- *   children?: () => { names: () => readonly string[], handleOf: (name: string) => any } | undefined }} [options]
+ *   children?: () => { names: () => readonly string[], handleOf: (name: string) => any, childKeyOf?: (name: string) => string | undefined } | undefined }} [options]
  * @returns {Labels}
  */
 export const makeLabels = ({
@@ -183,12 +183,18 @@ export const makeLabels = ({
   return harden({
     get: label => {
       if (!label.startsWith(subagentLabelPrefix)) return map.get(label);
-      const child = children()?.handleOf(
-        label.slice(subagentLabelPrefix.length),
-      );
+      const name = label.slice(subagentLabelPrefix.length);
+      const part = children();
+      const child = part?.handleOf(name);
+      const childKey = part?.childKeyOf?.(name);
       return child === undefined
         ? undefined
-        : harden({ kind: 'object', value: child, source: 'subagent' });
+        : harden({
+            kind: 'object',
+            value: child,
+            source: 'subagent',
+            ...(childKey === undefined ? {} : { childKey }),
+          });
     },
     list: () =>
       harden(

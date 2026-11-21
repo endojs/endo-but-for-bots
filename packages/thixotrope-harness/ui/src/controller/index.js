@@ -73,7 +73,12 @@ const LIST_MAX_PAGES = 200;
  */
 
 /**
+ * @typedef {{turnId:string, offset:number, raw:boolean}} ReadingPosition
+ */
+
+/**
  * @typedef {object} ConversationView
+ * @property {ReadingPosition} [readingPosition] the ancestor transcript position on return
  * @property {number} generation the current session watch
  * @property {Record<string, any>} info `SessionInfo` as received
  * @property {TurnEntry[]} messages oldest first
@@ -100,6 +105,7 @@ const LIST_MAX_PAGES = 200;
  * @property {string} [connectionMessage] the refusal text
  * @property {Array<Record<string, any>>} sessions rows without their presence
  * @property {string} [activeKey]
+ * @property {Array<{key:string,title:string,name?:string}>} sessionPath the root and inspected descendants
  * @property {Array<{ index: number, label: string, available: boolean, description?: string, reasoningEffort?: string, unavailableReason?: string }>} presets
  * @property {Array<{ index: number, label: string, kind: string }>} backends
  * @property {{ rows: any[], state: string, next?: string, error?: string, backendIndex?: number }} models
@@ -164,6 +170,7 @@ const usageOfEvent = event => {
 const initialState = () => ({
   connection: 'connecting',
   sessions: [],
+  sessionPath: [],
   presets: [],
   backends: [],
   models: { rows: [], state: 'idle' },
@@ -229,6 +236,35 @@ export const makeController = ({
 
   /** key -> Session presence */
   const sessionsByKey = new Map();
+  // Descendants are operator inspection targets, separate from the listed sessions.
+  const inspected = new Map();
+  const rootInputs = new Map();
+  /** @type {Map<string,ReadingPosition>} one bookmark per inspected ancestor */
+  const readingPositions = new Map();
+  /** @type {undefined | (()=>ReadingPosition | undefined)} */
+  let readPosition;
+  let navigationEpoch = 0;
+  const inspecting = () => state.sessionPath.length > 1;
+  const rememberInput = () => {
+    if (
+      !inspecting() &&
+      state.view &&
+      state.view.info.key === state.activeKey
+    ) {
+      rootInputs.set(state.activeKey, state.view.input);
+    }
+  };
+  /** @param {any} parent @param {string} name @param {string} [expectedKey] */
+  const childOf = async (parent, name, expectedKey) => {
+    const args =
+      expectedKey === undefined ? [parent, name] : [parent, name, expectedKey];
+    const child = await E(powers.operator).findSubagentSession(...args);
+    if (!child) throw Error('This subagent is no longer available.');
+    const info = await E(child).getInfo();
+    if (expectedKey !== undefined && info.key !== expectedKey)
+      throw Error('This subagent has changed.');
+    return { child, info };
+  };
   /** key -> row (as received, with its presence) */
   const rowsByKey = new Map();
   let listRev = 0;
@@ -318,16 +354,29 @@ export const makeController = ({
   const upsertRow = row => {
     sessionsByKey.set(row.key, row.session);
     rowsByKey.set(row.key, row);
+    const [root, ...children] = state.sessionPath;
+    if (root?.key === row.key && root.title !== row.title) {
+      update({ sessionPath: [{ ...root, title: row.title }, ...children] });
+    }
   };
 
   /** @param {string} key */
   const removeRow = key => {
     sessionsByKey.delete(key);
     rowsByKey.delete(key);
-    if (state.activeKey === key) {
+    rootInputs.delete(key);
+    if (state.activeKey === key || state.sessionPath[0]?.key === key) {
+      navigationEpoch += 1;
+      inspected.clear();
+      readingPositions.clear();
       viewEpoch += 1;
       closeViewSubscription();
-      update({ activeKey: undefined, view: null, recovery: null });
+      update({
+        activeKey: undefined,
+        sessionPath: [],
+        view: null,
+        recovery: null,
+      });
     }
   };
 
@@ -356,8 +405,9 @@ export const makeController = ({
     for (const row of rows) upsertRow(row);
     listRev = rev;
     publishRows();
-    if (state.activeKey !== undefined && !rowsByKey.has(state.activeKey)) {
-      removeRow(state.activeKey);
+    const rootKey = state.sessionPath[0]?.key ?? state.activeKey;
+    if (rootKey !== undefined && !rowsByKey.has(rootKey)) {
+      removeRow(rootKey);
     }
   };
 
@@ -818,9 +868,10 @@ export const makeController = ({
    * the newest history page.
    *
    * @param {string} key
+   * @param {ReadingPosition} [readingPosition]
    */
-  const openView = async key => {
-    const session = sessionsByKey.get(key);
+  const openView = async (key, readingPosition) => {
+    const session = sessionsByKey.get(key) ?? inspected.get(key);
     if (!session) throw Error(`no session ${key}`);
     viewEpoch += 1;
     const epoch = viewEpoch;
@@ -835,9 +886,9 @@ export const makeController = ({
     folder = makeReplyFold();
     foldTurnId = undefined;
     const keptInput =
-      state.view && state.activeKey === key
+      state.view && state.view.info.key === key
         ? state.view.input
-        : { text: '', caret: 0 };
+        : (rootInputs.get(key) ?? { text: '', caret: 0 });
     /** @type {Record<string, any>} */
     let snapshot;
     try {
@@ -850,6 +901,7 @@ export const makeController = ({
     update({
       view: {
         generation: epoch,
+        readingPosition,
         info: snapshot.info,
         inventoryRevision: snapshot.inventoryRevision,
         messages: [],
@@ -1015,6 +1067,10 @@ export const makeController = ({
     attachEpoch += 1;
     const epoch = attachEpoch;
     viewEpoch += 1;
+    navigationEpoch += 1;
+    const navigation = navigationEpoch;
+    rememberInput();
+    inspected.clear();
     powers = newPowers;
     context = undefined;
     submissionListeners.clear();
@@ -1026,16 +1082,51 @@ export const makeController = ({
       ...(state.view && { view: { ...state.view, inventoryLoading: true } }),
     });
     try {
-      factory = await E(powers.operator).getFactory();
+      const attachedFactory = await E(powers.operator).getFactory();
       if (epoch !== attachEpoch) return;
+      factory = attachedFactory;
       await loadSessions(epoch);
       if (epoch !== attachEpoch) return;
       pumpList(epoch).catch(error => {
         if (epoch === attachEpoch) reportStatus(error);
       });
       const catalogue = loadCatalogue(epoch).catch(reportStatus);
-      if (state.activeKey !== undefined && sessionsByKey.has(state.activeKey)) {
-        await openView(state.activeKey);
+      if (navigation === navigationEpoch && state.sessionPath.length > 1) {
+        const [root, ...children] = state.sessionPath;
+        const restored = [root];
+        let parent = sessionsByKey.get(root.key);
+        for (const step of children) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            const { child } = await childOf(
+              parent,
+              /** @type {string} */ (step.name),
+              step.key,
+            );
+            if (navigation !== navigationEpoch || epoch !== attachEpoch) break;
+            parent = child;
+            inspected.set(step.key, child);
+            restored.push(step);
+          } catch (error) {
+            if (navigation === navigationEpoch && epoch === attachEpoch)
+              reportStatus(error);
+            break;
+          }
+        }
+        if (navigation === navigationEpoch && epoch === attachEpoch) {
+          update({
+            sessionPath: restored,
+            activeKey: restored[restored.length - 1].key,
+            view: null,
+          });
+        }
+      }
+      if (
+        navigation === navigationEpoch &&
+        epoch === attachEpoch &&
+        state.activeKey !== undefined
+      ) {
+        await openView(state.activeKey, readingPositions.get(state.activeKey));
       }
       await resendDrafts(epoch);
       await catalogue;
@@ -1048,7 +1139,7 @@ export const makeController = ({
 
   /** @param {string} key */
   const activeSession = key => {
-    const session = sessionsByKey.get(key);
+    const session = sessionsByKey.get(key) ?? inspected.get(key);
     if (!session) throw Error(`no session ${key}`);
     return session;
   };
@@ -1060,9 +1151,12 @@ export const makeController = ({
    * @param {string} entryKey
    */
   const entryOf = async entryKey => {
+    const sessionKey = state.activeKey;
     let entry = entriesByKey.get(entryKey);
     if (!entry) {
       await viewReady;
+      if (sessionKey !== state.activeKey || inspecting())
+        throw Error('The selected session changed.');
       entry = entriesByKey.get(entryKey);
     }
     if (!entry) throw Error(`no queued entry ${entryKey}`);
@@ -1163,16 +1257,106 @@ export const makeController = ({
         : E(session).getInventoryPage(cursor);
     },
 
+    /** @param {()=>ReadingPosition | undefined} reader */
+    onReadPosition(reader) {
+      readPosition = reader;
+      return () => {
+        if (readPosition === reader) readPosition = undefined;
+      };
+    },
+
     /** @param {string} key */
     selectSession: key =>
       guarded(async () => {
+        const row = rowsByKey.get(key);
+        if (!row) throw Error('This session is no longer listed.');
+        rememberInput();
+        navigationEpoch += 1;
+        inspected.clear();
+        readingPositions.clear();
         update({
           activeKey: key,
+          sessionPath: [{ key, title: row.title }],
+          view: null,
+          recovery: null,
           drawerOpen: false,
           settingsOpen: false,
           panel: undefined,
         });
         await openView(key);
+      }),
+
+    /** @param {string} parentKey @param {string} name @param {string} [expectedKey] */
+    openSubagent: (parentKey, name, expectedKey) =>
+      guarded(async () => {
+        if (
+          state.connection !== 'open' ||
+          state.activeKey !== parentKey ||
+          state.view?.info.key !== parentKey ||
+          state.view.inventoryLoading
+        )
+          return;
+        navigationEpoch += 1;
+        const navigation = navigationEpoch;
+        const epoch = attachEpoch;
+        const parent = viewSession;
+        const target = await childOf(parent, name, expectedKey).catch(error => {
+          if (navigation === navigationEpoch && epoch === attachEpoch)
+            throw error;
+          return undefined;
+        });
+        if (!target) return;
+        const { child, info } = target;
+        if (navigation !== navigationEpoch || epoch !== attachEpoch) return;
+        rememberInput();
+        const bookmark = readPosition?.();
+        if (bookmark) readingPositions.set(parentKey, bookmark);
+        else readingPositions.delete(parentKey);
+        inspected.set(info.key, child);
+        const path = [
+          ...state.sessionPath,
+          { key: info.key, title: info.title, name },
+        ];
+        update({
+          activeKey: info.key,
+          sessionPath: path,
+          view: null,
+          recovery: null,
+          drawerOpen: false,
+          settingsOpen: false,
+          panel: undefined,
+        });
+        await openView(info.key);
+      }),
+
+    /** @param {string} key */
+    openAncestor: key =>
+      guarded(async () => {
+        const index = state.sessionPath.findIndex(step => step.key === key);
+        if (
+          index < 0 ||
+          index >= state.sessionPath.length - 1 ||
+          state.connection !== 'open' ||
+          state.view?.inventoryLoading
+        )
+          return;
+        navigationEpoch += 1;
+        for (const step of state.sessionPath.slice(index + 1)) {
+          inspected.delete(step.key);
+          readingPositions.delete(step.key);
+        }
+        update({
+          activeKey: key,
+          sessionPath: state.sessionPath.slice(0, index + 1),
+          view: null,
+          recovery: null,
+          drawerOpen: false,
+          settingsOpen: false,
+          panel: undefined,
+        });
+        const bookmark = readingPositions.get(key);
+        readingPositions.delete(key);
+        await openView(key, bookmark);
       }),
 
     /**
@@ -1219,8 +1403,14 @@ export const makeController = ({
           });
           publishRows();
         }
+        rememberInput();
+        inspected.clear();
+        readingPositions.clear();
+        navigationEpoch += 1;
         update({
           activeKey: info.key,
+          sessionPath: [{ key: info.key, title: info.title }],
+          view: null,
           drawerOpen: false,
           newSessionOpen: false,
           panel: undefined,
@@ -1234,11 +1424,18 @@ export const makeController = ({
      * @param {string} title
      */
     renameSession: (key, title) =>
-      guarded(() => E(activeSession(key)).rename(title)),
+      guarded(async () => {
+        const row = rowsByKey.get(key);
+        if (row) await E(row.session).rename(title);
+      }),
 
     /** @param {string} key */
     deleteSession: key =>
-      guarded(() => E(factory).deleteSession(activeSession(key))),
+      guarded(() => {
+        const row = rowsByKey.get(key);
+        if (row) return E(factory).deleteSession(row.session);
+        return undefined;
+      }),
 
     /**
      * Send the composer's text exactly once (9.2).
@@ -1247,7 +1444,7 @@ export const makeController = ({
      */
     send: async text => {
       const key = state.activeKey;
-      if (key === undefined || !state.view) return undefined;
+      if (key === undefined || !state.view || inspecting()) return undefined;
       if (!locks) {
         updateView({ sendError: uiTexts.noWebLocks });
         return undefined;
@@ -1267,6 +1464,7 @@ export const makeController = ({
             false,
           );
           clearDraft(storage, key, requestId);
+          if (rootInputs.get(key)?.text === text) rootInputs.delete(key);
           const notice = { sessionKey: key, session, requestId, receipt };
           for (const listener of [...submissionListeners]) {
             try {
@@ -1291,6 +1489,7 @@ export const makeController = ({
     /** Stop the running turn (R6-49). Leaving the page cancels nothing. */
     stop: () =>
       guarded(async () => {
+        if (inspecting()) return;
         const turn = await runningTurn();
         if (turn) await E(turn).cancel();
       }),
@@ -1298,6 +1497,7 @@ export const makeController = ({
     /** @param {string} entryKey */
     sendPendingNow: entryKey =>
       guarded(async () => {
+        if (inspecting()) return;
         const entry = await entryOf(entryKey);
         // R6-44: Send now on the head while a turn runs cancels that turn so
         // it goes next. The session does it itself (M2 review, J-9491); a
@@ -1312,12 +1512,16 @@ export const makeController = ({
      */
     editPending: (entryKey, text) =>
       guarded(async () =>
-        E(powers.composer).edit(await entryOf(entryKey), text),
+        inspecting()
+          ? undefined
+          : E(powers.composer).edit(await entryOf(entryKey), text),
       ),
 
     /** @param {string} entryKey */
     cancelPending: entryKey =>
-      guarded(async () => E(await entryOf(entryKey)).cancel()),
+      guarded(async () =>
+        inspecting() ? undefined : E(await entryOf(entryKey)).cancel(),
+      ),
 
     /** Scrollback reads vat pages until `archived`, then `History`. */
     loadEarlier: () =>
@@ -1396,6 +1600,7 @@ export const makeController = ({
      */
     resolveTurn: (turnId, note) =>
       guarded(async () => {
+        if (inspecting()) return;
         const turn =
           turnsById.get(turnId) ?? (await E(viewSession).findTurn(turnId));
         turnsById.set(turnId, turn);
@@ -1460,7 +1665,9 @@ export const makeController = ({
     },
 
     toggleDrawer: () => update({ drawerOpen: !state.drawerOpen }),
-    toggleSettings: () => update({ settingsOpen: !state.settingsOpen }),
+    toggleSettings: () => {
+      if (!inspecting()) update({ settingsOpen: !state.settingsOpen });
+    },
 
     /**
      * Open an `app.panel` feature by its id (the header menu).

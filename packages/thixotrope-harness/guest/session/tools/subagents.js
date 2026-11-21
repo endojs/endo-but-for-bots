@@ -346,11 +346,11 @@ const spawnEntry = harden({
         return failed(texts.frameLimit);
       part.spawning(name, context.turn);
       /** @type {any} */
-      let handle;
+      let answer;
       try {
-        ({ handle } = await E(part.delegation()).spawn(spawnRequest));
+        answer = await E(part.delegation()).spawn(spawnRequest);
       } finally {
-        part.spawned(name, handle);
+        part.spawned(name, answer?.handle, answer?.childKey);
       }
       return ok(mailTextOf.spawned(name));
     },

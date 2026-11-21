@@ -532,6 +532,16 @@ export const makeFactoryKit = ({
 
   const operator = makeExo('Operator', interfaces.Operator, {
     getFactory: () => factory,
+    /**
+     * @param {any} parent
+     * @param {string} name
+     * @param {string} [expectedKey]
+     */
+    findSubagentSession(parent, name, expectedKey) {
+      const session = subagents.findSubagentSession(parent, name, expectedKey);
+      if (session === undefined) throw Error(texts.unknownSession);
+      return session;
+    },
     /** M2 W2.7: the agent host's Secrets manager (m2-interfaces.md 9). */
     getSecrets: () => E(admin).getSecrets(),
     getPresets: () => catalog.facet,

@@ -84,31 +84,63 @@ export const Header = ({
           ' Inventory',
         )
       : null,
-    editing !== null
-      ? h('input', {
-          class: 'floot-header-title-input',
-          value: editing,
-          autofocus: true,
-          /** @param {any} event */
-          onInput: event => setEditing(event.target.value),
-          /** @param {any} event */
-          onKeyDown: event => {
-            if (event.key === 'Enter') commit();
-            else if (event.key === 'Escape') setEditing(null);
-          },
-          onBlur: commit,
-        })
-      : h(
-          'div',
-          {
-            class: 'floot-header-title',
-            title: view ? 'Double-click to rename' : undefined,
-            onDblClick: () => {
-              if (view) setEditing(view.info.title);
+    state.sessionPath?.[1]
+      ? h(
+          'nav',
+          { class: 'thix-session-path', 'aria-label': 'Session path' },
+          state.sessionPath.map(
+            (
+              /** @type {{key:string,title:string,name?:string}} */ step,
+              /** @type {number} */ index,
+            ) =>
+              index === state.sessionPath.length - 1
+                ? h(
+                    'span',
+                    {
+                      key: step.key,
+                      'aria-current': 'page',
+                      title: step.title,
+                    },
+                    step.name ?? step.title,
+                  )
+                : h(
+                    'button',
+                    {
+                      key: step.key,
+                      type: 'button',
+                      title: step.title,
+                      'aria-label': step.title,
+                      onClick: () => controller.openAncestor(step.key),
+                    },
+                    step.name ?? step.title,
+                  ),
+          ),
+        )
+      : editing !== null
+        ? h('input', {
+            class: 'floot-header-title-input',
+            value: editing,
+            autofocus: true,
+            /** @param {any} event */
+            onInput: event => setEditing(event.target.value),
+            /** @param {any} event */
+            onKeyDown: event => {
+              if (event.key === 'Enter') commit();
+              else if (event.key === 'Escape') setEditing(null);
             },
-          },
-          title,
-        ),
+            onBlur: commit,
+          })
+        : h(
+            'div',
+            {
+              class: 'floot-header-title',
+              title: view ? 'Double-click to rename' : undefined,
+              onDblClick: () => {
+                if (view) setEditing(view.info.title);
+              },
+            },
+            title,
+          ),
     h(Slot, { slot: 'header.chip', features, context, class: 'thix-chips' }),
     panels.map(feature =>
       h(
@@ -126,7 +158,7 @@ export const Header = ({
         feature.label ?? feature.id,
       ),
     ),
-    view
+    view && !state.sessionPath?.[1]
       ? h(
           'button',
           {

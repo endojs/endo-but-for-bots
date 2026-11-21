@@ -39,6 +39,22 @@ test('agent lookup and the browser projection see the same spawned child', t => 
   t.is(source.lookup('subagents/helper'), undefined);
 });
 
+test('only the factory-owned child binding carries its navigation key', t => {
+  const handle = Far('Child', {});
+  const labels = makeLabels({
+    children: () => ({
+      names: () => ['helper'],
+      handleOf: name => (name === 'helper' ? handle : undefined),
+      childKeyOf: name => (name === 'helper' ? 's2' : undefined),
+    }),
+  });
+  labels.bindObject('alias', handle, 'stored');
+  t.deepEqual(inventoryPage(labels, 1).rows, [
+    { label: 'alias', kind: 'object' },
+    { label: 'subagents/helper', kind: 'subagent', childKey: 's2' },
+  ]);
+});
+
 test('inventory cursors restart on mutation and bound previews by UTF-8 bytes', t => {
   let rev = 0;
   const labels = makeLabels({

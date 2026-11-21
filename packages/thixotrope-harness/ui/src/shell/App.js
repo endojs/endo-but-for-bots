@@ -72,7 +72,14 @@ export const App = ({ controller, features, views = {}, narrow = false }) => {
   const context = controller.featureContext();
   const sessions = views.sessions ?? {};
   const conversation = views.conversation ?? {};
-  const shared = { state, controller, features, context, narrow };
+  const inspecting = Boolean(state.sessionPath?.[1]);
+  const shared = {
+    state,
+    controller,
+    features: inspecting ? [] : features,
+    context,
+    narrow,
+  };
   const drawerOpen = narrow && state.drawerOpen;
   const sidebarOpen = !narrow || drawerOpen;
 
@@ -172,8 +179,8 @@ export const App = ({ controller, features, views = {}, narrow = false }) => {
           'div',
           { class: 'thix-session-content' },
           body(),
-          h(StatusBar, { state, features, context }),
-          state.view && !panel && conversation.Composer
+          h(StatusBar, shared),
+          state.view && !inspecting && !panel && conversation.Composer
             ? h(conversation.Composer, shared)
             : null,
         ),

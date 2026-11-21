@@ -49,6 +49,7 @@ import {
 
 /**
  * @typedef {object} FakeSessionSpec
+ * @property {{key:string, name:string}} [parent]
  * @property {(cursor?: string) => any} [inventoryPage]
  * @property {string} [key]
  * @property {string} [title]
@@ -90,6 +91,7 @@ const previewOf = text => text.slice(0, 1024);
  *   presets?: any[],
  *   extras?: Array<{ label: string, service: any }>,
  *   pageTurns?: number,
+ *   beforeChildLookup?: () => Promise<void>,
  * }} [options]
  */
 export const makeFakePowers = ({
@@ -99,6 +101,7 @@ export const makeFakePowers = ({
   presets,
   extras = [],
   pageTurns = 32,
+  beforeChildLookup,
 } = {}) => {
   let clock = 1_700_000_000_000;
   const tick = () => {
@@ -289,6 +292,7 @@ export const makeFakePowers = ({
 
   /**
    * @typedef {object} FakeSession
+   * @property {{key:string, name:string}} [parent]
    * @property {(cursor?: string) => any} [inventoryPage]
    * @property {string} key
    * @property {string} title
@@ -581,6 +585,7 @@ export const makeFakePowers = ({
     const s = {
       key: spec.key ?? `s${sessionCounter}`,
       inventoryPage: spec.inventoryPage,
+      parent: spec.parent,
       inventoryRevision: 0,
       title: spec.title ?? 'New chat',
       state: spec.state ?? 'ready',
@@ -993,7 +998,7 @@ export const makeFakePowers = ({
     /** @param {{ after?: string, limit?: number }} [page] */
     listSessions: ({ after, limit = 50 } = {}) => {
       enter('SessionFactory', 'listSessions', [{ after, limit }]);
-      const all = [...byKey.values()];
+      const all = [...byKey.values()].filter(row => !row.parent);
       const start =
         after === undefined ? 0 : all.findIndex(s => s.key === after) + 1;
       const slice = all.slice(start, start + limit);
@@ -1043,6 +1048,20 @@ export const makeFakePowers = ({
   });
 
   const operator = Far('Operator', {
+    /** @param {any} parent @param {string} name @param {string} [expectedKey] */
+    async findSubagentSession(parent, name, expectedKey) {
+      await beforeChildLookup?.();
+      enter('Operator', 'findSubagentSession', [parent, name, expectedKey]);
+      const child = [...byKey.values()].find(
+        row =>
+          row.parent &&
+          row.parent.key === byFacet.get(parent)?.key &&
+          row.parent.name === name,
+      );
+      if (!child || (expectedKey !== undefined && child.key !== expectedKey))
+        throw Error('This subagent is no longer available.');
+      return child.facet;
+    },
     getFactory: () => {
       enter('Operator', 'getFactory', []);
       return factory;

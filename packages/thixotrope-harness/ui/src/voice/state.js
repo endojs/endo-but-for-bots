@@ -945,7 +945,7 @@ export const makeVoiceState = ({
   const onControllerChange = () => {
     const state = viewState();
     const current = state.view && state.view.current;
-    if (current && state.activeKey !== undefined) {
+    if (current && !state.sessionPath?.[1] && state.activeKey !== undefined) {
       const seen = `${state.activeKey} ${current.turnId}`;
       if (seen !== lastTurn) {
         lastTurn = seen;

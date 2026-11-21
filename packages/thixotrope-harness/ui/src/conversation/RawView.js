@@ -42,12 +42,12 @@ export const rawJson = value => {
 };
 
 /**
- * @param {{ label: string, value: unknown }} props
+ * @param {{ label: string, value: unknown, turnId?: string }} props
  */
-const RawBlock = ({ label, value }) =>
+const RawBlock = ({ label, value, turnId }) =>
   h(
     'div',
-    { class: 'floot-msg-row assistant' },
+    { class: 'floot-msg-row assistant', 'data-turn': turnId },
     h(
       'div',
       { class: 'floot-tool thix-raw' },
@@ -66,6 +66,7 @@ export const RawView = ({ view }) =>
     view.messages.map((/** @type {Record<string, any>} */ entry) =>
       h(RawBlock, {
         key: entry.turnId,
+        turnId: entry.turnId,
         label: `turn ${entry.turnId} (raw)`,
         value: entry,
       }),

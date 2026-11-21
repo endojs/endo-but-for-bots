@@ -32,7 +32,7 @@ const STICK_PX = 48;
  * }} props
  */
 export const Conversation = ({ state, controller, features, context }) => {
-  const [raw, setRaw] = useState(false);
+  const [raw, setRaw] = useState(Boolean(state.view?.readingPosition?.raw));
   const scroller = useRef(/** @type {HTMLDivElement | null} */ (null));
   const stick = useRef(true);
   const view = state.view;
@@ -41,6 +41,30 @@ export const Conversation = ({ state, controller, features, context }) => {
   const lastAutoPage = useRef(/** @type {string | undefined} */ (undefined));
   const anchor = useRef(
     /** @type {{node: Element, offset: number} | undefined} */ (undefined),
+  );
+
+  const restored = useRef(-1);
+  const lastRestorePage = useRef(/** @type {string | undefined} */ (undefined));
+
+  useLayoutEffect(
+    () =>
+      controller.onReadPosition?.(() => {
+        const el = scroller.current;
+        if (!el || el.scrollHeight - el.scrollTop - el.clientHeight < STICK_PX)
+          return undefined;
+        const edge = el.getBoundingClientRect().top;
+        for (const row of el.querySelectorAll('[data-turn]')) {
+          const bounds = row.getBoundingClientRect();
+          if (bounds.bottom > edge)
+            return {
+              turnId: row.getAttribute('data-turn'),
+              offset: bounds.top - edge,
+              raw,
+            };
+        }
+        return undefined;
+      }),
+    [controller, raw],
   );
 
   const requestEarlier = () => {
@@ -69,6 +93,36 @@ export const Conversation = ({ state, controller, features, context }) => {
       stick.current = true;
       anchor.current = undefined;
       lastAutoPage.current = undefined;
+      lastRestorePage.current = undefined;
+    }
+    const position = view.readingPosition;
+    if (
+      position &&
+      restored.current !== view.generation &&
+      view.messages.length
+    ) {
+      const target = [...element.querySelectorAll('[data-turn]')].find(
+        row => row.getAttribute('data-turn') === position.turnId,
+      );
+      if (target) {
+        restored.current = view.generation;
+        stick.current = false;
+        const delta =
+          target.getBoundingClientRect().top -
+          element.getBoundingClientRect().top -
+          position.offset;
+        element.scrollTo({
+          top: element.scrollTop + delta,
+          behavior: 'instant',
+        });
+      } else if (view.earlier !== 'none') {
+        const first = view.messages[0].turnId;
+        if (view.earlier === 'more' && first !== lastRestorePage.current) {
+          lastRestorePage.current = first;
+          void controller.loadEarlier();
+        }
+        return;
+      }
     }
     const saved = anchor.current;
     if (saved && view.earlier !== 'loading') {

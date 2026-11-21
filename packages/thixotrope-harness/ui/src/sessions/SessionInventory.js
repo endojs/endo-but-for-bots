@@ -2,7 +2,7 @@
 import { h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 
-/** @typedef {{ label: string, kind: 'value'|'object'|'subagent', preview?: string, truncated?: boolean }} InventoryRow */
+/** @typedef {{ label: string, kind: 'value'|'object'|'subagent', preview?: string, truncated?: boolean, childKey?: string }} InventoryRow */
 
 const kindLabels = {
   value: 'Value',
@@ -77,7 +77,23 @@ const InventoryRows = ({ controller, sessionKey, revision }) => {
       h(
         'li',
         { key: row.label, 'data-label': row.label },
-        h('span', { class: 'thix-inventory-label' }, row.label),
+        row.kind === 'subagent' && row.label.startsWith('subagents/')
+          ? h(
+              'button',
+              {
+                type: 'button',
+                class: 'thix-subagent-link',
+                'aria-label': `Inspect ${row.label.slice('subagents/'.length)}`,
+                onClick: () =>
+                  controller.openSubagent(
+                    sessionKey,
+                    row.label.slice('subagents/'.length),
+                    row.childKey,
+                  ),
+              },
+              row.label,
+            )
+          : h('span', { class: 'thix-inventory-label' }, row.label),
         h('span', { class: 'thix-inventory-kind' }, kindLabels[row.kind]),
         row.preview === undefined
           ? null

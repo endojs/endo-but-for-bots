@@ -220,6 +220,8 @@ test('a spawned child is hidden, titled under its parent, inherits the creation,
     [['scout', 'ready']],
   );
   t.is(listed[0].handle, answer.handle);
+  t.is(answer.childKey, child.row.key);
+  t.is(listed[0].childKey, answer.childKey);
   t.is(
     tree.tree.delegationFor(parent.row, harden({})),
     parent.delegation,
