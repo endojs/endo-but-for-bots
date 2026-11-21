@@ -1587,6 +1587,15 @@ and inference are separate requests. A fresh usage reading verifies only the
 former. The gateway and supervisor logs in the local UAT directory cover
 process startup and transport.
 
+**Mail and delegation passed** on the same pinned worker with the ChatGPT
+backend and `gpt-5.6-terra` at low reasoning effort. The sender (`s4`)
+forwarded a held address as an attachment to the recipient (`s5`). The
+recipient adopted it and returned the identical capability to the operator.
+Its automatic reply named the forwarded package's postmark. The sender then
+spawned `scout` (`s6`), verified the child's live answer through
+`askSubagent`, and stopped it. The factory export confirmed removal.
+[Run record](../JOURNAL.md#j-12586-2026-11-21-live-terra-mail-and-delegation-setup).
+
 Default provisioning installs the base harness. The operator supplies a backend and
 configures the runner and speech services for the corresponding journeys. Record the worker digest, backend/model, runner or audio device,
 observed outcome and any failing turn for each journey.
@@ -1596,7 +1605,8 @@ provider was scripted. Automated coverage includes all four cross-lane cases and
 54 milestone files across runs. The combined core record covers 25 of 26 files and
 the separate worker-retirement case.
 M6 assigns isolation to a real runtime. M8 assigns image and compaction checks to live
-providers. M9 calls for live repeats of attachment adoption, forwarding and asking a child.
+providers. The M9 live repeat of attachment adoption, forwarding and asking
+a child passed in J-12586 through J-12588.
 M11 assigns speech engines, providers and microphone checks to the owner.
 J-12566 records the trial scope. J-12575 records the Chromium preflight, 14 installed
 mail and delegation cases and 2,011 package tests on the selected guest.
@@ -2110,6 +2120,10 @@ definitions brought spawn to 1,452 ms against 1,500 ms on the pinned worker.
 Ask overhead was 312 ms against 300 ms. Three eight-child bursts and three
 subtree stops passed. The baseline and candidate are in J-12567 and J-12569. The two additional
 delegation candidates in J-12574 missed both strict medians.
+The live functional UAT subsequently passed on the pinned worker with Terra
+at low effort. The operator verified forwarded capability identity, the
+recipient's reply postmark, the hidden child's answer and its removal after
+stop (J-12586 through J-12588).
 The ten mail, request and subagent tools are registered. With the production session
 linker, the delegation change adds 21,433 bytes to the WX.1 base of 115,502,
 leaving 67 bytes of M9's 21,500-byte allocation. The combined session is 145,960

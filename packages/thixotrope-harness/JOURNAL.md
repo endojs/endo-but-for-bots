@@ -19180,3 +19180,42 @@ provider wiring tests, package type checking, and the installed M4 wire
 regression (acceptance 8 and 9, exit 0). The regression used a short private
 state path for the macOS control socket. ESLint reported its two existing
 safe-await warnings in the touched files and no errors.
+
+### J-12586 2026-11-21 Live Terra mail and delegation setup
+
+Used the running worker `367e78ad1d` and the existing ChatGPT pool. Model
+discovery advertised `gpt-5.6-terra` with low reasoning effort. Created two
+Chat only sessions with that explicit selection, sender `s4` and recipient
+`s5`. The operator attached the recipient's minted address as `target` and
+the sender's minted address as `proof` to one package. In `s4/t1`, both
+`adopt` calls succeeded. The operator mailbox received `READY` with
+`inReplyTo: 1`, matching the original postmark.
+
+### J-12587 2026-11-21 Live attachment forwarding and correlated reply
+
+In a second turn (`s4/t2`), the sender used its adopted `target` address to
+send the `proof` capability and the marker `mail-98ad8208`. The recipient
+inbox showed package 1 with edge `proof`, from the sender, with postmark 3.
+In `s5/t1` the recipient adopted that edge as `parcel-proof`, then sent it
+to the operator under the label `verified`. The operator took it from message
+2 and compared it by object identity with the sender's original minted address.
+The sender's inbox separately held the recipient's reply
+`RECEIVED-mail-98ad8208` with `inReplyTo: 3`. The recorded adoption and send
+tool results matched their operation IDs on both sides and reported success.
+
+### J-12588 2026-11-21 Live Terra spawn, ask and stop passed
+
+Sender `s4` also served as the parent. Its session info and the recipient's
+both reported `gpt-5.6-terra`, low reasoning effort and the Chat only preset.
+Parent turn `t3` called `spawnSubagent` for `scout`. The factory session
+count rose from five to six. The new child `s6` reported the same model and
+effort when inspected directly.
+
+Parent turn `t4` called `askSubagent` with a per-run challenge. The child's
+own completed turn (`s6/t1`), the parent's ask tool result and the parent's
+final answer all contained the exact string `CHILD-mail-98ad8208`. Parent
+turn `t5` called `stopSubagent`. The tool succeeded, the factory count
+returned to five and its session export no longer contained `s6`. Every
+delegation tool result matched its intent by operation ID and reported success.
+The two top-level chats remain available for operator review. Together with
+J-12586 and J-12587, this passes the live M9 mail and delegation journey.
