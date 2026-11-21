@@ -62,6 +62,10 @@ shows provider readings. A dashed line projects the observed usage rate to the
 reported reset, or to exhaustion if it comes sooner. Weekly reset markers and
 observation times use UTC. Expand **Readings** for the exact values.
 
+Accounts that report a numeric credit balance also get a separate **Credit
+balance** graph. Its forecast uses spending since the latest observed top-up
+and labels how far ahead it projects.
+
 The harness records usage reported during provider calls and when you select
 **Refresh**. Opening the chart reads existing history. A forecast requires
 two observations at least ten minutes apart in the same quota period.

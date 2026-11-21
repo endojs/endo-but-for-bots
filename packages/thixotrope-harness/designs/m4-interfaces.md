@@ -520,6 +520,14 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   read, last confirmation, count and reported reset. A failed history read keeps the last graph
   and says so beside it (`role=status`).
 
+  Each member can also supply `credits`, a bounded list of confirmed numeric
+  balances with `from`, `value` and optional `to` and `count`. The service
+  preserves the provider's decimal precision. A full observation without a
+  numeric balance ends the current credit series. An inference header that
+  omits the balance leaves its observation time unchanged. An observed balance
+  increase starts a new spending forecast. Weekly reset timestamps apply to
+  quota windows.
+
 ---
 
 ## 7. Renewal and sign-in (W4.4; R7-16, R7-29, R7-30, R8-35..R8-38)

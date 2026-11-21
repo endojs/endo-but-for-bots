@@ -27,6 +27,22 @@ import { useEffect, useState } from 'preact/hooks';
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { subscriptionLimits } from '../../../guest/lib/subscription-limits.js';
 /* eslint-enable import/no-relative-packages */
+import {
+  BOTTOM,
+  COLOURS,
+  HEIGHT,
+  LEFT,
+  PLOT_WIDTH,
+  RIGHT,
+  TOP,
+  WIDTH,
+  fixed,
+  labelAt,
+  nowMarker,
+  scaleOf,
+  timeAxis,
+} from './chart-frame.js';
+import { CreditGraph, reportsNumericCredits } from './CreditGraph.js';
 import { windowName } from './labels.js';
 import {
   analyseSeries,
@@ -34,7 +50,6 @@ import {
   latestText,
   projectionText,
   remainingOf,
-  timeTicks,
 } from './quota-projection.js';
 
 /** The graph's own words (harness texts). */
@@ -55,29 +70,13 @@ export const quotaGraphTexts = harden({
   recent: 'Recent readings (zoomed)',
 });
 
-const WIDTH = 360;
-const HEIGHT = 160;
-const LEFT = 34;
-const RIGHT = 10;
-const TOP = 16;
-const BOTTOM = 32;
 const INSET_HEIGHT = 110;
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
-const PLOT_WIDTH = WIDTH - LEFT - RIGHT;
 /** The inset is drawn when the observed span is narrower than this. */
 const SQUEEZED_PX = PLOT_WIDTH * 0.25;
 /** How often an open view advances its clock. */
 export const QUOTA_TICK_MS = 30_000;
-
-const COLOURS = harden({
-  observed: '#2b6cb0',
-  projected: '#b7791f',
-  now: '#718096',
-  reset: '#c53030',
-  grid: '#ccc',
-  text: '#555',
-});
 
 /**
  * @param {unknown} error
@@ -135,38 +134,13 @@ export const recentDomainOf = (analysis, nowMs) => {
 };
 
 /**
- * @param {number} start
- * @param {number} end
- * @param {number} height
- */
-const scaleOf = (start, end, height) => ({
-  x: (/** @type {number} */ ms) => LEFT + ((ms - start) / (end - start)) * PLOT_WIDTH,
-  y: (/** @type {number} */ used) => TOP + (used / 100) * (height - TOP - BOTTOM),
-});
-
-/** @param {number} n */
-const fixed = n => n.toFixed(1);
-
-/**
- * A marker label beside its line, on the side with room: left of it, unless
- * that would run into the y-axis labels.
- *
- * @param {number} x
- */
-const labelAt = x =>
-  x - LEFT < 30
-    ? { x: fixed(x + 3), 'text-anchor': 'start' }
-    : { x: fixed(x - 3), 'text-anchor': 'end' };
-
-/**
  * Grid, axes and hour/day-aligned time ticks. Every other tick label is
  * `minor` (hidden on narrow screens by the stylesheet).
  *
  * @param {{ start: number, end: number, height: number, maxTicks: number }} frame
  */
 const axes = ({ start, end, height, maxTicks }) => {
-  const { x, y } = scaleOf(start, end, height);
-  const base = height - BOTTOM;
+  const { y } = scaleOf(start, end, height);
   const yTicks = [100, 50, 0].map(remaining =>
     h(
       'g',
@@ -190,57 +164,7 @@ const axes = ({ start, end, height, maxTicks }) => {
       ),
     ),
   );
-  const ticks = timeTicks(start, end, maxTicks);
-  const xTicks = ticks.map((tick, index) =>
-    h(
-      'g',
-      {
-        class: `m4-quota-time${index % 2 === 1 ? ' minor' : ''}`,
-        'data-ms': tick.ms,
-      },
-      h('line', {
-        x1: fixed(x(tick.ms)),
-        x2: fixed(x(tick.ms)),
-        y1: base,
-        y2: base + 3,
-        stroke: COLOURS.text,
-      }),
-      h(
-        'text',
-        {
-          x: fixed(x(tick.ms)),
-          y: base + 13,
-          'text-anchor': 'middle',
-          fill: COLOURS.text,
-        },
-        tick.time ?? tick.date,
-      ),
-      tick.time !== undefined && tick.date !== undefined
-        ? h(
-            'text',
-            {
-              x: fixed(x(tick.ms)),
-              y: base + 24,
-              'text-anchor': 'middle',
-              fill: COLOURS.text,
-            },
-            tick.date,
-          )
-        : null,
-    ),
-  );
-  return [
-    ...yTicks,
-    h('line', {
-      class: 'm4-quota-axis',
-      stroke: COLOURS.text,
-      x1: LEFT,
-      x2: WIDTH - RIGHT,
-      y1: base,
-      y2: base,
-    }),
-    ...xTicks,
-  ];
+  return [...yTicks, ...timeAxis({ start, end, height, maxTicks })];
 };
 
 /** @param {Point} point */
@@ -279,57 +203,24 @@ const observed = (analysis, { x, y }, start = -Infinity) => {
   const dots = analysis.points
     .filter(point => point.seenMs >= start)
     .flatMap(point =>
-      (point.seenMs > point.atMs ? [point.atMs, point.seenMs] : [point.atMs]).map(
-        ms =>
-          h(
-            'circle',
-            {
-              class: 'm4-quota-dot',
-              fill: COLOURS.observed,
-              cx: fixed(x(ms)),
-              cy: fixed(y(point.usedPercent)),
-              r: 2.6,
-            },
-            h('title', null, recordTitle(point)),
-          ),
+      (point.seenMs > point.atMs
+        ? [point.atMs, point.seenMs]
+        : [point.atMs]
+      ).map(ms =>
+        h(
+          'circle',
+          {
+            class: 'm4-quota-dot',
+            fill: COLOURS.observed,
+            cx: fixed(x(ms)),
+            cy: fixed(y(point.usedPercent)),
+            r: 2.6,
+          },
+          h('title', null, recordTitle(point)),
+        ),
       ),
     );
   return [...lines, ...dots];
-};
-
-/**
- * The "now" marker: grey, dotted, labelled under the plot.
- *
- * @param {number} nowMs
- * @param {{ start: number, end: number, height: number }} frame
- */
-const nowMarker = (nowMs, { start, end, height }) => {
-  if (nowMs < start || nowMs > end) return null;
-  const x = scaleOf(start, end, height).x(nowMs);
-  const at = fixed(x);
-  return h(
-    'g',
-    { class: 'm4-quota-now', 'data-marker': 'now' },
-    h('line', {
-      x1: at,
-      x2: at,
-      y1: TOP,
-      y2: height - BOTTOM,
-      stroke: COLOURS.now,
-      'stroke-dasharray': '1.5 2.5',
-    }),
-    h(
-      'text',
-      {
-        ...labelAt(x),
-        y: height - BOTTOM - 3,
-        fill: COLOURS.now,
-        class: 'm4-quota-marker-label',
-      },
-      quotaGraphTexts.now,
-    ),
-    h('title', null, `${quotaGraphTexts.now}: ${formatInstant(nowMs)}`),
-  );
 };
 
 /**
@@ -360,7 +251,9 @@ export const QuotaGraph = ({ series, account, nowMs }) => {
         fill: 'none',
         stroke: COLOURS.projected,
         'stroke-dasharray': '5 4',
-        points: pts.map(([ms, used]) => `${fixed(x(ms))},${fixed(y(used))}`).join(' '),
+        points: pts
+          .map(([ms, used]) => `${fixed(x(ms))},${fixed(y(used))}`)
+          .join(' '),
       }),
     );
   }
@@ -373,7 +266,11 @@ export const QuotaGraph = ({ series, account, nowMs }) => {
     markers.push(
       h(
         'g',
-        { class: 'm4-quota-reset', 'data-reset': 'weekly', 'data-marker': 'reset' },
+        {
+          class: 'm4-quota-reset',
+          'data-reset': 'weekly',
+          'data-marker': 'reset',
+        },
         h('line', {
           x1: at,
           x2: at,
@@ -470,7 +367,11 @@ export const QuotaGraph = ({ series, account, nowMs }) => {
       ),
       latest === ''
         ? null
-        : h('span', { class: 'm4-quota-latest', 'data-latest-ms': newest?.seenMs }, latest),
+        : h(
+            'span',
+            { class: 'm4-quota-latest', 'data-latest-ms': newest?.seenMs },
+            latest,
+          ),
     ),
     h(
       'svg',
@@ -504,7 +405,11 @@ export const QuotaGraph = ({ series, account, nowMs }) => {
           ),
     ),
     inset,
-    h('p', { class: 'm4-quota-status', 'data-status': analysis.status }, status),
+    h(
+      'p',
+      { class: 'm4-quota-status', 'data-status': analysis.status },
+      status,
+    ),
     h(
       'details',
       { class: 'm4-quota-readings' },
@@ -535,27 +440,29 @@ export const QuotaGraph = ({ series, account, nowMs }) => {
           'tbody',
           null,
           // Newest first: the latest figure leads.
-          [...analysis.points].reverse().map(point =>
-            h(
-              'tr',
-              null,
-              h('td', null, formatInstant(point.atMs)),
+          [...analysis.points]
+            .reverse()
+            .map(point =>
               h(
-                'td',
+                'tr',
                 null,
-                point.seenMs > point.atMs ? formatInstant(point.seenMs) : '—',
-              ),
-              h('td', null, String(point.count)),
-              h('td', null, `${remainingOf(point.usedPercent)}%`),
-              h(
-                'td',
-                null,
-                point.resetsAtMs === undefined
-                  ? 'not reported'
-                  : formatInstant(point.resetsAtMs),
+                h('td', null, formatInstant(point.atMs)),
+                h(
+                  'td',
+                  null,
+                  point.seenMs > point.atMs ? formatInstant(point.seenMs) : '—',
+                ),
+                h('td', null, String(point.count)),
+                h('td', null, `${remainingOf(point.usedPercent)}%`),
+                h(
+                  'td',
+                  null,
+                  point.resetsAtMs === undefined
+                    ? 'not reported'
+                    : formatInstant(point.resetsAtMs),
+                ),
               ),
             ),
-          ),
         ),
       ),
     ),
@@ -598,7 +505,11 @@ const readHistory = async (feed, backend) => {
   if (first === undefined || first === null) return null;
   const members = [...(first.members ?? [])];
   let offset = Number(first.next);
-  for (let page = 1; page < MAX_PAGES && Number.isSafeInteger(offset) && offset > 0; page += 1) {
+  for (
+    let page = 1;
+    page < MAX_PAGES && Number.isSafeInteger(offset) && offset > 0;
+    page += 1
+  ) {
     // eslint-disable-next-line no-await-in-loop -- each page names the next
     const more = await feed.history(backend, offset);
     if (more === undefined || more === null) break;
@@ -624,9 +535,25 @@ export const PoolQuotaHistory = ({
   const [state, setState] = useState(
     /** @type {{ history?: any, error?: string }} */ ({}),
   );
+  /**
+   * The member's credit records, when its current account (the pool view)
+   * reports a numeric balance; else none.
+   *
+   * @param {any} member
+   * @returns {readonly any[]}
+   */
+  const creditsOf = member => {
+    const current = (pool.members ?? []).find(
+      (/** @type {any} */ account) => account.label === member.label,
+    );
+    return reportsNumericCredits(current) && Array.isArray(member.credits)
+      ? member.credits
+      : [];
+  };
   const graphs = (state.history?.members ?? []).some(
-    (/** @type {{ windows?: unknown }} */ member) =>
-      Array.isArray(member.windows) && member.windows.length !== 0,
+    (/** @type {any} */ member) =>
+      (Array.isArray(member.windows) && member.windows.length !== 0) ||
+      creditsOf(member).length !== 0,
   );
   const nowMs = useNow(now, tickMs, graphs);
   useEffect(() => {
@@ -637,7 +564,8 @@ export const PoolQuotaHistory = ({
       },
       thrown => {
         // The last graph stays; the failure is said beside it.
-        if (live) setState(previous => ({ ...previous, error: messageOf(thrown) }));
+        if (live)
+          setState(previous => ({ ...previous, error: messageOf(thrown) }));
       },
     );
     return () => {
@@ -652,28 +580,42 @@ export const PoolQuotaHistory = ({
   } else if (state.history === undefined) {
     body = h('p', { class: 'm4-note' }, quotaGraphTexts.loading);
   } else if (state.history === null) {
-    body = h('p', { class: 'm4-note m4-quota-empty' }, quotaGraphTexts.noReadings);
+    body = h(
+      'p',
+      { class: 'm4-note m4-quota-empty' },
+      quotaGraphTexts.noReadings,
+    );
   } else {
-    body = (state.history.members ?? []).map(
-      (/** @type {any} */ member) =>
+    body = (state.history.members ?? []).map((/** @type {any} */ member) =>
+      h(
+        'div',
+        {
+          class: 'm4-quota-member',
+          'data-provider': member.provider,
+        },
         h(
-          'div',
-          {
-            class: 'm4-quota-member',
-            'data-provider': member.provider,
-          },
-          h(
-            'h4',
-            null,
-            member.label,
-            h('span', { class: 'm4-secret-facts' }, ` ${member.provider}`),
-          ),
-          member.windows.length === 0
-            ? h('p', { class: 'm4-note m4-quota-empty' }, quotaGraphTexts.noReadings)
-            : member.windows.map((/** @type {any} */ series) =>
-                h(QuotaGraph, { series, account: member, nowMs }),
-              ),
+          'h4',
+          null,
+          member.label,
+          h('span', { class: 'm4-secret-facts' }, ` ${member.provider}`),
         ),
+        member.windows.length === 0
+          ? h(
+              'p',
+              { class: 'm4-note m4-quota-empty' },
+              quotaGraphTexts.noReadings,
+            )
+          : member.windows.map((/** @type {any} */ series) =>
+              h(QuotaGraph, { series, account: member, nowMs }),
+            ),
+        creditsOf(member).length === 0
+          ? null
+          : h(CreditGraph, {
+              records: creditsOf(member),
+              account: member,
+              nowMs,
+            }),
+      ),
     );
   }
   const failure =
