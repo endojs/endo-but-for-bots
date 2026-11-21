@@ -51,9 +51,12 @@ const fire = (window, element, type, init = {}) => {
   element.dispatchEvent(new EventClass(type, { bubbles: true, ...init }));
 };
 
-/** @param {any} fake */
-const setup = async fake => {
-  const dom = makeTestDom({ width: 1024 });
+/**
+ * @param {any} fake
+ * @param {number} [width]
+ */
+const setup = async (fake, width = 1024) => {
+  const dom = makeTestDom({ width });
   const { powers, control } = fake;
   const controller = makeController({
     storage: undefined,
@@ -316,5 +319,235 @@ test.serial(
       delete globals.confirm;
     }
     await close();
+  },
+);
+
+test.serial(
+  'agent inventory reads the selected session while expanded and follows its revisions',
+  async t => {
+    let revision = 0;
+    let wait = false;
+    /** @type {(page: any) => void} */
+    let finish = () => {};
+    const fake = makeFakePowers({
+      sessions: [
+        {
+          key: 'one',
+          inventoryPage: cursor => {
+            if (wait)
+              return new Promise(resolve => {
+                finish = resolve;
+              });
+            return cursor === undefined
+              ? harden({
+                  rev: revision,
+                  rows: [
+                    {
+                      label: 'paper',
+                      kind: 'value',
+                      preview: String(revision),
+                    },
+                  ],
+                  next: 'more',
+                })
+              : harden({
+                  rev: revision,
+                  rows: [
+                    { label: 'helper', kind: 'subagent' },
+                    { label: 'format', kind: 'object' },
+                  ],
+                });
+          },
+        },
+        { key: 'two', inventoryPage: () => harden({ rev: 0, rows: [] }) },
+        { key: 'legacy' },
+      ],
+    });
+    const { dom, controller, control, close } = await setup(fake);
+    const panel = () => dom.document.querySelector('.thix-session-inventory');
+    const toggle = () =>
+      fire(
+        dom.window,
+        dom.document.querySelector('.thix-inventory-toggle'),
+        'click',
+      );
+    const reads = () => control.callsOf('Session', 'getInventoryPage').length;
+    try {
+      await controller.selectSession('one');
+      t.is(reads(), 0);
+      toggle();
+      await flush();
+      t.deepEqual(
+        [...panel().querySelectorAll('[data-label]')].map(
+          el => el.dataset.label,
+        ),
+        ['paper', 'helper', 'format'],
+      );
+      t.is(
+        panel().querySelector('[data-label="format"] .thix-inventory-kind')
+          .textContent,
+        'Object',
+      );
+      t.is(reads(), 2);
+      revision += 1;
+      control.publish('one', [{ type: 'inventory', revision }]);
+      await flush();
+      t.is(panel().querySelector('code').textContent, '1');
+      toggle();
+      await flush();
+      const before = reads();
+      revision += 1;
+      control.publish('one', [{ type: 'inventory', revision }]);
+      await flush();
+      t.is(reads(), before);
+      wait = true;
+      toggle();
+      await flush();
+      await controller.selectSession('two');
+      await flush();
+      finish(
+        harden({
+          rev: revision,
+          rows: [{ label: 'former-session', kind: 'object' }],
+        }),
+      );
+      await flush();
+      t.true(panel().textContent.includes('inventory is empty'));
+      t.false(panel().textContent.includes('former-session'));
+      await controller.selectSession('legacy');
+      await flush();
+      t.true(panel().textContent.includes('does not support inventory'));
+      controller.setConnection('reconnecting');
+      await flush();
+      t.true(panel().textContent.includes('offline'));
+    } finally {
+      await close();
+    }
+  },
+);
+
+test.serial(
+  'closing the mobile inventory drawer pauses inventory reads; reopening recovers after a failed page',
+  async t => {
+    let unavailable = true;
+    const fake = makeFakePowers({
+      sessions: [
+        {
+          key: 'mobile',
+          inventoryPage: () => {
+            if (unavailable) throw Error('page unavailable');
+            return harden({
+              rev: 2,
+              rows: [{ label: 'journal', kind: 'object' }],
+            });
+          },
+        },
+      ],
+    });
+    const { dom, controller, control, close } = await setup(fake, 390);
+    try {
+      await controller.selectSession('mobile');
+      const heading = dom.document.querySelector('.thix-inventory-toggle');
+      t.is(heading.getAttribute('aria-expanded'), 'false');
+      fire(dom.window, heading, 'click');
+      await flush();
+      const panel = dom.document.querySelector('.thix-session-inventory');
+      t.true(panel.textContent.includes('Inventory unavailable.'));
+      unavailable = false;
+      fire(dom.window, panel.querySelector('[role="status"] button'), 'click');
+      await flush();
+      t.truthy(panel.querySelector('[data-label="journal"]'));
+      fire(dom.window, heading, 'click');
+      await flush();
+      const requests = control.callsOf('Session', 'getInventoryPage').length;
+      control.publish('mobile', [{ type: 'inventory', revision: 2 }]);
+      await flush();
+      t.is(control.callsOf('Session', 'getInventoryPage').length, requests);
+      fire(dom.window, heading, 'click');
+      await flush();
+      t.is(control.callsOf('Session', 'getInventoryPage').length, requests + 1);
+      t.truthy(panel.querySelector('[data-label="journal"]'));
+    } finally {
+      await close();
+    }
+  },
+);
+
+test.serial(
+  'a revision change mid-page replaces all older inventory rows',
+  async t => {
+    const fake = makeFakePowers({
+      sessions: [
+        {
+          key: 'changing',
+          inventoryPage: cursor =>
+            cursor === undefined
+              ? harden({
+                  rev: 1,
+                  rows: [{ label: 'old', kind: 'object' }],
+                  next: '1.1',
+                })
+              : harden({
+                  rev: 2,
+                  rows: [{ label: 'current', kind: 'value', preview: '42' }],
+                }),
+        },
+      ],
+    });
+    const { dom, controller, close } = await setup(fake);
+    try {
+      await controller.selectSession('changing');
+      fire(
+        dom.window,
+        dom.document.querySelector('.thix-inventory-toggle'),
+        'click',
+      );
+      await flush();
+      t.is(dom.document.querySelector('[data-label="old"]'), null);
+      t.is(
+        dom.document.querySelector('[data-label="current"] code').textContent,
+        '42',
+      );
+    } finally {
+      await close();
+    }
+  },
+);
+
+test.serial(
+  'reattaching replaces the inventory source even at the same session key and revision',
+  async t => {
+    const current = (/** @type {string} */ label) =>
+      makeFakePowers({
+        sessions: [
+          {
+            key: 's1',
+            inventoryPage: () =>
+              harden({ rev: 0, rows: [{ label, kind: 'object' }] }),
+          },
+        ],
+      });
+    const first = current('oldBinding');
+    const next = current('newBinding');
+    const { dom, controller, close } = await setup(first);
+    try {
+      await controller.selectSession('s1');
+      fire(
+        dom.window,
+        dom.document.querySelector('.thix-inventory-toggle'),
+        'click',
+      );
+      await flush();
+      t.truthy(dom.document.querySelector('[data-label="oldBinding"]'));
+      controller.setConnection('reconnecting');
+      await flush();
+      await controller.attach(next.powers);
+      await flush();
+      t.is(dom.document.querySelector('[data-label="oldBinding"]'), null);
+      t.truthy(dom.document.querySelector('[data-label="newBinding"]'));
+      t.is(first.control.callsOf('Session', 'getInventoryPage').length, 1);
+    } finally {
+      await close();
+    }
   },
 );

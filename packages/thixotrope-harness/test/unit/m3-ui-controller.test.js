@@ -501,6 +501,28 @@ test('queue rows: Send now on the head cancels the running turn; edit and delete
   t.is(controller.getState().view?.messages.at(-1)?.record.input, 'queued one');
 });
 
+test('older history requests are single-flight and cannot cross a session change or disconnect', async t => {
+  const { controller, control } = await setup({
+    sessions: [{ turns: 12 }, { turns: 2 }],
+    pageTurns: 4,
+  });
+  await controller.selectSession('s1');
+  const callsBefore = control.callsOf('Session', 'getHistoryPage').length;
+  const pending = controller.loadEarlier();
+  const duplicate = controller.loadEarlier();
+  await Promise.all([pending, duplicate]);
+  t.is(control.callsOf('Session', 'getHistoryPage').length, callsBefore + 1);
+  const outdated = controller.loadEarlier();
+  const switching = controller.selectSession('s2');
+  await Promise.all([outdated, switching]);
+  t.is(controller.getState().view?.messages.length, 2);
+  await controller.selectSession('s1');
+  const beforeDisconnect = control.callsOf('Session', 'getHistoryPage').length;
+  controller.setConnection('connecting');
+  await controller.loadEarlier();
+  t.is(control.callsOf('Session', 'getHistoryPage').length, beforeDisconnect);
+});
+
 test('Load earlier pages the session back across the archive, every turn once', async t => {
   const { controller } = await setup({
     sessions: [{ turns: 12, archived: 5 }],

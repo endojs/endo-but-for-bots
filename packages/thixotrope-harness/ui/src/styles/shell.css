@@ -82,3 +82,17 @@ body {
 .thix-app.narrow .thix-menu-btn {
   display: flex;
 }
+
+.thix-session-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.thix-session-content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}

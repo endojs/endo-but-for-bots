@@ -74,6 +74,7 @@ const LIST_MAX_PAGES = 200;
 
 /**
  * @typedef {object} ConversationView
+ * @property {number} generation the current session watch
  * @property {Record<string, any>} info `SessionInfo` as received
  * @property {TurnEntry[]} messages oldest first
  * @property {string} streamingText the live turn's text so far
@@ -82,6 +83,8 @@ const LIST_MAX_PAGES = 200;
  * @property {Record<string, any>} [current] the newest `TurnStatus`
  * @property {any[]} pending `PendingRow`s as received
  * @property {Record<string, any>} [hold]
+ * @property {boolean} [inventoryLoading] waiting for this connection’s session snapshot
+ * @property {number} [inventoryRevision] the selected agent’s binding inventory revision
  * @property {Record<string, any>} usage `UsageTotals`
  * @property {'none'|'more'|'loading'} earlier
  * @property {string} status a status line ('' when none)
@@ -486,7 +489,7 @@ export const makeController = ({
    * Replace or add turn entries (by turnId), keeping the oldest-first order.
    *
    * @param {TurnEntry[]} entries
-   * @param {boolean} [prepend] older turns (Load earlier)
+   * @param {boolean} [prepend] older turns requested during scrollback
    */
   const mergeTurns = (entries, prepend = false) => {
     if (!state.view) return;
@@ -571,6 +574,7 @@ export const makeController = ({
     const { current } = snapshot;
     updateView({
       info: snapshot.info,
+      inventoryRevision: snapshot.inventoryRevision,
       pending: snapshot.pending.entries,
       hold: snapshot.pending.hold,
       usage: snapshot.usage,
@@ -673,6 +677,9 @@ export const makeController = ({
         rereadSettled(event.turnId);
         break;
       }
+      case 'inventory':
+        updateView({ inventoryRevision: event.revision });
+        break;
       case 'usage':
         if (event.turnId === foldTurnId) folder.apply(fold, foldable(event));
         updateView({ usage: usageOfEvent(event) });
@@ -842,7 +849,9 @@ export const makeController = ({
     if (epoch !== viewEpoch) return;
     update({
       view: {
+        generation: epoch,
         info: snapshot.info,
+        inventoryRevision: snapshot.inventoryRevision,
         messages: [],
         streamingText: '',
         phase: '',
@@ -1010,7 +1019,12 @@ export const makeController = ({
     context = undefined;
     submissionListeners.clear();
     viewSubscription = undefined;
-    update({ connection: 'open', connectionMessage: undefined, status: '' });
+    update({
+      connection: 'open',
+      connectionMessage: undefined,
+      status: '',
+      ...(state.view && { view: { ...state.view, inventoryLoading: true } }),
+    });
     try {
       factory = await E(powers.operator).getFactory();
       if (epoch !== attachEpoch) return;
@@ -1129,6 +1143,25 @@ export const makeController = ({
     },
     featureContext,
     features,
+    /**
+     * Read only from the selected agent. Each page request checks selection
+     * again, so a late continuation cannot read the next agent by mistake.
+     * @param {string} key
+     * @param {string} [cursor]
+     */
+    async getInventoryPage(key, cursor) {
+      if (
+        state.connection !== 'open' ||
+        state.activeKey !== key ||
+        state.view?.inventoryLoading
+      ) {
+        throw Error('The selected session changed.');
+      }
+      const session = activeSession(key);
+      return cursor === undefined
+        ? E(session).getInventoryPage()
+        : E(session).getInventoryPage(cursor);
+    },
 
     /** @param {string} key */
     selectSession: key =>
@@ -1286,22 +1319,33 @@ export const makeController = ({
     cancelPending: entryKey =>
       guarded(async () => E(await entryOf(entryKey)).cancel()),
 
-    /** "Load earlier messages": vat pages until `archived`, then `History`. */
+    /** Scrollback reads vat pages until `archived`, then `History`. */
     loadEarlier: () =>
       guarded(async () => {
-        if (!state.view || state.view.earlier !== 'more') return;
+        if (
+          state.connection !== 'open' ||
+          state.view?.generation !== viewEpoch ||
+          state.view.earlier !== 'more'
+        )
+          return;
         const epoch = viewEpoch;
         updateView({ earlier: 'loading' });
-        let page = earlierArchived
-          ? await E(powers.history).page(viewSession, earlierCursor)
-          : await E(viewSession).getHistoryPage(earlierCursor);
-        if (epoch !== viewEpoch) return;
-        if (!earlierArchived && page.archived && page.turns.length === 0) {
-          earlierArchived = true;
-          page = await E(powers.history).page(viewSession, page.next);
+        try {
+          let page = earlierArchived
+            ? await E(powers.history).page(viewSession, earlierCursor)
+            : await E(viewSession).getHistoryPage(earlierCursor);
           if (epoch !== viewEpoch) return;
+          if (!earlierArchived && page.archived && page.turns.length === 0) {
+            earlierArchived = true;
+            page = await E(powers.history).page(viewSession, page.next);
+            if (epoch !== viewEpoch) return;
+          }
+          applyHistoryPage(page, true);
+        } catch (error) {
+          if (epoch !== viewEpoch) return;
+          updateView({ earlier: 'more' });
+          throw error;
         }
-        applyHistoryPage(page, true);
       }),
 
     /** Open the "Turn journal and recovery" panel and read its first page. */

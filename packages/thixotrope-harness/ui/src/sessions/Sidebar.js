@@ -180,7 +180,10 @@ export const Sidebar = ({ state, controller, open }) => {
   const rows = /** @type {any[]} */ (state.sessions);
   return h(
     'aside',
-    { class: `floot-sidebar${open ? ' open' : ''}` },
+    {
+      id: 'thix-session-sidebar',
+      class: `floot-sidebar${open ? ' open' : ''}`,
+    },
     h(
       'div',
       { class: 'floot-sidebar-head' },

@@ -20,9 +20,23 @@ import { Slot, visibleFeatures } from './Slot.js';
  *   features: readonly UiFeature[],
  *   context: FeatureContext,
  *   narrow: boolean,
+ *   sidebarOpen: boolean,
+ *   toggleSidebar: () => void,
+ *   inventoryOpen: boolean,
+ *   toggleInventory?: () => void,
  * }} props
  */
-export const Header = ({ state, controller, features, context, narrow }) => {
+export const Header = ({
+  state,
+  controller,
+  features,
+  context,
+  narrow,
+  sidebarOpen,
+  toggleSidebar,
+  inventoryOpen,
+  toggleInventory,
+}) => {
   const [editing, setEditing] = useState(/** @type {string | null} */ (null));
   const view = state.view;
   const title = view ? view.info.title : uiTexts.pageTitle;
@@ -45,10 +59,29 @@ export const Header = ({ state, controller, features, context, narrow }) => {
             type: 'button',
             class: 'floot-menu-btn thix-menu-btn',
             'aria-label': uiTexts.sessions,
-            'aria-expanded': state.drawerOpen ? 'true' : 'false',
-            onClick: () => controller.toggleDrawer(),
+            'aria-controls': 'thix-session-sidebar',
+            'aria-expanded': sidebarOpen,
+            onClick: toggleSidebar,
           },
           '☰',
+        )
+      : null,
+    toggleInventory
+      ? h(
+          'button',
+          {
+            type: 'button',
+            class: 'floot-header-btn thix-inventory-toggle',
+            'aria-label': 'Agent inventory',
+            title: inventoryOpen
+              ? 'Hide agent inventory'
+              : 'Show agent inventory',
+            'aria-expanded': inventoryOpen,
+            'aria-controls': 'thix-agent-inventory-items',
+            onClick: toggleInventory,
+          },
+          h('span', { 'aria-hidden': 'true' }, inventoryOpen ? '‹' : '›'),
+          ' Inventory',
         )
       : null,
     editing !== null

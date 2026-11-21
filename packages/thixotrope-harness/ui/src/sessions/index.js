@@ -4,6 +4,7 @@
  * `Sidebar` in the sidebar region and `NewSession` while
  * `state.newSessionOpen`.
  */
+export { SessionInventory } from './SessionInventory.js';
 export { Sidebar } from './Sidebar.js';
 export { NewSession } from './NewSession.js';
 export {

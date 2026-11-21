@@ -208,6 +208,7 @@ test.serial('at 641 px there is no drawer and no ☰', async t => {
   t.true(
     dom.document.querySelector('.floot-sidebar').classList.contains('open'),
   );
+  t.is(dom.document.querySelector('.thix-sidebar-toggle'), null);
   await dom.close();
 });
 

@@ -24,9 +24,12 @@ import { E } from '@endo/far';
 import { texts } from '../../guest/lib/interfaces.js';
 import {
   makeSlice,
+  requestId as newRequestId,
   turnWithInput,
   waitFor,
 } from '../integration/_m1a-slice.js';
+
+import { turnRecords } from '../integration/_m1b.js';
 
 /** A scripted backend that answers every turn with a short reply. */
 const replyScript = harden({
@@ -325,5 +328,183 @@ const valueBecomes = async (locator, value) => {
     } finally {
       await close();
     }
+  },
+);
+
+(enabled ? test.serial : test.skip)(
+  '[browser] selected-session inventory follows live adoptions, switches, and collapse',
+  async t => {
+    t.timeout(4 * 60_000);
+    const { startBrowserGateway } = await import('./_harness.mjs');
+    const { page, state, close } = await startBrowserGateway({
+      template: 'm2',
+    });
+    t.teardown(close);
+    const slice = await makeSlice(state);
+    const samples = [
+      { label: 'alpha-first', number: 1 },
+      { label: 'beta-only', number: 1 },
+      { label: 'alpha-later', number: 2 },
+      { label: 'beta-hidden', number: 2 },
+    ];
+    const { backend } = await slice.makeBackend(
+      harden({
+        turns: samples.map(({ label, number }) => ({
+          input: label,
+          rounds: [
+            {
+              chunks: [{ text: 'Saving.' }],
+              toolCalls: [
+                {
+                  name: 'adopt',
+                  args: JSON.stringify({
+                    messageNumber: number,
+                    edgeName: 'item',
+                    petName: label,
+                  }),
+                },
+              ],
+            },
+            { chunks: [{ text: 'Saved.' }] },
+          ],
+        })),
+      }),
+    );
+    const alpha = await slice.createSession(backend, 'Inventory Alpha');
+    const beta = await slice.createSession(backend, 'Inventory Beta');
+    const adopt = async (
+      /** @type {any} */ session,
+      /** @type {string} */ label,
+    ) => {
+      const attachment = await slice.makeBackend(harden({ turns: [] }), {
+        label,
+      });
+      const { turn } = await E(slice.composer).submit(
+        session,
+        label,
+        newRequestId(),
+        harden({
+          attachments: [{ label: 'item', value: attachment.backend }],
+        }),
+      );
+      t.is((await E(turn).whenFinished()).state, 'completed');
+      const result = (await turnRecords(turn)).find(
+        record => record.kind === 'tool-result',
+      );
+      t.like(result, { name: 'adopt', failed: false });
+    };
+    const toggle = page.getByRole('button', {
+      name: 'Agent inventory',
+      exact: true,
+    });
+    const panel = page.locator('.thix-session-inventory');
+    const visibleLabels = async () =>
+      panel
+        .locator('[data-label]:visible')
+        .evaluateAll((/** @type {Element[]} */ rows) =>
+          rows.map(row => row.getAttribute('data-label')),
+        );
+    const select = async (/** @type {string} */ title) => {
+      await page.locator('.floot-session-item', { hasText: title }).click();
+      await toggle.waitFor();
+      if ((await toggle.getAttribute('aria-expanded')) === 'false')
+        await toggle.click();
+    };
+    const expectLabels = async (/** @type {string[]} */ wanted) => {
+      await waitFor(
+        async () => {
+          const shown = await visibleLabels();
+          return samples.every(
+            ({ label }) => shown.includes(label) === wanted.includes(label),
+          );
+        },
+        15_000,
+        `inventory contains exactly the selected session's sample labels: ${wanted.join(', ')}`,
+      );
+    };
+    await select('Inventory Alpha');
+    await adopt(alpha, 'alpha-first');
+    await expectLabels(['alpha-first']);
+    await select('Inventory Beta');
+    await expectLabels([]);
+    await adopt(beta, 'beta-only');
+    await expectLabels(['beta-only']);
+    await adopt(alpha, 'alpha-later');
+    await expectLabels(['beta-only']);
+    await toggle.click();
+    t.is(await toggle.getAttribute('aria-expanded'), 'false');
+    await adopt(beta, 'beta-hidden');
+    t.deepEqual(await visibleLabels(), []);
+    await toggle.click();
+    await expectLabels(['beta-only', 'beta-hidden']);
+    const chatWidth = () =>
+      page
+        .locator('.thix-conversation')
+        .evaluate(el => el.getBoundingClientRect().width);
+    const box = async (/** @type {string} */ selector) => {
+      return page.locator(selector).evaluate(el => {
+        const { x, y, width, height } = el.getBoundingClientRect();
+        return { x, y, width, height };
+      });
+    };
+    // All coordinates in this check describe the settled layout. The drawer
+    // also supports reduced motion, so request it before comparing widths.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await panel.evaluate(async el => {
+      await Promise.all(
+        el
+          .getAnimations({ subtree: true })
+          .map(anim => anim.finished.catch(() => {})),
+      );
+    });
+    const sessions = await box('.floot-sidebar');
+    const drawer = await box('.thix-session-inventory');
+    const chat = await box('.thix-conversation');
+    const sessionHeader = await box('.floot-main > .floot-header');
+    const controls = await box('.thix-session-content .floot-compose');
+    t.is(await panel.locator('..').getAttribute('class'), 'thix-session-body');
+    t.is(drawer.y, sessionHeader.y + sessionHeader.height);
+    t.is(chat.y, drawer.y);
+    t.is(sessionHeader.x, drawer.x);
+    t.is(chat.x + chat.width, sessionHeader.x + sessionHeader.width);
+    t.true(drawer.width > 150);
+    t.true(controls.x >= chat.x);
+    t.is(drawer.x, sessions.x + sessions.width);
+    t.is(chat.x, drawer.x + drawer.width);
+    await toggle.click();
+    await waitFor(
+      async () => (await chatWidth()) >= chat.width + drawer.width - 1,
+      3000,
+      'inventory releases chat width',
+    );
+    t.deepEqual(await box('.floot-sidebar'), sessions);
+    t.deepEqual(await box('.floot-main > .floot-header'), sessionHeader);
+    t.true(
+      (await box('.floot-compose')).width >= controls.width + drawer.width - 1,
+    );
+    await toggle.click();
+    await expectLabels(['beta-only', 'beta-hidden']);
+    await waitFor(
+      async () => (await chatWidth()) === chat.width,
+      3000,
+      'expanded inventory takes its original width',
+    );
+    await page.setViewportSize({ width: 390, height: 844 });
+    await waitFor(
+      async () => (await page.locator('.thix-app.narrow').count()) === 1,
+      3000,
+      'mobile layout',
+    );
+    await expectLabels(['beta-only', 'beta-hidden']);
+    const mobile = await box('.thix-conversation');
+    const header = await box('.floot-header');
+    const sheet = await box('.thix-session-inventory');
+    t.true(sheet.y >= header.y + header.height - 1);
+    t.true(sheet.width < mobile.width);
+    await toggle.click();
+    t.is(await chatWidth(), mobile.width);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await select('Inventory Alpha');
+    await expectLabels(['alpha-first', 'alpha-later']);
   },
 );

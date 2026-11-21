@@ -7,7 +7,7 @@
  *
  * - tool calls fold into a "Thought for ..." group; an `exec` call shows
  *   its `code` highlighted; `</>` shows the raw JSON;
- * - "Load earlier messages" pages the 300-turn session back to turn 1
+ * - scrolling up pages the 300-turn session back to turn 1
  *   across the archive with every turn once;
  * - a 1 MiB reply watched live renders fully (Show all reads it in pages).
  *
@@ -201,7 +201,7 @@ run(
 );
 
 run(
-  'acceptance 8: Load earlier pages back to turn 1, every turn once',
+  'acceptance 8: scrolling up preserves the reading position through every page to turn 1',
   async t => {
     if (!harness) throw Error('setup failed');
     const page = harness.page;
@@ -216,21 +216,44 @@ run(
       100,
     );
     await page.locator('.thix-turn').first().waitFor();
-    const earlier = page.locator('.floot-history-earlier');
-    let clicks = 0;
+    await page.setViewportSize({ width: 900, height: 480 });
+    const scroller = page.locator('.thix-conversation');
+    t.is(
+      await page.getByRole('button', { name: 'Load earlier messages' }).count(),
+      0,
+    );
+    let pages = 0;
     for (;;) {
       const ids = await turnIds(page);
       if (ids.includes('t1')) break;
-      if (clicks > 100) throw Error('too many pages');
-      await earlier.click();
-      clicks += 1;
+      if (pages > 100) throw Error('too many pages');
+      const first = scroller.locator('.thix-turn').first();
+      const id = await first.getAttribute('data-turn');
+      const old = scroller.locator(`.thix-turn[data-turn="${id}"]`);
+      const topAtStart = await old.evaluate((/** @type {HTMLElement} */ el) => {
+        const parent = /** @type {HTMLElement} */ (
+          el.closest('.thix-conversation')
+        );
+        return el.getBoundingClientRect().top + parent.scrollTop;
+      });
+      await scroller.hover();
+      await page.mouse.wheel(0, -1_000_000);
       await waitFor(
         async () => (await turnIds(page)).length > ids.length,
         30_000,
-        'an earlier page',
+        'an earlier page after a real upward wheel event',
         50,
       );
+      const top = await old.evaluate(
+        (/** @type {HTMLElement} */ el) => el.getBoundingClientRect().top,
+      );
+      t.true(
+        Math.abs(top - topAtStart) <= 2,
+        `page ${pages}: anchor ${top} vs ${topAtStart}`,
+      );
+      pages += 1;
     }
+    t.true(pages > 1);
     const ids = await turnIds(page);
     const numbers = ids.map(id => Number(String(id).slice(1)));
     t.is(new Set(ids).size, ids.length, 'every turn once');
@@ -241,7 +264,44 @@ run(
       Array.from({ length: max }, (_, i) => i + 1),
       'turns 1..N, none missing',
     );
-    t.log(`${ids.length} turns in ${clicks} pages`);
+    const scrollPosition = () =>
+      scroller.evaluate((/** @type {HTMLElement} */ el) => ({
+        top: el.scrollTop,
+        remaining: el.scrollHeight - el.clientHeight - el.scrollTop,
+      }));
+    const position = await scrollPosition();
+    t.true(position.remaining > 48);
+    await send(page, 'update while reading earlier messages');
+    await waitFor(
+      async () => (await turnIds(page)).length > ids.length,
+      30_000,
+      'first incoming turn',
+      50,
+    );
+    t.true(
+      Math.abs((await scrollPosition()).top - position.top) <= 2,
+      'incoming turn keeps the reading position',
+    );
+    await scroller.hover();
+    await page.mouse.wheel(0, 1_000_000);
+    await waitFor(
+      async () => (await scrollPosition()).remaining < 2,
+      10_000,
+      'reader reached the latest turn',
+      50,
+    );
+    await send(page, 'update while reading latest');
+    await waitFor(
+      async () => (await turnIds(page)).length > ids.length + 1,
+      30_000,
+      'second incoming turn',
+      50,
+    );
+    t.true(
+      (await scrollPosition()).remaining < 2,
+      'the latest turn stays in view',
+    );
+    t.log(`${ids.length} turns in ${pages} pages`);
   },
 );
 

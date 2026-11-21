@@ -13,6 +13,7 @@
  * `open`. A missing view leaves its region with the shell's bare frame.
  */
 import { h } from 'preact';
+import { useState } from 'preact/hooks';
 
 import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
 import { Header } from './Header.js';
@@ -36,7 +37,10 @@ import { StatusBar } from './StatusBar.js';
 const BareSidebar = ({ open, controller }) =>
   h(
     'aside',
-    { class: `floot-sidebar${open ? ' open' : ''}` },
+    {
+      id: 'thix-session-sidebar',
+      class: `floot-sidebar${open ? ' open' : ''}`,
+    },
     h(
       'div',
       { class: 'floot-sidebar-head' },
@@ -63,12 +67,14 @@ const BareSidebar = ({ open, controller }) =>
  * }} props
  */
 export const App = ({ controller, features, views = {}, narrow = false }) => {
+  const [inventoryOpen, setInventoryOpen] = useState(false);
   const state = controller.getState();
   const context = controller.featureContext();
   const sessions = views.sessions ?? {};
   const conversation = views.conversation ?? {};
   const shared = { state, controller, features, context, narrow };
   const drawerOpen = narrow && state.drawerOpen;
+  const sidebarOpen = !narrow || drawerOpen;
 
   const panel =
     state.panel === undefined
@@ -76,6 +82,15 @@ export const App = ({ controller, features, views = {}, narrow = false }) => {
       : features.find(
           feature => feature.slot === 'app.panel' && feature.id === state.panel,
         );
+
+  const inventory =
+    state.activeKey && !panel && sessions.SessionInventory
+      ? h(sessions.SessionInventory, {
+          state,
+          controller,
+          expanded: inventoryOpen,
+        })
+      : null;
 
   /** @returns {any} */
   const body = () => {
@@ -120,6 +135,7 @@ export const App = ({ controller, features, views = {}, narrow = false }) => {
     'div',
     {
       class: `floot-app thix-app${narrow ? ' narrow' : ''}`,
+      'data-sidebar': sidebarOpen ? 'open' : 'closed',
       'data-drawer': narrow ? (drawerOpen ? 'open' : 'closed') : 'none',
     },
     h(Overlay, {
@@ -127,8 +143,8 @@ export const App = ({ controller, features, views = {}, narrow = false }) => {
       message: state.connectionMessage,
     }),
     sessions.Sidebar
-      ? h(sessions.Sidebar, { ...shared, open: !narrow || drawerOpen })
-      : h(BareSidebar, { open: !narrow || drawerOpen, controller }),
+      ? h(sessions.Sidebar, { ...shared, open: sidebarOpen })
+      : h(BareSidebar, { open: sidebarOpen, controller }),
     drawerOpen
       ? h('div', {
           class: 'floot-backdrop open',
@@ -138,12 +154,30 @@ export const App = ({ controller, features, views = {}, narrow = false }) => {
     h(
       'div',
       { class: 'floot-main' },
-      h(Header, shared),
-      body(),
-      h(StatusBar, { state, features, context }),
-      state.view && !panel && conversation.Composer
-        ? h(conversation.Composer, shared)
-        : null,
+      h(Header, {
+        ...shared,
+        sidebarOpen,
+        toggleSidebar: () => controller.toggleDrawer(),
+        inventoryOpen,
+        toggleInventory:
+          state.activeKey && !panel && sessions.SessionInventory
+            ? () => setInventoryOpen(open => !open)
+            : undefined,
+      }),
+      h(
+        'div',
+        { class: 'thix-session-body' },
+        inventory,
+        h(
+          'div',
+          { class: 'thix-session-content' },
+          body(),
+          h(StatusBar, { state, features, context }),
+          state.view && !panel && conversation.Composer
+            ? h(conversation.Composer, shared)
+            : null,
+        ),
+      ),
     ),
     state.newSessionOpen && sessions.NewSession
       ? h(sessions.NewSession, shared)

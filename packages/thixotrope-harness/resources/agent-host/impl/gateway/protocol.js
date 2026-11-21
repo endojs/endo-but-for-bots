@@ -205,7 +205,6 @@ export const uiTexts = Object.freeze({
   edit: 'Edit',
   delete: 'Delete',
   sendAgain: 'Send again',
-  loadEarlier: 'Load earlier messages',
   turnFailed: 'This turn did not finish.',
   turnStopped: 'This turn was stopped.',
   turnInterrupted: 'This turn was interrupted.',

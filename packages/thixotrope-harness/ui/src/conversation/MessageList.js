@@ -5,7 +5,7 @@
  * `message.renderer` features under it (`{ context, turn, record }`, once
  * per turn), its replies and tool groups, the streaming bubble and thinking
  * row of the live turn, and a status row for a turn that did not complete.
- * "Load earlier messages" sits above. Adapted from Floot's `MessageList`
+ * Earlier turns appear as the reader scrolls up. Adapted from Floot's `MessageList`
  * at `1315bef86`: Floot drew a flat message list with string ids and
  * Endo-specific `meta`; here a row is a turn the controller holds (its
  * `TurnEntry`), keyed by `turnId`, with replies taken from the turn's live
@@ -14,7 +14,6 @@
 import { h } from 'preact';
 
 import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
-import { labels } from './labels.js';
 import { ConversationSlot } from './slots.js';
 import { StatusRow } from './StatusRow.js';
 import { LongText, linkify } from './text.js';
@@ -155,28 +154,6 @@ export const TurnView = ({ entry, view, controller, features, context }) => {
       : null,
   );
 };
-
-/**
- * "Load earlier messages" (vat pages, then archived pages; the controller
- * chooses).
- *
- * @param {{ view: Record<string, any>, controller: any }} props
- */
-export const LoadEarlier = ({ view, controller }) =>
-  view.earlier === 'none'
-    ? null
-    : h(
-        'button',
-        {
-          type: 'button',
-          class: 'floot-history-earlier',
-          disabled: view.earlier === 'loading',
-          onClick: () => controller.loadEarlier(),
-        },
-        view.earlier === 'loading'
-          ? labels.loadingEarlier
-          : uiTexts.loadEarlier,
-      );
 
 /**
  * @param {{

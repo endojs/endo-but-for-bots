@@ -7,7 +7,7 @@
  */
 export const labels = Object.freeze({
   emptyConversation: 'Say hello to Floot.',
-  loadingEarlier: 'Loading earlier messages…',
+  history: 'Conversation history',
   /** @param {number} bytes */
   showAll: bytes => `Show all (${bytes} bytes)`,
   loadingText: 'Loading…',

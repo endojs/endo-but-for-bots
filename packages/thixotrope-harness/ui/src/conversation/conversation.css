@@ -10,8 +10,7 @@
 .thix-details-btn,
 .thix-show-all,
 .thix-recovery-close,
-.thix-recovery-more,
-.floot-history-earlier {
+.thix-recovery-more {
   font: inherit;
   font-size: 0.8rem;
   border: 1px solid var(--fl-border);
@@ -27,9 +26,9 @@
   border-color: var(--fl-accent);
 }
 
-.floot-history-earlier {
-  align-self: center;
-  margin: 0.25rem auto;
+.thix-conversation {
+  overflow-anchor: none;
+  scroll-behavior: auto;
 }
 
 .thix-show-all {

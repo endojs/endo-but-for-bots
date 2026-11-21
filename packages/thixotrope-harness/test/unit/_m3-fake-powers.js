@@ -49,6 +49,7 @@ import {
 
 /**
  * @typedef {object} FakeSessionSpec
+ * @property {(cursor?: string) => any} [inventoryPage]
  * @property {string} [key]
  * @property {string} [title]
  * @property {'creating'|'ready'|'error'|'lost'|'deleting'} [state]
@@ -288,6 +289,7 @@ export const makeFakePowers = ({
 
   /**
    * @typedef {object} FakeSession
+   * @property {(cursor?: string) => any} [inventoryPage]
    * @property {string} key
    * @property {string} title
    * @property {string} state
@@ -298,6 +300,7 @@ export const makeFakePowers = ({
    * @property {string} presetLabel
    * @property {number} createdAt
    * @property {number} rev
+   * @property {number} inventoryRevision
    * @property {number} seq
    * @property {FakeTurn[]} turns
    * @property {FakeTurn} [current]
@@ -577,6 +580,8 @@ export const makeFakePowers = ({
     /** @type {FakeSession} */
     const s = {
       key: spec.key ?? `s${sessionCounter}`,
+      inventoryPage: spec.inventoryPage,
+      inventoryRevision: 0,
       title: spec.title ?? 'New chat',
       state: spec.state ?? 'ready',
       activity: spec.activity ?? 'passive',
@@ -750,6 +755,7 @@ export const makeFakePowers = ({
     harden({
       rev: s.rev,
       info: infoOf(s),
+      ...(s.inventoryPage && { inventoryRevision: s.inventoryRevision }),
       pending: pendingView(s),
       usage: usageOf(s),
       ...(s.current
@@ -828,6 +834,13 @@ export const makeFakePowers = ({
   /** @param {FakeSession} s */
   function makeSessionFacet(s) {
     return Far('Session', {
+      /** @param {string} [cursor] */
+      getInventoryPage: cursor => {
+        enter('Session', 'getInventoryPage', [s.key, cursor]);
+        return s.inventoryPage
+          ? s.inventoryPage(cursor)
+          : harden({ rev: 0, rows: [] });
+      },
       getInfo: () => {
         enter('Session', 'getInfo', []);
         return infoOf(s);
@@ -1294,7 +1307,14 @@ export const makeFakePowers = ({
      * @param {string} key
      * @param {any[]} events
      */
-    publish: (key, events) => publish(sessionState(key), events),
+    publish: (key, events) => {
+      const session = sessionState(key);
+      for (const event of events) {
+        if (event.type === 'inventory')
+          session.inventoryRevision = event.revision;
+      }
+      publish(session, events);
+    },
     /**
      * Skip a rev: the next batch arrives with a gap (as after a lost
      * delivery).
