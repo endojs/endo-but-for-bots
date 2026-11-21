@@ -19710,3 +19710,28 @@ clone, active worker heaps and the temporary checkpoint copy. For Ironhorse
 work, measure peak space at the copy and surface the underlying checkpoint
 error to the parent startup path. A four-minute test timeout hid the
 actionable error. [Checkpoint copy](../thixotrope/src/ironhorse/ironhorse-engine.js)
+
+### J-13007 2026-11-21 Project development acceptance
+
+The published preset selects `491ecbe14da70ad551fcba86e430cb834708eeb4`.
+The prepared operator workspace, s16, received the final incremental Git
+bundle after its initial setup. Its own shell confirmed a clean tree and
+the expected starting commit before fast-forwarding. All three existing
+inventory tests passed again at the new HEAD. It has no configured remote.
+New development sessions start directly at the published revision. The
+operator’s ChatGPT backend, Terra model and low effort remain selected.
+
+In UAT session s14, t17 ran the unchanged M1a cloned-template test with the
+larger scratch mount. It provisioned the inner supervisor, created a session,
+observed the expected model refusal and streamed a scripted turn through final
+text, usage and completion. The case passed in 70.1s. The complete outer
+unit and adapter suite passed 1,882 tests, with eight gated tests skipped in
+that run. Separate real Docker runs exercised the OCI runner on the project
+and Alpine images. TypeScript passed. The preset editor round-tripped both
+the modern source pin and the legacy compatibility capability.
+
+The checked-in `oci/selfdev/smoke.sh` also ran against this source revision
+and the final image on real Docker Desktop bind mounts. Its three unit tests
+passed, a fresh nested chat returned `Hello!` and stopped cleanly, the
+cloned-template test passed in 51.3s, and a second dependency preparation
+completed in 10.8s. [Operator setup](README.md#develop-the-harness-from-a-session)
