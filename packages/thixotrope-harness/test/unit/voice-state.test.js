@@ -970,12 +970,20 @@ test.serial(
         ...dom.document.querySelectorAll('button[aria-label="Play message"]'),
       ];
       t.is(buttons.length, 2);
-      t.is(buttons[0].closest('.floot-msg').textContent, 'a');
-      t.true(
-        buttons.every(button =>
-          button.closest('.floot-msg-row.assistant .floot-msg'),
-        ),
-      );
+      const bubbles = buttons.map(button => {
+        t.is(button.closest('.floot-msg'), null);
+        const actions = button.closest('.thix-message-actions');
+        t.true(
+          actions.parentElement.matches(
+            '.floot-msg-row.assistant.thix-assistant-message',
+          ),
+        );
+        const bubble = actions.previousElementSibling;
+        t.true(bubble.matches('.floot-msg'));
+        return bubble;
+      });
+      t.is(bubbles[0].textContent, 'a');
+      t.true(bubbles[1].textContent.includes('preview'));
       t.false(
         Boolean(
           dom.document.querySelector(

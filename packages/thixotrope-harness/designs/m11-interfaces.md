@@ -264,7 +264,8 @@ left (K11-1).
 sends create plain sessions. Departs from R5-52's "the UI creates every session spoken" (O-2).
 
 **D-M11-17. Play an individual assistant message.** The `message.action` slot
-places a Play button at the lower right of each assistant message that has text to speak.
+places a Play button just outside the right edge of each assistant bubble that has text to speak.
+The button and bubble share a bottom edge, including when the text wraps.
 Activating the button sends that message's content to `Speech.replay`.
 If automatic playback misses the live turn, the user can play the saved message from its button.
 

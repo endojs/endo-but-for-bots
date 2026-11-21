@@ -19334,3 +19334,16 @@ after a reload delivered 31,709 nonzero samples and completed without a new turn
 The obsolete live-reply notice never appeared. A separate Chromium test
 played two assistant messages from one turn in reverse order and verified
 the speech engine received exactly the selected text on each click.
+
+### J-12595 2026-11-21 Chat spacing and Play button alignment
+
+The operator asked for breathing room between chat bubbles and clarified the
+Play button should sit outside its message on the right, aligned at the bottom.
+On the pinned worker, Chromium originally measured zero vertical space from a
+prompt to its reply and from that reply to the next prompt in `s7`.
+The rebuilt transcript measured 8 px at both boundaries. At viewport widths
+of 320, 390 and 1,150 px the button sat 4 px to the right of its bubble and
+their bottom edges aligned, including on multiline replies. Playing the saved
+reply succeeded without starting another turn.
+An isolated transcript also measured an 8 px gap between consecutive assistant
+messages in the same turn at both 390 and 1,280 px.

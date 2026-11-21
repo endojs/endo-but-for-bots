@@ -103,3 +103,26 @@
   border-radius: 22px;
   padding: 0 0.9rem;
 }
+
+.thix-transcript,
+.thix-turn {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: 0.5rem;
+}
+.thix-renderers:empty,
+.thix-message-actions:empty {
+  display: none;
+}
+.floot-msg-row.assistant.thix-assistant-message {
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 4px;
+}
+.thix-assistant-message > .floot-msg {
+  min-width: 0;
+}
+.thix-message-actions {
+  display: flex;
+  flex: none;
+}

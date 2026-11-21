@@ -60,7 +60,10 @@ const usage = {
 /** The reply's sentences, streamed over about 4.5 s. */
 const REPLY = Array.from({ length: 30 }, (_, i) => `Reply sentence ${i}.`);
 const replayPrompt = 'Check message playback';
-const replayParts = ['Opening playback check.', 'Closing playback check.'];
+const replayParts = [
+  'Opening playback check.',
+  'Closing playback check with enough words to wrap this assistant message across multiple lines on a narrow phone screen.',
+];
 const replyScript = harden({
   turns: [
     {
@@ -341,22 +344,84 @@ const voiceStubs = () => {
         .map(line => line.text)
         .filter(text => replayParts.includes(text));
     t.deepEqual(replayLog(), []);
-    const expected = [];
-    for (const text of [...replayParts].reverse()) {
-      const bubble = replayTurn.locator('.floot-msg-row.assistant .floot-msg', {
-        hasText: text,
+    const checkLayout = async (/** @type {number} */ width) => {
+      await pageB.setViewportSize({ width, height: 800 });
+      const geometry = await replayTurn
+        .locator('.floot-msg-row.assistant')
+        .evaluateAll((/** @type {Element[]} */ rows) =>
+          rows.map(row => {
+            const bubble = row.querySelector(':scope > .floot-msg');
+            const button = row.querySelector(
+              ':scope > .floot-msg + .thix-message-actions button[aria-label="Play message"]',
+            );
+            if (!bubble || !button)
+              throw Error(
+                'Expected a Play button beside each assistant bubble',
+              );
+            const message = bubble.getBoundingClientRect();
+            const playRect = button.getBoundingClientRect();
+            return {
+              gap: playRect.left - message.right,
+              bottom: playRect.bottom - message.bottom,
+              height: message.height,
+              right: playRect.right,
+              left: message.left,
+            };
+          }),
+        );
+      t.is(geometry.length, 2);
+      for (const rect of geometry) {
+        t.true(
+          rect.gap > 0 && rect.gap <= 8,
+          `horizontal gap at ${width}px: ${rect.gap}`,
+        );
+        t.true(
+          Math.abs(rect.bottom) <= 1,
+          `bottom alignment at ${width}px: ${rect.bottom}`,
+        );
+        t.true(
+          rect.left >= 0 && rect.right <= width,
+          'bubble and control fit inside the viewport',
+        );
+      }
+      const userBubble = await replayTurn
+        .locator('.floot-msg-row.user > .floot-msg')
+        .boundingBox();
+      const firstBubble = await replayTurn
+        .locator('.floot-msg-row.assistant > .floot-msg')
+        .first()
+        .boundingBox();
+      const verticalGap = firstBubble.y - (userBubble.y + userBubble.height);
+      t.true(
+        verticalGap > 0 && verticalGap <= 12,
+        `bubble gap at ${width}px: ${verticalGap}`,
+      );
+      return { geometry, verticalGap };
+    };
+    const replay = async (
+      /** @type {number} */ index,
+      /** @type {string[]} */ expected,
+    ) => {
+      const row = replayTurn.locator('.floot-msg-row.assistant').filter({
+        has: pageB.locator('.floot-msg', { hasText: replayParts[index] }),
       });
-      // eslint-disable-next-line no-await-in-loop -- replay one message at a time
-      await bubble.getByRole('button', play).click();
-      expected.push(text);
-      // eslint-disable-next-line no-await-in-loop -- one engine response per click
+      await row.getByRole('button', play).click();
       await waitFor(
         () => replayLog().length >= expected.length,
         15_000,
         'the selected assistant message was spoken',
       );
       t.deepEqual(replayLog(), expected);
-    }
+    };
+    const desktop = await checkLayout(1280);
+    await replay(1, [replayParts[1]]);
+    const mobile = await checkLayout(390);
+    t.true(
+      mobile.geometry[1].height > desktop.geometry[1].height,
+      'the longer bubble wraps on mobile',
+    );
+    await replay(0, [replayParts[1], replayParts[0]]);
+    t.log({ desktop, mobile });
     const pageBWake = await pageB.evaluate(() => globalThis.thixVoiceTest.wake);
     t.deepEqual(pageLog, [], 'no page error');
     t.log({ wake: wake.map(([, what]) => what), pageBWake: pageBWake.length });

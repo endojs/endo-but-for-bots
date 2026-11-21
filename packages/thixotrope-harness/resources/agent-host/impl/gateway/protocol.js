@@ -175,7 +175,7 @@ export const uiSlots = Object.freeze([
    * widgets, mail captions); props `MessageRendererProps`.
    */
   'message.renderer',
-  /** Actions inside an individual committed assistant message bubble. */
+  /** Actions beside an individual committed assistant message bubble. */
   'message.action',
 ]);
 

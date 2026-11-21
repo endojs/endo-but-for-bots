@@ -1645,7 +1645,8 @@ M11 passed live local speech recognition, automatic reply playback and manual
 Replay in Chromium, including replay after a restart and a fragmentless reconnect.
 Refresh the signed-in tab, choose **Start listening** and allow microphone access
 to check the physical input. **Speak replies** enables audio for new replies on
-that page. The **Play message** button at the lower right of an assistant reply plays that reply.
+that page. **Play message** sits to the right of the assistant bubble, aligned with its bottom edge.
+The transcript leaves a small vertical gap between messages and between turns.
 The physical microphone and speaker
 check remains with the operator.
 [Speech run](../JOURNAL.md#j-12591-2026-11-21-live-dictation-spoken-replies-and-replay).

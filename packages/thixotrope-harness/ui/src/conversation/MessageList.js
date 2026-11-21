@@ -120,21 +120,24 @@ export const TurnView = ({ entry, view, controller, features, context }) => {
         ? h(ToolGroup, { key: `actions-${row.index}`, actions: row.actions })
         : h(
             'div',
-            { key: `msg-${row.index}`, class: `floot-msg-row ${row.msg.role}` },
+            {
+              key: `msg-${row.index}`,
+              class: `floot-msg-row ${row.msg.role}${row.msg.role === 'assistant' ? ' thix-assistant-message' : ''}`,
+            },
             h(
               'div',
               { class: 'floot-msg' },
               h(LongText, { value: row.msg.text, controller }),
-              row.msg.role === 'assistant'
-                ? h(ConversationSlot, {
-                    slot: 'message.action',
-                    features,
-                    context,
-                    class: 'thix-message-actions',
-                    props: { message: row.msg },
-                  })
-                : null,
             ),
+            row.msg.role === 'assistant'
+              ? h(ConversationSlot, {
+                  slot: 'message.action',
+                  features,
+                  context,
+                  class: 'thix-message-actions',
+                  props: { message: row.msg },
+                })
+              : null,
           ),
     ),
     live && streamingText
