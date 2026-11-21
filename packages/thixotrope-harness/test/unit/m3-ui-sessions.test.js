@@ -330,6 +330,8 @@ test.serial(
 test.serial(
   'agent inventory reads the selected session while expanded and follows its revisions',
   async t => {
+    const longLabel = 'saved-'.repeat(20);
+    const longPreview = '界'.repeat(70);
     let revision = 0;
     let wait = false;
     /** @type {(page: any) => void} */
@@ -348,7 +350,7 @@ test.serial(
                   rev: revision,
                   rows: [
                     {
-                      label: 'paper',
+                      label: 'tools/paper',
                       kind: 'value',
                       preview: String(revision),
                     },
@@ -358,7 +360,19 @@ test.serial(
               : harden({
                   rev: revision,
                   rows: [
-                    { label: 'helper', kind: 'subagent' },
+                    { label: 'alpha', kind: 'value', preview: 'null' },
+                    { label: 'tools', kind: 'object' },
+                    { label: 'tools/zinc', kind: 'object' },
+                    ...(revision === 0
+                      ? [
+                          {
+                            label: `tools/nested/${longLabel}`,
+                            kind: 'value',
+                            preview: longPreview,
+                            truncated: true,
+                          },
+                        ]
+                      : []),
                     { label: 'format', kind: 'object' },
                   ],
                 });
@@ -382,22 +396,56 @@ test.serial(
       t.is(reads(), 0);
       toggle();
       await flush();
+      const directory = (/** @type {string} */ path) =>
+        panel().querySelector(`li[data-directory="${path}"]`);
+      const children = (/** @type {any} */ list) =>
+        [...list.children].map(
+          item => item.dataset.label || `${item.dataset.directory}/`,
+        );
+      const folderButton = () => directory('tools').querySelector('button');
+      const folderList = () => directory('tools').querySelector('ul');
       t.deepEqual(
-        [...panel().querySelectorAll('[data-label]')].map(
-          el => el.dataset.label,
-        ),
-        ['paper', 'helper', 'format'],
+        children(panel().querySelector('ul[aria-label="Inventory items"]')),
+        ['alpha', 'format', 'tools', 'tools/'],
       );
+      t.deepEqual(children(folderList()), [
+        'tools/nested/',
+        'tools/paper',
+        'tools/zinc',
+      ]);
+      const nested = directory('tools/nested').querySelector('ul');
+      t.false(nested.hidden);
+      t.deepEqual(children(nested), [`tools/nested/${longLabel}`]);
+      const longRow = nested.firstElementChild;
       t.is(
-        panel().querySelector('[data-label="format"] .thix-inventory-kind')
-          .textContent,
-        'Object',
+        longRow.querySelector('.thix-inventory-label').textContent,
+        longLabel,
+      );
+      t.is(longRow.querySelector('code').textContent, `${longPreview}…`);
+      t.is(panel().querySelector('[data-label="tools"] code'), null);
+      t.is(
+        panel().querySelector('[data-label="alpha"] code').textContent,
+        'null',
       );
       t.is(reads(), 2);
+      t.is(folderButton().getAttribute('aria-expanded'), 'true');
+      folderButton().focus();
+      t.is(dom.document.activeElement, folderButton());
+      folderButton().click();
+      await flush();
+      t.true(folderList().hidden);
       revision += 1;
       control.publish('one', [{ type: 'inventory', revision }]);
       await flush();
-      t.is(panel().querySelector('code').textContent, '1');
+      t.is(folderButton().getAttribute('aria-expanded'), 'false');
+      t.true(folderList().hidden);
+      folderButton().click();
+      await flush();
+      t.deepEqual(children(folderList()), ['tools/paper', 'tools/zinc']);
+      t.is(
+        panel().querySelector('[data-label="tools/paper"] code').textContent,
+        '1',
+      );
       toggle();
       await flush();
       const before = reads();
@@ -609,9 +657,20 @@ test.serial(
         fire(dom.window, dom.document.querySelector(selector), 'click');
       click('.thix-inventory-toggle');
       await flush();
-      click('[aria-label="Inspect scout"]');
+      const scout = dom.document.querySelector(
+        '[data-directory="subagents"] [data-label="subagents/scout"] > button',
+      );
+      t.is(scout.getAttribute('aria-label'), 'Inspect scout');
+      t.is(scout.querySelector('.thix-inventory-label').textContent, 'scout');
+      scout.click();
       await flush();
       t.is(controller.getState().activeKey, 'child');
+      t.deepEqual(
+        fake.control
+          .callsOf('Operator', 'findSubagentSession')
+          .map(args => args.slice(3)),
+        [['scout', 'child']],
+      );
       t.is(controller.getState().view?.messages.length, 1);
       t.deepEqual(
         controller.getState().sessions.map(r => r.key),

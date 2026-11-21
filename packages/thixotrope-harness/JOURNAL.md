@@ -19526,3 +19526,26 @@ checks opened the existing Scout session through its parent’s inventory.
 The Chromium regression also checked a longer ancestor title at 960 and 390 px.
 It reproduced the original overlap, then passed with the updated stylesheet.
 The 24 shell, session and build tests and the package TypeScript check passed.
+
+### J-13001 2026-11-21 Alphabetical session inventory and directory hierarchy
+
+The operator chose one alphabetical list of folders and bindings at each
+level. The drawer uses compact item rows and directory disclosures like Endo
+Chat. A small badge on each binding identifies its kind. The displayed tree
+comes from the selected session’s complete, revision-consistent inventory page
+sequence. Directory disclosure is local to the viewer. Opening a managed
+subagent resolves its full petname and immutable child key where available.
+
+On the pinned gateway, the Terra counter parent showed `counter` followed by
+`subagents/`, with `scout` underneath. Enter collapsed the folder while
+`counter` stayed visible, and Space reopened it. Opening Scout showed its own
+`shared-counter`; the parent breadcrumb returned to the original inventory.
+Chromium verified the same tree in a 390 px drawer. The check sent no prompts.
+
+A UI fixture covered mixed kinds, alphabetical siblings across pages, multiple
+levels, and a binding and folder sharing a name. It also checked full labels,
+long value previews and a directory remaining collapsed when new items arrive.
+The session’s existing ordinary petname rules still admit single components;
+managed children supply the `subagents/` hierarchy on this installation.
+All 24 shell, session and build tests passed. The installed Chromium regression
+for live adoption, session switching and drawer collapse also passed.

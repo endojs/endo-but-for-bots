@@ -1,13 +1,99 @@
 // @ts-check
 import { h } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useId, useState } from 'preact/hooks';
 
 /** @typedef {{ label: string, kind: 'value'|'object'|'subagent', preview?: string, truncated?: boolean, childKey?: string }} InventoryRow */
 
-const kindLabels = {
-  value: 'Value',
-  object: 'Object',
-  subagent: 'Subagent',
+/** @typedef {{ name: string, path: string, children: Map<string, InventoryNode>, row?: InventoryRow }} InventoryNode */
+
+/** @param {InventoryRow[]} rows */
+const inventoryTree = rows => {
+  /** @type {Map<string, InventoryNode>} */
+  const root = new Map();
+  for (const row of rows) {
+    let children = root;
+    let path = '';
+    for (const name of row.label.split('/')) {
+      path += name;
+      let node = children.get(name);
+      if (!node) {
+        node = { name, path, children: new Map() };
+        children.set(name, node);
+      }
+      if (path === row.label) node.row = row;
+      children = node.children;
+      path += '/';
+    }
+  }
+  return root;
+};
+
+const kindLabels = { object: 'Object', value: 'Value', subagent: 'Subagent' };
+const alphabetic = new Intl.Collator('en', { sensitivity: 'base' });
+
+/** @param {{ row: InventoryRow, name: string, controller: any, sessionKey: string }} props */
+const InventoryItem = ({ row, name, controller, sessionKey }) => {
+  const alias =
+    row.kind === 'subagent' && row.label.startsWith('subagents/')
+      ? row.label.slice('subagents/'.length)
+      : undefined;
+  const content = [
+    h('span', { class: 'thix-inventory-label' }, name),
+    h('span', { class: 'thix-inventory-kind' }, kindLabels[row.kind]),
+    alias &&
+      h('span', { class: 'thix-inventory-arrow', 'aria-hidden': true }, '›'),
+    row.preview !== undefined &&
+      h(
+        'code',
+        { class: 'thix-inventory-preview' },
+        row.preview,
+        row.truncated ? '…' : '',
+      ),
+  ];
+  return h(
+    'li',
+    { 'data-label': row.label, title: row.label },
+    alias
+      ? h(
+          'button',
+          {
+            class: 'thix-inventory-row thix-subagent-link',
+            type: 'button',
+            'aria-label': `Inspect ${alias}`,
+            onClick: () =>
+              controller.openSubagent(sessionKey, alias, row.childKey),
+          },
+          content,
+        )
+      : h('div', { class: 'thix-inventory-row' }, content),
+  );
+};
+
+/** @param {{ node: InventoryNode, expanded: boolean, toggle: () => void, children?: import('preact').ComponentChildren }} props */
+const InventoryFolder = ({ node, expanded, toggle, children }) => {
+  const listId = useId();
+  return h(
+    'li',
+    { 'data-directory': node.path },
+    h(
+      'button',
+      {
+        class: 'thix-inventory-folder',
+        type: 'button',
+        title: node.path,
+        'aria-controls': listId,
+        'aria-expanded': expanded,
+        onClick: toggle,
+      },
+      h('span', { class: 'thix-inventory-caret', 'aria-hidden': true }, '▸'),
+      h('span', { class: 'thix-inventory-folder-name' }, node.name),
+    ),
+    h(
+      'ul',
+      { class: 'thix-inventory-list', id: listId, hidden: !expanded },
+      children,
+    ),
+  );
 };
 
 /**
@@ -18,6 +104,9 @@ const kindLabels = {
 const InventoryRows = ({ controller, sessionKey, revision }) => {
   const [rows, setRows] = useState(
     /** @type {InventoryRow[] | undefined} */ (undefined),
+  );
+  const [collapsed, setCollapsed] = useState(
+    /** @type {Set<string>} */ (new Set()),
   );
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -70,41 +159,48 @@ const InventoryRows = ({ controller, sessionKey, revision }) => {
       rows ? 'This agent’s inventory is empty.' : 'Loading inventory…',
     );
   }
+  /**
+   * @param {Map<string, InventoryNode>} nodes
+   * @returns {import('preact').ComponentChildren}
+   */
+  const entries = nodes => {
+    const sorted = [...nodes.values()].sort(
+      (a, b) =>
+        alphabetic.compare(a.name, b.name) ||
+        (a.name === b.name ? 0 : a.name < b.name ? -1 : 1),
+    );
+    return sorted.flatMap(node => [
+      node.row &&
+        h(InventoryItem, {
+          key: `leaf:${node.path}`,
+          row: node.row,
+          name: node.name,
+          controller,
+          sessionKey,
+        }),
+      node.children.size > 0 &&
+        h(
+          InventoryFolder,
+          {
+            key: `folder:${node.path}`,
+            node,
+            expanded: !collapsed.has(node.path),
+            toggle: () =>
+              setCollapsed(previous => {
+                const next = new Set(previous);
+                if (next.has(node.path)) next.delete(node.path);
+                else next.add(node.path);
+                return next;
+              }),
+          },
+          entries(node.children),
+        ),
+    ]);
+  };
   return h(
     'ul',
     { class: 'thix-inventory-list', 'aria-label': 'Inventory items' },
-    rows.map(row =>
-      h(
-        'li',
-        { key: row.label, 'data-label': row.label },
-        row.kind === 'subagent' && row.label.startsWith('subagents/')
-          ? h(
-              'button',
-              {
-                type: 'button',
-                class: 'thix-subagent-link',
-                'aria-label': `Inspect ${row.label.slice('subagents/'.length)}`,
-                onClick: () =>
-                  controller.openSubagent(
-                    sessionKey,
-                    row.label.slice('subagents/'.length),
-                    row.childKey,
-                  ),
-              },
-              row.label,
-            )
-          : h('span', { class: 'thix-inventory-label' }, row.label),
-        h('span', { class: 'thix-inventory-kind' }, kindLabels[row.kind]),
-        row.preview === undefined
-          ? null
-          : h(
-              'code',
-              { class: 'thix-inventory-preview' },
-              row.preview,
-              row.truncated ? '…' : '',
-            ),
-      ),
-    ),
+    entries(inventoryTree(rows)),
   );
 };
 

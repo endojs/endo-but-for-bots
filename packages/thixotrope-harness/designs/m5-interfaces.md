@@ -355,6 +355,14 @@ through the delegation tools. In the operator view, each managed child row opens
 its session and inventory. An ordinary object stays an inventory entry even when
 its value happens to be a transferable subagent handle.
 
+The drawer lists names alphabetically at each directory level. A slash separates
+path components. For example, `counter` appears at the root and
+`subagents/scout` appears as `scout` inside the expandable `subagents/` folder.
+Ordinary session petnames are single components. Directories start expanded and
+retain their disclosure state across live revisions while the drawer is open.
+Selecting a child uses its complete binding and session key. A stored value
+shows its supplied preview below the name.
+
 To share stateful behavior, publish the object's named methods from eval.
 
 ```js

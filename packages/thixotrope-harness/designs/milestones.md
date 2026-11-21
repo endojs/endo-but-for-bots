@@ -1519,11 +1519,13 @@ In the live Terra low counter run the parent, child and parent returned 1,
 2 and 3 from their own exec calls. The open inventory showed the published
 counter and the newly created child. [Saved turn evidence](../JOURNAL.md#j-12596-2026-11-21-observable-session-inventories-and-shared-objects).
 
-The live counter chat also passed child inspection. Open `subagents/scout` to
-read the child’s own reply and `shared-counter`; follow the parent breadcrumb
+The live counter chat also passed child inspection. The inventory lists folders
+and items alphabetically at each level. Expand `subagents/` and select `scout`
+to read the child’s own reply and `shared-counter`. Follow the parent breadcrumb
 to recover the parent’s draft and inventory. Current factories resolve children
 directly. The retained UAT factory has a verified registration for this pair.
 [Inspection and compatibility](../JOURNAL.md#j-12598-2026-11-21-inspect-a-delegated-session-and-return-to-its-parent)
+· [Desktop and mobile inventory tree](../JOURNAL.md#j-13001-2026-11-21-alphabetical-session-inventory-and-directory-hierarchy)
 
 On the pinned gateway, the Inventory label and parent breadcrumb have visible
 space between them at six widths from 320 to 1,200 CSS px. The root chat’s
