@@ -25,6 +25,7 @@ const { isDigestPin } =
 const run = promisify(execFile);
 const presetName = 'Thixotrope development';
 const { workspaceSeedLabel: markerLabel } =
+  // eslint-disable-next-line import/no-relative-packages -- shared with the private guest preset contract
   await import('../guest/lib/workspace-seed.js');
 const projectWorkflow = [
   'You are developing the Thixotrope harness in your own persistent Git checkout at /workspace.',

@@ -19681,3 +19681,32 @@ for nested state. The host checkout and normal temporary directory retain
 their original mount settings. The image smoke now exercises the production
 OCI adapter and host bind mounts. The pinned environments adapter was
 restarted by itself so the live session could exercise the corrected mount.
+
+A fresh browser opened the updated preset at
+`082926e380f4c222cb5cefacc9068c1815d3a255`. Its independent session, s16,
+is named **Thixotrope development workspace**. The browser closed after
+creation. A Terra low setup turn prepared the checkout, ran all three
+existing inventory tests and confirmed a clean Git worktree at the expected
+commit. Cold dependency preparation on this bind mount took 3m26s. This
+workspace is prepared for the operator. The two-file UAT edit remains in the
+separate Terra session, s14.
+
+After the adapter restart, s14 still returned the identical patch and passed
+all four tests. Its shell preserved delayed stdout, delayed stderr and a
+deliberate exit status of 37. In turn t15 it started a fresh nested supervisor,
+provisioned the harness, created inner session s1, submitted a prompt, and
+observed the scripted reply `Hello!` and a completed turn. The inner
+supervisor stopped cleanly. Serving took 8.8s, opening the workspace 3.3s,
+provisioning and exercising the harness 29.3s, and shutdown 0.94s.
+
+**Ironhorse checkpoint footprint.** The copied-template test timed out at the
+outer AVA deadline with 512 MiB of scratch. On the same warmed checkout the
+nested supervisor reported ENOSPC while copying the live heap SQLite file
+to `snapshot.sqlite` during checkpoint. The filesystem reached 521,348 KiB
+used. A fresh provision and a same-path restart both worked on the smaller
+mount. At 1,536 MiB the original cloned-template test completed and streamed
+the full turn. The project scratch limit now accommodates the template, its
+clone, active worker heaps and the temporary checkpoint copy. For Ironhorse
+work, measure peak space at the copy and surface the underlying checkpoint
+error to the parent startup path. A four-minute test timeout hid the
+actionable error. [Checkpoint copy](../thixotrope/src/ironhorse/ironhorse-engine.js)

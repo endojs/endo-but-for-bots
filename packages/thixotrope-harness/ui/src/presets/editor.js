@@ -21,6 +21,7 @@
  */
 import { E } from '@endo/far';
 
+// eslint-disable-next-line import/no-relative-packages -- shared with the private guest preset contract
 import { workspaceSeedLabel } from '../../../guest/lib/workspace-seed.js';
 import { fitsPresetRecord } from './size.js';
 import { presetTexts, presetTooLarge } from './texts.js';

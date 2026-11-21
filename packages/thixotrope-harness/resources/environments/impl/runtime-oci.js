@@ -357,7 +357,7 @@ export const makeOciRuntime = ({
       ...(env.project
         ? [
             '--tmpfs',
-            '/tmp/thix:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=0700,size=512m',
+            '/tmp/thix:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=0700,size=1536m',
           ]
         : []),
       '--security-opt',

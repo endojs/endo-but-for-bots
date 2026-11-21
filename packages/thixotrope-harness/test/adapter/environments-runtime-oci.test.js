@@ -318,7 +318,7 @@ for (const binary of /** @type {const} */ (['podman', 'docker'])) {
     await runtime.start(seeded);
     t.true(
       calls()[1].includes(
-        '/tmp/thix:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=0700,size=512m',
+        '/tmp/thix:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=0700,size=1536m',
       ),
     );
 
@@ -773,8 +773,8 @@ realTest(
         'sh',
         '-ec',
         'stat -c "%u:%g:%a" /tmp/thix; stat -f -c %T /tmp/thix; ' +
-          'cp /bin/true /tmp/thix/probe; /tmp/thix/probe; ' +
-          'cp /bin/true /tmp/probe; ! /tmp/probe',
+          "printf '#!/bin/sh\\nexit 0\\n' > /tmp/thix/probe; chmod 700 /tmp/thix/probe; /tmp/thix/probe; " +
+          'cp /tmp/thix/probe /tmp/probe; ! /tmp/probe',
       ],
       execOptions,
     );

@@ -12,4 +12,5 @@ git -C "$repo" archive "${2:-HEAD}" -- package.json yarn.lock .yarnrc.yml \
   tar -xf - -C "$root/workspace"
 git -C "$root/workspace" init -q
 git -C "$root/workspace" -c user.name=Test -c user.email=test@example.invalid commit -qm seed --allow-empty
-node "$here/smoke.mjs" "$image" "$root"
+cp "$here/../../scripts/verify-project-turn.mjs" "$root/workspace/packages/thixotrope-harness/scripts/"
+node "$here/../../scripts/verify-project-image.mjs" "$image" "$root"

@@ -356,7 +356,7 @@ environments ADAPTER (Node): workspaces, git (@endo/git), runner (fake | podman 
 ```
 
 Project development sessions also receive a private Linux tmpfs at
-`/tmp/thix` (512 MiB, UID/GID 1000, mode 0700, `exec,nosuid,nodev`).
+`/tmp/thix` (1536 MiB, UID/GID 1000, mode 0700, `exec,nosuid,nodev`).
 The native layout selects it from the authenticated seed when starting the
 container. Nested supervisors need Linux Unix-socket permission changes and
 an executable state directory for their staged worker. Ordinary environments
