@@ -67,7 +67,14 @@ export const environmentServices = async ({ presetSnapshot, settings }) => {
   if (!workspace) return {};
   const admin = adminOf(settings);
   if (admin === undefined) throw Error(texts.runnerRequired);
-  const kit = await E(admin).provide(harden({ workspace, shell }));
+  const workspaceSeed = presetSnapshot?.workspaceSeed;
+  const kit = await E(admin).provide(
+    harden({
+      workspace,
+      shell,
+      ...(workspaceSeed === undefined ? {} : { workspaceSeed }),
+    }),
+  );
   /** @type {Record<string, any>} */
   const services = { environment: kit.control };
   if (kit.workspace !== undefined) services.workspace = kit.workspace;

@@ -19606,3 +19606,19 @@ passed. The returned two-file patch passed `git apply --check --index` against
 the second clean checkout. The test reused host JavaScript dependencies.
 Container execution, persistence across an environment restart and the
 selectable preset still need end-to-end acceptance.
+
+### J-13004 2026-11-21 Project preset implementation
+
+The operator publishes a committed project revision as an immutable Git
+bundle in the supervisor's private state. The preset snapshots its identity.
+Git and shell share one initializer. A checkout has its own object store,
+branch and completion marker. Adapter tests exercised independent sessions,
+first use through either tool, recovery after an interrupted import, and
+reopening an edited workspace after removing the original bundle.
+
+The pinned factory predates the new preset field. Its existing endowment
+channel can carry an opaque project source minted by the environments manager.
+The session program installs that source before publishing the new session.
+This permits an in-place rollout with the original operator and provider.
+The ordinary development preset continues to start with an empty repository.
+[Operator procedure](README.md#develop-the-harness-from-a-session)

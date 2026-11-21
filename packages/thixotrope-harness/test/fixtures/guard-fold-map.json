@@ -291,7 +291,13 @@
   "methodNames.Operator": "WX.1 for M9 (m9-interfaces.md 6.2) F6: + getMail; WX.1 for M11 (m11-interfaces.md appendix A): + getVoice; operator child inspection adds findSubagentSession",
   "methodNames.SessionInternal": "WX.1 for M9 (m9-interfaces.md 6.2) S9: + deliverMail, cancelMail",
   "methodNames.TurnSink": "WX.1 for M8 (m8-interfaces.md 10) G-2: + compacted",
-  "methodNames.HarnessRoot": "WX.1 for M11 (m11-interfaces.md appendix A): + configureSpeech"
+  "methodNames.HarnessRoot": "WX.1 for M11 (m11-interfaces.md appendix A): + configureSpeech",
+  "shapes.PresetSnapshot": "Development presets may identify a pinned workspace seed.",
+  "shapes.SessionConfig": "Development presets may identify a pinned workspace seed.",
+  "shapes.PresetRecord": "Development presets may identify a pinned workspace seed.",
+  "shapes.PresetView": "Development presets may identify a pinned workspace seed.",
+  "interfaces.PresetCatalog": "Development presets may identify a pinned workspace seed.",
+  "interfaces.Preset": "Development presets may identify a pinned workspace seed."
  },
  "exportsRemoved": [
   "m1bInterfaces",
@@ -346,10 +352,14 @@
   "texts.commandOutcomeUnknown": "WX.1 for M6 (m6-interfaces.md 15).1",
   "texts.commandStopped": "WX.1 for M6 (m6-interfaces.md 15).1",
   "texts.notBuiltYet": "WX.1: the refusal of a guarded method whose lane has not merged (deliverMail, getMail, getVoice); deleted by the group fold",
-  "texts.runnerRequired": "WX.1 for M6 (m6-interfaces.md 15).2 (R3-21)"
+  "texts.runnerRequired": "WX.1 for M6 (m6-interfaces.md 15).2 (R3-21)",
+  "shapes.WorkspaceSeed": "The pinned project and source commit for a development workspace."
  },
  "vocabularyAdded": {
   "keys": [
+   "commit",
+   "project",
+   "workspaceSeed",
    "childKey",
    "inventoryRevision",
    "truncated",

@@ -40,6 +40,7 @@ const messageOf = error =>
  * @property {string} template
  * @property {string} instructions
  * @property {string} networkPolicy
+ * @property {{ project: string, commit: string }} [workspaceSeed]
  * @property {any} [backend] a `Backend` presence, or undefined (factory default)
  * @property {string} modelId '' for none
  * @property {string} reasoningEffort '' for none
@@ -83,6 +84,7 @@ export const formOf = view => ({
   template: view.template,
   instructions: view.instructions ?? '',
   networkPolicy: view.networkPolicy ?? 'off',
+  ...(view.workspaceSeed && { workspaceSeed: view.workspaceSeed }),
   backend: view.backend,
   modelId: view.modelId ?? '',
   reasoningEffort: view.reasoningEffort ?? '',
@@ -108,6 +110,9 @@ export const recordOf = form =>
     description: form.description,
     instructions: form.instructions,
     networkPolicy: form.networkPolicy,
+    ...(form.template === 'development' && form.workspaceSeed
+      ? { workspaceSeed: form.workspaceSeed }
+      : {}),
     objects: form.objects.map(({ kind, label }) => ({ kind, label })),
     endowments: form.endowments.map(({ label, value }) => ({ label, value })),
     ...(form.backend === undefined ? {} : { backend: form.backend }),

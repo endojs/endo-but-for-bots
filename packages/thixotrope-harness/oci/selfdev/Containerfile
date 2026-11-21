@@ -1,0 +1,32 @@
+ARG NODE_IMAGE=node@sha256:e0d149b4727ac0c20d9774e801e423d7a946a0bffced886f42cfe9cd3c67820a
+FROM ${NODE_IMAGE} AS worker
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+      arm64) triple=aarch64-unknown-linux-gnu; hash=e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c ;; \
+      amd64) triple=x86_64-unknown-linux-gnu; hash=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c ;; \
+      *) exit 1 ;; esac && \
+    curl -fsSL "https://static.rust-lang.org/rustup/archive/1.28.2/$triple/rustup-init" -o /tmp/rustup-init && \
+    echo "$hash  /tmp/rustup-init" | sha256sum -c - && chmod +x /tmp/rustup-init && \
+    /tmp/rustup-init -y --profile minimal --default-toolchain 1.91.1
+ENV PATH="/root/.cargo/bin:${PATH}"
+WORKDIR /build
+COPY rust-src/ ./
+RUN cargo +1.91.1 build --locked --release -p thixotrope-ironhorse-worker && \
+    cp target/release/thixotrope-ironhorse-worker /worker
+
+FROM ${NODE_IMAGE} AS dependencies
+WORKDIR /build
+COPY manifests/ ./
+ENV YARN_ENABLE_GLOBAL_CACHE=false YARN_CACHE_FOLDER=/opt/thix-selfdev/cache
+RUN corepack install --global yarn@4.13.0 && \
+    corepack enable && corepack yarn install --immutable && \
+    sha256sum yarn.lock > /opt/thix-selfdev/lock.sha256
+
+FROM ${NODE_IMAGE}
+# Docker mounts /tmp noexec. Yarn creates executable wrappers under TMPDIR.
+ENV TMPDIR=/home/node COREPACK_HOME=/opt/thix-selfdev/corepack YARN_ENABLE_GLOBAL_CACHE=false YARN_CACHE_FOLDER=/opt/thix-selfdev/cache
+COPY --from=dependencies /root/.cache/node/corepack/ /opt/thix-selfdev/corepack/
+COPY --from=dependencies /opt/thix-selfdev/ /opt/thix-selfdev/
+COPY --from=worker /worker /opt/thix-selfdev/thixotrope-ironhorse-worker
+RUN corepack enable
+COPY --chmod=755 prepare.sh /usr/local/bin/thix-selfdev-prepare

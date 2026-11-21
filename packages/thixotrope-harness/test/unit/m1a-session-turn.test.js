@@ -1212,10 +1212,8 @@ test('tool table: echo only when the ports offer it', t => {
   t.true(set.byName.has('echo'));
 });
 
-test('SpareMaker makes one session per vat', async t => {
-  const maker = makeSpareMaker();
-  const s = await setup();
-  const args = harden({
+const spareArgs = () =>
+  harden({
     config: harden({
       key: 's2',
       title: 't',
@@ -1231,11 +1229,55 @@ test('SpareMaker makes one session per vat', async t => {
     }),
     rowReporter: Far('RowReporter', { changed: () => {} }),
   });
-  const made = maker.make(args);
+test('SpareMaker makes one session per vat', async t => {
+  const maker = makeSpareMaker();
+  const s = await setup();
+  const args = spareArgs();
+  const made = await maker.make(args);
   t.truthy(made.session);
   t.truthy(made.internal);
-  t.throws(() => maker.make(args), { message: ALREADY_MADE });
+  await t.throwsAsync(() => maker.make(args), { message: ALREADY_MADE });
   t.truthy(s);
+});
+
+test('session publication waits for the legacy project seed; only the other endowments enter inventory', async t => {
+  const started = makePromiseKit();
+  const installed = makePromiseKit();
+  const marker = Far('WorkspaceSeedMarker', {});
+  const args = spareArgs();
+  const making = makeSpareMaker().make(
+    harden({
+      ...args,
+      services: {
+        ...args.services,
+        environment: Far('EnvironmentControl', {
+          useWorkspaceSeed: (/** @type {any} */ given) => {
+            started.resolve(given);
+            return installed.promise;
+          },
+        }),
+        endowments: [
+          { label: 'thixotrope-project-source', value: marker },
+          { label: 'notes', value: Far('Notes', {}) },
+        ],
+      },
+    }),
+  );
+  const received = await started.promise;
+  t.is(received, marker);
+  const waiting = await Promise.race([making, Promise.resolve('waiting')]);
+  t.is(waiting, 'waiting');
+  const workspaceSeed = harden({
+    project: 'thixotrope',
+    commit: 'ab'.repeat(20),
+  });
+  installed.resolve(workspaceSeed);
+  const { session, internal } = await making;
+  const head = await internal.exportState();
+  t.deepEqual(head.config.preset.workspaceSeed, workspaceSeed);
+  t.deepEqual(session.getInventoryPage().rows, [
+    { label: 'notes', kind: 'object' },
+  ]);
 });
 
 test('a waiting entry cancelled from outside a turn crank publishes pending at the end of its crank', async t => {

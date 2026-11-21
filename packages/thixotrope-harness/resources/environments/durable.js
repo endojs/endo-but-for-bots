@@ -39,10 +39,12 @@ import {
   gitReaderMethodNames,
 } from '../../guest/lib/guards/environments.js';
 import { guardLimits as limits } from '../../guest/lib/guard-limits.js';
+import { assertWorkspaceSeed } from '../../guest/lib/workspace-seed.js';
 import { isRetiredBreak } from '../../guest/lib/retired.js';
 /* eslint-enable import/no-relative-packages */
 import { makeAttachedOps } from '../native-attach.js';
 
+/** @import { WorkspaceSeed } from '../../guest/lib/workspace-seed.js' */
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 
 const { E, Far } = /** @type {GuestGlobals} */ (globalThis);
@@ -50,6 +52,13 @@ const { E, Far } = /** @type {GuestGlobals} */ (globalThis);
 // `gitWrites`), which the typed overload cannot follow; the guards check
 // every call.
 const { makeExo } = /** @type {any} */ (globalThis);
+
+/** @param {EnvironmentRecord} record */
+const seedArgs = record => {
+  record.workspaceUsed = true;
+  return record.workspaceSeed ? [record.workspaceSeed] : [];
+};
+harden(seedArgs);
 
 /** The one registration key; the adapter (`impl/index.js`) binds it. */
 export const SERVICE_KEY = 'environments';
@@ -150,6 +159,8 @@ harden(sameSettings);
 /**
  * @typedef {object} EnvironmentRecord
  * @property {string} key `e<n>`; leaves this vat toward the adapter only
+ * @property {boolean} [workspaceUsed]
+ * @property {WorkspaceSeed} [workspaceSeed]
  * @property {boolean} stopped emergency-stopped (D-M6-9)
  * @property {boolean} released released with its session or rollback
  * @property {any} control the `EnvironmentControl`
@@ -168,6 +179,8 @@ export const make = ({ makeManager }) => {
   let serial = 0;
   /** @type {Map<string, EnvironmentRecord>} */
   const records = new Map();
+  /** @type {WeakMap<object, WorkspaceSeed>} */
+  const workspaceSeeds = new WeakMap();
   /** @type {WeakMap<any, EnvironmentRecord>} */
   const recordOf = new WeakMap();
   /** @type {WeakMap<any, EnvironmentRecord>} */
@@ -242,8 +255,14 @@ export const make = ({ makeManager }) => {
    */
   const forwardGit = async (record, op, args, write) => {
     assertLive(record);
+    const seed = seedArgs(record);
     return forward(
-      ops => E(ops).git(record.key, harden({ op, args: harden([...args]) })),
+      ops =>
+        E(ops).git(
+          record.key,
+          harden({ op, args: harden([...args]) }),
+          ...seed,
+        ),
       write,
     );
   };
@@ -265,7 +284,8 @@ export const make = ({ makeManager }) => {
     /** @param {string[]} path */
     openImage: async path => {
       assertLive(record);
-      return forward(ops => E(ops).openImage(record.key, path));
+      const seed = seedArgs(record);
+      return forward(ops => E(ops).openImage(record.key, path, ...seed));
     },
     /** @param {string} [method] */
     help: method => helpOf(name, names, method),
@@ -309,6 +329,7 @@ export const make = ({ makeManager }) => {
        */
       runCommand: async (command, args, options = {}) => {
         assertLive(record);
+        const seed = seedArgs(record);
         await settleStop(record);
         return forward(
           ops =>
@@ -317,6 +338,7 @@ export const make = ({ makeManager }) => {
               command,
               args,
               harden({ ...options }),
+              ...seed,
             ),
           true,
         );
@@ -363,6 +385,20 @@ export const make = ({ makeManager }) => {
   /** @param {EnvironmentRecord} record */
   const makeControl = record =>
     makeExo('EnvironmentControl', I.EnvironmentControl, {
+      /** @param {object} marker */
+      useWorkspaceSeed: marker => {
+        assertLive(record);
+        const seed = workspaceSeeds.get(marker);
+        if (!seed) throw Error('Unknown workspace seed marker');
+        if (record.workspaceSeed !== undefined) {
+          if (record.workspaceSeed.commit !== seed.commit)
+            throw Error('Workspace seed changed');
+          return seed;
+        }
+        if (record.workspaceUsed) throw Error('Workspace is already in use');
+        record.workspaceSeed = seed;
+        return seed;
+      },
       describe: () =>
         harden({
           workspace: record.git !== undefined,
@@ -372,8 +408,9 @@ export const make = ({ makeManager }) => {
         }),
       port: async () => {
         assertLive(record);
+        const seed = seedArgs(record);
         await settleStop(record);
-        return forward(ops => E(ops).port(record.key));
+        return forward(ops => E(ops).port(record.key, ...seed));
       },
       // Cancel (R4-7): kill the commands and stop the container; workspace
       // and home stay. A failure keeps the stop pending (sent again by the
@@ -453,6 +490,16 @@ export const make = ({ makeManager }) => {
   };
 
   const admin = makeExo('EnvironmentsAdmin', I.EnvironmentsAdmin, {
+    getSettings: () => settings,
+    /** @param {WorkspaceSeed} seed */
+    makeWorkspaceSeed: seed => {
+      assertWorkspaceSeed(seed);
+      const marker = makeExo('WorkspaceSeedMarker', I.WorkspaceSeedMarker, {
+        describe: () => seed,
+      });
+      workspaceSeeds.set(marker, seed);
+      return marker;
+    },
     /** @param {Record<string, any>} wanted `EnvironmentSettings` */
     configure: async wanted => {
       if (wanted.runtime !== 'fake' && !isDigestPinForm(wanted.image))
@@ -462,14 +509,16 @@ export const make = ({ makeManager }) => {
       return statusNow();
     },
     status: () => statusNow(),
-    /** @param {{ workspace: boolean, shell: boolean }} request */
-    provide: ({ workspace, shell }) => {
+    /** @param {{ workspace: boolean, shell: boolean, workspaceSeed?: WorkspaceSeed }} request */
+    provide: ({ workspace, shell, workspaceSeed }) => {
       if (settings === undefined) throw Error(T.notConfigured);
       if (records.size >= L.maxEnvironments) throw Error(T.tooManyEnvironments);
+      if (workspaceSeed !== undefined) assertWorkspaceSeed(workspaceSeed);
       serial += 1;
       /** @type {EnvironmentRecord} */
       const record = {
         key: `e${serial}`,
+        ...(workspaceSeed === undefined ? {} : { workspaceSeed }),
         stopped: false,
         released: false,
         control: undefined,

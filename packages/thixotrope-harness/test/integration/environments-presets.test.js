@@ -62,6 +62,7 @@ import {
   takeIntegrationLock,
   tmpRoot,
 } from '../template/index.js';
+import { exportState, importState } from '../../scripts/export.mjs';
 import { makeSlice, round1, sliceTemplate } from './_m1a-slice.js';
 import { runTurn, turnRecords } from './_m1b.js';
 import {
@@ -271,3 +272,69 @@ run('14 and 17: objects by preset, reachability and paths', async t => {
     ...identity,
   });
 });
+
+run(
+  'a legacy project marker becomes a pinned modern preset and session on export/restore',
+  async t => {
+    t.timeout(4 * 60_000);
+    const template = await environmentsTemplate();
+    const source = await startFromTemplate(template, { t });
+    const slice = await makeSlice(source);
+    const { backend } = await slice.makeBackend(script);
+    const operator = await E(slice.harness).getOperator();
+    const catalog = await E(operator).getPresets();
+    const development = await presetOfTemplate(slice.factory, 'development');
+    const { objects } = await E(development).describe();
+    const admin = await source.client.call('lookup', 'environmentsAdmin');
+    const workspaceSeed = harden({
+      project: 'thixotrope',
+      commit: 'ab'.repeat(20),
+    });
+    const marker = await E(admin).makeWorkspaceSeed(workspaceSeed);
+    const { revision } = await E(catalog).configuration();
+    const { preset } = await E(catalog).create(
+      harden({
+        label: 'Legacy project',
+        template: 'development',
+        objects,
+        endowments: [{ label: 'thixotrope-project-source', value: marker }],
+      }),
+      revision,
+    );
+    const session = await E(slice.factory).createSession(
+      harden({ preset, backend, at: 1 }),
+    );
+    const inventory = await E(session).getInventoryPage();
+    t.deepEqual(
+      inventory.rows.map((/** @type {any} */ row) => row.label),
+      ['shell', 'workspace'],
+    );
+    const file = path.join(tmpRoot, `${shortName('project')}.jsonl`);
+    t.teardown(() => rm(file, { force: true }));
+    await exportState({ client: source.client, file });
+    const lines = readFileSync(file, 'utf8')
+      .trimEnd()
+      .split('\n')
+      .map(line => JSON.parse(line));
+    t.deepEqual(
+      lines.find(line => line.type === 'presets').records[0].workspaceSeed,
+      workspaceSeed,
+    );
+    t.deepEqual(
+      lines.find(line => line.type === 'session').head.config.preset
+        .workspaceSeed,
+      workspaceSeed,
+    );
+    await source.stop();
+    const target = await startFromTemplate(template, { t });
+    const targetSlice = await makeSlice(target);
+    const targetBackend = await targetSlice.makeBackend(script);
+    const restored = await importState({
+      client: target.client,
+      file,
+      backends: [targetBackend.backend],
+    });
+    t.is(restored.presets, 1);
+    t.is(restored.sessions.length, 1);
+  },
+);

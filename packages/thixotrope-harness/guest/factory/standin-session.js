@@ -130,7 +130,7 @@ export const makeSpareMaker = () => {
   let made = false;
   return makeExo('SpareMaker', interfaces.SpareMaker, {
     /** @param {any} makeArgs */
-    make: makeArgs => {
+    make: async makeArgs => {
       if (made) throw Error('This session vat was already made');
       made = true;
       return makeSession(makeArgs);

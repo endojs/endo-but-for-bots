@@ -538,6 +538,57 @@ test('export records leave endowments out; import creates a user preset', async 
   });
 });
 
+test('a development workspace seed survives views, snapshots and preset export/import', async t => {
+  const catalog = makePresetCatalog();
+  const workspaceSeed = harden({
+    project: 'thixotrope',
+    commit: 'a1'.repeat(20),
+  });
+  const development = {
+    ...BUILTIN_PRESETS[0],
+    label: 'Thixotrope development',
+  };
+  const { preset } = await E(catalog.facet).create(
+    harden({ ...development, workspaceSeed }),
+    0,
+  );
+  t.deepEqual((await E(preset).describe()).workspaceSeed, workspaceSeed);
+  t.deepEqual((await E(preset).snapshot()).workspaceSeed, workspaceSeed);
+  const [record] = catalog.exportRecords();
+  const restored = makePresetCatalog().importRecord(record);
+  t.deepEqual(
+    (await E(restored.preset).snapshot()).workspaceSeed,
+    workspaceSeed,
+  );
+  const saved = harden({
+    ...development,
+    workspaceSeed: { ...workspaceSeed, commit: 'cd'.repeat(20) },
+  });
+  const before = await E(preset).snapshot();
+  await E(preset).save(saved, 1);
+  t.deepEqual(before.workspaceSeed, workspaceSeed);
+  t.deepEqual((await E(preset).snapshot()).workspaceSeed, saved.workspaceSeed);
+  for (const commit of [
+    'abc',
+    'A'.repeat(40),
+    'x'.repeat(40),
+    `${'a'.repeat(39)}\n`,
+  ]) {
+    t.throws(
+      () =>
+        normalizePresetRecord(
+          { ...development, workspaceSeed: { ...workspaceSeed, commit } },
+          { templates },
+        ),
+      { message: 'Invalid workspace seed' },
+    );
+  }
+  t.throws(
+    () => normalizePresetRecord(custom({ workspaceSeed }), { templates }),
+    { message: 'Workspace seeds require a development preset' },
+  );
+});
+
 // ---------------------------------------------------------------- the bound
 
 /** A string of `units` three-byte characters. */

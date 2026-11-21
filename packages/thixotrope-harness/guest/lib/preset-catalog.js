@@ -15,9 +15,11 @@
  * Pure: no state, no sends. Runs in the factory vat and in Node.
  */
 import { limits } from './limits.js';
+import { assertWorkspaceSeed } from './workspace-seed.js';
 import { fitsFrame } from './bounded.js';
 import { reservedLabels, textOf, texts } from './guards/factory.js';
 
+/** @import { WorkspaceSeed } from './workspace-seed.js' */
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { Templates, PresetTemplate } from '../factory/preset-templates.js' */
 const { passStyleOf } = /** @type {GuestGlobals} */ (globalThis);
@@ -31,6 +33,7 @@ const { passStyleOf } = /** @type {GuestGlobals} */ (globalThis);
  * @property {'off' | 'public-internet'} networkPolicy
  * @property {readonly { kind: string, label: string }[]} objects
  * @property {readonly { label: string, value: any }[]} endowments
+ * @property {WorkspaceSeed} [workspaceSeed]
  * @property {any} [backend]
  * @property {string} [modelId]
  * @property {string} [reasoningEffort]
@@ -283,6 +286,12 @@ export const normalizePresetRecord = (record, { templates, backendKind }) => {
     objects: harden(objects),
     endowments: harden(endowments),
   };
+  if (record.workspaceSeed !== undefined) {
+    if (template.template !== 'development')
+      throw Error('Workspace seeds require a development preset');
+    assertWorkspaceSeed(record.workspaceSeed);
+    result.workspaceSeed = harden({ ...record.workspaceSeed });
+  }
   if (backend !== undefined) result.backend = backend;
   if (modelId) result.modelId = modelId;
   if (reasoningEffort) result.reasoningEffort = reasoningEffort;

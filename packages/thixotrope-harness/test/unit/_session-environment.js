@@ -99,6 +99,9 @@ export const makeFakeEnvironment = ({ holdStops = false } = {}) => {
     'EnvironmentControl',
     environmentInterfaces.EnvironmentControl,
     {
+      useWorkspaceSeed: () => {
+        throw Error('not used');
+      },
       describe: () =>
         harden({
           workspace: true,

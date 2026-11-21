@@ -7,10 +7,11 @@
  * makes the vat's one session.
  */
 import { interfaces } from '../lib/guards/session.js';
+import { workspaceSeedLabel } from '../lib/workspace-seed.js';
 import { makeSession } from './session.js';
 
 // The exo methods are typed loosely; the interface guards check the values.
-const { makeExo } = /** @type {any} */ (globalThis);
+const { E, makeExo } = /** @type {any} */ (globalThis);
 
 /** The text a second `make` throws (one session per vat). */
 export const ALREADY_MADE = 'this vat already made its session';
@@ -22,7 +23,30 @@ export const makeSpareMaker = () => {
     make(makeArgs) {
       if (made) throw Error(ALREADY_MADE);
       made = true;
-      return makeSession(makeArgs);
+      const { services } = makeArgs;
+      const marker = services.endowments?.find(
+        (/** @type {any} */ entry) => entry.label === workspaceSeedLabel,
+      );
+      if (marker === undefined) return makeSession(makeArgs);
+      return E(services.environment)
+        .useWorkspaceSeed(marker.value)
+        .then((/** @type {any} */ workspaceSeed) =>
+          makeSession(
+            harden({
+              ...makeArgs,
+              config: {
+                ...makeArgs.config,
+                preset: { ...makeArgs.config.preset, workspaceSeed },
+              },
+              services: {
+                ...services,
+                endowments: services.endowments.filter(
+                  (/** @type {any} */ entry) => entry !== marker,
+                ),
+              },
+            }),
+          ),
+        );
     },
   });
 };

@@ -361,7 +361,10 @@ const shapeBuilders = {
     ),
   /** `EnvironmentsAdmin.provide` argument: which objects the preset selects. */
   EnvironmentRequest: () =>
-    record({ workspace: M.boolean(), shell: M.boolean() }),
+    record(
+      { workspace: M.boolean(), shell: M.boolean() },
+      { workspaceSeed: S.WorkspaceSeed },
+    ),
   /** `EnvironmentsAdmin.provide` answer. A shell always comes with a workspace. */
   EnvironmentKit: () =>
     record(
@@ -588,8 +591,16 @@ const interfaceBuilders = {
    * Manager vat: the installation's facet (inventory `environmentsAdmin`),
    * held by provisioning and the factory only.
    */
+  WorkspaceSeedMarker: () =>
+    M.interface('WorkspaceSeedMarker', {
+      describe: M.call().returns(S.WorkspaceSeed),
+    }),
   EnvironmentsAdmin: () =>
     M.interface('EnvironmentsAdmin', {
+      getSettings: M.call().returns(M.or(M.undefined(), S.EnvironmentSettings)),
+      makeWorkspaceSeed: M.call(S.WorkspaceSeed).returns(
+        R('WorkspaceSeedMarker'),
+      ),
       configure: M.callWhen(S.EnvironmentSettings).returns(
         S.EnvironmentsStatus,
       ),
@@ -622,18 +633,24 @@ const interfaceBuilders = {
   EnvironmentsOps: () =>
     M.interface('EnvironmentsOps', {
       status: M.callWhen().returns(S.EnvironmentsStatus),
-      git: M.callWhen(text(limits.idUnits), S.GitOpRequest).returns(M.any()),
+      git: M.callWhen(text(limits.idUnits), S.GitOpRequest)
+        .optional(S.WorkspaceSeed)
+        .returns(M.any()),
       runCommand: M.callWhen(
         text(limits.idUnits),
         S.CommandName,
         list(text(L.commandArgUnits), L.maxCommandArgs),
         S.CommandOptions,
-      ).returns(S.CommandResult),
+      )
+        .optional(S.WorkspaceSeed)
+        .returns(S.CommandResult),
       inspect: M.callWhen(text(limits.idUnits)).returns(S.ShellInfo),
-      openImage: M.callWhen(text(limits.idUnits), S.ImagePath).returns(
-        R('ImageSource'),
-      ),
-      port: M.callWhen(text(limits.idUnits)).returns(R('ShellPort')),
+      openImage: M.callWhen(text(limits.idUnits), S.ImagePath)
+        .optional(S.WorkspaceSeed)
+        .returns(R('ImageSource')),
+      port: M.callWhen(text(limits.idUnits))
+        .optional(S.WorkspaceSeed)
+        .returns(R('ShellPort')),
       stop: M.callWhen(text(limits.idUnits))
         .optional(S.StopOptions)
         .returns(done),
@@ -703,6 +720,7 @@ const interfaceBuilders = {
    */
   EnvironmentControl: () =>
     M.interface('EnvironmentControl', {
+      useWorkspaceSeed: M.call(R('WorkspaceSeedMarker')).returns(S.WorkspaceSeed),
       describe: M.call().returns(S.EnvironmentInfo),
       port: M.callWhen().returns(R('ShellPort')),
       stop: M.callWhen().returns(done),
@@ -716,7 +734,10 @@ export const environmentInterfaces = lazyTable(interfaceBuilders);
 
 /** Method names per interface, in declaration order (tests, review). */
 export const environmentMethodNames = harden({
+  WorkspaceSeedMarker: harden(['describe']),
   EnvironmentsAdmin: harden([
+    'getSettings',
+    'makeWorkspaceSeed',
     'configure',
     'status',
     'provide',
@@ -741,6 +762,7 @@ export const environmentMethodNames = harden({
   Shell: shellMethodNames,
   ShellPort: harden(['runCommand', 'inspect']),
   EnvironmentControl: harden([
+    'useWorkspaceSeed',
     'describe',
     'port',
     'stop',

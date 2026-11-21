@@ -176,6 +176,9 @@ export const PresetEditor = ({ context }) => {
           ),
         ),
       ),
+      form.template === 'development' && form.workspaceSeed
+        ? field('Project revision', h('code', {}, form.workspaceSeed.commit))
+        : null,
       field(
         presetTexts.backend,
         h(

@@ -51,11 +51,17 @@ const makeEnvironmentsAdmin = log => {
   /** @type {Map<any, string>} */
   const keys = new Map();
   let next = 0;
+  /** @type {any[]} */
+  const requests = [];
   const failures = { releaseSession: 0 };
   const admin = makeExo(
     'EnvironmentsAdmin',
     environmentInterfaces.EnvironmentsAdmin,
     {
+      getSettings: () => undefined,
+      makeWorkspaceSeed: () => {
+        throw Error('not used');
+      },
       configure: async () => {
         throw Error('not used');
       },
@@ -63,7 +69,9 @@ const makeEnvironmentsAdmin = log => {
         throw Error('not used');
       },
       /** @param {any} request `{ workspace, shell }` */
-      provide: ({ workspace, shell }) => {
+      provide: request => {
+        requests.push(request);
+        const { workspace, shell } = request;
         next += 1;
         const key = `e${next}`;
         log.push(`provide ${key} ${workspace} ${shell}`);
@@ -71,6 +79,9 @@ const makeEnvironmentsAdmin = log => {
           'EnvironmentControl',
           environmentInterfaces.EnvironmentControl,
           {
+            useWorkspaceSeed: () => {
+              throw Error('not used');
+            },
             describe: () =>
               harden({ workspace, shell, stopped: false, released: false }),
             port: async () => Far('ShellPort', {}),
@@ -108,7 +119,7 @@ const makeEnvironmentsAdmin = log => {
       },
     },
   );
-  return { admin, failures };
+  return { admin, failures, requests };
 };
 
 const SOURCE = `/* session */ ${'s'.repeat(100)}`;
@@ -186,6 +197,7 @@ const makeWorld = () => {
     create,
     attach,
     environments,
+    catalog: root.getOperator().getPresets(),
   };
 };
 
@@ -231,6 +243,31 @@ test('without the setting, presets with a workspace or shell are unavailable wit
       ['voice', true],
     ],
   );
+});
+
+test('only project development sessions request their selected workspace seed', async t => {
+  const world = makeWorld();
+  world.attach();
+  const workspaceSeed = harden({
+    project: 'thixotrope',
+    commit: 'ab'.repeat(20),
+  });
+  const base = world.preset('development').describe();
+  world.catalog.create(
+    harden({
+      label: 'Thixotrope development',
+      template: 'development',
+      objects: base.objects,
+      workspaceSeed,
+    }),
+    0,
+  );
+  await world.create('Thixotrope development');
+  await world.create('development');
+  t.deepEqual(world.environments.requests, [
+    { workspace: true, shell: true, workspaceSeed },
+    { workspace: true, shell: true },
+  ]);
 });
 
 test('creation provides what the preset selects, binds after make, and chat-only gets nothing', async t => {

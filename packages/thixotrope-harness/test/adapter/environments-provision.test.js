@@ -33,6 +33,10 @@ const makeFakeState = () => {
   const inventory = new Map();
   const makeAdmin = () =>
     makeExo('EnvironmentsAdmin', I.EnvironmentsAdmin, {
+      getSettings: () => undefined,
+      makeWorkspaceSeed: () => {
+        throw Error('not used');
+      },
       configure: async (/** @type {any} */ settings) => {
         configured.push(settings);
         return harden({
@@ -159,6 +163,10 @@ test('a refused image is reported in the detail, not thrown', async t => {
   state.inventory.set(
     environmentsAdminName,
     makeExo('EnvironmentsAdmin', I.EnvironmentsAdmin, {
+      getSettings: () => undefined,
+      makeWorkspaceSeed: () => {
+        throw Error('not used');
+      },
       configure: async () =>
         harden({
           state: 'refused',

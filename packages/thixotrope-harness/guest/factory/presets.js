@@ -149,6 +149,8 @@ export const makePresetCatalog = ({
       revision: state.revision,
       available: true,
     };
+    if (record.workspaceSeed !== undefined)
+      view.workspaceSeed = record.workspaceSeed;
     if (record.backend !== undefined) view.backend = record.backend;
     if (record.modelId !== undefined) view.modelId = record.modelId;
     if (record.reasoningEffort !== undefined)
@@ -173,6 +175,8 @@ export const makePresetCatalog = ({
       endowmentLabels: record.endowments.map(item => item.label),
       revision: state.revision,
     };
+    if (record.workspaceSeed !== undefined)
+      snapshot.workspaceSeed = record.workspaceSeed;
     if (record.instructions !== '') snapshot.instructions = record.instructions;
     if (record.modelId !== undefined) snapshot.modelId = record.modelId;
     if (record.reasoningEffort !== undefined)

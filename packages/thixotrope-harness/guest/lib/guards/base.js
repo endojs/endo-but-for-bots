@@ -226,6 +226,7 @@ export const textOf = harden({
  * M1b's and M2's.
  */
 const m1aShapeBuilders = {
+  WorkspaceSeed: () => record({ project: 'thixotrope', commit: text(40) }),
   /**
    * The `SourceReader.read` argument: the protocol `readSources` targets
    * implement (M6's workspace `Dir`; the M5 test fixture). Fae's item.

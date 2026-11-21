@@ -576,6 +576,82 @@ test('no host path in a failure: the workspace is /workspace, the state <state>'
   );
 });
 
+test('legacy seed markers are manager-owned, immutable and accepted only before workspace use', async t => {
+  const kit = makeKit(t);
+  t.is(kit.admin.getSettings(), undefined);
+  await configured(kit);
+  t.deepEqual(kit.admin.getSettings(), fakeSettings);
+  const workspaceSeed = harden({
+    project: 'thixotrope',
+    commit: 'ab'.repeat(20),
+  });
+  const marker = kit.admin.makeWorkspaceSeed(workspaceSeed);
+  t.deepEqual(marker.describe(), workspaceSeed);
+  const { control } = kit.admin.provide({ workspace: true, shell: true });
+  t.throws(
+    () =>
+      control.useWorkspaceSeed(
+        Far('WorkspaceSeedMarker', { describe: () => workspaceSeed }),
+      ),
+    { message: 'Unknown workspace seed marker' },
+  );
+  control.useWorkspaceSeed(marker);
+  await E(control).port();
+  control.useWorkspaceSeed(marker);
+  const replacement = kit.admin.makeWorkspaceSeed(
+    harden({ ...workspaceSeed, commit: 'f'.repeat(40) }),
+  );
+  t.throws(() => control.useWorkspaceSeed(replacement), {
+    message: 'Workspace seed changed',
+  });
+  const fresh = kit.admin.provide({ workspace: true, shell: true });
+  await E(fresh.control).port();
+  t.throws(() => fresh.control.useWorkspaceSeed(marker), {
+    message: 'Workspace is already in use',
+  });
+  t.deepEqual(
+    kit.calls.filter(call => call[0] === 'port'),
+    [
+      ['port', 'e1', workspaceSeed],
+      ['port', 'e2'],
+    ],
+  );
+});
+
+test('a seeded environment sends its immutable selection on first use and after native restart', async t => {
+  const kit = await configured(makeKit(t));
+  const workspaceSeed = harden({
+    project: 'thixotrope',
+    commit: 'a1'.repeat(20),
+  });
+  const { workspace, shell, control } = kit.admin.provide({
+    workspace: true,
+    shell: true,
+    workspaceSeed,
+  });
+  const ordinary = kit.admin.provide({ workspace: true, shell: true });
+  await E(control).port();
+  await E(shell).runCommand('true', []);
+  kit.overrideGit(() => gitAnswers.status);
+  await E(workspace).status();
+  kit.kill();
+  await E(workspace.readOnly()).status();
+  await t.throwsAsync(E(workspace).openImage(['photo.png']), {
+    message: 'Workspace seed bundle is missing',
+  });
+  const seededCalls = kit.calls.filter(call => call[1] === 'e1');
+  t.deepEqual(
+    seededCalls.map(call => call[0]),
+    ['port', 'runCommand', 'git', 'git', 'openImage'],
+  );
+  for (const call of seededCalls) t.deepEqual(call.at(-1), workspaceSeed);
+  await E(ordinary.workspace).status();
+  const unseeded = kit.calls.find(
+    call => call[0] === 'git' && call[1] === 'e2',
+  );
+  t.is(unseeded.length, 3);
+});
+
 test('a read whose adapter call breaks reattaches and is sent once more', async t => {
   const kit = await configured(makeKit(t));
   const { workspace, shell } = kit.admin.provide({
@@ -834,7 +910,7 @@ test('the composition: real git, the fake runtime, a real ShellPort; emergency s
   const status = await E(kit.admin).configure(
     harden({ runtime: 'fake', allowedCommands: ['sh', 'git'] }),
   );
-  t.like(status, { state: 'ready', runtime: 'fake', running: 0 });
+  t.like(status, { state: 'ready', runtime: 'fake', running: 0 }, status.error);
   const { workspace, shell, control } = kit.admin.provide({
     workspace: true,
     shell: true,

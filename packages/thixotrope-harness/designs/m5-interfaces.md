@@ -233,6 +233,32 @@ getInventory })` (`m5FactoryInterfaces.Operator`); both answer the factory's one
 inventory. M4 adds no `Operator` method (its accounts hang off `SecretsAdmin` and the pool
 backends), so seam H-2 has no M4 half.
 
+#### Pinned project source in a development preset
+
+An operator can save a user preset of the `development` template with
+`workspaceSeed: { project: 'thixotrope', commit }`. The commit is the full
+40-character lowercase hexadecimal Git object name. The catalogue carries the
+selection in the preset record, view and creation snapshot. Changing a saved
+preset affects future creations. Each session retains its creation-time pin.
+A child created from a modern pinned preset receives the same source revision
+in its own environment through the inherited snapshot.
+
+For installations with an older factory, the operator can endow a development
+preset with the manager's marker under `thixotrope-project-source`. The current
+session maker presents the marker to its environment control before publication,
+records the returned source pin in its session configuration and removes the
+marker from its inventory. A child in this compatibility mode receives only
+explicitly delegated endowments. It starts with an ordinary workspace.
+
+JSONL preset export writes the seed as plain data, including the pin described
+by a compatibility marker. Session restore matches the saved project and commit
+when selecting a destination preset. The destination needs a seed-aware factory
+and the corresponding source bundle. For an older session export that names the
+marker but omits its pin, restore reports that the operator must reprovision
+the original revision. Restoring a session recreates a checkout of that base
+commit. Back up the native state separately to recover uncommitted edits,
+later workspace commits and installed tools.
+
 ### 2.3 Creation: how a preset becomes a session (W5.1, W5.2)
 
 In `factory.js` `create(given)`, in this order (contract 9 and M2 7.2 hold for everything else):

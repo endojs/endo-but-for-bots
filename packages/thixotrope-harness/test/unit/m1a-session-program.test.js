@@ -69,7 +69,7 @@ test('the session program bundles within sessionProgramBytes and evaluates with 
     }),
     tools: harden([]),
   });
-  const { session } = maker.make(
+  const { session } = await maker.make(
     harden({
       config: harden({
         key: 's1',

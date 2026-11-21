@@ -62,6 +62,10 @@ import url from 'node:url';
 import { E, passStyleOf } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
+import {
+  assertWorkspaceSeed,
+  workspaceSeedLabel,
+} from '../guest/lib/workspace-seed.js';
 import { limits } from '../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { names } from './provision-steps.js';
@@ -205,6 +209,23 @@ const exportPresets = async operator => {
         networkPolicy: view.networkPolicy,
         objects: view.objects,
       };
+      const marker = view.endowments.find(
+        (/** @type {any} */ entry) => entry.label === workspaceSeedLabel,
+      );
+      if (marker !== undefined) {
+        const described = await E(marker.value).describe();
+        assertWorkspaceSeed(described);
+        if (
+          view.workspaceSeed &&
+          view.workspaceSeed.commit !== described.commit
+        )
+          throw Error(
+            'Project preset and marker identify different source commits',
+          );
+        record.workspaceSeed = described;
+      } else if (view.workspaceSeed !== undefined) {
+        record.workspaceSeed = view.workspaceSeed;
+      }
       if (view.backend !== undefined)
         record.backend = await labelOf(view.backend);
       if (view.modelId !== undefined) record.modelId = view.modelId;
@@ -587,6 +608,13 @@ export const importState = async ({
         userInitiated: head.userInitiated,
       };
       const saved = head.config.preset;
+      if (
+        saved?.endowmentLabels?.includes(workspaceSeedLabel) &&
+        saved.workspaceSeed === undefined
+      )
+        throw Error(
+          'This legacy project session has no recorded source commit. Reprovision its project preset with the original commit before creating a replacement session.',
+        );
       if (saved?.objects?.length || head.execution !== undefined) {
         // Only restore the selected template objects. Importing an old
         // session must never grant a destination preset's live endowments.
@@ -601,6 +629,8 @@ export const importState = async ({
             view.label === saved?.label &&
             view.template === saved.template &&
             view.networkPolicy === saved.networkPolicy &&
+            view.workspaceSeed?.project === saved.workspaceSeed?.project &&
+            view.workspaceSeed?.commit === saved.workspaceSeed?.commit &&
             view.endowments.length === 0 &&
             view.objects.length === saved.objects.length &&
             view.objects.every(

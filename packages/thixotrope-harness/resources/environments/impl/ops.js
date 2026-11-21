@@ -30,6 +30,8 @@ import {
 import { limits } from '../../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 
+/** @import { WorkspaceSeed } from './layout.js' */
+
 const { makeExo } = /** @type {any} */ (globalThis);
 
 /**
@@ -151,14 +153,16 @@ export const makeOps = ({
    * @template T
    * @param {string | undefined} key
    * @param {() => Promise<T> | T} fn
-   * @param {{ refuseWithdrawn?: boolean }} [options]
+   * @param {{ refuseWithdrawn?: boolean, seed?: WorkspaceSeed }} [options]
    * @returns {Promise<T>}
    */
-  const serve = async (key, fn, { refuseWithdrawn = true } = {}) => {
+  const serve = async (key, fn, { refuseWithdrawn = true, seed } = {}) => {
     await ready;
     if (refuseWithdrawn && key !== undefined && withdrawn.has(key))
       throw Error(T.stopped);
     try {
+      if (key !== undefined && seed !== undefined)
+        layout.registerSeed(key, seed);
       return await fn();
     } catch (error) {
       throw hidden(error, key);
@@ -182,48 +186,69 @@ export const makeOps = ({
     /**
      * @param {string} key
      * @param {{ op: string, args: unknown[] }} request
+     * @param {WorkspaceSeed} [seed]
      */
-    git: (key, request) =>
-      serve(key, () => git.run(key, request, { readOnly: false })),
+    git: (key, request, seed) =>
+      serve(key, () => git.run(key, request, { readOnly: false }), { seed }),
     /**
      * @param {string} key
      * @param {string} command
      * @param {string[]} args
      * @param {{ timeoutMs?: number }} options
+     * @param {WorkspaceSeed} [seed]
      */
-    runCommand: (key, command, args, options) =>
-      serve(key, async () => {
-        if (!check().ok) throw Error(T.imageRefused);
-        // The runner checks the allowlist and the timeout (exo-shell's
-        // rules) on every path; a timeout rejects as exo-shell does, the
-        // partial output dropped (5.5).
-        const timeoutMs =
-          options.timeoutMs ??
-          settings.defaultTimeoutMs ??
-          L.defaultCommandTimeoutMs;
-        const raw = await runner.exec(key, [command, ...args], { timeoutMs });
-        if (raw.timedOut) throw Error(environmentTextOf.timedOut(timeoutMs));
-        return commandRecord(raw);
-      }),
+    runCommand: (key, command, args, options, seed) =>
+      serve(
+        key,
+        async () => {
+          if (!check().ok) throw Error(T.imageRefused);
+          // The runner checks the allowlist and the timeout (exo-shell's
+          // rules) on every path; a timeout rejects as exo-shell does, the
+          // partial output dropped (5.5).
+          const timeoutMs =
+            options.timeoutMs ??
+            settings.defaultTimeoutMs ??
+            L.defaultCommandTimeoutMs;
+          const raw = await runner.exec(key, [command, ...args], { timeoutMs });
+          if (raw.timedOut) throw Error(environmentTextOf.timedOut(timeoutMs));
+          return commandRecord(raw);
+        },
+        { seed },
+      ),
     /** @param {string} key */
     inspect: key =>
       serve(key, () => runner.inspect(), { refuseWithdrawn: false }),
     /**
      * @param {string} key
      * @param {string[]} segments
+     * @param {WorkspaceSeed} [seed]
      */
-    openImage: (key, segments) =>
-      serve(key, () => images(key, segments, sideOptions(key))),
-    /** @param {string} key */
-    port: key =>
-      serve(key, () => {
-        let port = portOf.get(key);
-        if (port === undefined) {
-          port = ports(key, sideOptions(key));
-          portOf.set(key, port);
-        }
-        return port;
-      }),
+    openImage: (key, segments, seed) =>
+      serve(
+        key,
+        async () => {
+          if (seed !== undefined) await layout.ensureWorkspace(key);
+          return images(key, segments, sideOptions(key));
+        },
+        { seed },
+      ),
+    /**
+     * @param {string} key
+     * @param {WorkspaceSeed} [seed]
+     */
+    port: (key, seed) =>
+      serve(
+        key,
+        () => {
+          let port = portOf.get(key);
+          if (port === undefined) {
+            port = ports(key, sideOptions(key));
+            portOf.set(key, port);
+          }
+          return port;
+        },
+        { seed },
+      ),
     /**
      * @param {string} key
      * @param {{ withdraw?: boolean }} [options]

@@ -361,10 +361,19 @@ environments ADAPTER (Node): workspaces, git (@endo/git), runner (fake | podman 
 |---|---|---|---|---|---|---|
 | `configure(EnvironmentSettings) -> EnvironmentsStatus` | provisioning step `60-environments.js` (control client) | manager: store settings, `manager.register(SERVICE_KEY, { sink, settings })`, await reconcile | answered | settings: 32 names x 64 units, < 7 KB | the manager vat is lost (guest): fail provisioning | the reconcile (adapter bind: image check, sweep) |
 | `status() -> EnvironmentsStatus` | provisioning, tests, M12 diagnostics | manager, forwards to ops when bound | answered | < 1 KB | as above | one ops hop |
-| `provide({ workspace, shell }) -> EnvironmentKit` | factory services builder (creation) | manager: mint record `e<n>` and 2-4 exos; refuse when unconfigured or full | answered | answer: 3 handles, < 300 B | as above (the creation fails and rolls back) | minting 4 exos (record bounded by `maxEnvironments`) |
+| `provide({ workspace, shell, workspaceSeed? }) -> EnvironmentKit` | factory services builder (creation) | manager: mint record `e<n>` and 2-4 exos; refuse when unconfigured or full | answered | answer: 3 handles, < 300 B | as above (the creation fails and rolls back) | minting 4 exos (record bounded by `maxEnvironments`) |
 | `bindSession(control, session)` | factory binder, after `make` | manager: record.session = session; `sessionOf` `WeakMap` | sendOnly | 2 handles | - | trivial |
 | `release(control)` | factory releaser (rolled-back creation) | manager: mark released, refuse calls, queue release; forward `E(ops).release(key)` | sendOnly from the factory | 1 handle | - | one ops hop |
 | `releaseSession(session)` | factory delete hook | as `release`, found by the session | answered (the delete waits) | 1 handle | as above: the delete record stays at its step and resumes at the next start (M2 7.1) | one ops hop |
+
+`getSettings()` returns the configured settings, or `undefined` before the
+first configuration. Provisioning uses this operator-only method to retain the
+runner settings when adding a project. `makeWorkspaceSeed(workspaceSeed)`
+returns a manager-owned marker whose `describe()` returns the project and
+pinned commit. `EnvironmentControl.useWorkspaceSeed(marker)` checks the
+marker against that manager's identities and returns the authenticated seed.
+Repeating the same selection is idempotent. A different commit, a foreign
+marker or a first selection after workspace use is refused.
 
 A release is idempotent; a release whose adapter call failed stays in `pendingReleases` and is
 re-sent by the next `attach`. A released record is dropped from the manager once the adapter
@@ -384,6 +393,11 @@ The D-7 attach pattern of the agent host, with the work a new incarnation owes:
 | `port(key) -> ShellPort` | manager (from `EnvironmentControl.port`) | adapter: one `ShellPort` per key per incarnation (same presence on a repeat) | answered | 1 handle | retry once |
 | `openImage(key, path) -> ImageSource` | manager (from `Git.openImage`/`GitReader.openImage`) | adapter: path rules, `lstat` (a regular file inside the worktree, no symlink followed), mint an `ImageSource` exo over `(key, path)` | answered | 64 x 255 units in; 1 handle out | read: retry once |
 | `stop(key, { withdraw? })`, `resume(key)`, `release(key)` | manager | adapter; `withdraw` marks the key refused for `ShellPort` and `ImageSource` calls, `resume` clears it | answered | tiny | idempotent: on a break the manager keeps it pending and answers its caller after one reattach-and-retry, or rejects |
+
+For a seeded environment the manager appends the immutable selection as the
+final argument to the private `git`, `runCommand`, `port` and `openImage`
+calls. The environment record owns this value, so the first request after an
+adapter restart carries it too. Acquiring a shell port remains lazy.
 
 ### 3.4 `Git` and `GitReader` (manager vat; label `workspace` in the session)
 
@@ -676,6 +690,8 @@ flight on a `ShellPort` breaks: D-M6-5. Exec-path calls in flight: reads retried
 ```
 <state>/environments/
   tag                       # this state's container label value: sha256(realpath(state))[0:16], rewritten at each bind
+  projects/thixotrope/<commit>.bundle  # operator-installed source with refs/heads/seed
+  sessions/e<n>/workspace-seed  # records successful checkout outside the container mounts
   sessions/e<n>/workspace/  # the git repository (/workspace); `.thix-ready` marker in .git after init + empty commit
   sessions/e<n>/home/       # /home/node (R3-46)
   sessions/e<n>/run/        # fake runtime: one file per live process group (pgid, start time)
@@ -685,6 +701,15 @@ flight on a `ShellPort` breaks: D-M6-5. Exec-path calls in flight: reads retried
 Directories 0700. The tag is path-dependent on purpose: a cloned state (test templates) gets its own
 containers. The `findStateDir` of `AH/blobs.js` and `findHarnessRoot` of `AH/../ephemeral.js` are
 imported, not copied (rule 3; moved to a shared module at the fold, section 14).
+
+A seeded workspace starts from the selected commit on its private `main`
+branch. Git and shell share this session's checkout at `/workspace`. Keep the
+source bundle for new sessions and data-only restores. The completion marker
+lets a restarted environment reopen the edited tree. Before that marker exists,
+an interrupted initialization can retry from the bundle. A missing bundle,
+a mismatched ref or an attempt to change a completed workspace's seed is an
+explicit failure. Physical state backup must include each checkout, home,
+completion marker and the durable manager state.
 
 ### 5.2 Modules (each one unit's file; signatures fixed here)
 

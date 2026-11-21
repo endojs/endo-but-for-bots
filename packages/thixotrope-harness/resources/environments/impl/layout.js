@@ -5,7 +5,9 @@
  * ```
  * <state>/environments/
  *   tag                       this state's container label value
- *   sessions/e<n>/workspace/  the git repository (/workspace); `.thix-ready` in .git
+ *   projects/thixotrope/<commit>.bundle  operator-installed source
+ *   sessions/e<n>/workspace/  the git repository (/workspace)
+ *   sessions/e<n>/workspace-seed  seeded checkout completion record
  *   sessions/e<n>/home/       /home/node (R3-46)
  *   sessions/e<n>/run/        the fake runtime's process-group records
  *   trash/                    releases in progress; emptied at bind
@@ -17,8 +19,8 @@
  * else is refused before it names a path.
  *
  * A workspace is made on first use (D-M6-3): `git.js`
- * `initWorkspaceRepository` (branch `main`, one empty commit, git run as
- * every host-side git call is), then the ready marker. A directory without the marker is a
+ * `initWorkspaceRepository` makes branch `main` at the project seed or an
+ * empty initial commit, then the layout marks it ready. A workspace without a marker is a
  * creation a kill interrupted (K5): nothing the session made can be in it
  * yet, so it is wiped and made again. A release renames the session's
  * directory into `trash/` (one rename, so a kill leaves it whole or gone
@@ -29,14 +31,24 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
-import { mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
   syncDirectory,
+  writeFileAtomic,
   writeFileAtomicSync,
 } from '../../agent-host/impl/files.js';
-import { initWorkspaceRepository } from './git.js';
+// eslint-disable-next-line import/no-relative-packages -- shared durable/native identity check
+import { assertWorkspaceSeed } from '../../../guest/lib/workspace-seed.js';
+import { initWorkspaceRepository, openWorkspaceFile } from './git.js';
 
 /** The ready marker, inside `.git` so no worktree listing shows it. */
 export const READY_MARKER = '.thix-ready';
@@ -75,9 +87,14 @@ const assertKey = key => {
  */
 
 /**
+ * @typedef {import('../../../guest/lib/workspace-seed.js').WorkspaceSeed} WorkspaceSeed
+ */
+
+/**
  * @typedef {object} Layout
  * @property {() => string} tag this state's tag (the `tag` file written on first use)
  * @property {(key: string) => EnvironmentDirs} dirsOf
+ * @property {(key: string, seed: WorkspaceSeed) => void} registerSeed
  * @property {(key: string) => Promise<void>} ensureWorkspace the repository,
  *   home and run directories, made once behind the marker (serial per key)
  * @property {(key: string) => Promise<void>} release delete the
@@ -108,6 +125,8 @@ export const makeLayout = ({
    * @type {Map<string, Promise<void>>}
    */
   const creating = new Map();
+  /** @type {Map<string, WorkspaceSeed>} Seeds supplied by the durable manager. */
+  const seeds = new Map();
 
   /** @param {string} key */
   const dirsOf = key => {
@@ -123,11 +142,40 @@ export const makeLayout = ({
   const create = async key => {
     const dirs = dirsOf(key);
     const marker = join(dirs.workspace, '.git', READY_MARKER);
-    if (!existsSync(marker)) {
+    const seed = seeds.get(key);
+    // A shell can edit all of /workspace, including .git. Keep the
+    // authoritative seeded marker outside its workspace and home mounts.
+    const seededMarker = join(sessions, key, 'workspace-seed');
+    const expected = seed && `${seed.project} ${seed.commit}\n`;
+    if (existsSync(seededMarker)) {
+      if ((await readFile(seededMarker, 'utf8')) !== expected)
+        throw Error('Workspace seed changed');
+    } else if (seed !== undefined || !existsSync(marker)) {
+      if (seed !== undefined && existsSync(marker))
+        throw Error('Cannot seed an existing workspace');
       await rm(dirs.workspace, { recursive: true, force: true });
       await mkdir(dirs.workspace, { recursive: true, mode: DIR_MODE });
-      await initWorkspaceRepository(dirs.workspace);
-      await writeFile(marker, `${key}\n`, { mode: 0o600 });
+      if (seed === undefined) {
+        await initWorkspaceRepository(dirs.workspace);
+      } else {
+        const name = `${seed.commit}.bundle`;
+        const segments = ['projects', seed.project, name];
+        const { handle } = await openWorkspaceFile(
+          root,
+          segments,
+          'Workspace seed bundle is missing',
+        );
+        await handle.close();
+        await initWorkspaceRepository(dirs.workspace, {
+          bundle: join(root, ...segments),
+          commit: seed.commit,
+        });
+      }
+      if (expected !== undefined) {
+        await writeFileAtomic(seededMarker, expected);
+      } else {
+        await writeFile(marker, `${key}\n`, { mode: 0o600 });
+      }
     }
     await mkdir(dirs.home, { recursive: true, mode: DIR_MODE });
     await mkdir(dirs.run, { recursive: true, mode: DIR_MODE });
@@ -154,6 +202,14 @@ export const makeLayout = ({
       return tagValue;
     },
     dirsOf,
+    registerSeed: (key, seed) => {
+      assertKey(key);
+      assertWorkspaceSeed(seed);
+      const prior = seeds.get(key);
+      if (prior && prior.commit !== seed.commit)
+        throw Error('Workspace seed changed');
+      seeds.set(key, seed);
+    },
     ensureWorkspace: key => {
       assertKey(key);
       let creation = creating.get(key);
@@ -164,6 +220,7 @@ export const makeLayout = ({
       return creation;
     },
     release: async key => {
+      seeds.delete(key);
       const base = join(sessions, assertKey(key));
       if (!existsSync(base)) return;
       await mkdir(trash, { recursive: true, mode: DIR_MODE });

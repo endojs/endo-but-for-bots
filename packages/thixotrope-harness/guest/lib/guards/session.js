@@ -1115,6 +1115,7 @@ const m1aShapeBuilders = {
     record(
       { label: S.Label },
       {
+        workspaceSeed: S.WorkspaceSeed,
         template: text(limits.templateKindUnits),
         instructions: text(limits.presetInstructionsUnits),
         networkPolicy: M.or('off', 'public-internet'),
@@ -1396,7 +1397,7 @@ const m1aInterfaceBuilders = {
   /** What the evaluating crank of the session program returns (M1a cold create; M1b pool). */
   SpareMaker: () =>
     M.interface('SpareMaker', {
-      make: M.call(S.MakeArgs).returns(S.MadeSession),
+      make: M.callWhen(S.MakeArgs).returns(S.MadeSession),
     }),
 };
 

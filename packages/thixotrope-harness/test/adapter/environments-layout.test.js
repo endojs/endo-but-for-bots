@@ -18,6 +18,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -30,6 +31,13 @@ import {
   environmentsDirIn,
   makeLayout,
 } from '../../resources/environments/impl/layout.js';
+
+import { makeTimers } from '../../resources/agent-host/impl/timers.js';
+import {
+  defaultRuntimes,
+  makeBindingParts,
+} from '../../resources/environments/impl/index.js';
+import { makeOps } from '../../resources/environments/impl/ops.js';
 
 const harnessRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 
@@ -164,4 +172,127 @@ test('the environments on disk are listed by key', async t => {
   // Only key names count: anything else in sessions/ names no environment.
   mkdirSync(join(layout.dirsOf('e1').workspace, '..', '..', 'notes'));
   t.deepEqual((await layout.keys()).sort(), ['e1', 'e2']);
+});
+
+/** @param {string} stateDir */
+const makeSeed = stateDir => {
+  const source = join(stateDir, 'source');
+  mkdirSync(source);
+  git(source, ['init', '--quiet', '--initial-branch=seed']);
+  writeFileSync(join(source, 'source.txt'), 'tracked\n');
+  git(source, ['add', 'source.txt']);
+  git(source, [
+    '-c',
+    'user.name=Seed',
+    '-c',
+    'user.email=seed@example.invalid',
+    '-c',
+    'commit.gpgSign=false',
+    'commit',
+    '-qm',
+    'Seed fixture',
+  ]);
+  /** @type {import('../../resources/environments/impl/layout.js').WorkspaceSeed} */
+  const seed = harden({
+    project: 'thixotrope',
+    commit: git(source, ['rev-parse', 'HEAD']),
+  });
+  const dir = join(environmentsDirIn(stateDir), 'projects', seed.project);
+  mkdirSync(dir, { recursive: true });
+  const bundle = join(dir, `${seed.commit}.bundle`);
+  git(source, ['bundle', 'create', bundle, 'refs/heads/seed']);
+  return { seed, bundle };
+};
+
+test('Git-first and shell-first sessions get independent writable project checkouts', async t => {
+  const stateDir = freshState(t);
+  const { seed, bundle } = makeSeed(stateDir);
+  const layout = makeLayout({ stateDir });
+  const settings = harden({ runtime: 'fake', allowedCommands: ['sh'] });
+  const parts = makeBindingParts({
+    settings,
+    layout,
+    runtime: defaultRuntimes.fake(),
+    tag: layout.tag(),
+    timers: makeTimers(),
+    trace: () => {},
+  });
+  const ops = makeOps({
+    ...parts,
+    layout,
+    settings,
+    withdrawn: new Set(),
+    check: () => ({ ok: true }),
+  });
+  t.teardown(() => parts.runner.stop('e2'));
+  await ops.git('e1', harden({ op: 'status', args: [] }), seed);
+  await ops.port('e2', seed);
+  t.false(existsSync(layout.dirsOf('e2').workspace));
+  await ops.runCommand(
+    'e2',
+    'sh',
+    harden(['-c', 'cat source.txt > shell-copy']),
+    harden({}),
+    seed,
+  );
+  const first = layout.dirsOf('e1').workspace;
+  const second = layout.dirsOf('e2').workspace;
+  t.is(readFileSync(join(second, 'shell-copy'), 'utf8'), 'tracked\n');
+  for (const dir of [first, second]) {
+    t.is(git(dir, ['rev-parse', 'HEAD']), seed.commit);
+    t.is(git(dir, ['branch', '--show-current']), 'main');
+    t.is(git(dir, ['remote']), '');
+    t.false(existsSync(join(dir, '.git', 'objects', 'info', 'alternates')));
+    t.false(existsSync(join(dir, '.git', 'FETCH_HEAD')));
+  }
+  writeFileSync(join(first, 'source.txt'), 'edited\n');
+  t.is(readFileSync(join(second, 'source.txt'), 'utf8'), 'tracked\n');
+  rmSync(bundle);
+  const restarted = makeLayout({ stateDir });
+  restarted.registerSeed('e1', seed);
+  await restarted.ensureWorkspace('e1');
+  t.is(readFileSync(join(first, 'source.txt'), 'utf8'), 'edited\n');
+  const changed = makeLayout({ stateDir });
+  changed.registerSeed('e1', { ...seed, commit: 'a'.repeat(40) });
+  await t.throwsAsync(changed.ensureWorkspace('e1'), {
+    message: 'Workspace seed changed',
+  });
+  t.is(readFileSync(join(first, 'source.txt'), 'utf8'), 'edited\n');
+});
+
+test('seed validation refuses unsafe and missing sources; interrupted checkout retries', async t => {
+  const stateDir = freshState(t);
+  const { seed, bundle } = makeSeed(stateDir);
+  const layout = makeLayout({ stateDir });
+  for (const invalid of [
+    { ...seed, project: '../thixotrope' },
+    { ...seed, commit: '../seed' },
+    { ...seed, commit: seed.commit.toUpperCase() },
+  ])
+    t.throws(() => layout.registerSeed('e1', /** @type {any} */ (invalid)), {
+      message: 'Invalid workspace seed',
+    });
+  const other = { ...seed, commit: 'a'.repeat(40) };
+  const otherBundle = join(bundle, '..', `${other.commit}.bundle`);
+  layout.registerSeed('e1', other);
+  await t.throwsAsync(layout.ensureWorkspace('e1'), {
+    message: 'Workspace seed bundle is missing',
+  });
+  symlinkSync(bundle, otherBundle);
+  await t.throwsAsync(layout.ensureWorkspace('e1'));
+  rmSync(otherBundle);
+  writeFileSync(otherBundle, readFileSync(bundle));
+  await t.throwsAsync(layout.ensureWorkspace('e1'), {
+    message: 'Workspace seed ref does not match the configured commit',
+  });
+  t.false(
+    existsSync(join(layout.dirsOf('e1').workspace, '..', 'workspace-seed')),
+  );
+  const ws = layout.dirsOf('e2').workspace;
+  mkdirSync(ws, { recursive: true });
+  writeFileSync(join(ws, 'partial'), 'incomplete');
+  layout.registerSeed('e2', seed);
+  await layout.ensureWorkspace('e2');
+  t.false(existsSync(join(ws, 'partial')));
+  t.is(git(ws, ['rev-parse', 'HEAD']), seed.commit);
 });

@@ -101,10 +101,18 @@ run(
     const source = await open(t);
     const ops = await operatorOf(source.slice);
     const { revision } = await E(ops.catalog).configuration();
+    const workspaceSeed = harden({
+      project: 'thixotrope',
+      commit: 'ab'.repeat(20),
+    });
+    const development = await presetLabelled(ops.catalog, 'development');
+    const { objects } = await E(development).describe();
     await E(ops.catalog).create(
       harden({
         label: 'Exported',
-        template: 'general',
+        template: 'development',
+        objects,
+        workspaceSeed,
         description: 'kept',
         instructions: 'Answer in French.',
         backend: source.backend,
@@ -132,7 +140,8 @@ run(
     const view = await E(preset).describe();
     t.like(view, {
       label: 'Exported',
-      template: 'general',
+      template: 'development',
+      workspaceSeed,
       description: 'kept',
       instructions: 'Answer in French.',
       modelId: 'scripted-model',

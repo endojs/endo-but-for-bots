@@ -54,6 +54,38 @@ See the [milestone outcomes](designs/milestones.md) for measured results and out
 Operators can use the [guided user acceptance checklist](designs/milestones.md#guided-user-acceptance-on-the-integrated-stack)
 for chat, mail, delegation, workspace images and voice.
 
+### Develop the harness from a session
+
+Open **New session**, select **Thixotrope development**, choose a backend and
+model, and create the session. A first prompt can be “Prepare the checkout,
+show its revision, and run the session inventory unit test.” Each session has
+a private Git repository at `/workspace`. Shell commands, edits and commits
+use that same checkout. The package is `/workspace/packages/thixotrope-harness`.
+The preset tells the model how to set up the locked Linux dependencies on
+first use. Reopen the session to resume an edit. Ask for `git diff HEAD` to
+review tracked changes, and stage new files before requesting the diff.
+
+An operator can publish the preset to a running, provisioned state. From
+`packages/thixotrope-harness`, with Docker running and a full project checkout:
+
+```sh
+project_ref=$(git rev-parse HEAD)
+project_image=$(./oci/selfdev/build.sh "$project_ref")
+node scripts/project-preset.mjs "$state" --repo ../.. --ref "$project_ref" --image "$project_image"
+```
+
+Set `state` to the supervisor's state directory. The image build needs access
+to the locked upstream dependencies. Once built, the session runs offline
+from the pinned local image. The operator publishes only committed source
+and history. Publishing another revision updates the preset for future
+sessions. Sessions already created retain their own checkout and revision.
+If the host uses an older installed factory that predates project revisions,
+add `--legacy-factory` to load the current session program and convey the
+revision through a private source capability. This requires the current
+environments manager. The runner image applies across the installation.
+The command requires `--replace-runner` to change an existing runtime,
+image or shell allowlist.
+
 To reproduce the four-delivery mail check, run
 `corepack yarn exec node perf/mail-forward-trace.perf.mjs` from this package.
 It uses the release worker, a 60 s operator prefix and a 60 s sequential forwarding window.

@@ -355,9 +355,30 @@ const runGitCapped = (
  * (contract 4.2), as the backend's environment would. For the layout's
  * `ensureWorkspace` and tests; the caller writes the ready marker after.
  * @param {string} workspace an existing, empty directory
+ * @param {{bundle: string, commit: string}} [seed] trusted local project bundle
  */
-export const initWorkspaceRepository = async workspace => {
+export const initWorkspaceRepository = async (workspace, seed) => {
   await runGitCapped(workspace, ['init', '--quiet', '--initial-branch=main']);
+  if (seed !== undefined) {
+    // Import into this repository's object store. A bundle has no local
+    // transports, remote configuration, alternates, or checkout hooks.
+    const { stdout } = await runGitCapped(workspace, [
+      'bundle',
+      'unbundle',
+      seed.bundle,
+    ]);
+    if (!stdout.split('\n').includes(`${seed.commit} refs/heads/seed`))
+      throw Error('Workspace seed ref does not match the configured commit');
+    const object = await runGitCapped(workspace, [
+      'cat-file',
+      '-t',
+      seed.commit,
+    ]);
+    if (object.stdout.trim() !== 'commit')
+      throw Error('Workspace seed ref must be a commit');
+    await runGitCapped(workspace, ['reset', '--hard', '--quiet', seed.commit]);
+    return;
+  }
   await runGitCapped(workspace, [
     'commit',
     '--quiet',

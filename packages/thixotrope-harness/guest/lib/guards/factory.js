@@ -617,6 +617,7 @@ const presetShapeBuilders = {
         description: text(limits.presetDescriptionUnits),
         instructions: text(limits.presetInstructionsUnits),
         networkPolicy: S.NetworkPolicyName,
+        workspaceSeed: S.WorkspaceSeed,
         backend: R('Backend'),
         modelId: S.ModelId,
         reasoningEffort: text(limits.effortUnits),
@@ -640,6 +641,7 @@ const presetShapeBuilders = {
         available: M.boolean(),
       },
       {
+        workspaceSeed: S.WorkspaceSeed,
         backend: R('Backend'),
         modelId: S.ModelId,
         reasoningEffort: text(limits.effortUnits),

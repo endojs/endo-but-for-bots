@@ -27,6 +27,20 @@ import { makeFakePowers, makeTestDom } from './_m3-fake-powers.js';
 const STALE = 'Preset settings changed elsewhere. Reload before saving.';
 const NOT_DELETABLE = 'Built-in presets can be reset, not deleted';
 
+test('editing a development preset preserves its pinned project revision', t => {
+  const workspaceSeed = { project: 'thixotrope', commit: 'a'.repeat(40) };
+  const form = formOf({
+    label: 'project',
+    template: 'development',
+    workspaceSeed,
+  });
+  t.deepEqual(
+    recordOf({ ...form, label: 'project copy' }).workspaceSeed,
+    workspaceSeed,
+  );
+  t.false('workspaceSeed' in recordOf({ ...form, template: 'chat-only' }));
+});
+
 /**
  * An in-memory `PresetCatalog` with the contract's methods and CAS rule,
  * and an `Inventory` (pages of 50), shared by the pages of a test.
