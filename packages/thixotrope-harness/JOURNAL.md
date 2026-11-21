@@ -19844,3 +19844,18 @@ cannot start a refresh or write back to the slot. The import made no Tokyo
 configuration or credential writes and sent no inference requests. Tokyo
 continues to own renewal. A later cutover must reconcile both current source
 generations before the local tower claims renewal.
+
+### J-13013 2026-11-21 Claude Haiku session and tool-use preflight
+
+The pinned worker listed both Claude members as active, with their staged
+Secrets still at generation 1. The factory returned `unavailable` and zero
+models for this pool. Live Haiku session creation stopped at discovery.
+Tokyo retained renewal ownership and received no requests from this check.
+
+The isolated M4 accounts integration test passed on the pinned Ironhorse
+worker using a prerecorded Claude Messages exchange. The harness executed
+`accountStatus` and included one successful tool result in the next request.
+The test checked its call ID and both expected account labels, then verified
+the turn completed. This covers the tool round trip. Live-model acceptance
+requires an independently authorized local login or a renewal handoff.
+[Session tool assertions](test/integration/m4-accounts.test.js#L168)
