@@ -375,6 +375,35 @@ export const codexBody = ({
 };
 harden(codexBody);
 
+/** @param {string | undefined} name */
+const missingTypeReason = name => {
+  if (!name) return 'event-type-no-name';
+  if (name === 'message') return 'event-type-message';
+  if (
+    BUFFERED.has(name) ||
+    FAILURE_EVENTS.has(name) ||
+    name === 'response.output_text.delta' ||
+    name === 'response.completed'
+  )
+    return 'event-type-known-name';
+  return 'event-type-other-name';
+};
+
+/**
+ * Classify the MIME type without putting a provider-supplied header in errors.
+ * @param {string | null} contentType
+ */
+const mimeClass = contentType => {
+  if (!contentType) return 'missing';
+  if (
+    /^application\/(?:[a-z0-9!#$&^_.+-]+\+)?json\s*(?:;|$)/i.test(contentType)
+  )
+    return 'json';
+  if (/^(?:text\/html|application\/xhtml\+xml)\s*(?:;|$)/i.test(contentType))
+    return 'html';
+  return 'other';
+};
+
 /**
  * The request headers of one attempt (the reference's Codex profile).
  * @param {import('./types.js').Credential} credential
@@ -510,16 +539,29 @@ export async function* codexAttempt({
       ...(after === undefined ? {} : { retryAfterMs: after }),
     });
   }
+  const contentType = response.headers.get('content-type');
   if (
-    !/^text\/event-stream(?:;|$)/i.test(
-      response.headers.get('content-type') ?? '',
-    )
+    contentType !== null &&
+    !/^text\/event-stream[ \t]*(?:;|$)/i.test(contentType)
   ) {
     discardBody(response);
     throw wireFailure(
-      subscriptionTextOf.responsesFailed('stream.unreadable', []),
+      subscriptionTextOf.responsesFailed('stream.unreadable', [
+        `mime=${mimeClass(contentType)}`,
+      ]),
     );
   }
+
+  // Headerless successes still require a complete Responses SSE stream.
+  let sawEvent = false;
+  const framingFacts = () =>
+    contentType === null
+      ? [
+          'mime=missing',
+          `status=${response.status}`,
+          `sse=${sawEvent ? 'seen' : 'none'}`,
+        ]
+      : [];
 
   /** @type {any} */
   let completed;
@@ -529,6 +571,8 @@ export async function* codexAttempt({
   let model;
   /** @type {Map<number, any>} */
   const items = new Map();
+  /** @type {any[]} */
+  const unindexed = [];
   // The round's text, digested as it streams (the native context's check).
   const digest = createHash('sha256');
   let textLength = 0;
@@ -544,8 +588,10 @@ export async function* codexAttempt({
       const pieces = [];
       /** @type {any} */
       let failed;
-      let unreadable = false;
-      for (const { data } of batch) {
+      /** @type {string | undefined} */
+      let unreadable;
+      sawEvent = true;
+      for (const { data, event: name } of batch) {
         // Nothing after completion counts (a `[DONE]` or `stream.done`
         // marker, trailing metadata).
         if (completed !== undefined || data === '[DONE]') break;
@@ -554,16 +600,22 @@ export async function* codexAttempt({
         try {
           event = JSON.parse(data);
         } catch {
-          unreadable = true;
+          unreadable = 'json-parse';
           break;
         }
-        if (event === null || typeof event !== 'object') {
-          unreadable = true;
+        if (
+          event === null ||
+          typeof event !== 'object' ||
+          Array.isArray(event)
+        ) {
+          unreadable = 'non-object';
           break;
         }
+        // A named SSE error may carry the error object without a JSON type.
+        if (name === 'error' && event.type === undefined) event.type = 'error';
         const type = event.type;
         if (typeof type !== 'string') {
-          unreadable = true;
+          unreadable = missingTypeReason(name);
           break;
         }
         const failureEvent = FAILURE_EVENTS.has(type);
@@ -597,19 +649,30 @@ export async function* codexAttempt({
         } else if (type === 'response.output_item.done') {
           const index = event.output_index;
           if (
-            !Number.isSafeInteger(index) ||
-            Number(index) < 0 ||
-            event.item === null ||
-            typeof event.item !== 'object' ||
-            typeof event.item.type !== 'string'
+            index !== undefined &&
+            (!Number.isSafeInteger(index) || Number(index) < 0)
           ) {
-            unreadable = true;
+            unreadable = 'output-index';
             break;
           }
-          if (items.size >= MAX_ITEMS && !items.has(index)) {
+          if (
+            event.item === null ||
+            typeof event.item !== 'object' ||
+            Array.isArray(event.item)
+          ) {
+            unreadable = 'output-item';
+            break;
+          }
+          if (typeof event.item.type !== 'string') {
+            unreadable = 'output-item-type';
+            break;
+          }
+          if (items.size + unindexed.length >= MAX_ITEMS && !items.has(index)) {
             throw wireFailure(texts.frameLimit, { delivered });
           }
-          items.set(index, keptItem(event.item));
+          const item = keptItem(event.item);
+          if (index === undefined) unindexed.push(item);
+          else items.set(index, item);
         } else if (type === 'response.completed') {
           completed = event.response ?? {};
           usageRaw = completed.usage;
@@ -637,7 +700,10 @@ export async function* codexAttempt({
       }
       if (unreadable) {
         throw wireFailure(
-          subscriptionTextOf.responsesFailed('stream.unreadable', []),
+          subscriptionTextOf.responsesFailed('stream.unreadable', [
+            `reason=${unreadable}`,
+            ...framingFacts(),
+          ]),
           {
             delivered,
           },
@@ -652,7 +718,7 @@ export async function* codexAttempt({
     // A body that ended inside an event, bad UTF-8, a reset: not a whole
     // answer.
     throw wireFailure(
-      subscriptionTextOf.responsesFailed('stream.incomplete', []),
+      subscriptionTextOf.responsesFailed('stream.incomplete', framingFacts()),
       {
         delivered,
       },
@@ -660,11 +726,18 @@ export async function* codexAttempt({
   }
   if (completed === undefined) {
     throw wireFailure(
-      subscriptionTextOf.responsesFailed('stream.incomplete', []),
+      subscriptionTextOf.responsesFailed('stream.incomplete', framingFacts()),
       {
         delivered,
       },
     );
+  }
+  // Wait for every explicit index before assigning remaining positions.
+  let nextIndex = 0;
+  for (const item of unindexed) {
+    while (items.has(nextIndex)) nextIndex += 1;
+    items.set(nextIndex, item);
+    nextIndex += 1;
   }
   const output =
     Array.isArray(completed.output) && Number(completed.output.length) > 0

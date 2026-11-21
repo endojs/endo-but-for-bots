@@ -470,6 +470,184 @@ test('HTTP: 429 exhausted carries its reset, 401 rejected, others the subscripti
   for (const result of [exhausted, rejected, other]) clean(t, result);
 });
 
+test('unreadable Responses diagnostics expose only fixed MIME and event categories', async t => {
+  const sse = 'text/event-stream; marker=FAKE-PROSE';
+  const cases = [
+    ['application/problem+json; marker=FAKE-PROSE', BODY_MARKER, 'mime=json'],
+    ['text/html; marker=FAKE-PROSE', BODY_MARKER, 'mime=html'],
+    ['application/FAKE-PROSE', BODY_MARKER, 'mime=other'],
+    [sse, 'FAKE-PROSE', 'reason=json-parse'],
+    [sse, JSON.stringify([BODY_MARKER]), 'reason=non-object'],
+    [sse, '{}', 'reason=event-type-no-name'],
+    [sse, '{}', 'reason=event-type-message', 'message'],
+    [sse, '{}', 'reason=event-type-known-name', 'response.output_text.delta'],
+    [sse, '{}', 'reason=event-type-other-name', 'FAKE-PROSE'],
+    [
+      sse,
+      JSON.stringify({ type: 'response.output_item.done', output_index: null }),
+      'reason=output-index',
+    ],
+    [
+      sse,
+      JSON.stringify({
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: {},
+      }),
+      'reason=output-item-type',
+    ],
+    [
+      sse,
+      JSON.stringify({
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: BODY_MARKER,
+      }),
+      'reason=output-item',
+    ],
+  ];
+  await Promise.all(
+    cases.map(async ([contentType, data, fact, name]) => {
+      const prefix = name ? `event: ${name}\n` : '';
+      const result = await drain(
+        codexAttempt({
+          credential,
+          projection: { transcript: [] },
+          request: { modelId: MODEL, tools: [] },
+          signal: new AbortController().signal,
+          fetch: async () =>
+            new Response(
+              new TextEncoder().encode(`${prefix}data: ${data}\n\n`),
+              {
+                headers: contentType ? { 'content-type': contentType } : {},
+              },
+            ),
+        }),
+      );
+      t.is(
+        result.error?.message,
+        subscriptionTextOf.responsesFailed('stream.unreadable', [fact]),
+      );
+      clean(t, result);
+    }),
+  );
+});
+
+test('headerless success requires a complete Responses SSE stream', async t => {
+  const run = (/** @type {string | null} */ body, status = 200) =>
+    drain(
+      codexAttempt({
+        credential,
+        projection: { transcript: [] },
+        request: { modelId: MODEL, tools: [] },
+        signal: new AbortController().signal,
+        fetch: async () =>
+          new Response(body === null ? null : new TextEncoder().encode(body), {
+            status,
+          }),
+      }),
+    );
+  const delta = 'data: {"type":"response.output_text.delta","delta":"ok"}\n\n';
+  const completed =
+    'data: {"type":"response.completed","response":{"output":[]}}\n\n';
+  const good = await run(delta + completed);
+  t.is(good.error, undefined);
+  t.is(joined(good), 'ok');
+  t.deepEqual(good.events.at(-1), { stop: 'completed' });
+  const incomplete = (status = 200, event = 'none') =>
+    subscriptionTextOf.responsesFailed('stream.incomplete', [
+      'mime=missing',
+      `status=${status}`,
+      `sse=${event}`,
+    ]);
+  /** @type {Array<[ReturnType<typeof run>, string]>} */
+  const cases = [
+    [run(JSON.stringify({ error: BODY_MARKER })), incomplete()],
+    [run(`<html>${BODY_MARKER}</html>\n`), incomplete()],
+    [run(''), incomplete()],
+    [run(null, 204), incomplete(204)],
+    [run(delta + completed.trimEnd()), incomplete(200, 'seen')],
+    [
+      run(`${delta}data: FAKE-PROSE\n\n`),
+      subscriptionTextOf.responsesFailed('stream.unreadable', [
+        'reason=json-parse',
+        'mime=missing',
+        'status=200',
+        'sse=seen',
+      ]),
+    ],
+  ];
+  await Promise.all(
+    cases.map(async ([pending, expected]) => {
+      const result = await pending;
+      t.is(result.error?.message, expected);
+      t.false(result.events.some(event => event.stop === 'completed'));
+      clean(t, result);
+    }),
+  );
+});
+
+test('streamed output preserves index-free arrival order and reserves explicit positions', async t => {
+  const server = await serverFor(t);
+  const done = (
+    /** @type {string} */ text,
+    /** @type {number} */ index = -1,
+  ) => ({
+    data: {
+      type: 'response.output_item.done',
+      ...(index === -1 ? {} : { output_index: index }),
+      item: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text }],
+      },
+    },
+  });
+  const completed = {
+    data: { type: 'response.completed', response: { output: [] } },
+  };
+  server.setPlan([
+    { events: [done('A'), done('B'), completed] },
+    { events: [done('B'), done('D', 3), done('C'), done('A', 0), completed] },
+    { events: [done('B', 1), done('A', 0), completed] },
+  ]);
+  for (const expected of ['AB', 'ABCD', 'AB']) {
+    // eslint-disable-next-line no-await-in-loop -- consume the fixtures in order
+    const result = await drain(attempt(server));
+    t.is(result.error, undefined);
+    t.is(joined(result), expected);
+  }
+});
+
+test('named SSE errors retain symbolic facts and honor the delivery fence', async t => {
+  const code = 'server_is_overloaded';
+  const error = { code, message: 'FAKE-PROSE' };
+  const failure = `event: error\ndata: ${JSON.stringify({ error })}\n\n`;
+  const delta = 'data: {"type":"response.output_text.delta","delta":"ok"}\n\n';
+  const run = async (/** @type {string} */ prefix) =>
+    drain(
+      codexAttempt({
+        credential,
+        projection: { transcript: [] },
+        request: { modelId: MODEL, tools: [] },
+        signal: new AbortController().signal,
+        fetch: async () =>
+          new Response(prefix + failure, {
+            headers: { 'content-type': 'Text/Event-Stream ; charset=UTF-8' },
+          }),
+      }),
+    );
+  const [early, late] = await Promise.all([run(''), run(delta)]);
+  t.true(early.error.retryable);
+  t.false(late.error.retryable);
+  t.is(joined(late), 'ok');
+  for (const result of [early, late]) {
+    t.true(result.error.overloaded);
+    t.is(result.error.message, responsesFailureText({ type: 'error', error }));
+    clean(t, result);
+  }
+});
+
 test('empty answer, cut stream, timeout and cancel', async t => {
   const server = await serverFor(t);
   server.setPlan([
