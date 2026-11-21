@@ -1542,6 +1542,14 @@ and sends the request to the Anthropic Messages API. A warm session normally kee
 last successful member. [Subscription provisioning](../scripts/provision-steps/40-subscriptions.js)
 and the [pool contract](m4-interfaces.md#52-one-round-on-a-pool-w46-providerjs) describe this path.
 
+For the ChatGPT trial, the registered provider is **ChatGPT** (`codex-pool`) and its
+first member is **ChatGPT Account 1**. One member is sufficient. The tester can supply
+that member’s Codex subscription login JSON through the header menu under **Secrets →
+ChatGPT Account 1 → Replace value**, using the local file picker and **Send**. The
+subscription parser accepts at most 8,192 UTF-8 bytes. After authorization, open
+**New Session**, choose **ChatGPT**, select a model returned by discovery, then choose
+**Chat only**. J-12581 records the initial registration.
+
 For the first live turn, send “Write eight numbered, one-sentence observations about
 the moon.” Reload once text starts appearing. Check that the same conversation shows
 one copy of the prompt and one completed reply. Record the provider label and model

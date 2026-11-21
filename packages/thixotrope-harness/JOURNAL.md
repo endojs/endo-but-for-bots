@@ -19108,3 +19108,12 @@ model available to every member for this trial.
 
 A local control query of the running UAT workspace returned zero registered backends,
 zero pools and zero members. No live prompt was sent in this check.
+
+### J-12581 2026-11-21 Guided UAT ChatGPT pool registration
+
+On the running pinned worker, the operator selected ChatGPT and an initial pool of one.
+Created the empty `ChatGPT Account 1` Secret and registered a `codex` member of that
+name through the existing subscriptions provision step. Read-back through the factory
+and subscription manager showed the same active `ChatGPT` backend, kind `codex-pool`,
+with exactly that one member. The credential was empty at registration. Account
+authorization, live model discovery and the first chat/reconnect verdict are pending.
