@@ -19557,3 +19557,52 @@ passed. The procedure in the Terra voice chat covered dictating one prompt,
 hearing its reply automatically, and playing the saved reply with Speak replies
 off. This closes the manual device check left open in J-12591. The earlier
 Chromium run provides the separate audio-buffer and reconnect evidence.
+
+### J-13003 2026-11-21 Project development preset preflight
+
+The operator wants to develop the harness from a session in the harness. The
+proposed **Thixotrope development** preset uses the existing development
+template and session picker. The source is the integrated Endo monorepo, with
+the initial task in `/workspace/packages/thixotrope-harness`. This is a
+proposed preset. The pinned installation currently has no environments admin.
+
+**Checkout.** M6 allocates a private environment for each session. Git access
+and shell startup converge on the same one-time workspace initializer, which
+currently creates an empty repository. The preset snapshot has no source
+selector. Carry an operator-selected project and immutable commit through the
+preset snapshot and durable environment record to that initializer. Materialize
+the commit from an operator-provided local repository or verified Git bundle
+before marking the workspace ready. Reopening a session should retain its edits.
+A new session should receive a fresh checkout of its preset revision. The
+integration origin is a local filesystem path. The observed source can be
+prepared locally without requiring the commit to be on a public remote.
+[Preset snapshot](guest/factory/presets.js) ·
+[Environment allocation](guest/factory/environments.js) ·
+[Workspace initializer](resources/environments/impl/layout.js)
+
+**Runner.** Docker Desktop and its CLI are installed on this macOS arm64 host.
+The configured engine sockets were absent at preflight. The outer harness
+supports Docker and Podman. It starts an offline container from a locally
+present image pinned by repository and manifest digest. The existing shared
+development image supplies Node, Git, ripgrep and build tools. Provision
+Yarn 4.13.0 and the lockfile’s Linux dependencies for offline use, make the
+project’s test command available and validate it as the session user. Image
+selection currently belongs to the environment runner. For the first slice one
+prepared image can serve the project preset. [Shared image](../hosted-agent/oci/dev/README.md)
+
+**Debug loop.** Start with a JavaScript unit test. For installed integration
+tests, prepare a Linux Ironhorse worker for the container architecture, bundle
+its matching boot code and run a second supervisor in the session with its own
+short state path. The locally pinned arm64 macOS executable cannot serve as the
+Linux artifact. Use a scripted provider for regression runs. Browser UAT adds
+Linux Chromium and its runtime libraries. An interactive preview in the outer
+chat would also need a route to the session’s private gateway.
+
+**Host-only proof.** Two depth-one checkouts of
+`081be0d60a599de887d92b178b3fa910349b78a2` had independent Git object stores
+and contained 52,861 tracked files each. A throwaway inventory test first
+failed (one failed, three passed). After editing the implementation, all four
+passed. The returned two-file patch passed `git apply --check --index` against
+the second clean checkout. The test reused host JavaScript dependencies.
+Container execution, persistence across an environment restart and the
+selectable preset still need end-to-end acceptance.
