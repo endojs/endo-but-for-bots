@@ -19819,3 +19819,28 @@ Thixotrope already has an Anthropic API-key backend. Local Anthropic UAT is
 pending a separately provisioned Platform credential. No subscription credential
 was transferred and no inference was requested.
 [Anthropic credential guidance](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use) · [Claude API authentication](https://platform.claude.com/docs/en/manage-claude/authentication)
+
+### J-13012 2026-11-21 Tokyo Claude subscription snapshots imported on the new tower
+
+The operator selected the direct Claude subscription provider and requested an
+import only. On the pinned worker the factory now lists `Claude` as a
+`claude-pool` with the members Primary Claude and Secondary Claude.
+
+A read-only Tokyo client matched each member to its configured Secret and
+renewal owner, then sealed each snapshot to the local SecretWriter’s public
+key. Both source records were distinct and had no pending refresh. The writer
+accepted each box on the condition that its local slot was empty. A fresh
+local control connection confirmed both populated slots at generation 1.
+
+| Local member | Tokyo member | Tokyo generation at import |
+| --- | --- | ---: |
+| Primary Claude | `primary-oauth` | 199 |
+| Secondary Claude | `secondary-oauth` | 195 |
+
+Each local value is a held `StagedClaudeSubscriptionV1` record containing
+the captured refresh record, source identity and generation. A synthetic
+check of the installed Claude parser and renewal code verified that this form
+cannot start a refresh or write back to the slot. The import made no Tokyo
+configuration or credential writes and sent no inference requests. Tokyo
+continues to own renewal. A later cutover must reconcile both current source
+generations before the local tower claims renewal.
