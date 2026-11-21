@@ -1547,6 +1547,17 @@ For the ChatGPT trial, **ChatGPT Account 1** is an empty member of the registere
 and lacks a **Continue with ChatGPT** action. Browser enrollment and the first
 live chat are pending (J-12581–12582).
 
+The operator kept the pool design for the single-account trial (J-12583).
+To attach the first account in the current build:
+
+1. In the signed-in local gateway, open the header menu and choose **Secrets**.
+2. On **ChatGPT Account 1**, choose **Replace value**. In **or a text file**,
+   select the tester's own Codex ChatGPT login JSON (up to 8,192 UTF-8 bytes).
+   For a default file-backed Codex login the path is `~/.codex/auth.json`.
+3. Choose **Send**. **Value replaced.** and `gen 1` confirm the first write.
+4. Open **New Session**, select **ChatGPT**, choose a discovered model and select
+   **Chat only**. Use the live turn below to verify provider access.
+
 OpenAI provides browser sign-in for a locally hosted app such as Thixotrope.
 The tester authorizes Thixotrope by name and grants permission to use their
 eligible plan. Thixotrope can then discover models and call the Responses API

@@ -19133,3 +19133,11 @@ user's requests. This calls for a personal ChatGPT connection bound to the user.
 The previous credential-import instruction does not test that flow.
 [OpenAI integration guide](https://developers.openai.com/siwc/token-sharing-open-source)
 and [plan usage terms §3.1](https://openai.com/policies/sign-in-with-chatgpt-terms/).
+
+### J-12583 2026-11-21 Guided UAT first account instructions
+
+The operator retained the pool design and asked how to attach the first account
+to the existing slot. Checked the Secrets panel's file picker, write confirmation,
+generation display and the subscription parser's Codex login format. The milestone
+guide records those steps for the local single-account trial. The gateway was
+listening on loopback port 7831. Credential entry and the live chat are pending.
