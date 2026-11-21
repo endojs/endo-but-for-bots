@@ -460,6 +460,71 @@ test('ops: values are re-read every round; one sink call per grant per incarnati
   t.is(audit[0].outcome, 'succeeded');
 });
 
+test('the operator activates only the matching staged Claude import at its expected generation', async t => {
+  const dirs = makeDirs();
+  t.teardown(dirs.done);
+  const store = storeOf(dirs.files);
+  t.teardown(() => store.close());
+  const seal = makeSealKeys({
+    wrappingKey: makeWrappingKey({
+      keyFile: dirs.files.keyFile,
+      stateDir: dirs.stateDir,
+    }),
+  });
+  const fake = makeFakeSecretSink();
+  const ops = makeSecretsOps({ store, seal, sink: () => fake.sink });
+  const { secret, grant } = fake.mint('k1');
+  await ops.secretCreate({
+    key: 'k1',
+    label: 'Primary Claude',
+    description: 'Claude import',
+  });
+  const writer = await ops.secretWriter();
+  const key = await E(writer).publicKey();
+  const receipt = harden({
+    runId: 'run-1',
+    memberId: 'primary',
+    sourceGeneration: '3',
+  });
+  const accountRef = 'claude-primary';
+  const original = {
+    version: 'BrokerOAuthRefreshStateV1',
+    accountId: accountRef,
+    refreshToken: 'synthetic-claude-refresh',
+    scopes: ['user:inference'],
+  };
+  const staged = {
+    version: 'StagedClaudeSubscriptionV1',
+    ...receipt,
+    accountRef,
+    sourceFormulaId: 'f1',
+    record: original,
+  };
+  await E(writer).replace(secret, sealTo(key, JSON.stringify(staged)), 0);
+  const other = harden({ ...receipt, memberId: 'secondary' });
+  await t.throwsAsync(E(writer).activateClaudeImport(secret, other, 1));
+  const fenced = {
+    ...staged,
+    record: { ...original, pendingRefresh: { startedAt: 1 } },
+  };
+  await E(writer).replace(secret, sealTo(key, JSON.stringify(fenced)), 1);
+  await t.throwsAsync(E(writer).activateClaudeImport(secret, receipt, 2));
+  await E(writer).replace(secret, sealTo(key, JSON.stringify(staged)), 2);
+  await t.throwsAsync(
+    E(writer).activateClaudeImport(secret, receipt, 1),
+    failed('GENERATION_CONFLICT'),
+  );
+  t.deepEqual(await E(writer).activateClaudeImport(secret, receipt, 3), {
+    generation: 4,
+  });
+  t.deepEqual(JSON.parse(await ops.readKey(grant)), {
+    version: 'LocalClaudeRefreshV1',
+    refreshToken: original.refreshToken,
+    scopes: original.scopes,
+  });
+  await t.throwsAsync(E(writer).activateClaudeImport(secret, receipt, 4));
+});
+
 test('state directory: after a full exercise no encoding of the value is there', async t => {
   const dirs = makeDirs();
   t.teardown(dirs.done);

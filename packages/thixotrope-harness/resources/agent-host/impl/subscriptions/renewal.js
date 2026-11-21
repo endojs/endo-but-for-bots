@@ -56,12 +56,14 @@ import {
   formatCredential,
   jwtClaims,
   codexAccountOf,
-  parseCredential,
+  parseRenewalCredential,
   assertToken,
   assertScopes,
 } from './credentials.js';
 
-/** @import { StoredCredential } from './credentials.js' */
+/** @import { StoredCredential, LocalClaudeRefresh } from './credentials.js' */
+
+/** @typedef {StoredCredential | LocalClaudeRefresh} RenewalCredential */
 
 /** Refresh answers are small JSON; anything larger is refused. */
 const ANSWER_BYTES = 64 * 1024;
@@ -167,7 +169,7 @@ export const makeMemberCredential = ({
     kept: 0,
   };
 
-  /** @returns {Promise<{ credential: StoredCredential, generation: number, value: string }>} */
+  /** @returns {Promise<{ credential: RenewalCredential, generation: number, value: string }>} */
   const read = async () => {
     counters.reads += 1;
     /** @type {{ value: string, generation: number }} */
@@ -177,19 +179,19 @@ export const makeMemberCredential = ({
     } catch (error) {
       throw credentialError(codeOf(error) ?? 'READ_FAILED');
     }
-    const credential = parseCredential(stored.value, provider);
+    const credential = parseRenewalCredential(stored.value, provider);
     return { credential, generation: stored.generation, value: stored.value };
   };
 
   /**
-   * Whether this credential must be replaced: near expiry, or the exact
-   * access token a provider has just refused.
+   * Whether the stored access token can serve this request.
    * @param {StoredCredential} credential
    * @param {string} [rejected]
    */
-  const spent = (credential, rejected) =>
-    now() + refreshSkewMs >= credential.expiresAtMs ||
-    (rejected !== undefined && credential.accessToken === rejected);
+  const usable = (credential, rejected) =>
+    credential.pendingRefresh === undefined &&
+    now() + refreshSkewMs < credential.expiresAtMs &&
+    credential.accessToken !== rejected;
 
   /**
    * After a conditioned write lost to another writer: adopt what is stored
@@ -206,8 +208,8 @@ export const makeMemberCredential = ({
     const now2 = await read();
     if (
       now2.generation !== lostAt &&
-      now2.credential.pendingRefresh === undefined &&
-      !spent(now2.credential, rejected)
+      'accessToken' in now2.credential &&
+      usable(now2.credential, rejected)
     ) {
       counters.adopted += 1;
       return { credential: now2.credential, generation: now2.generation };
@@ -218,7 +220,7 @@ export const makeMemberCredential = ({
   /**
    * POST the refresh-token grant; the answer as JSON, or throw with
    * `undispatched` set when the request provably never left.
-   * @param {StoredCredential} credential
+   * @param {RenewalCredential} credential
    * @param {string} refreshToken
    */
   const post = async (credential, refreshToken) => {
@@ -275,7 +277,7 @@ export const makeMemberCredential = ({
   /**
    * The renewed credential from a token answer (claude-sandbox and
    * codex-sandbox `make*SubscriptionRefresh`).
-   * @param {StoredCredential} credential
+   * @param {RenewalCredential} credential
    * @param {string} refreshToken
    * @param {any} answer
    * @returns {StoredCredential}
@@ -319,13 +321,15 @@ export const makeMemberCredential = ({
       (typeof answer.account?.uuid === 'string'
         ? answer.account.uuid
         : undefined);
+    const boundAccount =
+      'accountId' in credential ? credential.accountId : undefined;
     if (
-      credential.accountId !== undefined &&
+      boundAccount !== undefined &&
       named !== undefined &&
-      named !== credential.accountId
+      named !== boundAccount
     )
       throw credentialError('INVALID');
-    const accountId = credential.accountId ?? named;
+    const accountId = boundAccount ?? named;
     let { scopes } = credential;
     if (provider === 'claude' && typeof answer.scope === 'string')
       scopes = assertScopes(answer.scope.split(/ +/), true);
@@ -349,13 +353,21 @@ export const makeMemberCredential = ({
    * next round renews. Nothing survives an answer that is not an object,
    * carries an unusable refresh token, or names another account (that
    * token is not this member's: fail closed).
-   * @param {StoredCredential} credential
+   * @param {RenewalCredential} credential
    * @param {string} refreshToken
    * @param {any} answer
-   * @returns {StoredCredential | undefined}
+   * @returns {RenewalCredential | undefined}
    */
   const salvaged = (credential, refreshToken, answer) => {
     if (typeof answer !== 'object' || answer === null) return undefined;
+    // A failed first exchange has no prior access credential to preserve.
+    // Keep its intent unless the provider explicitly supplied a new grant.
+    if (
+      'version' in credential &&
+      (answer.refresh_token === undefined ||
+        answer.refresh_token === refreshToken)
+    )
+      return undefined;
     let kept = refreshToken;
     if (answer.refresh_token !== undefined) {
       try {
@@ -364,6 +376,12 @@ export const makeMemberCredential = ({
         return undefined;
       }
     }
+    if ('version' in credential)
+      return harden({
+        version: credential.version,
+        refreshToken: kept,
+        scopes: credential.scopes,
+      });
     if (credential.accountId !== undefined) {
       const named =
         typeof answer.account_id === 'string'
@@ -391,7 +409,7 @@ export const makeMemberCredential = ({
   /**
    * Write a credential over the intent; a failure leaves the intent (the
    * next read fails `CONSUMED`), a conflict means a newer writer won.
-   * @param {StoredCredential} credential
+   * @param {RenewalCredential} credential
    * @param {number} intentGeneration
    */
   const keep = async (credential, intentGeneration) => {
@@ -411,13 +429,18 @@ export const makeMemberCredential = ({
   const exchange = async rejected => {
     counters.flights += 1;
     const { credential, generation, value } = await read();
-    if (!spent(credential, rejected)) return { credential, generation };
+    if ('accessToken' in credential && usable(credential, rejected))
+      return { credential, generation };
     if (credential.pendingRefresh !== undefined)
       throw credentialError('CONSUMED');
     const { refreshToken } = credential;
     if (refreshToken === undefined) {
       // No renewal authority: a still-valid token is served to its end.
-      if (rejected === undefined && now() < credential.expiresAtMs)
+      if (
+        'expiresAtMs' in credential &&
+        rejected === undefined &&
+        now() < credential.expiresAtMs
+      )
         return { credential, generation };
       throw credentialError(rejected === undefined ? 'EXPIRED' : 'REJECTED');
     }
@@ -508,7 +531,8 @@ export const makeMemberCredential = ({
   return harden({
     current: async () => {
       const { credential, generation } = await read();
-      if (!spent(credential)) return harden({ credential, generation });
+      if ('accessToken' in credential && usable(credential))
+        return harden({ credential, generation });
       const renewed = await renew();
       return harden(renewed);
     },

@@ -485,6 +485,17 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   read (claude-sandbox and codex-sandbox `subscription-auth.js` `import*Subscription` for the
   accepted inputs); over 8,192 bytes, unparsable or of the wrong provider: code `INVALID`. Never
   logged; errors carry codes only.
+- **Claude imports from a prior tower.** A `StagedClaudeSubscriptionV1` value
+  stays inert until an operator calls the native control writer’s
+  `activateClaudeImport(secret, receipt, expectedGeneration)`. The receipt
+  names the import run, member and source generation. The writer checks that
+  the binding matches, refuses a pending source renewal, and conditionally
+  replaces the held record inside the Secrets adapter. The caller receives
+  only the new local generation. The gateway exposes its usual writer methods.
+  A `LocalClaudeRefreshV1` value contains the refresh token and its scopes.
+  Model discovery or the first dispatch exchanges it under the same renewal
+  intent as an expired credential. The provider response supplies the access
+  token and its expiry. The old tower’s member label stays local to the import.
 - **Renewal** (`renewal.js`, port of hosted-agent `provider-broker.js` refresh and
   `managed-renewable-credentials.js`): one `MemberCredential` per member and incarnation, holding
   only `credentialFor(key)` (W-5 fixed). Renewal can also run at session creation, at the

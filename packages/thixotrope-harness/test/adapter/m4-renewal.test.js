@@ -560,3 +560,51 @@ test('store failures keep their codes: revoked member is REVOKED', async t => {
   await store.revoke('k1');
   await rejectsWith(t, member().current(), 'REVOKED');
 });
+
+test('activated Claude refresh-only grant writes intent and renews once across concurrent readers', async t => {
+  const { member, server, issued, store, stored } = await setup(t);
+  const activation = {
+    version: 'LocalClaudeRefreshV1',
+    refreshToken: issued.refreshToken,
+    scopes: ['user:inference'],
+  };
+  const generation = await store.replace('k1', JSON.stringify(activation));
+  const held = server.hold();
+  const manager = member();
+  const rounds = Array.from({ length: 16 }, () => manager.current());
+  await held.arrived;
+  const during = await store.read('k1');
+  held.release();
+  const results = await Promise.all(rounds);
+  const { pendingRefresh, ...rest } = JSON.parse(during.value);
+  t.deepEqual(rest, activation);
+  t.is(typeof pendingRefresh.startedAtMs, 'number');
+  t.is(during.generation, generation + 1);
+  t.is(server.presented(issued.serial), 1);
+  const after = await stored();
+  t.is(after.generation, generation + 2);
+  t.not(after.credential.refreshToken, issued.refreshToken);
+  for (const result of results) t.deepEqual(result, after);
+});
+
+test('uncertain first Claude exchange retains its intent across a restart', async t => {
+  const { member, server, issued, store } = await setup(t);
+  const activation = {
+    refreshToken: issued.refreshToken,
+    scopes: ['user:inference'],
+  };
+  await store.replace(
+    'k1',
+    JSON.stringify({ version: 'StagedClaudeSubscriptionV1', ...activation }),
+  );
+  await rejectsWith(t, member().current(), 'INVALID');
+  t.is(server.requests().length, 0);
+  await store.replace(
+    'k1',
+    JSON.stringify({ version: 'LocalClaudeRefreshV1', ...activation }),
+  );
+  server.setPlan([{ disconnect: true }]);
+  await rejectsWith(t, member().current(), 'RENEWAL_FAILED');
+  await rejectsWith(t, member().current(), 'CONSUMED');
+  t.is(server.presented(issued.serial), 1);
+});

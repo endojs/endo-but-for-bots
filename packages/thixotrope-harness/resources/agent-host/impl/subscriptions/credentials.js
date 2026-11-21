@@ -27,6 +27,10 @@
  *   account_id } }` with no API key; the access token is a JWT whose `exp`
  *   gives the expiry and whose account claim must equal `account_id`.
  *
+ * The renewal manager also accepts an activated Claude refresh-only import
+ * until its first exchange supplies an access credential. A staged import
+ * cannot be used by either reader.
+ *
  * Anything else, a value over 8,192 bytes (R7-25), or a credential of the
  * other provider: code `INVALID`. Errors carry a fixed text and a code
  * (`subscriptionCodes`), never a token, a value or a parse message.
@@ -260,11 +264,9 @@ const fromCodexLogin = input => {
 /**
  * Parse and validate a member's credential value (at every read).
  * @param {string} text the Secret's value
- * @param {import('./types.js').Provider} provider the member's provider
- * @returns {StoredCredential}
+ * @returns {Record<string, any>}
  */
-export const parseCredential = (text, provider) => {
-  if (!PROVIDERS.includes(provider)) throw credentialError('INVALID');
+const credentialRecord = text => {
   if (
     typeof text !== 'string' ||
     Buffer.byteLength(text, 'utf8') > subscriptionLimits.credentialBytes
@@ -278,22 +280,81 @@ export const parseCredential = (text, provider) => {
     throw credentialError('INVALID');
   }
   if (!isRecord(input)) throw credentialError('INVALID');
-  const record = /** @type {Record<string, any>} */ (input);
+  return /** @type {Record<string, any>} */ (input);
+};
+
+/**
+ * @param {Record<string, any>} record
+ * @param {import('./types.js').Provider} provider
+ */
+const accessCredential = (record, provider) => {
+  if (!PROVIDERS.includes(provider)) throw credentialError('INVALID');
   if (record.version === 1) return fromStored(record, provider);
   return provider === 'claude'
     ? fromClaudeLogin(record)
     : fromCodexLogin(record);
 };
+/**
+ * @param {string} text
+ * @param {import('./types.js').Provider} provider
+ */
+export const parseCredential = (text, provider) =>
+  accessCredential(credentialRecord(text), provider);
 harden(parseCredential);
+
+/**
+ * Only the renewal manager can use this operator-activated credential.
+ * @typedef {{version: 'LocalClaudeRefreshV1', refreshToken: string, scopes: string[], pendingRefresh?: {startedAtMs: number}}} LocalClaudeRefresh
+ * @param {string} text
+ * @param {import('./types.js').Provider} provider
+ * @returns {StoredCredential | LocalClaudeRefresh}
+ */
+export const parseRenewalCredential = (text, provider) => {
+  const record = credentialRecord(text);
+  if (record.version !== 'LocalClaudeRefreshV1')
+    return accessCredential(record, provider);
+  if (
+    provider !== 'claude' ||
+    Object.keys(record).some(
+      key =>
+        !['version', 'refreshToken', 'scopes', 'pendingRefresh'].includes(key),
+    )
+  )
+    throw credentialError('INVALID');
+  return harden({
+    version: 'LocalClaudeRefreshV1',
+    refreshToken: assertToken(record.refreshToken),
+    scopes: assertScopes(record.scopes, true),
+    ...(record.pendingRefresh === undefined
+      ? {}
+      : {
+          pendingRefresh: {
+            startedAtMs: assertTime(record.pendingRefresh?.startedAtMs),
+          },
+        }),
+  });
+};
+harden(parseRenewalCredential);
 
 /**
  * The stored form, keys in a fixed order. Refused (`INVALID`) when it would
  * not parse back (over 8,192 bytes), so the renewal never writes a value
  * the next read refuses.
- * @param {StoredCredential} credential
+ * @param {StoredCredential | LocalClaudeRefresh} credential
  * @returns {string}
  */
 export const formatCredential = credential => {
+  if (!('accessToken' in credential)) {
+    const { version, refreshToken, scopes, pendingRefresh } = credential;
+    const text = JSON.stringify({
+      version,
+      refreshToken,
+      scopes,
+      pendingRefresh,
+    });
+    parseRenewalCredential(text, 'claude');
+    return text;
+  }
   const {
     provider,
     accessToken,

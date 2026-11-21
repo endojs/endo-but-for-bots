@@ -19859,3 +19859,28 @@ The test checked its call ID and both expected account labels, then verified
 the turn completed. This covers the tool round trip. Live-model acceptance
 requires an independently authorized local login or a renewal handoff.
 [Session tool assertions](test/integration/m4-accounts.test.js#L168)
+
+### J-13014 2026-11-21 Local Claude activation and live Haiku tool use
+
+The operator authorized local activation of both imported accounts. Tokyo’s
+metadata still showed the imported source generations, 199 for Primary Claude
+and 195 for Secondary Claude. Local control promoted the two generation-1
+snapshots in the pinned worker’s Secrets store. Both became generation 2.
+Each first renewal records its intent before contacting Anthropic and writes
+the result using a generation check. No Tokyo configuration or credential was
+removed. Subsequent renewal on Tokyo can fail if Anthropic rotated its token.
+
+Live model discovery returned 15 models. Session `s19`, **UAT Claude Haiku
+tool check dbcf953e**, used the built-in `chat-only` preset and
+`claude-haiku-4-5-20251001`. Its first round called `accountStatus` once.
+The saved tool result matched `t1/r0/c0`, succeeded and named the Claude
+pool. The second round answered “Claude” and the turn completed.
+
+Fresh provider usage readings confirmed both credentials. Primary Claude
+reported 100% usage and a reset at 02:00 JST on November 23. The pool marked
+it temporarily unavailable. Secondary Claude reported 8% usage and was
+available. The transcript attributes the turn to the Claude pool.
+After an adapter restart both Secrets were at generation 4, model discovery
+still returned 15 rows and the gateway returned HTTP 200. The full unit and
+adapter suite passed 1,888 tests with eight gated tests skipped. The 43
+focused activation, renewal and interface tests passed on the final build.

@@ -30,6 +30,7 @@
 import { count, R, record, text } from '../../../../guest/lib/guards/base.js';
 import { shapes } from '../../../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
+import { activateStagedClaudeCredential } from '../subscriptions/activate-import.js';
 import { secretError } from './store.js';
 
 const { M, makeExo, matches } = /** @type {any} */ (globalThis);
@@ -68,13 +69,24 @@ export const localWriterGuard = () => {
 let hubGuard;
 /**
  * The hub writer's exo guard: `interfaces.SecretWriter` with the value
- * argument checked in the method (`SealedBox` only) instead.
+ * argument checked in the method (`SealedBox` only) instead. Local control
+ * also provides explicit activation of a staged Claude import. The gateway
+ * publishes the ordinary writer interface and vocabulary.
  */
 const hubWriterGuard = () => {
   hubGuard ??= M.interface('SecretWriter', {
     replace: M.callWhen(R('Secret'), M.any())
       .optional(count)
       .returns(record({ generation: count })),
+    activateClaudeImport: M.callWhen(
+      R('Secret'),
+      record({
+        runId: text(128),
+        memberId: text(128),
+        sourceGeneration: text(32),
+      }),
+      count,
+    ).returns(record({ generation: count })),
     publicKey: M.call().returns(text(64)),
   });
   return hubGuard;
@@ -131,6 +143,24 @@ export const makeSecretWriter = ({ store, seal, resolveSecret }) => {
     replace: async (secret, box, expectedGeneration) => {
       assertValueShape(box, shapes.SealedBox);
       return write(secret, seal.open(box), expectedGeneration);
+    },
+    /**
+     * Promote one staged credential. Only the expected import can be
+     * activated and a concurrent replacement wins through the store CAS.
+     * @param {any} secret
+     * @param {import('../subscriptions/activate-import.js').ImportReceipt} receipt
+     * @param {number} expectedGeneration
+     */
+    activateClaudeImport: async (secret, receipt, expectedGeneration) => {
+      const key = await resolveSecret(secret);
+      if (key === null) throw secretError('UNKNOWN_SECRET');
+      const { value, generation } = await store.read(key);
+      if (generation !== expectedGeneration)
+        throw secretError('GENERATION_CONFLICT');
+      const active = activateStagedClaudeCredential(value, receipt);
+      return harden({
+        generation: await store.replace(key, active, expectedGeneration),
+      });
     },
     publicKey: () => seal.publicKey(),
   });
