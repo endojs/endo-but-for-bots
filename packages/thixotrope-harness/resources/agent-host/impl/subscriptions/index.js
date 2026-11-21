@@ -128,6 +128,26 @@ export const makeSubscriptions = ({
    * @type {Map<any, PoolRecord>}
    */
   const pools = new Map();
+  /** @type {WeakMap<object, Promise<void>>} */
+  const specLoads = new WeakMap();
+
+  /**
+   * The pinned manager forwards its private spec with catalogue calls.
+   * Ask for zero rows to hydrate the endpoint without reading models or
+   * renewing credentials. Concurrent cold refreshes share the round trip.
+   * @param {any} backend
+   */
+  const ensureUsageSpec = async backend => {
+    if (pools.has(backend)) return;
+    let flight = specLoads.get(backend);
+    if (!flight) {
+      flight = Promise.resolve(E(backend).listModels(harden({ limit: 0 })))
+        .then(() => undefined)
+        .finally(() => specLoads.delete(backend));
+      specLoads.set(backend, flight);
+    }
+    await flight;
+  };
   /** @type {WeakMap<any, ReturnType<typeof makeMemberCredential>>} */
   const memberCredentials = new WeakMap();
   /** The spec of the first pool a member was loaded in (its `tokenUrl`). */
@@ -311,7 +331,7 @@ export const makeSubscriptions = ({
     // accounts view described without its spec (after a restart, before its
     // first open or catalogue read) may name its own `usageUrl`, and the
     // provider's default must not be read in its place (W4.8). Its readings
-    // stay `remembered` until the pool is used.
+    // stay `remembered` until the genuine pool spec is available.
     url: (backend, member) => {
       const pool = pools.get(backend);
       if (pool === undefined) return undefined;
@@ -341,6 +361,7 @@ export const makeSubscriptions = ({
     now,
     readers: {
       usage: async (backend, entry) => {
+        await ensureUsageSpec(backend);
         const reading = await usageReader(backend, entry);
         if (reading !== undefined) {
           const previous = readings.get(entry.member);
@@ -417,8 +438,10 @@ export const makeSubscriptions = ({
   return harden({
     catalog: harden({
       /** @param {any} request M2 `makeCatalog`'s request (`backend`, `spec`, ...) */
-      listModels: request => {
+      listModels: async request => {
         recordOf(request.backend, request.spec);
+        if (request.request?.limit === 0 && specLoads.has(request.backend))
+          return harden({ rows: [], state: 'ok' });
         return poolCatalog.listModels(request);
       },
       /** @param {any} request */

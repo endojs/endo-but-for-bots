@@ -649,3 +649,55 @@ test('HR-SYN-3 (a): a pool round started without its projection is refused befor
   );
   t.is(s.server.requests().length, 0);
 });
+
+test('explicit cold account refresh recovers the durable usage URL once, without provider catalogue traffic', async t => {
+  const s = await setup(t, { kind: 'claude-pool' });
+  const usageUrl = 'https://custom.example.test/operator-usage';
+  const spec = harden({ ...s.spec, usageUrl });
+  /** @type {string[]} */
+  const urls = [];
+  const native = makeSubscriptions({
+    sink: s.fake.sink,
+    secrets: {
+      credentialFor: (/** @type {string} */ key) =>
+        makeCredentialAccess({ store: s.store, key }),
+    },
+    stateDir: () => s.stateDir,
+    timers,
+    fetch: async url => {
+      urls.push(String(url));
+      return Response.json({ five_hour: { utilization: 26 } });
+    },
+  });
+  t.teardown(() => native.close());
+  let forwards = 0;
+  let attached = false;
+  const backend = Far('Backend', {
+    describe: () => harden({ kind: spec.kind, label: spec.label }),
+    listModels: (/** @type {any} */ request) => {
+      forwards += 1;
+      if (!attached) throw Error('adapter unavailable');
+      return native.catalog.listModels({ backend, spec, request });
+    },
+  });
+  const { accounts } = native.accounts;
+  await accounts.forBackend(backend);
+  await accounts.history(backend);
+  t.is(forwards, 0);
+  await accounts.refresh(backend);
+  t.is(forwards, 1, 'two members share a failed spec load');
+  t.deepEqual(urls, [], 'no fallback endpoint on failure');
+  attached = true;
+  const [fresh] = await Promise.all([
+    accounts.refresh(backend),
+    accounts.refresh(backend),
+  ]);
+  t.is(forwards, 2, 'concurrent refreshes share the retry');
+  t.deepEqual(urls, [usageUrl, usageUrl]);
+  t.deepEqual(
+    fresh.pools[0].members.map(member => member.provenance),
+    ['observed', 'observed'],
+  );
+  await accounts.refresh(backend);
+  t.is(forwards, 2, 'the genuine spec stays available for this incarnation');
+});
