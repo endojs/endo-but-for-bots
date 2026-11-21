@@ -347,7 +347,7 @@ const voiceStubs = () => {
     const checkLayout = async (/** @type {number} */ width) => {
       await pageB.setViewportSize({ width, height: 800 });
       const geometry = await replayTurn
-        .locator('.floot-msg-row.assistant')
+        .locator('.thix-assistant-message')
         .evaluateAll((/** @type {Element[]} */ rows) =>
           rows.map(row => {
             const bubble = row.querySelector(':scope > .floot-msg');
@@ -388,7 +388,7 @@ const voiceStubs = () => {
         .locator('.floot-msg-row.user > .floot-msg')
         .boundingBox();
       const firstBubble = await replayTurn
-        .locator('.floot-msg-row.assistant > .floot-msg')
+        .locator('.thix-assistant-message > .floot-msg')
         .first()
         .boundingBox();
       const verticalGap = firstBubble.y - (userBubble.y + userBubble.height);
@@ -402,7 +402,7 @@ const voiceStubs = () => {
       /** @type {number} */ index,
       /** @type {string[]} */ expected,
     ) => {
-      const row = replayTurn.locator('.floot-msg-row.assistant').filter({
+      const row = replayTurn.locator('.thix-assistant-message').filter({
         has: pageB.locator('.floot-msg', { hasText: replayParts[index] }),
       });
       await row.getByRole('button', play).click();
