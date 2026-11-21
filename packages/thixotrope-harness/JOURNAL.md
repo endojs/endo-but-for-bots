@@ -19779,7 +19779,7 @@ are preserved. [Environment contract](designs/m6-interfaces.md#53-runtime-contra
 
 ### J-13010 2026-11-21 Retry session updates ChatGPT discovery and verifies versioned Astra models
 
-In `s18/t2`, the model used the operator-supplied client-version evidence
+In `s18/t2`, the model used the desktop catalog’s observed client version
 to update the ChatGPT discovery request and two regression suites. It
 committed `d1863fb65` to its own project checkout. The catalog and session
 dialog suites passed all 16 tests there and again in the integration checkout.
@@ -19793,6 +19793,13 @@ returned ten listed models. The live backend resolved `gpt-6-astra` and
 The full regression caught an obsolete expected URL in the provider wire
 fixture. Session `s18/t3` updated only its client-version parameter, passed
 the wire suite and committed `e0cabf62a` to the session checkout.
-This checked discovery and resolution without spending a turn on Astra.
-The gateway returned HTTP 200 after the idle provider adapter reloaded.
+The deployment check used catalog discovery and resolution. The gateway
+returned HTTP 200 after the idle provider adapter reloaded. The development
+preset was published and read back at `732286d42f`. The original turn and
+all three retry turns remained readable with completed status.
+
+The final unit and adapter run passed 1,885 tests with eight gated cases
+skipped. Two mock OCI signal tests had received TERM before their shell
+installed its trap under heavier load. Both passed in isolation and in the
+complete two-worker run. The real-Docker run passed all 37 OCI cases.
 [Pool catalog contract](designs/m4-interfaces.md#54-catalogue-and-creation-w43-catalogue-w41-resolver)
