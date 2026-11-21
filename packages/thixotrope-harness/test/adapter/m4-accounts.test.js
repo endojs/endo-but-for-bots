@@ -262,6 +262,160 @@ test('member state, marks and retirement are shown; one publish per change', asy
   t.is(members[2].state, 'retired');
 });
 
+test('Codex full usage defines the window inventory; partial turn headers update confirmed slots', async t => {
+  /**
+   * @param {any} rateLimit
+   * @param {number} at
+   */
+  const full = (rateLimit, at) =>
+    readingFromCodexUsage({ plan_type: 'pro', rate_limit: rateLimit }, at);
+  const week = {
+    used_percent: 67,
+    limit_window_seconds: 604_800,
+    reset_at: (T0 + 3_600_000) / 1000,
+  };
+  let snapshot = full({ primary_window: week, secondary_window: null }, T0);
+  const { core, file } = await setup(t, {
+    readers: { usage: async () => snapshot },
+  });
+  const pool = Far('Backend', {});
+  const pro = memberEntry('pro', 'k1', 'codex');
+  const other = memberEntry('other', 'k2', 'codex');
+  core.register(pool, { kind: 'codex-pool', label: 'pool', members: [pro] });
+  const current = () => core.accounts.list().pools[0].members[0];
+  const placeholder = /** @type {const} */ ({
+    name: 'secondary',
+    usedPercent: 0,
+  });
+  await core.accounts.refresh(pool);
+  core.observe(pool, pro, {
+    at: T0 + 1,
+    source: 'observed',
+    limitReached: false,
+    windows: [{ name: 'primary', usedPercent: 67 }, placeholder],
+  });
+  t.is(current().plan, 'Pro');
+  t.deepEqual(current().windows, [
+    {
+      name: 'primary',
+      usedPercent: 67,
+      windowMinutes: 10_080,
+      resetsAt: new Date(T0 + 3_600_000).toISOString(),
+    },
+  ]);
+  core.observe(pool, pro, {
+    at: T0 + 2,
+    source: 'observed',
+    limitReached: false,
+    windows: [],
+  });
+  t.is(
+    current().windows.length,
+    1,
+    'a credits-only turn leaves known limits intact',
+  );
+  core.register(pool, { kind: 'codex-pool', label: 'pool', members: [other] });
+  core.observe(pool, other, {
+    at: T0 + 3,
+    source: 'observed',
+    limitReached: false,
+    windows: [placeholder],
+  });
+  t.deepEqual(
+    current().windows,
+    [],
+    'a bare header slot never creates a limit for a new account',
+  );
+  core.register(pool, { kind: 'codex-pool', label: 'pool', members: [pro] });
+  snapshot = full(
+    { primary_window: week, secondary_window: { used_percent: 0 } },
+    T0 + 4,
+  );
+  await core.accounts.refresh(pool);
+  core.observe(pool, pro, {
+    at: T0 + 5,
+    source: 'observed',
+    limitReached: false,
+    windows: [placeholder],
+  });
+  t.deepEqual(
+    current().windows.map(w => w.usedPercent),
+    [67, 0],
+    'full usage explicitly confirmed a second zero window without timing',
+  );
+  await core.flush();
+  t.deepEqual(
+    loadReadings(file)
+      .find(e => e.key === 'k1')
+      ?.reading.windows.map(w => w.usedPercent),
+    [67, 0],
+  );
+  snapshot = full({ primary_window: week }, T0 + 6);
+  await core.accounts.refresh(pool);
+  t.is(
+    current().windows.length,
+    1,
+    'a fresh complete read removes an omitted window',
+  );
+  core.observe(pool, pro, {
+    at: T0 + 1,
+    source: 'observed',
+    limitReached: true,
+    windows: [{ name: 'secondary', usedPercent: 100 }],
+  });
+  t.is(
+    current().windows.length,
+    1,
+    'an older header cannot restore the removed slot',
+  );
+  core.observe(pool, pro, {
+    at: T0 + 7,
+    source: 'observed',
+    limitReached: false,
+    windows: [{ ...placeholder, windowMinutes: 300 }],
+  });
+  t.deepEqual(
+    current().windows.map(w => w.usedPercent),
+    [67, 0],
+    'a timed zero header independently confirms a second limit',
+  );
+});
+
+test('legacy Codex readings drop ambiguous zero placeholders on first display', async t => {
+  const dir = await tempDir();
+  const file = join(dir, 'readings.json');
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(
+    file,
+    JSON.stringify({
+      format: 'thixotrope-harness-readings-1',
+      members: [
+        {
+          key: 'k1',
+          provider: 'codex',
+          reading: {
+            at: T0,
+            windows: [
+              { name: 'primary', usedPercent: 67, windowMinutes: 10_080 },
+              { name: 'secondary', usedPercent: 0 },
+            ],
+          },
+        },
+      ],
+    }),
+  );
+  const core = makeAccounts({ file, timers: makeClock().timers });
+  t.teardown(() => core.close());
+  const pool = Far('Backend', {});
+  const pro = memberEntry('pro', 'k1', 'codex');
+  core.register(pool, { kind: 'codex-pool', label: 'pool', members: [pro] });
+  const [account] = core.accounts.list().pools[0].members;
+  t.is(account.provenance, 'remembered');
+  t.deepEqual(account.windows, [
+    { name: 'primary', usedPercent: 67, windowMinutes: 10_080 },
+  ]);
+});
+
 test('push per change: a watcher gets one batch per change, no reader is called', async t => {
   let usageReads = 0;
   let poolOfCalls = 0;

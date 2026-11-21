@@ -68,6 +68,7 @@ export const windowName = window => {
   const minutes = window.windowMinutes;
   if (minutes !== undefined && minutes > 0) {
     // Keep the entire period, including odd durations such as 90 minutes.
+    if (minutes === 10_080) return 'weekly';
     if (minutes % 1440 === 0) return `${minutes / 1440}d quota`;
     if (minutes % 60 === 0) return `${minutes / 60}h quota`;
     return `${minutes}m quota`;
@@ -76,6 +77,16 @@ export const windowName = window => {
   if (window.name === 'secondary') return 'secondary quota';
   return 'other quota';
 };
+
+/**
+ * Windows the provider reported, including readings remembered after restart.
+ * @param {Record<string, any>} account
+ * @returns {readonly any[]}
+ */
+export const confirmedWindows = account =>
+  account.provenance === 'observed' || account.provenance === 'remembered'
+    ? account.windows
+    : [];
 
 /** How long a "limit reached" with no window to say when it lifts is believed. */
 const UNDATED_BLOCK_MS = 3_600_000;
@@ -92,7 +103,7 @@ const UNDATED_BLOCK_MS = 3_600_000;
 export const accountBlocked = (account, nowMs) => {
   if (account.state !== 'ok') return true;
   /** @type {Array<ReturnType<typeof windowNow>>} */
-  const windows = account.windows.map((/** @type {any} */ window) =>
+  const windows = confirmedWindows(account).map(window =>
     windowNow(window, nowMs),
   );
   if (windows.some(window => window.exhausted)) return true;
@@ -131,7 +142,7 @@ export const provenanceText = (account, nowMs) => {
 
 /**
  * The status-bar chip of one member account (R6-52): its label, then each
- * window, the long one first ("7d quota 40% used", "5h quota used up, back in 2h 10m"),
+ * window, the long one first ("weekly 40% used", "5h quota used up, back in 2h 10m"),
  * else its credits, else its plan; "limit reached" when the provider said
  * so; the provenance when nothing was observed.
  *
@@ -140,7 +151,7 @@ export const provenanceText = (account, nowMs) => {
  */
 export const chipText = (account, nowMs) => {
   const parts = [];
-  const ordered = [...account.windows].sort(
+  const ordered = [...confirmedWindows(account)].sort(
     (a, b) => (b.windowMinutes ?? 0) - (a.windowMinutes ?? 0),
   );
   for (const window of ordered) {

@@ -16,7 +16,7 @@ import { E } from '@endo/far';
 import { h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 
-import { accountBlocked, chipText } from './labels.js';
+import { accountBlocked, chipText, confirmedWindows } from './labels.js';
 import { useAccountsFeed } from './SubscriptionsPanel.js';
 
 /** @import { FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
@@ -104,7 +104,7 @@ export const AccountChip = ({ context, now = Date.now }) => {
           title: [
             pool.label,
             account.provider,
-            ...(account.windows.length
+            ...(confirmedWindows(account).length
               ? [
                   "Percent of this account's subscription allowance used in each provider window.",
                 ]

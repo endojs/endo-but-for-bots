@@ -461,8 +461,15 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   next request carries the rendered text as a tool result that is not an error.
 - **Banked reset credits** (R4-86): shown read-only with their expiry; no redeem (decision 8).
 - **Readings file**: `<state>/agent-host/subscriptions/readings.json`, `{ format:
-  'thixotrope-harness-readings-1', members: [{ key, provider, reading }] }`, no token, no header
+  'thixotrope-harness-readings-2', members: [{ key, provider, reading }] }`, no token, no header
   value, no body; written temp + rename + fsync at most every 5 s.
+  A full Codex usage refresh establishes the account's window list.
+  Inference headers update individual confirmed windows. Positive usage, a positive
+  duration or a reset timestamp can establish a window from headers alone.
+  An explicit window in a full usage response can also be confirmed at zero usage.
+  When loading version 1, the adapter drops ambiguous Codex entries that recorded only zero.
+  The chip displays current or remembered provider windows. The Subscriptions panel
+  also lists operator-declared windows and identifies their source.
 
 ---
 

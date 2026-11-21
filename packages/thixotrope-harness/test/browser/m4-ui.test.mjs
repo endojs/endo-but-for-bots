@@ -53,10 +53,14 @@ import { waitFor } from '../integration/_m1a-slice.js';
 import { grepState } from '../integration/_m2-secrets.js';
 import {
   CLAUDE_MODEL,
+  CODEX_MODEL,
   TOKEN_PREFIXES,
   credentialText,
   fakeDefaults,
   m4Template,
+  m4View,
+  makePool,
+  makeValueSecret,
   tokenOf,
 } from '../integration/_m4.js';
 import { browserSkipReason, startBrowserGateway } from './_harness.mjs';
@@ -264,6 +268,85 @@ const methodOf = text => {
  */
 const domHas = async (page, text) => (await page.content()).includes(text);
 
+run(
+  '[browser] Codex account chip shows confirmed five-hour and weekly allowances',
+  async t => {
+    t.timeout(4 * 60_000);
+    const reset = Math.floor(Date.now() / 1000);
+    const server = await startFakeSubscriptionServer({
+      defaults: {
+        ...fakeDefaults,
+        'GET /backend-api/wham/usage': {
+          body: {
+            plan_type: 'plus',
+            rate_limit: {
+              limit_reached: false,
+              primary_window: {
+                used_percent: 0,
+                limit_window_seconds: 18_000,
+                reset_at: reset + 18_000,
+              },
+              secondary_window: {
+                used_percent: 67,
+                limit_window_seconds: 604_800,
+                reset_at: reset + 604_800,
+              },
+            },
+          },
+        },
+      },
+    });
+    t.teardown(() => server.close());
+    const harness = await startBrowserGateway({ template: await m4Template() });
+    t.teardown(() => harness.close());
+    const m4 = await m4View(harness.state);
+    const { secret } = await makeValueSecret(
+      m4,
+      'browser allowance',
+      credentialText('codex', { accessToken: tokenOf('quota') }),
+    );
+    const label = 'Allowance pool';
+    const { backend } = await makePool(m4, {
+      kind: 'codex-pool',
+      label,
+      members: [{ label: 'member', credential: secret }],
+      baseUrl: server.url,
+    });
+    await E(m4.slice.factory).createSession(
+      harden({
+        title: 'quota check',
+        preset: m4.slice.chatOnly,
+        backend,
+        modelId: CODEX_MODEL,
+        at: Date.now(),
+      }),
+    );
+    const { page } = harness;
+    await page
+      .locator('.floot-session-item', { hasText: 'quota check' })
+      .click();
+    const chip = page.locator(`.m4-chips[data-pool="${label}"] .m4-chip`);
+    await chip.waitFor();
+    const panelButton = page.locator('button[data-panel="accounts"]');
+    await panelButton.click();
+    const pool = page.locator('.m4-subscriptions .m4-pool', { hasText: label });
+    await pool.locator('button[data-action="refresh-pool"]').click();
+    await pool.locator('.m4-account[data-provenance="observed"]').waitFor();
+    t.true(server.requests().some(r => r.path === '/backend-api/wham/usage'));
+    await panelButton.click();
+    await waitFor(
+      async () => {
+        const text = await chip.innerText();
+        return (
+          text.includes('weekly 67% used') && text.includes('5h quota 0% used')
+        );
+      },
+      15_000,
+      'both confirmed periods and usage percentages in the session chip',
+    );
+  },
+);
+
 run('[browser] M4 acceptance 14, 15 (browser part) and rule 4a', async t => {
   t.timeout(4.5 * 60_000);
   const started = Date.now();
@@ -423,9 +506,13 @@ run('[browser] M4 acceptance 14, 15 (browser part) and rule 4a', async t => {
     await input.press('Enter');
     await waitFor(
       async () =>
-        (await chips.allTextContents()).some(text => text.includes('37%')),
+        (await chips.allTextContents()).some(
+          text =>
+            text.includes('weekly 37% used') &&
+            text.includes('5h quota 20% used'),
+        ),
       60_000,
-      'a chip shows the served round reading',
+      'one account chip identifies both confirmed quota windows',
       100,
     );
     mark('chipLive');

@@ -5,7 +5,7 @@
  * of each member's account, so a restarted adapter can show it as
  * `remembered` (R4-84) until the provider is read again.
  *
- * Format: `{ format: 'thixotrope-harness-readings-1', members: [{ key,
+ * Format: `{ format: 'thixotrope-harness-readings-2', members: [{ key,
  * provider, reading }] }`. `key` is the credential's store key (`k<n>`): it
  * names the entry on disk and never leaves the adapter (M1b 17.3). A reading
  * holds windows, plan, credits and times only: no token, no header value,
@@ -32,7 +32,8 @@ import { limits } from '../../../../guest/lib/limits.js';
 
 /** @import { Reading, ReadingWindow } from './types.js' */
 
-export const READINGS_FORMAT = 'thixotrope-harness-readings-1';
+const LEGACY_FORMAT = 'thixotrope-harness-readings-1';
+export const READINGS_FORMAT = 'thixotrope-harness-readings-2';
 /** The file never holds more entries than the manager keeps members. */
 const MAX_ENTRIES = subscriptionLimits.maxMembers;
 /** A store key is `k<n>`; anything else in the file is dropped. */
@@ -48,6 +49,18 @@ const isTime = value =>
  */
 const boundedText = (value, units) =>
   typeof value === 'string' ? value.slice(0, units) : undefined;
+
+/**
+ * A Codex inference response can fill an unused slot with zeroes. A
+ * nonzero reading, positive period or reset identifies a window. Full
+ * usage snapshots explicitly enumerate windows and do not need this test.
+ * @param {ReadingWindow} window
+ */
+export const hasWindowEvidence = window =>
+  window.usedPercent > 0 ||
+  (window.windowMinutes ?? 0) > 0 ||
+  (window.resetsAtMs ?? 0) > 0;
+harden(hasWindowEvidence);
 
 /**
  * One window, checked and bounded, or undefined.
@@ -142,7 +155,7 @@ export const loadReadings = file => {
   if (
     parsed === null ||
     typeof parsed !== 'object' ||
-    parsed.format !== READINGS_FORMAT ||
+    (parsed.format !== READINGS_FORMAT && parsed.format !== LEGACY_FORMAT) ||
     !Array.isArray(parsed.members)
   )
     return [];
@@ -160,6 +173,11 @@ export const loadReadings = file => {
         ? checkReading(candidate.reading, 'remembered')
         : undefined;
     if (reading !== undefined) {
+      // Version 1 also persisted empty Codex header slots as zero usage.
+      // Their original source cannot be recovered until a fresh usage read.
+      if (parsed.format === LEGACY_FORMAT && provider === 'codex') {
+        reading.windows = reading.windows.filter(hasWindowEvidence);
+      }
       seen.add(key);
       entries.push({ key, provider, reading });
     }

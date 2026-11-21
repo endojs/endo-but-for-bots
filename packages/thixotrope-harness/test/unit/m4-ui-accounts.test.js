@@ -73,6 +73,7 @@ const setup = async () => {
       label: 'second',
       provenance: 'declared',
       plan: 'pro',
+      windows: [{ name: 'primary', windowMinutes: 10_080, usedPercent: 100 }],
     }),
   ];
   const sessionsToPools = new Map();
@@ -148,7 +149,17 @@ test.serial('labels: chip text, rows, provenance, blocked', t => {
   });
   t.is(
     chipText(observed, nowMs),
-    'a: 7d quota used up, back in 3h · 5h quota 99% used',
+    'a: weekly used up, back in 3h · 5h quota 99% used',
+  );
+  t.is(
+    chipText(
+      memberAccount({
+        label: 'Pro',
+        windows: [{ name: 'primary', windowMinutes: 10_080, usedPercent: 67 }],
+      }),
+      nowMs,
+    ),
+    'Pro: weekly 67% used',
   );
   const unknownDuration = memberAccount({
     label: 'a',
@@ -255,6 +266,9 @@ test.serial(
     );
     t.regex(String(s.$('.m4-account')?.textContent), /Plan.*max/);
     t.regex(String(s.$('.m4-account')?.textContent), /40% used, 60% left/);
+    const declaredRow = s.$('[data-provenance="declared"]');
+    t.regex(String(declaredRow?.textContent), /100% used, 0% left/);
+    t.false(declaredRow?.classList.contains('blocked'));
     t.deepEqual(s.accounts.callsOf('Accounts.list').length, 1);
     t.deepEqual(s.accounts.callsOf('Accounts.watch'), [
       ['Accounts', 'watch', 1],
@@ -335,6 +349,9 @@ test.serial(
       `second: pro · ${subscriptionTexts.provenanceDeclared}`,
     ]);
     t.true(s.$('.m4-chip')?.title.includes('subscription allowance used'));
+    const declaredChip = s.$$('.m4-chip')[1];
+    t.false(declaredChip.title.includes('subscription allowance used'));
+    t.false(declaredChip.classList.contains('blocked'));
     t.is(s.$('.m4-chips')?.classList.contains('all-blocked'), false);
     t.is(
       s.accounts.callsOf('Accounts.forSession')[0][2],

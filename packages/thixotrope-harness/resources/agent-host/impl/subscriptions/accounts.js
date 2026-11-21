@@ -59,6 +59,7 @@ import { boundToolOutput } from '../../../../guest/lib/bounded.js';
 import { channelLimits } from '../../../../config/defaults.js';
 import {
   checkReading,
+  hasWindowEvidence,
   loadReadings,
   makeReadingsWriter,
 } from './account-file.js';
@@ -472,20 +473,43 @@ export const makeAccounts = ({
    * Keep a reading of a member (no publish).
    * @param {MemberEntry} entry
    * @param {Reading} candidate
+   * @param {boolean} [fromHeaders]
    * @returns {boolean} whether it was kept
    */
-  const keepReading = (entry, candidate) => {
+  const keepReading = (entry, candidate, fromHeaders = false) => {
     ensureLoaded();
     const reading = checkReading(candidate, 'observed');
     if (reading === undefined) return false;
-    const previous = readingOfMember.get(entry.member);
-    if (
-      previous !== undefined &&
-      previous.source === 'observed' &&
-      previous.at > reading.at
-    )
-      return false;
-    const kept = harden(reading);
+    const previous = readingOf(entry);
+    if (previous !== undefined && previous.at > reading.at) return false;
+    const partial = fromHeaders && entry.provider === 'codex';
+    if (partial) {
+      // Inference headers update individual slots. A full usage read below
+      // replaces the inventory, including slots or metadata it has removed.
+      const windows = new Map(previous?.windows.map(w => [w.name, w]));
+      for (const current of reading.windows.filter(hasWindowEvidence)) {
+        const prior = windows.get(current.name);
+        const samePeriod =
+          current.windowMinutes === undefined ||
+          current.windowMinutes === prior?.windowMinutes;
+        windows.set(current.name, {
+          ...(samePeriod && prior?.windowMinutes !== undefined
+            ? { windowMinutes: prior.windowMinutes }
+            : {}),
+          ...(samePeriod &&
+          prior?.resetsAtMs !== undefined &&
+          prior.resetsAtMs > reading.at
+            ? { resetsAtMs: prior.resetsAtMs }
+            : {}),
+          ...current,
+        });
+      }
+      reading.windows = [...windows.values()];
+    }
+    const kept = harden({
+      ...(partial ? previous : undefined),
+      ...reading,
+    });
     readingOfMember.set(entry.member, kept);
     if (
       fileEntries.has(entry.key) ||
@@ -665,7 +689,7 @@ export const makeAccounts = ({
   return harden({
     accounts,
     observe: (backend, member, reading) => {
-      if (keepReading(member, reading)) publish();
+      if (keepReading(member, reading, true)) publish();
     },
     memberState: (backend, member, state, code, markedUntilMs) => {
       const previous = stateOfMember.get(member.member);
