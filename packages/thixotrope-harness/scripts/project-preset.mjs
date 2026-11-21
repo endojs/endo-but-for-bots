@@ -147,7 +147,7 @@ harden(publishSource);
  * @param {Awaited<ReturnType<typeof publishSource>>} seed
  * @param {boolean} legacy
  */
-const savePreset = async (catalog, admin, seed, legacy) => {
+export const savePreset = async (catalog, admin, seed, legacy) => {
   const { revision, presets } = await E(catalog).configuration();
   const views = await Promise.all(
     presets.map(/** @param {any} p */ p => E(p).describe()),
@@ -172,6 +172,7 @@ const savePreset = async (catalog, admin, seed, legacy) => {
   if (
     previousSeed?.commit === seed.commit &&
     Boolean(marker) === legacy &&
+    prior.reasoningEffort === undefined &&
     prior.instructions === prompt
   ) {
     if (!prior.available) throw Error(prior.unavailableReason);
@@ -201,7 +202,6 @@ const savePreset = async (catalog, admin, seed, legacy) => {
     ...(legacy ? {} : { workspaceSeed: seed }),
     ...(prior?.backend && { backend: prior.backend }),
     ...(prior?.modelId && { modelId: prior.modelId }),
-    ...(prior?.reasoningEffort && { reasoningEffort: prior.reasoningEffort }),
   });
   let saved = preset;
   if (saved) await E(saved).save(record, revision);

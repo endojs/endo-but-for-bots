@@ -46,7 +46,6 @@ const messageOf = error =>
  * @property {any} [projectSource] the compatibility marker of an older factory
  * @property {any} [backend] a `Backend` presence, or undefined (factory default)
  * @property {string} modelId '' for none
- * @property {string} reasoningEffort '' for none
  * @property {Array<{ kind: string, label: string }>} objects
  * @property {Array<{ label: string, value: any }>} endowments
  */
@@ -72,7 +71,7 @@ const messageOf = error =>
  * @property {boolean} confirmDelete
  * @property {Array<{ backend: any, label: string }>} backends
  * @property {Array<{ label: string, value: any }>} inventory
- * @property {Array<{ modelId: string, reasoningEfforts: string[] }>} models
+ * @property {Array<{ modelId: string }>} models
  */
 
 /**
@@ -90,7 +89,6 @@ export const formOf = view => ({
   ...(view.workspaceSeed && { workspaceSeed: view.workspaceSeed }),
   backend: view.backend,
   modelId: view.modelId ?? '',
-  reasoningEffort: view.reasoningEffort ?? '',
   objects: (view.objects ?? []).map(
     /** @param {any} object */ ({ kind, label }) => ({ kind, label }),
   ),
@@ -109,7 +107,7 @@ harden(formOf);
 
 /**
  * The `PresetRecord` a form sends (factory `shapes.PresetRecord`): the
- * optional `backend`, `modelId` and `reasoningEffort` only when set.
+ * optional `backend` and `modelId` only when set.
  *
  * @param {PresetForm} form
  */
@@ -132,9 +130,6 @@ export const recordOf = form =>
     ],
     ...(form.backend === undefined ? {} : { backend: form.backend }),
     ...(form.modelId === '' ? {} : { modelId: form.modelId }),
-    ...(form.reasoningEffort === ''
-      ? {}
-      : { reasoningEffort: form.reasoningEffort }),
   });
 harden(recordOf);
 
@@ -208,7 +203,6 @@ export const makePresetEditor = ({ powers }) => {
         models: page.rows.map(
           /** @param {any} row */ row => ({
             modelId: row.modelId,
-            reasoningEfforts: [...(row.reasoningEfforts ?? [])],
           }),
         ),
       });
@@ -379,13 +373,13 @@ export const makePresetEditor = ({ powers }) => {
     /**
      * Set a text field of the form.
      *
-     * @param {'label'|'description'|'template'|'instructions'|'networkPolicy'|'modelId'|'reasoningEffort'} name
+     * @param {'label'|'description'|'template'|'instructions'|'networkPolicy'|'modelId'} name
      * @param {string} value
      */
     setField: (name, value) => edit(form => ({ ...form, [name]: value })),
     /**
      * Choose a backend by its index in `backends`, or -1 for the factory
-     * default (which also clears the model and effort defaults).
+     * default (which also clears the model default).
      *
      * @param {number} index
      */
@@ -394,7 +388,7 @@ export const makePresetEditor = ({ powers }) => {
       edit(form =>
         row
           ? { ...form, backend: row.backend }
-          : { ...form, backend: undefined, modelId: '', reasoningEffort: '' },
+          : { ...form, backend: undefined, modelId: '' },
       );
       loadModels();
     },

@@ -10,7 +10,6 @@ export { NewSession } from './NewSession.js';
 export {
   countsLabel,
   discoveryNotes,
-  effortRefusal,
   lifecycleNote,
   matchesModel,
   runtimeLabel,

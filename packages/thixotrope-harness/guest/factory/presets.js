@@ -153,8 +153,6 @@ export const makePresetCatalog = ({
       view.workspaceSeed = record.workspaceSeed;
     if (record.backend !== undefined) view.backend = record.backend;
     if (record.modelId !== undefined) view.modelId = record.modelId;
-    if (record.reasoningEffort !== undefined)
-      view.reasoningEffort = record.reasoningEffort;
     const reason = unavailableReason(record);
     if (reason !== undefined) {
       view.available = false;
@@ -179,8 +177,6 @@ export const makePresetCatalog = ({
       snapshot.workspaceSeed = record.workspaceSeed;
     if (record.instructions !== '') snapshot.instructions = record.instructions;
     if (record.modelId !== undefined) snapshot.modelId = record.modelId;
-    if (record.reasoningEffort !== undefined)
-      snapshot.reasoningEffort = record.reasoningEffort;
     return harden(snapshot);
   };
 
@@ -304,7 +300,7 @@ export const makePresetCatalog = ({
   /**
    * Section 2.3 step 1, synchronous: the preset of a creation (the given
    * one, else the default) must be this catalogue's, not deleted and
-   * available; missing `backend`, `modelId` and `reasoningEffort` come from
+   * available; missing `backend` and `modelId` come from
    * its record (R6-55). A model default fills in only when the creation
    * uses the preset's backend; an option the caller gave wins.
    * @param {Record<string, any>} options `shapes.CreateOptions`
@@ -318,15 +314,12 @@ export const makePresetCatalog = ({
     const filled = { ...options, preset };
     if (record.backend !== undefined) {
       if (filled.backend === undefined) filled.backend = record.backend;
-      if (filled.backend === record.backend) {
-        if (filled.modelId === undefined && record.modelId !== undefined)
-          filled.modelId = record.modelId;
-        if (
-          filled.reasoningEffort === undefined &&
-          record.reasoningEffort !== undefined
-        )
-          filled.reasoningEffort = record.reasoningEffort;
-      }
+      if (
+        filled.backend === record.backend &&
+        filled.modelId === undefined &&
+        record.modelId !== undefined
+      )
+        filled.modelId = record.modelId;
     }
     return harden(filled);
   };

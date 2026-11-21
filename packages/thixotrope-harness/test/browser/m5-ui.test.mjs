@@ -191,7 +191,7 @@ const valueBecomes = async (locator, value) => {
           .locator('select[name="addObject"]')
           .selectOption({ label: longLabel(i) });
       }
-      // 80 three-byte units per endowment label: 22,605 string bytes in
+      // 80 three-byte units per endowment label, with the three-byte model ID in
       // all (computed with the editor's `recordOf` and `presetRecordSize`),
       // over the 22,528 bound; never sent, so the duplicates do not matter.
       for (let i = 0; i < 32; i += 1) {
@@ -199,8 +199,8 @@ const valueBecomes = async (locator, value) => {
         await page.locator(`input[name="endowment-${i}"]`).fill('€'.repeat(80));
       }
       await page.locator('select[name="backend"]').selectOption({ index: 1 });
-      await page.locator('input[name="modelId"]').fill('m'.repeat(256));
-      await page.locator('input[name="reasoningEffort"]').fill('€'.repeat(32));
+      await page.locator('input[name="modelId"]').fill('€'.repeat(256));
+      t.is(await page.locator('[name="reasoningEffort"]').count(), 0);
       await page.locator('button[name="save"]').click();
       await page.locator('.thix-preset-error').waitFor();
       t.is(

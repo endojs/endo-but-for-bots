@@ -385,11 +385,10 @@ test('model defaults need a backend, and an API backend a model (R6-55)', async 
     () => normalizePresetRecord(custom({ modelId: 'm' }), { templates }),
     { message: texts.backendForDefaults },
   );
-  t.throws(
-    () =>
-      normalizePresetRecord(custom({ reasoningEffort: 'high' }), { templates }),
-    { message: texts.backendForDefaults },
-  );
+  const legacy = normalizePresetRecord(custom({ reasoningEffort: 'high' }), {
+    templates,
+  });
+  t.false('reasoningEffort' in legacy);
   // Applied when the caller knows the backend's kind (the catalogue's
   // synchronous guards cannot ask the backend; see presets.js).
   t.throws(
@@ -413,13 +412,19 @@ test('model defaults need a backend, and an API backend a model (R6-55)', async 
   );
   t.is((await E(preset).describe()).backend, scripted);
   await E(preset).save(
-    custom({ backend: api, modelId: 'model-a', reasoningEffort: 'high' }),
+    custom({
+      backend: api,
+      modelId: 'model-a',
+      reasoningEffort: 'obsolete',
+    }),
     revision,
   );
   const view = await E(preset).describe();
-  t.like(view, { modelId: 'model-a', reasoningEffort: 'high' });
+  t.is(view.modelId, 'model-a');
+  t.false('reasoningEffort' in view);
   const snapshot = await E(preset).snapshot();
-  t.like(snapshot, { modelId: 'model-a', reasoningEffort: 'high' });
+  t.is(snapshot.modelId, 'model-a');
+  t.false('reasoningEffort' in snapshot);
   t.false('backend' in snapshot);
   t.throws(
     () => normalizePresetRecord(custom({ label: '  ' }), { templates }),
@@ -475,17 +480,23 @@ test('withDefaults: amplification refuses foreign, deleted and unavailable prese
     custom({ backend: api, modelId: 'model-a', reasoningEffort: 'low' }),
     0,
   );
-  t.like(kit.withDefaults(harden({ preset })), {
+  const defaults = kit.withDefaults(harden({ preset }));
+  t.false('reasoningEffort' in defaults);
+  t.like(defaults, {
     backend: api,
     modelId: 'model-a',
-    reasoningEffort: 'low',
   });
   // An option the caller gave wins.
-  t.like(kit.withDefaults(harden({ preset, modelId: 'model-b' })), {
-    backend: api,
-    modelId: 'model-b',
-    reasoningEffort: 'low',
-  });
+  t.like(
+    kit.withDefaults(
+      harden({ preset, modelId: 'model-b', reasoningEffort: 'high' }),
+    ),
+    {
+      backend: api,
+      modelId: 'model-b',
+      reasoningEffort: 'high',
+    },
+  );
   // Another backend: the preset's model is not carried over to it.
   const other2 = kit.withDefaults(harden({ preset, backend: scripted }));
   t.is(other2.backend, scripted);
@@ -653,7 +664,6 @@ test('guard boundary: a record of exactly presetRecordBytes is accepted and its 
     networkPolicy: 'public-internet',
     backend: scripted,
     modelId: wide(limits.modelIdUnits),
-    reasoningEffort: wide(limits.effortUnits),
     objects: [{ kind: 'git-workspace', label: 'workspace' }],
     endowments: Array.from({ length: limits.maxEndowments }, (_, i) =>
       harden({

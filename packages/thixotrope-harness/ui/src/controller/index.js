@@ -106,7 +106,7 @@ const LIST_MAX_PAGES = 200;
  * @property {Array<Record<string, any>>} sessions rows without their presence
  * @property {string} [activeKey]
  * @property {Array<{key:string,title:string,name?:string}>} sessionPath the root and inspected descendants
- * @property {Array<{ index: number, label: string, available: boolean, description?: string, reasoningEffort?: string, unavailableReason?: string }>} presets
+ * @property {Array<{ index: number, label: string, available: boolean, description?: string, unavailableReason?: string }>} presets
  * @property {Array<{ index: number, label: string, kind: string }>} backends
  * @property {{ rows: any[], state: string, next?: string, error?: string, backendIndex?: number }} models
  * @property {ConversationView | null} view
@@ -471,18 +471,12 @@ export const makeController = ({
         try {
           const description = await E(preset).describe();
           const available = description.available !== false;
-          // M3-FIX: the dialog shows `description` and refuses an
-          // unsupported `reasoningEffort` (R6-39); both come from M5's
-          // PresetView when the preset's record has them.
           return {
             index,
             label: description.label,
             available,
             ...(typeof description.description === 'string'
               ? { description: description.description }
-              : {}),
-            ...(typeof description.reasoningEffort === 'string'
-              ? { reasoningEffort: description.reasoningEffort }
               : {}),
             ...(!available && description.unavailableReason !== undefined
               ? { unavailableReason: description.unavailableReason }
@@ -1678,6 +1672,65 @@ export const makeController = ({
     closePanel: () => update({ panel: undefined }),
     openNewSession: () => update({ newSessionOpen: true, drawerOpen: false }),
     closeNewSession: () => update({ newSessionOpen: false }),
+
+    /**
+     * Find the model used when a preset starts without a model override.
+     * Read its current settings so edits since the page opened take effect.
+     * @param {number | undefined} presetIndex
+     * @returns {Promise<any>}
+     */
+    presetModel: async presetIndex => {
+      const preset =
+        presetIndex === undefined
+          ? undefined
+          : await E(presetObjects[presetIndex]).describe();
+      const backend = preset?.backend;
+      const selection = (/** @type {any} */ row) => {
+        if (!row) return undefined;
+        let backendIndex = backendObjects.indexOf(row.backend);
+        if (backendIndex < 0) {
+          backendIndex = backendObjects.length;
+          backendObjects.push(row.backend);
+        }
+        return {
+          modelId: row.modelId,
+          backendIndex,
+          reasoningEfforts: row.reasoningEfforts,
+          defaultReasoningEffort: row.defaultReasoningEffort,
+        };
+      };
+      if (backend && preset.modelId) {
+        const cached = state.models.rows.find(
+          row => row.backend === backend && row.modelId === preset.modelId,
+        );
+        if (cached) return selection(cached);
+      }
+      let cursor;
+      const candidates = [];
+      for (;;) {
+        // eslint-disable-next-line no-await-in-loop
+        const page = await E(factory).listModels({
+          ...(backend ? { backend } : {}),
+          ...(cursor === undefined ? {} : { after: cursor }),
+        });
+        if (preset?.modelId === undefined) candidates.push(...page.rows);
+        const row = page.rows.find((/** @type {any} */ candidate) =>
+          preset?.modelId === undefined
+            ? candidate.default
+            : candidate.modelId === preset.modelId,
+        );
+        if (row) return selection(row);
+        if (!page.next) break;
+        cursor = page.next;
+      }
+      if (candidates.some(row => row.reasoningEfforts.length)) {
+        const resolved = await E(candidates[0].backend).resolveModel();
+        return selection(
+          candidates.find(row => row.modelId === resolved.modelId),
+        );
+      }
+      return undefined;
+    },
 
     /**
      * Load the first catalogue page of a backend (the new-session dialog).

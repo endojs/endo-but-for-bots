@@ -33,7 +33,10 @@ test('editing a development preset preserves its pinned project revision', t => 
     label: 'project',
     template: 'development',
     workspaceSeed,
+    reasoningEffort: 'high',
   });
+  t.false('reasoningEffort' in form);
+  t.false('reasoningEffort' in recordOf(form));
   t.deepEqual(
     recordOf({ ...form, label: 'project copy' }).workspaceSeed,
     workspaceSeed,
@@ -254,7 +257,6 @@ test('loads the catalogue, backends and inventory; fields round-trip to a record
   editor.setBackend(0);
   await waitFor(() => editor.getState().models.length > 0);
   editor.setField('modelId', editor.getState().models[0].modelId);
-  editor.setField('reasoningEffort', 'high');
   editor.addEndowment(0);
   editor.addEndowment(0); // the same object twice: kept once
   editor.addEndowment(1);
@@ -270,7 +272,6 @@ test('loads the catalogue, backends and inventory; fields round-trip to a record
     'modelId',
     'networkPolicy',
     'objects',
-    'reasoningEffort',
     'template',
   ]);
   t.is(record.backend, state.backends[0].backend);

@@ -3,7 +3,7 @@
 // happy-dom over the real controller and the fake powers: presets with an
 // unavailable one disabled with its reason, backends, catalogue pages and
 // the search filter, "Factory default", the unavailable-catalogue text, the
-// effort refusal, the `newSession.field` slot, closing, and a failed create.
+// effort selection, the `newSession.field` slot, closing, and a failed create.
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { E, Far } from '@endo/far';
@@ -18,7 +18,7 @@ import {
 } from '../../resources/agent-host/impl/gateway/protocol.js';
 import { makeFakePowers, makeTestDom } from './_m3-fake-powers.js';
 
-const { discoveryNotes, effortRefusal, matchesModel } = sessionViews;
+const { discoveryNotes, matchesModel } = sessionViews;
 
 // Hook effects run on the next turn instead of after a 100 ms frame timeout.
 /** @type {any} */ (preactOptions).requestAnimationFrame = (
@@ -72,8 +72,9 @@ const brokenPreset = Far('Preset', {
  * @param {any} fake
  * @param {Record<string, string[]>} efforts
  * @param {Record<string, string>} [titles]
+ * @param {Record<string, string>} [defaults]
  */
-const withEfforts = async (fake, efforts, titles = {}) => {
+const withEfforts = async (fake, efforts, titles = {}, defaults = {}) => {
   const inner = await E(fake.powers.operator).getFactory();
   /** @param {any} page */
   const widen = page =>
@@ -82,6 +83,9 @@ const withEfforts = async (fake, efforts, titles = {}) => {
       rows: page.rows.map((/** @type {any} */ row) => ({
         ...row,
         reasoningEfforts: efforts[row.modelId] ?? [],
+        ...(defaults[row.modelId]
+          ? { defaultReasoningEffort: defaults[row.modelId] }
+          : {}),
         title: titles[row.modelId] ?? row.title,
       })),
     });
@@ -165,7 +169,7 @@ const setup = async ({ fake, powers = fake.powers, features = [], views }) => {
   };
 };
 
-test('helpers: model filter, discovery notes, effort refusal (A-9, R6-38, R6-39)', t => {
+test('helpers: model filter and discovery notes (A-9, R6-38)', t => {
   t.true(matchesModel({ title: 'Big Model', modelId: 'big-1' }, 'big m'));
   t.true(matchesModel({ title: 'Big Model', modelId: 'big-1' }, ' BIG-1 '));
   t.false(matchesModel({ title: 'Big Model', modelId: 'big-1' }, 'small'));
@@ -177,17 +181,6 @@ test('helpers: model filter, discovery notes, effort refusal (A-9, R6-38, R6-39)
   t.deepEqual(
     discoveryNotes({ rows: [], state: 'unavailable', error: 'down' }),
     [uiTexts.accountsUnreachable, 'down'],
-  );
-  t.is(effortRefusal(undefined, { reasoningEfforts: [] }), undefined);
-  t.is(effortRefusal({}, { reasoningEfforts: [] }), undefined);
-  t.is(effortRefusal({ reasoningEffort: 'high' }, undefined), undefined);
-  t.is(
-    effortRefusal({ reasoningEffort: 'high' }, { reasoningEfforts: ['high'] }),
-    undefined,
-  );
-  t.is(
-    effortRefusal({ reasoningEffort: 'high' }, { reasoningEfforts: ['low'] }),
-    uiTextOf.effortUnavailable('high'),
   );
 });
 
@@ -268,7 +261,10 @@ test.serial(
     );
     t.false('backend' in options);
     t.false('modelId' in options);
-    t.false('reasoningEffort' in options, 'effort comes only from the preset');
+    t.false(
+      'reasoningEffort' in options,
+      'factory resolves effort for its default model',
+    );
     t.is(dialog(), null);
     t.is(controller.getState().newSessionOpen, false);
     t.truthy(controller.getState().activeKey);
@@ -400,42 +396,90 @@ test.serial(
 );
 
 test.serial(
-  'R6-39: the preset effort is refused for a model without it',
+  'model-specific effort defaults and overrides ignore legacy preset effort',
   async t => {
-    // M3-FIX: the saved effort reaches the dialog through the controller's
-    // preset row (Preset.describe's PresetView), not a test-only view.
     const fake = makeFakePowers({
       presets: [presetOf({ label: 'thinker', reasoningEffort: 'high' })],
     });
-    fake.control.addBackend('Effortful', { models: ['plain', 'deep'] });
-    const powers = await withEfforts(fake, { deep: ['low', 'high'] });
-    const { open, choose, close, card, $, dialog } = await setup({
+    fake.control.addBackend('Effortful', {
+      models: ['plain', 'deep', 'other'],
+    });
+    const powers = await withEfforts(fake, {
+      deep: ['low', 'medium', 'high'],
+      other: ['low', 'high'],
+    });
+    const { open, choose, close, card, $ } = await setup({
       fake,
       powers,
     });
     await open();
     await choose('Backend', '1');
     await choose('Model', '0');
-    card(0).click();
-    await flush();
-    t.is(
-      $('.thix-new-session-error')?.textContent,
-      uiTextOf.effortUnavailable('high'),
-    );
-    t.is(fake.control.callsOf('SessionFactory', 'createSession').length, 0);
-    t.truthy(dialog());
-
     await choose('Model', '1');
-    t.is($('.thix-new-session-error'), null, 'a new choice clears the refusal');
+    const effort = () => $('select[aria-label="Reasoning effort"]');
+    t.is(effort().value, 'medium');
+    await choose('Reasoning effort', 'high');
+    await choose('Model', '2');
+    t.is(effort().value, '');
+    await choose('Model', '0');
+    t.is(effort(), null);
+    await choose('Model', '1');
+    t.is(effort().value, 'medium');
+    await choose('Reasoning effort', 'low');
     card(0).click();
     await flush();
     const creates = fake.control.callsOf('SessionFactory', 'createSession');
     t.is(creates.length, 1);
     t.is(creates[0][2].modelId, 'deep');
-    t.false(
-      'reasoningEffort' in creates[0][2],
-      'the factory takes the preset’s',
+    t.is(creates[0][2].reasoningEffort, 'low');
+    await close();
+  },
+);
+
+test.serial(
+  'a saved development model exposes its provider default and permits an override',
+  async t => {
+    let backend;
+    const preset = Far('Preset', {
+      describe: () =>
+        harden({
+          label: 'Development',
+          template: 'development',
+          backend,
+          modelId: 'dev',
+          reasoningEffort: 'obsolete',
+        }),
+    });
+    const fake = makeFakePowers({ presets: [preset] });
+    backend = fake.control.addBackend('Development provider', {
+      models: ['other', 'dev'],
+    });
+    const powers = await withEfforts(
+      fake,
+      { dev: ['low', 'high'] },
+      {},
+      { dev: 'high' },
     );
+    const { open, choose, close, card, $ } = await setup({ fake, powers });
+    await open();
+    await choose('Backend', '1');
+    const modelReads = () =>
+      fake.control.callsOf('SessionFactory', 'listModels').length;
+    const readsBeforePreview = modelReads();
+    card(0).click();
+    await flush();
+    t.is(modelReads(), readsBeforePreview);
+    t.is($('select[aria-label="Reasoning effort"]').value, 'high');
+    t.is(fake.control.callsOf('SessionFactory', 'createSession').length, 0);
+    await choose('Reasoning effort', 'low');
+    $('.floot-preset-card').click();
+    await flush();
+    const creates = fake.control.callsOf('SessionFactory', 'createSession');
+    t.is(creates.length, 1);
+    t.is(creates[0][2].preset, preset);
+    t.is(creates[0][2].reasoningEffort, 'low');
+    t.is(creates[0][2].modelId, 'dev');
+    t.is(creates[0][2].backend, backend);
     await close();
   },
 );

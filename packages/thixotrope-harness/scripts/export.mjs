@@ -229,8 +229,6 @@ const exportPresets = async operator => {
       if (view.backend !== undefined)
         record.backend = await labelOf(view.backend);
       if (view.modelId !== undefined) record.modelId = view.modelId;
-      if (view.reasoningEffort !== undefined)
-        record.reasoningEffort = view.reasoningEffort;
       records.push(record);
     }
   }
@@ -249,6 +247,7 @@ const importPresets = async (operator, records, byLabel) => {
   for (const { backend: label, ...rest } of records) {
     /** @type {Record<string, unknown>} */
     const record = { ...rest };
+    delete record.reasoningEffort;
     if (label !== undefined) {
       const backend = byLabel.get(label);
       if (backend === undefined)
@@ -336,6 +335,8 @@ export const exportState = async ({ client, file, recordsPerLine = 512 }) => {
           counts.sessions += 1;
 
           const head = await E(entry.internal).exportState();
+          const config = await plain(head.config);
+          if (config.preset) delete config.preset.reasoningEffort;
 
           await out.write({
             type: 'session',
@@ -345,7 +346,7 @@ export const exportState = async ({ client, file, recordsPerLine = 512 }) => {
               userInitiated: entry.userInitiated,
               info: head.info,
 
-              config: await plain(head.config),
+              config,
               usage: head.usage,
               ...(head.archive === undefined ? {} : { archive: head.archive }),
               ...(head.execution === undefined
@@ -607,6 +608,8 @@ export const importState = async ({
         at: head.config.createdAt,
         userInitiated: head.userInitiated,
       };
+      if (head.config.reasoningEffort !== undefined)
+        options.reasoningEffort = head.config.reasoningEffort;
       const saved = head.config.preset;
       if (
         saved?.endowmentLabels?.includes(workspaceSeedLabel) &&

@@ -19884,3 +19884,26 @@ After an adapter restart both Secrets were at generation 4, model discovery
 still returned 15 rows and the gateway returned HTTP 200. The full unit and
 adapter suite passed 1,888 tests with eight gated tests skipped. The 43
 focused activation, renewal and interface tests passed on the final build.
+
+### J-13015 2026-11-21 Model-specific reasoning effort
+
+The development preset had saved `low` for ChatGPT Terra. The dialog
+carried that setting into Claude Haiku 4.5 and blocked creation. Presets
+now retain their backend and model. The new-session dialog reads effort
+choices after resolving the model. Both subscription pools prefer medium
+when supported, then a valid provider default when available. An operator
+can override the level per session. The catalogue ignores old preset effort
+values, and project refresh and archive restore also discard them. Session
+archive round trips retain the effort on each session.
+
+Through the pinned operator catalogue we removed the old field from
+**Thixotrope development** and verified the rest of the record, including
+its project pin. All six installed presets were free of saved effort.
+Live Chromium created development session `s20` on Claude Haiku 4.5 with
+no effort and `s21` on ChatGPT Terra with an explicit high override. The
+dialog defaulted to medium for Terra and Claude Haiku 5.5 and discarded
+the previous override on a model switch. Neither check submitted a turn.
+The isolated M4 integration exercised admission and both providers' wire formats.
+The full unit and adapter suite passed 1,891 tests with eight gated skips.
+Both M5 browser tests passed. The M3 Send now browser case needed an
+isolated rerun and passed there.

@@ -3,7 +3,7 @@
 // H-6, H-7; R4-21..R4-23): appended last to `optionResolvers`;
 // `reasoningEffort` no longer refused as "not yet"; on a pool the pool's
 // `resolveEffort` decides and its answer is stored (absent: none); a
-// preset default in `resolved.reasoningEffort` (M5) wins over the option;
+// session effort comes from the caller;
 // on an API or scripted backend any effort is refused.
 import './_m1a-prelude.js';
 
@@ -101,7 +101,7 @@ test('no effort given: the pool default is stored, or none', async t => {
   }
 });
 
-test('a preset default in resolved wins over the option (M5 fills it before the resolvers)', async t => {
+test('the resolver checks the caller’s effort even with a legacy preset value', async t => {
   const { backend, asked } = makePool();
   /** @type {Record<string, any>} */
   const resolved = {
@@ -115,8 +115,8 @@ test('a preset default in resolved wins over the option (M5 fills it before the 
     resolved,
     /** @type {any} */ ({}),
   );
-  t.is(resolved.reasoningEffort, 'max');
-  t.deepEqual(asked, [{ modelId: 'model-a', reasoningEffort: 'max' }]);
+  t.is(resolved.reasoningEffort, 'low');
+  t.deepEqual(asked, [{ modelId: 'model-a', reasoningEffort: 'low' }]);
 });
 
 test('an effort on an API or scripted backend is refused; none is fine', async t => {

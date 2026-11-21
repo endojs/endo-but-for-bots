@@ -244,12 +244,6 @@ export const uiTextOf = Object.freeze({
     return running ? elapsed : `Thought for ${elapsed}`;
   },
   /**
-   * R6-39.
-   * @param {string} effort
-   */
-  effortUnavailable: effort =>
-    `Saved reasoning effort ${effort} is unavailable for this model`,
-  /**
    * R6-51 other failures in the status bar.
    * @param {string} message
    */

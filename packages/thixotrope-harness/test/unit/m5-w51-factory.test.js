@@ -12,7 +12,6 @@ import { createHash } from 'node:crypto';
 /* eslint-disable import/no-relative-packages */
 import { shapes, methodNames, texts } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
-import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 import { makeFactoryKit, stagingSources } from '../../guest/factory/factory.js';
 import { makeStartCount } from '../../guest/factory/starts.js';
 import { makeProgramStore } from '../../guest/factory/root.js';
@@ -216,16 +215,13 @@ test('model defaults come from the preset; an option the caller gave wins', asyn
   t.is(made[0].config.backendTitle, 'Scripted backend');
   await E(kit.factory).createSession(harden({ preset, modelId: 'model-b' }));
   t.is(made[1].config.modelId, 'model-b');
-  // A preset effort goes to M4's check since M4 lifted NOT_YET (2.3 step 1;
-  // INT-M5): a backend that is not a subscription pool refuses it.
+  // A legacy preset effort is ignored even on a backend without effort.
   const effort = await E(kit.catalog.facet).create(
     custom({ label: 'e', backend, modelId: 'm', reasoningEffort: 'high' }),
     1,
   );
-  await t.throwsAsync(
-    E(kit.factory).createSession(harden({ preset: effort.preset })),
-    { message: subscriptionTexts.effortNotSupported },
-  );
+  await E(kit.factory).createSession(harden({ preset: effort.preset }));
+  t.false('reasoningEffort' in made[2].config);
 });
 
 test('a save between the snapshot and the services fails the creation with presetChanged and rolls it back', async t => {

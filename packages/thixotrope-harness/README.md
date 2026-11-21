@@ -56,8 +56,11 @@ for chat, mail, delegation, workspace images and voice.
 
 ### Develop the harness from a session
 
-Open **New session**, choose a backend and model if you want to override the
-defaults, then click **Thixotrope development** to start the session. A first prompt can be “Prepare the checkout,
+Open **New session** and choose **Thixotrope development** to use its saved
+backend and model, or pick another backend and model before choosing the
+preset. If the model offers reasoning effort, you can change it for this
+session. Both ChatGPT and Claude start at medium whenever the model offers it.
+A first prompt can be “Prepare the checkout,
 show its revision, and run the session inventory unit test.” Each session has
 a private Git repository at `/workspace`. Shell commands, edits and commits
 use that same checkout. The package is `/workspace/packages/thixotrope-harness`.

@@ -95,23 +95,3 @@ export const discoveryNotes = models => {
     ? [uiTexts.accountsUnreachable]
     : [uiTexts.accountsUnreachable, models.error];
 };
-
-/**
- * R6-39: a preset's saved reasoning effort must be one the chosen model
- * offers (`ModelRow.reasoningEfforts`). Answers the refusal text, or
- * undefined when the session may start. With "Factory default" (`model`
- * undefined) the page cannot know which model the factory resolves (a
- * preset may carry its own), so it does not refuse; the factory does.
- *
- * @param {{ reasoningEffort?: string } | undefined} preset
- * @param {{ reasoningEfforts?: readonly string[] } | undefined} model
- * @returns {string | undefined}
- */
-export const effortRefusal = (preset, model) => {
-  const effort = preset && preset.reasoningEffort;
-  if (!effort || !model) return undefined;
-  const offered = model.reasoningEfforts ?? [];
-  return offered.includes(effort)
-    ? undefined
-    : uiTextOf.effortUnavailable(effort);
-};

@@ -604,8 +604,7 @@ const presetShapeBuilders = {
   Endowment: () => S.Attachment,
   /**
    * What `PresetCatalog.create` and `Preset.save` take (R6-55): every
-   * editable field. A `backend` is the Backend object; model and effort
-   * are text (S.2 c).
+   * editable field. Legacy callers can still include the ignored effort.
    */
   PresetRecord: () =>
     record(

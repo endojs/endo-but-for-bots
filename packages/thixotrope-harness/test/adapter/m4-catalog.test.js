@@ -227,14 +227,19 @@ test('codex-pool listing: R4-18 intersection over two members; rows as M2 8.4', 
   t.false(shared.default);
   t.is(shared.backend, s.backend);
   t.deepEqual(shared.reasoningEfforts, ['medium', 'high', 'max']);
-  t.is(shared.defaultReasoningEffort, undefined, 'members disagree');
+  t.is(shared.defaultReasoningEffort, 'medium', 'both members offer medium');
   t.is(shared.contextLength, 200_000, 'the smaller window');
   t.is(shared.description, 'A fake model for tests.');
+  const singleLevel = page.rows.find(
+    (/** @type {any} */ r) => r.modelId === 'gpt-fake-b-only',
+  );
+  t.deepEqual(singleLevel.reasoningEfforts, ['low']);
+  t.is(singleLevel.defaultReasoningEffort, undefined);
   const mini = page.rows.find(
     (/** @type {any} */ r) => r.modelId === 'gpt-fake-mini',
   );
   t.deepEqual(mini.reasoningEfforts, ['low', 'medium']);
-  t.is(mini.defaultReasoningEffort, 'low');
+  t.is(mini.defaultReasoningEffort, 'medium');
   t.is(s.reads(), 2, 'one read per member');
   const requests = s.server.requests();
   t.deepEqual(
@@ -294,10 +299,12 @@ test('claude-pool listing: R4-19 union with efforts by model and no context leng
     'max',
   ]);
   t.is(sonnet.contextLength, undefined);
+  t.is(sonnet.defaultReasoningEffort, 'medium');
   const fake = page.rows.find(
     (/** @type {any} */ r) => r.modelId === 'claude-fake-1',
   );
   t.deepEqual(fake.reasoningEfforts, []);
+  t.is(fake.defaultReasoningEffort, undefined);
   const [request] = s.server.requests();
   t.is(request.path, '/v1/models');
   t.true(request.authorization);
@@ -334,7 +341,10 @@ test('creation: resolveModel and efforts (R4-21, R4-22, R4-23; D-M4-5, R4-92)', 
   );
   t.deepEqual(
     await claude.catalog.efforts({ ...base, modelId: 'claude-opus-4-6' }),
-    { reasoningEfforts: ['low', 'medium', 'high', 'max'] },
+    {
+      reasoningEfforts: ['low', 'medium', 'high', 'max'],
+      defaultReasoningEffort: 'medium',
+    },
   );
   await t.throwsAsync(claude.catalog.resolveModel(base), {
     message: subscriptionTexts.subscriptionModelRequired,

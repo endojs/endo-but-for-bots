@@ -626,7 +626,7 @@ test('feature context: extras by label, call reports a failure', async t => {
   t.is(controller.getState().status, uiTextOf.statusError('bad call'));
 });
 
-test('M3-FIX: preset rows keep description and reasoningEffort (R6-39)', async t => {
+test('M3-FIX: preset rows keep descriptions and discard legacy effort', async t => {
   const effortful = {
     describe: async () => ({
       label: 'deep',
@@ -642,7 +642,6 @@ test('M3-FIX: preset rows keep description and reasoningEffort (R6-39)', async t
       label: 'deep',
       available: true,
       description: 'Thinks hard',
-      reasoningEffort: 'high',
     },
   ]);
 });

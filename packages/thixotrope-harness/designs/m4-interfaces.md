@@ -408,9 +408,10 @@ Cancel aborts the attempt in flight and stops the member loop (R4-7).
   through `Backend.resolveModel(modelId)` and refuses an empty model on a non-default backend
   (`texts.modelRequired`); a pool's `resolveModel()` without a model answers
   `m4Texts.subscriptionModelRequired` unless the spec has `modelId`. M4's resolver
-  `subscriptionEffort` (appended after it, H-6) takes `resolved.reasoningEffort ??
-  options.reasoningEffort`; on a pool it calls `resolveEffort({ modelId, reasoningEffort? })` and
-  stores the answer (absent: the model's `defaultReasoningEffort`, else none); on any other
+  `subscriptionEffort` (appended after it, H-6) passes the session's explicit choice to
+  `resolveEffort({ modelId, reasoningEffort? })`. When omitted, both pools prefer
+  medium among the supported levels. Otherwise they use the catalogue's supported
+  provider default, if present. A model with no supported levels stores no effort. On any other
   backend an effort is refused with `m4Texts.effortNotSupported`. `factory.js` copies
   `reasoningEffort` into `SessionConfig` (H-7); the session sends it in `RoundRequest.options`
   already (M2 `turn.js`). Backend, model and effort never change afterwards (R4-22).
@@ -684,8 +685,7 @@ are M3's and nobody else edits them). M4 uses them in W4.6 (one gateway extensio
   of `RoundRequest.system` reaches both pool kinds with no M4 edit; after the M5 merge the case
   is in `m4-catalog.test.js` (17, acceptance 13; XB): a turn with an attachment carries
   `[stored prompt, R4-29 line]`.
-- The `reasoningEffort` lift out of `NOT_YET` (H-6) and the `BackendKind` widening (H-1) are
-  what M5's preset efforts need; H-1 may be merged early as a contract follow-up.
+- H-6 admits session-level reasoning effort. H-1 admits subscription pools as preset backends.
 
 ---
 

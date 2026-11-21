@@ -133,7 +133,7 @@ String content bytes, UTF-8, keys included (contract rule 4); estimates in vats 
 
 | object | largest | why it fits |
 |---|---|---|
-| `PresetRecord` (create, save) | label 120 + description 500 + instructions 4,096 + model 256 + effort 32 units, 32 endowments of 80-unit labels, 16 template objects | the field bounds alone admit about 31.6 KB at three bytes a unit (smallcaps, measured in W5.0-settle; 23,107 string bytes without template objects), so the record as a whole is bounded: string content bytes (keys included) <= `presetRecordBytes` = `frameBytes` - 2,048 = 22,528, checked with `fitsFrame` by the editor before sending and by the catalogue's validation (`texts.presetTooLarge`). An all-ASCII maximal record is about 8 KB and passes; a maximal three-byte record must trim about 600 bytes. The gateway's frame guard (M3) refuses a call over `frameBytes` before the hub |
+| `PresetRecord` (create, save) | label 120 + description 500 + instructions 4,096 + model 256 units, 32 endowments of 80-unit labels, 16 template objects | the field bounds alone admit about 31.6 KB at three bytes a unit (smallcaps, measured in W5.0-settle; 23,107 string bytes without template objects), so the record as a whole is bounded: string content bytes (keys included) <= `presetRecordBytes` = `frameBytes` - 2,048 = 22,528, checked with `fitsFrame` by the editor before sending and by the catalogue's validation (`texts.presetTooLarge`). An all-ASCII maximal record is about 8 KB and passes; a maximal three-byte record must trim about 600 bytes. The gateway's frame guard (M3) refuses a call over `frameBytes` before the hub |
 | `Preset.describe()` -> `PresetView` | a saved record + `builtIn`, `revision`, `available`, `unavailableReason` (< 200 bytes) | <= 22,528 + 200 string bytes, leaving > 1.8 KB of `frameBytes` for the envelope and up to 34 handles; typical < 6 KB |
 | `PresetSnapshot` (`Preset.snapshot()`) | `PresetView` without description and handles | < 19 KB |
 | `SessionConfig.preset` | the snapshot without `instructions` (they are already in the composed prompt): `catalog.configSnapshot(snapshot)` | worst case 3 x (120 + 32 x 80 + 16 x 144) ~ 15 KB, typically < 1 KB; the factory checks that `make`'s argument fits `frameBytes` and otherwise fails the creation with factory `texts.presetTooLarge` before any row (R4-6) |
@@ -182,7 +182,7 @@ not make with `texts.unknownPreset`).
   revision, raised by every save or reset), `available` and `unavailableReason`
   (`textOf.presetNeeds(kind)` while a template object kind has no provider).
 - `snapshot() -> PresetSnapshot` (data only; the widened `shapes.PresetSnapshot`, section 9.1):
-  `{ label, template, instructions?, networkPolicy, modelId?, reasoningEffort?, objects,
+  `{ label, template, instructions?, networkPolicy, modelId?, objects,
   endowmentLabels, revision }`. No object references: endowment objects reach the session through
   `SessionServices.endowments` (2.3).
 - `save(record, expectedRevision) -> revision` (A.4 `savePreset`), `delete(expectedRevision) ->
@@ -196,8 +196,8 @@ template in `presetTemplateNames`; template objects must be among the template's
 `development`, all of them; "An isolated shell requires a workspace"; endowment labels: Fae's
 `name()` rule (1-80, no `@`, `/`, control characters, `.` or `..`, not in `reservedLabels`), no
 duplicate among endowments and template object labels; endowment values are remotables (the
-guard) ; `chat-only` takes no endowment and network `off`; model defaults: a `modelId` or effort
-needs a `backend` ("Choose a backend for model defaults"), an API backend needs a `modelId`
+guard). `chat-only` takes no endowment and network `off`. A preset `modelId`
+needs a `backend` ("Choose a backend for model defaults"), and an API backend needs a `modelId`
 ("Choose a model for this backend"); a built-in's template cannot change; last, the whole record
 must satisfy `fitsFrame(record, limitsM5.presetRecordBytes)` (`texts.presetTooLarge`; section
 1.3). `normalizePresetRecord` makes that check, so `create` and `save` refuse before any state
@@ -265,10 +265,10 @@ In `factory.js` `create(given)`, in this order (contract 9 and M2 7.2 hold for e
 
 1. `given = catalog.withDefaults(given)` (synchronous, rights amplification): the preset is
    `given.preset ?? catalog.defaultPreset()`; a foreign object, a deleted preset or an unavailable
-   template is refused here, before any row or vat (R4-6). Missing `backend`, `modelId` and
-   `reasoningEffort` are filled from the preset's record (R6-55 model defaults); an option the
-   caller gave wins. A preset effort is refused by M1a's `refuse` resolver
-   (`textOf.optionNotSupported('reasoningEffort')`) until M4 lifts it (section 4.2).
+   template is refused here, before any row or vat (R4-6). Missing `backend` and `modelId`
+   are filled from the preset's record (R6-55). The caller can override either.
+   Legacy preset efforts are ignored on creation, save and restore. The resolved
+   model supplies the default effort for the new session (M4 section 5.4).
 2. The M2 resolvers run unchanged: `basics` (with `context.defaultPreset = catalog.defaultPreset()`),
    `describeObjects` (`E(preset).snapshot()` now answers the widened snapshot), `catalogueModel`,
    `promptResolver` (W5.2 composes from `resolved.presetSnapshot`, 2.3.1), `turnDeadline`.
@@ -763,11 +763,9 @@ in history pages. M3 needs nothing from M5 to build or pass its acceptance.
 ### 4.2 With M4 (secrets manager and subscription pools)
 
 **M5 needs from M4**: M4's subscription `provider.js` resolves the system text once per round
-through `systemTextOf` (assumption 4), so the R4-29 line reaches pool backends; M4 lifts
-`reasoningEffort` from M1a's `NOT_YET` when it builds efforts (until then a preset with an effort
-fails creation honestly, 2.3 step 1). M5 fills preset defaults into the create options before the
-resolvers (`catalog.withDefaults`), so M4's `subscriptionEffort` reads `resolved.reasoningEffort`,
-then `options.reasoningEffort`, and needs no M5 resolver (M4 9.3 item 1).
+through `systemTextOf` (assumption 4), so the R4-29 line reaches pool backends.
+M5 fills the preset's backend and model before M4 validates the session's
+effort choice against that model (M4 section 5.4).
 
 **M5 offers M4**: nothing it must build. Preset `backend` fields accept any `Backend` (M4's pool
 backends included); `ReadGrant`s may be inventory objects and endowments (a model can
@@ -891,13 +889,13 @@ in the shared branch, and its browser acceptance needs M3 merged; section 4.1 it
 | W5.5 powers and inspection tools | new `guest/session/powers-source.js` (a `m5-parts.js` entry), new `guest/session/tools/inspection.js` (`describeCapability`, `readSources`, the `inspector` part for `lookup`); appends: `tool-table.js`, `m5-parts.js`, `scripts/provision-steps.js` (the M5 fixture step, a no-op unless `options.m5Fixtures` is given; test templates set it); `test/integration/m5-objects.test.js`, `test/integration/m5-security.test.js`, new `perf/exec-m5.perf.mjs` (`exec.powersLookup`, `exec.membrane`, `exec.scope1000`, probes a, b, c, f), the `tools.inspect` row appended to `perf/tools.perf.mjs` | 2.4.3 (inspecting), 2.4.4 | integration: acceptance 3 (remote rendering), 4, 5, 8, 10; K7; unit: the fixture step does nothing without `options.m5Fixtures` | yes | 5 | fixture objects in the workspace vat interact with template provisioning |
 | W5.6 granted tools | new `guest/session/tools/granted.js` (`SessionGrants`, `ToolGrant`, `grantedToolSource`; the `grants` part); appends: `tool-table.js` (`toolSources`), `m5-parts.js`, the `grants.round` row of `perf/tools.perf.mjs`; `test/unit/m5-w56-*.test.js`, `test/integration/m5-grants.test.js`, `test/integration/m5-grants-restart.test.js` | 2.5, with the per-round built-in name set (static table plus `active.ports.tools`) | unit: discovery rules per round, including a grant named `accountStatus` on fake ports that offer an adapter tool of that name: `refused-builtin`, and offered on ports that do not; integration: acceptance 6, 11b (K4, K5) | yes | 5 | the schema checks (depth, nodes) cost in the exec vat |
 | W5.7 packages and mentions | new `guest/session/packages.js`, new `guest/session/tools/mentions.js` (`adopt`, `adoptTool`; the `packages` part); edits: `guest/session/{queue,submissions}.js`, `guest/lib/pending-queue.js`, `AH/composer.js`; appends: `turn-hooks.js` (`onClaim`, `onSettle`, `recoverySteps`), `tool-table.js`, `m5-parts.js`; `test/unit/m5-w57-*.test.js`, `test/integration/m5-mentions.test.js`, `test/integration/m5-mentions-restart.test.js`, new `perf/mentions.perf.mjs` (`mentions.turnStart`) | 2.6 | integration: acceptance 7, 11a (K3, K6) | yes | 6 | M2's receipt fingerprint and duplicate rules with attachments |
-| W5.8 preset and mention UI | new directories `ui/src/presets/` (`feature.js`: the editor, slot `app.panel`) and `ui/src/mentions/` (`feature.js` exporting `[mentions.addon (composer.addon), mentions.chips (message.renderer)]`, `texts.js`); `test/unit/m5-w58-*.test.js` (happy-dom, M3's `_m3-fake-powers.js`); `test/browser/m5-*.mjs` (M3's `startBrowserGateway`). No edit to any M3 file | the preset editor (R6-55: name, description, template, backend and model, effort, internet, instructions, endowments from the inventory; Save, Save as new, Delete, Reset, Discard; stale refused; a record over `presetRecordBytes` refused before sending with `texts.presetTooLarge`, by the rule of `fitsFrame`: units x 3 first, exact UTF-8 bytes when over); the mention addon and attachment chips exactly as section 4.1 items 2-3 | unit: editor fields and refusals, size refusal at the bound (its estimate agrees with `fitsFrame` on samples), `@` suggestions and `replaceRange`, `send` with and without chips, a resend after a simulated reload throws `texts.attachmentsLost` (copy equal to `interfaces-m5.js`'s), chips renderer with and without `attachments`; browser: acceptance 15 | yes (gateway) | 6 | M3's shell or harness lands late in the shared branch |
+| W5.8 preset and mention UI | new directories `ui/src/presets/` (`feature.js`: the editor, slot `app.panel`) and `ui/src/mentions/` (`feature.js` exporting `[mentions.addon (composer.addon), mentions.chips (message.renderer)]`, `texts.js`); `test/unit/m5-w58-*.test.js` (happy-dom, M3's `_m3-fake-powers.js`); `test/browser/m5-*.mjs` (M3's `startBrowserGateway`). No edit to any M3 file | the preset editor (R6-55: name, description, template, backend and model, internet, instructions, endowments from the inventory; Save, Save as new, Delete, Reset, Discard; stale refused; a record over `presetRecordBytes` refused before sending with `texts.presetTooLarge`, by the rule of `fitsFrame`: units x 3 first, exact UTF-8 bytes when over); the mention addon and attachment chips exactly as section 4.1 items 2-3 | unit: editor fields and refusals, size refusal at the bound (its estimate agrees with `fitsFrame` on samples), `@` suggestions and `replaceRange`, `send` with and without chips, a resend after a simulated reload throws `texts.attachmentsLost` (copy equal to `interfaces-m5.js`'s), chips renderer with and without `attachments`; browser: acceptance 15 | yes (gateway) | 6 | M3's shell or harness lands late in the shared branch |
 
 **Integration**:
 
 | id | owns | behaviour | tests | supervisor | hours | slower if |
 |---|---|---|---|---|---|---|
-| W5.9 integration | every file after group B; new `perf/creation-m5.perf.mjs` (`prompt.compose`, `session.createCold`, bundle bytes); `test/integration/m5-snapshot.test.js`, `test/integration/m5-reachability.test.js` | the runtime wiring that waits (section 10), no `notBuilt` stub left, the bundle budget (O-1: measure the merged bundles; the PM raises `sessionProgramBytes` to 240,000 and `execProgramBytes` to 120,000 in the M5 merge commit, with the `session.createCold` row), the merge seams with M3 and M4 as landed (M4's `NOT_YET` lift for preset efforts; M4's `systemTextOf` use for the R4-29 line on pools), the journal | acceptance 1, 9 (instructions part), 12; every perf row of section 8.2; the regression wall time | yes | 6 | the merge with M3 and M4 changes a seam; a perf miss needing a design change |
+| W5.9 integration | every file after group B; new `perf/creation-m5.perf.mjs` (`prompt.compose`, `session.createCold`, bundle bytes); `test/integration/m5-snapshot.test.js`, `test/integration/m5-reachability.test.js` | the runtime wiring that waits (section 10), no `notBuilt` stub left, the bundle budget (O-1: measure the merged bundles; the PM raises `sessionProgramBytes` to 240,000 and `execProgramBytes` to 120,000 in the M5 merge commit, with the `session.createCold` row), the merge seams with M3 and M4 as landed (M4's `NOT_YET` lift for session effort; M4's `systemTextOf` use for the R4-29 line on pools), the journal | acceptance 1, 9 (instructions part), 12; every perf row of section 8.2; the regression wall time | yes | 6 | the merge with M3 and M4 changes a seam; a perf miss needing a design change |
 
 Ordering inside group A: W5.3's first commit is the four widenings (contract rule) so that W5.1
 (`PresetSnapshot`, `SessionServices`) and W5.7 later can send the widened values; W5.1 builds and

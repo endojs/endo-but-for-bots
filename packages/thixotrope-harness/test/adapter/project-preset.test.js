@@ -15,6 +15,7 @@ import { promisify } from 'node:util';
 import {
   projectInstructions,
   publishSource,
+  savePreset,
 } from '../../scripts/project-preset.mjs';
 
 const git = promisify(execFile);
@@ -94,4 +95,38 @@ test('all published defaults upgrade to a ten-minute cold build, preserving oper
     t.is(projectInstructions(customized), customized);
   }
   t.is(projectInstructions(''), '');
+});
+
+test('refreshing the same project commit removes legacy effort once', async t => {
+  const seed = /** @type {const} */ ({
+    project: 'thixotrope',
+    commit: 'ab'.repeat(20),
+  });
+  /** @type {Record<string, any>} */
+  let view = {
+    label: 'Thixotrope development',
+    template: 'development',
+    workspaceSeed: seed,
+    available: true,
+    instructions: 'Custom instructions',
+    modelId: 'custom-model',
+    reasoningEffort: 'old',
+  };
+  let saves = 0;
+  const preset = {
+    describe: () => view,
+    save: (/** @type {object} */ record) => {
+      saves += 1;
+      view = { ...record, available: true };
+    },
+  };
+  const catalog = {
+    configuration: () => ({ presets: [preset], revision: saves }),
+  };
+  await savePreset(catalog, {}, seed, false);
+  await savePreset(catalog, {}, seed, false);
+  t.is(saves, 1);
+  t.false('reasoningEffort' in view);
+  t.is(view.instructions, 'Custom instructions');
+  t.is(view.modelId, 'custom-model');
 });

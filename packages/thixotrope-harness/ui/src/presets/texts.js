@@ -33,7 +33,6 @@ export const presetTexts = harden({
   backend: 'Provider',
   factoryDefault: 'Factory default',
   model: 'Model',
-  effort: 'Reasoning effort',
   internet: 'Public internet',
   instructions: 'Additional instructions',
   objects: 'Default objects',

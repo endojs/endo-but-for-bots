@@ -2,7 +2,7 @@
 /**
  * The preset editor panel (W5.8; R6-55, P-49): the list of presets, and
  * the selected one's name, description, template, provider and model,
- * reasoning effort, internet, instructions and default objects from the
+ * internet, instructions and default objects from the
  * inventory, with Save, Save as new, Delete, Reset to built-in defaults,
  * Discard edits and Reload. State and actions are `editor.js`'s.
  */
@@ -21,7 +21,6 @@ const MAX = harden({
   description: 500,
   instructions: 4096,
   model: 256,
-  effort: 32,
   endowmentLabel: 80,
 });
 
@@ -124,7 +123,6 @@ export const PresetEditor = ({ context }) => {
     const backendIndex = state.backends.findIndex(
       row => row.backend === form.backend,
     );
-    const model = state.models.find(row => row.modelId === form.modelId);
     const chosen = new Set(form.endowments.map(endowment => endowment.value));
     const offered = state.inventory
       .map((row, index) => ({ row, index }))
@@ -217,26 +215,6 @@ export const PresetEditor = ({ context }) => {
         { id: 'thix-preset-models' },
         state.models.map(row =>
           h('option', { key: row.modelId, value: row.modelId }),
-        ),
-      ),
-      field(
-        presetTexts.effort,
-        h('input', {
-          name: 'reasoningEffort',
-          value: form.reasoningEffort,
-          maxLength: MAX.effort,
-          list: 'thix-preset-efforts',
-          disabled: form.backend === undefined,
-          /** @param {any} event */
-          onInput: event =>
-            editor.setField('reasoningEffort', event.target.value),
-        }),
-      ),
-      h(
-        'datalist',
-        { id: 'thix-preset-efforts' },
-        (model ? model.reasoningEfforts : []).map(effort =>
-          h('option', { key: effort, value: effort }),
         ),
       ),
       h(

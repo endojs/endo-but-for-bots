@@ -20,14 +20,12 @@
  *   `describe()` that failed carries the error text). Choosing a card
  *   starts the session (as Floot): `controller.newSession({ presetIndex,
  *   backendIndex?, modelSelection? })`.
- * - R6-39: effort comes only from the preset; the dialog refuses to start
- *   when the chosen model does not offer the preset's saved effort.
  */
 import { h } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 
 import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
-import { discoveryNotes, effortRefusal, matchesModel } from './rows.js';
+import { discoveryNotes, matchesModel } from './rows.js';
 import { SessionsSlot } from './slot.js';
 
 /** The model select's value for "Factory default". */
@@ -53,6 +51,17 @@ export const NewSession = ({ state, controller, features, context }) => {
   const [pick, setPick] = useState(FACTORY_DEFAULT);
   const [refusal, setRefusal] = useState(
     /** @type {string | undefined} */ (undefined),
+  );
+  const [chosenEffort, setChosenEffort] = useState('');
+  const [confirmation, setConfirmation] = useState(
+    /** @type {{preset: any, model: any} | undefined} */ (undefined),
+  );
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+    },
+    [],
   );
   const [busy, setBusy] = useState(false);
 
@@ -92,6 +101,18 @@ export const NewSession = ({ state, controller, features, context }) => {
     selection === FACTORY_DEFAULT || !loaded
       ? undefined
       : loaded.rows[Number(selection)];
+  const effectiveModel = confirmation?.model ?? model;
+  /** @type {string[]} */
+  const efforts = effectiveModel?.reasoningEfforts ?? [];
+  const advertised = effectiveModel?.defaultReasoningEffort;
+  const defaultEffort = efforts.includes('medium')
+    ? 'medium'
+    : efforts.includes(advertised)
+      ? advertised
+      : undefined;
+  const reasoningEffort = efforts.includes(chosenEffort)
+    ? chosenEffort
+    : defaultEffort;
   const notes = loaded ? discoveryNotes(loaded) : [];
 
   const close = () => controller.closeNewSession();
@@ -99,14 +120,31 @@ export const NewSession = ({ state, controller, features, context }) => {
   /** @param {any} preset a `state.presets` row, or undefined (no presets) */
   const start = async preset => {
     if (busy || (preset && !preset.available)) return;
-    const refused = effortRefusal(preset, model);
-    setRefusal(refused);
-    if (refused) return;
     setBusy(true);
+    if (!model && !confirmation) {
+      try {
+        const resolved = await controller.presetModel(preset?.index);
+        if (!mounted.current) return;
+        if (resolved?.reasoningEfforts.length) {
+          setConfirmation({ preset, model: resolved });
+          setChosenEffort('');
+          setBusy(false);
+          return;
+        }
+      } catch {
+        // Discovery is optional. The factory still resolves the model at creation.
+        if (!mounted.current) return;
+      }
+    }
     const key = await controller.newSession({
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       ...(preset ? { presetIndex: preset.index } : {}),
-      ...(model
-        ? { backendIndex: loaded.backendIndex, modelSelection: model.modelId }
+      ...(effectiveModel
+        ? {
+            backendIndex:
+              confirmation?.model.backendIndex ?? loaded.backendIndex,
+            modelSelection: effectiveModel.modelId,
+          }
         : {}),
     });
     if (key === undefined) {
@@ -153,9 +191,11 @@ export const NewSession = ({ state, controller, features, context }) => {
             {
               class: 'floot-model-select',
               'aria-label': 'Backend',
+              disabled: busy,
               value: String(backendIndex),
               /** @param {any} event */
               onChange: event => {
+                setChosenEffort('');
                 setChosenBackend(Number(event.target.value));
                 setQuery('');
                 setPick(FACTORY_DEFAULT);
@@ -182,6 +222,7 @@ export const NewSession = ({ state, controller, features, context }) => {
       type: 'search',
       'aria-label': 'Search models',
       placeholder: 'Search by name or model ID',
+      disabled: busy,
       value: query,
       /** @param {any} event */
       onInput: event => {
@@ -200,9 +241,11 @@ export const NewSession = ({ state, controller, features, context }) => {
       {
         class: 'floot-model-select',
         'aria-label': 'Model',
+        disabled: busy,
         value: selection,
         /** @param {any} event */
         onChange: event => {
+          setChosenEffort('');
           setPick(event.target.value);
           setRefusal(undefined);
         },
@@ -266,16 +309,47 @@ export const NewSession = ({ state, controller, features, context }) => {
         onClick: event => event.stopPropagation(),
       },
       h('div', { class: 'floot-modal-title' }, uiTexts.startNewSession),
-      backendField,
-      notes.length > 0
+      !confirmation && backendField,
+      !confirmation && notes.length > 0
         ? h(
             'small',
             { class: 'floot-discovery-note', role: 'status' },
             notes.map(line => h('div', { key: line }, line)),
           )
         : null,
-      searchField,
-      modelField,
+      !confirmation && searchField,
+      confirmation
+        ? h(
+            'div',
+            { class: 'floot-modal-field' },
+            confirmation.preset ? `${confirmation.preset.label} · ` : '',
+            confirmation.model.modelId,
+          )
+        : modelField,
+      efforts.length > 0 &&
+        h(
+          'label',
+          { class: 'floot-modal-field' },
+          h('span', { class: 'floot-modal-label' }, 'Reasoning effort'),
+          h(
+            'select',
+            {
+              class: 'floot-model-select',
+              'aria-label': 'Reasoning effort',
+              value: reasoningEffort ?? '',
+              /** @param {any} event */
+              onChange: event => {
+                setChosenEffort(event.target.value);
+                setRefusal(undefined);
+              },
+            },
+            defaultEffort === undefined &&
+              h('option', { value: '' }, 'Model default'),
+            efforts.map(effort =>
+              h('option', { key: effort, value: effort }, effort),
+            ),
+          ),
+        ),
       h(SessionsSlot, { slot: 'newSession.field', features, context }),
       refusal
         ? h('div', { class: 'thix-new-session-error', role: 'alert' }, refusal)
@@ -283,18 +357,45 @@ export const NewSession = ({ state, controller, features, context }) => {
       h(
         'div',
         { class: 'floot-preset-list' },
-        presets.length > 0
-          ? presets.map(card)
-          : h(
-              'button',
-              {
-                type: 'button',
-                class: 'floot-preset-card',
-                disabled: busy,
-                onClick: () => start(undefined),
-              },
-              h('div', { class: 'floot-preset-name' }, 'Start session'),
-            ),
+        confirmation
+          ? [
+              h(
+                'button',
+                {
+                  type: 'button',
+                  class: 'floot-preset-card',
+                  disabled: busy,
+                  onClick: () => start(confirmation.preset),
+                },
+                'Start session',
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  class: 'floot-header-btn',
+                  disabled: busy,
+                  onClick: () => {
+                    setConfirmation(undefined);
+                    setChosenEffort('');
+                    setRefusal(undefined);
+                  },
+                },
+                'Back',
+              ),
+            ]
+          : presets.length > 0
+            ? presets.map(card)
+            : h(
+                'button',
+                {
+                  type: 'button',
+                  class: 'floot-preset-card',
+                  disabled: busy,
+                  onClick: () => start(undefined),
+                },
+                h('div', { class: 'floot-preset-name' }, 'Start session'),
+              ),
       ),
     ),
   );

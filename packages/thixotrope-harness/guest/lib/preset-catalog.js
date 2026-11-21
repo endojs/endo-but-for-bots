@@ -36,7 +36,6 @@ const { passStyleOf } = /** @type {GuestGlobals} */ (globalThis);
  * @property {WorkspaceSeed} [workspaceSeed]
  * @property {any} [backend]
  * @property {string} [modelId]
- * @property {string} [reasoningEffort]
  */
 
 const workspace = harden({ kind: 'git-workspace', label: 'workspace' });
@@ -254,13 +253,7 @@ export const normalizePresetRecord = (record, { templates, backendKind }) => {
   if (backend !== undefined && !isObjectCap(backend))
     throw Error(textOf.invalidField('backend'));
   const modelId = textField(record.modelId ?? '', 'model', limits.modelIdUnits);
-  const reasoningEffort = textField(
-    record.reasoningEffort ?? '',
-    'reasoning effort',
-    limits.effortUnits,
-  );
-  if (backend === undefined && (modelId || reasoningEffort))
-    throw Error(texts.backendForDefaults);
+  if (backend === undefined && modelId) throw Error(texts.backendForDefaults);
   if (
     backend !== undefined &&
     backendKind !== undefined &&
@@ -294,7 +287,6 @@ export const normalizePresetRecord = (record, { templates, backendKind }) => {
   }
   if (backend !== undefined) result.backend = backend;
   if (modelId) result.modelId = modelId;
-  if (reasoningEffort) result.reasoningEffort = reasoningEffort;
   const normal = /** @type {PresetData} */ (harden(result));
   if (!fitsFrame(normal, limits.presetRecordBytes))
     throw Error(texts.presetTooLarge);

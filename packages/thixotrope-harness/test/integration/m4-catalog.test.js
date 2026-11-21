@@ -132,6 +132,12 @@ run(
       (/** @type {any} */ r) => r.modelId === CODEX_MODEL,
     );
     t.deepEqual(shared.reasoningEfforts, ['medium', 'high', 'max']);
+    t.deepEqual(
+      await E(codex.backend).resolveEffort({ modelId: CODEX_MODEL }),
+      {
+        reasoningEffort: 'medium',
+      },
+    );
     t.is(shared.contextLength, 200_000, 'the smaller window');
     t.is(reads('/backend-api/codex/models'), 2, 'one read per member');
     // R4-104: a second listing within 15 min reads nothing.
@@ -164,6 +170,16 @@ run(
     );
     const sonnet = claudePage.rows.find(
       (/** @type {any} */ r) => r.modelId === CLAUDE_MODEL,
+    );
+    t.deepEqual(
+      await E(claude.backend).resolveEffort({ modelId: CLAUDE_MODEL }),
+      {
+        reasoningEffort: 'medium',
+      },
+    );
+    t.deepEqual(
+      await E(claude.backend).resolveEffort({ modelId: 'claude-fake-1' }),
+      {},
     );
     t.deepEqual(sonnet.reasoningEfforts, [
       'low',

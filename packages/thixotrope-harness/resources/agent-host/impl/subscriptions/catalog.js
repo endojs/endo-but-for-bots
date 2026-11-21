@@ -484,11 +484,13 @@ export const makePoolCatalog = ({
    */
   const effortsOf = model => {
     const efforts = rowEfforts(model.reasoningEfforts);
+    const preferred = efforts.includes('medium')
+      ? 'medium'
+      : model.defaultReasoningEffort;
     return harden({
       reasoningEfforts: efforts,
-      ...(model.defaultReasoningEffort !== undefined &&
-      efforts.includes(model.defaultReasoningEffort)
-        ? { defaultReasoningEffort: model.defaultReasoningEffort }
+      ...(preferred !== undefined && efforts.includes(preferred)
+        ? { defaultReasoningEffort: preferred }
         : {}),
     });
   };
