@@ -19803,3 +19803,19 @@ skipped. Two mock OCI signal tests had received TERM before their shell
 installed its trap under heavier load. Both passed in isolation and in the
 complete two-worker run. The real-Docker run passed all 37 OCI cases.
 [Pool catalog contract](designs/m4-interfaces.md#54-catalogue-and-creation-w43-catalogue-w41-resolver)
+
+### J-13011 2026-11-21 Tokyo Claude accounts and local Anthropic provisioning
+
+Tokyo’s active daemon configuration names two Claude members, `primary-oauth`
+(Primary Claude) and `secondary-oauth` (Secondary Claude). The Tokyo deployment
+record describes a renewable browser login per member and a broker that owns
+renewal. Copying those records would give two independent stores responsibility
+for the same rotating credentials. On the pinned worker, the only active
+local subscription pool was ChatGPT. The inspection used account metadata.
+
+Anthropic documents Claude subscription sign-in for its own applications and
+directs developers of independent clients to Claude Platform authentication.
+Thixotrope already has an Anthropic API-key backend. Local Anthropic UAT is
+pending a separately provisioned Platform credential. No subscription credential
+was transferred and no inference was requested.
+[Anthropic credential guidance](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use) · [Claude API authentication](https://platform.claude.com/docs/en/manage-claude/authentication)
