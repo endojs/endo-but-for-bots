@@ -19347,3 +19347,73 @@ their bottom edges aligned, including on multiline replies. Playing the saved
 reply succeeded without starting another turn.
 An isolated transcript also measured an 8 px gap between consecutive assistant
 messages in the same turn at both 390 and 1,280 px.
+
+### J-12596 2026-11-21 Observable session inventories and shared objects
+
+In the saved Terra low session `s8` (“UAT Terra voice controls”), turn
+`t6` created a counter and increment function in its exec worker. Turn
+`t7` called `powers.store` with that function. The call reached the
+session inventory wrapper, which accepted JSON and held object references
+and refused the ordinary JavaScript closure. Voice input and the provider
+both completed successfully.
+
+The operator wants each inventory entry to be transferable. A private
+function marker tested during diagnosis could recover a closure only in
+the originating exec worker. It was discarded before deployment. The
+replacement publishes named methods on a passable object, keeps their
+closures in the creating worker and supervises invocations from the
+owning session even when that session has no active turn.
+
+The browser reads pages of binding metadata and re-reads them when its
+existing session subscription reports an inventory change. Creating or
+removing a label never depends on an open browser. Isolated Chromium
+verified live adoption, session switching and collapse. The live-provider
+acceptance requires independent parent, child and parent increments and
+a sidebar already open when the bindings appear.
+
+**Live result.** On the pinned worker, both the parent `s10` (“Terra counter
+UAT 31a37e7f”) and child `s11` (“scout”) used `gpt-5.6-terra` at low
+effort. The browser opened the empty parent inventory before any submission.
+Parent turn `t1` published a counter whose method closed over the local
+variable `n`. In a separate eval, `t2` looked up `counter` and returned
+`1`. Turn `t3` spawned the child with the same object under the child's
+label `shared-counter`. The child's `t1` looked up that label and returned
+`2` during the parent's ask in `t4`. Parent turn `t5` returned `3`.
+The paired exec intents and tool results establish the sequence.
+The same browser document observed `counter` and `subagents/scout` arrive.
+The child and both bindings were retained for operator inspection.
+
+The installed regression using current factory, session and exec programs
+also sent nested JSON by copy across spawn, ask and operator mail. The
+stateful UAT factory retains its original object-only mail guards. The
+factory supports loading new session and exec programs for new sessions.
+An existing session keeps its own program and browser methods.
+
+**Performance.** A first draft of the new prompt took a default development
+session from 7,986 to 8,289 UTF-8 bytes. Crossing the 8,192-byte inline
+threshold adds a blob writer, append and close during creation or spawn.
+Shortening the guidance while keeping the executable example brought it to
+8,137 bytes. All five default presets, each tested with and without spoken
+mode, retained their previous inline or staged behavior.
+
+### J-12597 2026-11-21 Session inventory drawer and scrollback
+
+The operator clarified that inventory belongs inside the selected session
+between the session list and the transcript. Its own drawer slides left
+when closed. The operator also requested automatic history loading near
+the top of the transcript with a stable reading position. These replace
+the initial inventory disclosure below the sessions and M3's earlier
+history button.
+
+At 900 × 480, Chromium scrolled a 300-turn imported chat from the newest
+turn to the first in 41 page loads. Every turn appeared once, including
+archived turns. The original visible row stayed within 2 px on every prepend.
+A new message left the scroll position alone while the tester read earlier
+history and followed the bottom after the tester scrolled back there.
+
+On the operator's pinned gateway at 1,200 px, the session list stayed
+240 px wide. Under the selected session header the drawer occupied the next
+228 px. Collapsing it returned all 228 px to the transcript. At 390 px
+the inventory fit inside the screen beneath the header. In a two-window
+check an observer saw Terra add and remove a temporary alias to the
+published counter, with its value and the child's original binding intact.

@@ -177,7 +177,7 @@ All live in the agent-host adapter process and die with it. None is ever given t
 | `Live` (per-connection facade over the incarnation's `Live`) `subscribe(session, rev?)`, `subscribeList(rev?)` | browser | (A) | as M1b | the facade records each subscription and `close()`s it when the connection closes (a channel keeps at most 32 subscribers per session, `channelLimits`) |
 | `Composer.submit` / `edit` | browser | (A) then the entry's crank | <= 200,000 units in (`messageUnits`), staged over `inlineBytes` | M2's Composer, unchanged; the bridge exempts these two methods from the frame guard (`LargeCall`) |
 | `Content.read(blob, range)` | browser | (A) | <= `blobPageBytes` out | M1b; the page reads a large reply (1 MiB) in pages |
-| `History.page(session, cursor?)`, `turnContent(...)`, `SealedText.read(...)` | browser | (A); a live cursor costs one session crank | <= frameBytes | M2 4.9; "Load earlier messages" past the kept turns and the recovery panel |
+| `History.page(session, cursor?)`, `turnContent(...)`, `SealedText.read(...)` | browser | (A); a live cursor costs one session crank | <= frameBytes | M2 4.9; scrollback past the kept turns and the recovery panel |
 | extension services (`GatewayPowers.extras`) | browser | - | per service | section 6.1 |
 
 **Persists:** only `<state>/agent-host/gateway/signin.enc` (the sign-in secret, encrypted with the
@@ -413,7 +413,7 @@ verifies each):
   7).
 - A-7. `SessionRow.state` `creating`/`deleting` and `activity` are what R6-36's status circle
   shows (Working while creating or deleting; Error for `error` and `lost`).
-- A-8. The archive (M2 4.9): a page's "Load earlier messages" uses `Session.getHistoryPage` until
+- A-8. Scrolling near the start of the transcript loads earlier history from `Session.getHistoryPage` until
   a page answers `archived: true`, then `History.page(session, next)`; turns are compared by
   `turnId` (archived turns have no `Turn`, M2 4.9).
 - A-9. `ModelPage` has no search argument: the dialog filters loaded rows client-side and loads
@@ -797,9 +797,13 @@ WebSocket (`test/integration/_m3-gateway.js`); "browser" is Playwright headless 
    outcome-unknown status row; Details opens "Turn journal and recovery"; "Record
    acknowledgement" works while idle; no provider request or tool run happened twice.
 8. Tool calls fold into "Thought for ..." groups; `exec` calls show highlighted source; `</>`
-   shows raw JSON; "Load earlier messages" pages a 300-turn imported session back to turn 1
+   shows raw JSON; scrolling up pages a 300-turn imported session back to turn 1
    across the archive with every turn once; a 1 MiB reply renders fully.
-9. At 640 px the sidebar is a drawer opened with ☰ over a backdrop; at 641 px it is not.
+9. At 640 px the session list is a drawer opened with ☰ over a backdrop. On a
+   wide screen the selected session's inventory drawer opens between the session list
+   and transcript. Collapsing it to the left returns its width to the transcript
+   while the session list remains accessible. Prepending history preserves the
+   visible message and reading position.
 10. A client call carrying a 100 KiB string to a session method, one carrying a record with 2,000
     invented keys, one passing a page-made object, and a `createSession` whose `networkPolicy` is
     a record of invented keys are each refused by the gateway with its text; the session and the

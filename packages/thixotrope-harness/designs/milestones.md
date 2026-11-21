@@ -978,7 +978,7 @@ through the Node client or the browser)
    row; Details opens "Turn journal and recovery"; "Record acknowledgement" works while idle; no
    provider request or tool run happened twice (K5).
 8. Tool calls fold into "Thought for ..." groups; `exec` shows highlighted source; `</>` raw
-   view; "Load earlier messages" pages a 300-turn imported session back to turn 1 across the
+   view; scrolling up pages a 300-turn imported session back to turn 1 across the
    archive; a 1 MiB reply renders fully.
 9. At 640 px the sidebar becomes a drawer; at 641 px it does not.
 10. A call carrying a 100 KiB string to a session method, one with a record of 2,000 invented
@@ -1510,8 +1510,13 @@ The human trial and the real-service repeats still need recorded outcomes.
 |---|---|
 | Chat and reconnect | Sign in through the gateway, create a session on a configured backend, send a turn, and reload while it streams. The transcript should contain the input once and show its completed answer. |
 | Mail and delegation | From an operator client using `getMail()`, give a sender the recipient's address. Have the sender forward a package, then spawn, ask and stop a named child. Check the recipient's turn, the correlated reply, the child's answer and its removal. The operator Home inbox and mail CLI belong to M12. |
+| Shared inventory counter | Open Agent inventory on the parent. Have Terra publish a JavaScript counter, increment it, attach it to a child, and have the child increment it. A third increment by the parent should return 3. The open pane should show the counter and the child handle as they are bound. |
 | Workspace and images | With a configured runner, create a development session, inspect its Git workspace and ask it to view a known image there. Verify what the live backend sees. Stop the parent and confirm that its child can still use its own workspace. |
 | Voice and context | With speech engines, a runner and the pinned voice backend configured, start Talk, speak, interrupt playback and replay the answer. On a live provider, cross the context threshold and check that the next answer uses the compacted history coherently. |
+
+In the live Terra low counter run the parent, child and parent returned 1,
+2 and 3 from their own exec calls. The open inventory showed the published
+counter and the newly created child. [Saved turn evidence](../JOURNAL.md#j-12596-2026-11-21-observable-session-inventories-and-shared-objects).
 
 From the harness package, with the [workspace dependencies and pinned worker installed](../README.md#build-what-the-tests-run),
 build the browser assets and start the supervisor on a short, fresh local state path.

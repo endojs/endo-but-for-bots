@@ -356,6 +356,20 @@ entries: shell (`runCommand`, `inspectShell`), `viewImage`, mail (`listMessages`
 
 ## 3. Objects and interfaces
 
+**Integrated UAT amendment, J-12596.** A successful spawn exposes the
+child handle as `subagents/<name>` in the parent's inventory. The parent's
+normal lookup, eval and read-only browser view use that same name. A
+successful stop through the parent's tool removes it. A mail or
+delegation attachment can carry an object reference or bounded JSON data.
+The sender chooses its own petname and the destination label separately.
+Delegating a published object shares its identity. The child can call
+its methods after the creating eval finishes. A copied value is bound as
+data and cannot be used as a mail address.
+
+The object-only factory from earlier installations accepts published
+references. Direct JSON attachments require the factory and receiving
+session guards that admit the copy representation.
+
 Every exo below uses the guard named for it in `guards/mail.js` (`mailTables()`) or
 `guards/post-office.js` (`postOfficeTables()`). "Crank" names the crank of the callee unless
 stated. "Retired break" is what a caller does when the call breaks with the hub's retired text

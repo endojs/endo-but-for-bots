@@ -342,6 +342,37 @@ the inspector); `list`, `lookup`, `store`, `remove` always.
 
 #### 2.4.4 `ExecPowersSource` (W5.5)
 
+**Integrated UAT amendment, J-12596.** A session has one observable
+inventory. The agent can use `powers.list()` and `powers.lookup(label)`
+in eval. The operator can open **Agent inventory** for the selected
+session. Its existing live subscription carries the inventory revision.
+`Session.getInventoryPage(cursor?)` reads up to 16 labels at that
+revision, with a preview of at most 256 UTF-8 bytes for a stored value.
+The browser receives the label and kind of a capability. Removing a
+binding updates the view. Someone who already holds its value keeps it.
+The parent owns the lifecycle of each managed `subagents/<name>` binding
+through the delegation tools.
+
+To share stateful behavior, publish the object's named methods from eval.
+
+```js
+let n = 0;
+await powers.publish('counter', {
+  increment() { return ++n; },
+});
+```
+
+A later eval in the owner or a recipient that holds this object can call
+`const counter = await powers.lookup('counter'); return await E(counter).increment();`.
+A recipient may use its own label. Calls operate on the original closure
+and accept and return bounded JSON data. Published methods run
+synchronously in the originating exec worker. The owning session arms an
+external deadline before dispatch and retires that exec scope on timeout.
+Previously captured eval powers keep their original call lifetime. Deleting
+the owning session or retiring its scope ends access to that object's
+implementation. A session created under the earlier guest program retains
+its original methods.
+
 `m5Interfaces.ExecPowersSource`, one exo per session, minted in `make` by the `powers` part
 (`guest/session/powers-source.js`, registered in `m5-parts.js`) over the label map. It is sent to
 the exec vat in every `ExecRequest.powers` (W5.4's edit of `tools/exec.js`) and held there only
@@ -453,7 +484,7 @@ the `TurnStarted` record (transcript and archive; the objects are never recorded
 `ExecRequest`; `inspect` is new).
 
 - **`powers`** (`guest/exec/powers.js`): `makeCall` builds, per call, a hardened plain object
-  `{ lookup, list, store, remove }` that checks its arguments (label bounds, value size) and
+  `{ lookup, list, store, remove, publish }` that checks its arguments (label bounds, value size) and
   forwards through the call's `E` to `request.powers`; once the call is closed every method
   answers a promise rejected with `texts.powersExpired` (no send). `lookup`'s object answers are
   wrapped by the membrane; `{ json }` answers are parsed in the exec vat (it parses model data on
