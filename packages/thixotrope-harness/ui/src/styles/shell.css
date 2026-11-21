@@ -20,6 +20,19 @@ body {
   display: flex;
   flex-direction: column;
 }
+.thix-app .floot-header {
+  flex-wrap: wrap;
+}
+.thix-app .floot-header-title,
+.thix-app .floot-header-title-input {
+  flex-basis: 8rem;
+}
+.thix-inventory-toggle {
+  width: auto;
+  gap: 0.3rem;
+  padding-inline: 0.5rem;
+  white-space: nowrap;
+}
 .thix-overlay {
   position: absolute;
   inset: 0;

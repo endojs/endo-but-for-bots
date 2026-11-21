@@ -122,14 +122,17 @@
 }
 .thix-session-path {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   flex: 1;
   min-width: 0;
-  gap: 0.4rem;
-  overflow-x: auto;
+  gap: 0.15rem 0.4rem;
 }
 .thix-session-path > * {
-  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .thix-session-path > * + *::before {
   content: '›';

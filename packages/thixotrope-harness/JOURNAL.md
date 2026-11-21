@@ -19508,3 +19508,21 @@ and time four awaited `SessionFactory.createSession` calls. Repeat with
 `spareSessions: 1`, waiting for settlement and checking one ready spare
 before each sample. Time the initial configure-and-settle separately and
 leave provider submissions outside both windows.
+
+### J-13000 2026-11-21 Inventory toggle and session breadcrumb spacing
+
+The operator’s screenshot showed the Inventory label painting over the parent
+link in Scout’s header. On the pinned Terra counter chat, Chromium measured the
+toggle at 34 CSS px wide. Its centered label crossed 14.1 px into the parent
+link at an 857 px viewport and 15.8 px at 390 px. The root chat’s rightmost
+header control also extended 46.5 px past the viewport edge at 390 px.
+
+The labeled toggle now takes its intrinsic width. Header actions and breadcrumbs
+can wrap, and an overlong ancestor title can truncate within its own button.
+On the same chat, the toggle measured 99.1 px and the label cleared the parent
+breadcrumb by 16 px at 857 px and 14.4 px at 390 px. The child name and all
+root header controls fit at 320, 390, 641, 686, 857 and 1,200 CSS px. The
+checks opened the existing Scout session through its parent’s inventory.
+The Chromium regression also checked a longer ancestor title at 960 and 390 px.
+It reproduced the original overlap, then passed with the updated stylesheet.
+The 24 shell, session and build tests and the package TypeScript check passed.

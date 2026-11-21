@@ -807,6 +807,9 @@ WebSocket (`test/integration/_m3-gateway.js`); "browser" is Playwright headless 
    opens its own live transcript and inventory. The root stays selected in the sidebar.
    The parent breadcrumb restores the draft and reading position, including earlier
    pages. Socket reconnect follows the same child keys as far as they remain live.
+   The Inventory toggle fits its label. On narrow screens, header controls and
+   breadcrumbs can wrap. A long ancestor title shows an ellipsis and keeps its
+   full accessible name.
 10. A client call carrying a 100 KiB string to a session method, one carrying a record with 2,000
     invented keys, one passing a page-made object, and a `createSession` whose `networkPolicy` is
     a record of invented keys are each refused by the gateway with its text; the session and the
