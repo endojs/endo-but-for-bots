@@ -19776,3 +19776,23 @@ cold dependency preparation hit the model’s chosen two-minute timeout.
 The published preset instructions now request ten minutes for that command.
 The previous stock instructions upgrade on republishing. Custom instructions
 are preserved. [Environment contract](designs/m6-interfaces.md#53-runtime-contract)
+
+### J-13010 2026-11-21 Retry session updates ChatGPT discovery and verifies versioned Astra models
+
+In `s18/t2`, the model used the operator-supplied client-version evidence
+to update the ChatGPT discovery request and two regression suites. It
+committed `d1863fb65` to its own project checkout. The catalog and session
+dialog suites passed all 16 tests there and again in the integration checkout.
+The picker test gives two models the display name “Astra” and checks that
+choosing the second passes its exact slug to session creation.
+
+Before deployment the pinned worker’s ChatGPT pool returned three GPT-5.6
+models with client version `0.152.0`. With `0.169.0`, the same pool
+returned ten listed models. The live backend resolved `gpt-6-astra` and
+`gpt-6.2-astra` by their exact IDs and refused `gpt-6.1-astra`.
+The full regression caught an obsolete expected URL in the provider wire
+fixture. Session `s18/t3` updated only its client-version parameter, passed
+the wire suite and committed `e0cabf62a` to the session checkout.
+This checked discovery and resolution without spending a turn on Astra.
+The gateway returned HTTP 200 after the idle provider adapter reloaded.
+[Pool catalog contract](designs/m4-interfaces.md#54-catalogue-and-creation-w43-catalogue-w41-resolver)

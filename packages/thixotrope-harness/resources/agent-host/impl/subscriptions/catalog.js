@@ -83,11 +83,8 @@ import { CODEX_BASE_URL, CODEX_ORIGINATOR, codexEffort } from './responses.js';
 
 /** The Codex model list route (hosted-agent `codex-model-read.js`). */
 export const CODEX_MODELS_PATH = '/backend-api/codex/models';
-/**
- * The client version the Codex model list is asked for (the reference pins
- * its CLI's; `codex-reasoning.js` names 0.152.0).
- */
-export const CODEX_CLIENT_VERSION = '0.152.0';
+/** The Codex client version used for ChatGPT subscription model discovery. */
+export const CODEX_CLIENT_VERSION = '0.169.0';
 
 // Local resource bounds (hosted-agent), not claims about any provider.
 /** This catalogue's body bound (the API catalogues': 16 MB). */

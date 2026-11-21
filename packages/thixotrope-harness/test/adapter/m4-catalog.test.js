@@ -140,6 +140,20 @@ test('codexModels: listed rows by priority, efforts as listed, context window', 
         context_window: 1000,
       },
       {
+        slug: 'gpt-6-astra',
+        display_name: 'Astra',
+        visibility: 'list',
+        priority: 3,
+        supported_reasoning_levels: [{ effort: 'high' }],
+      },
+      {
+        slug: 'gpt-6.2-astra',
+        display_name: 'Astra',
+        visibility: 'list',
+        priority: 4,
+        supported_reasoning_levels: [{ effort: 'high' }],
+      },
+      {
         slug: 'h',
         visibility: 'hide',
         priority: 0,
@@ -149,7 +163,15 @@ test('codexModels: listed rows by priority, efforts as listed, context window', 
   });
   t.deepEqual(
     models.map(m => m.id),
-    ['a', 'b'],
+    ['a', 'b', 'gpt-6-astra', 'gpt-6.2-astra'],
+  );
+  t.deepEqual(
+    models.slice(2).map(({ id, title }) => ({ id, title })),
+    [
+      { id: 'gpt-6-astra', title: 'Astra' },
+      { id: 'gpt-6.2-astra', title: 'Astra' },
+    ],
+    'exact provider slugs remain distinct when display names coincide',
   );
   t.deepEqual(models[0].reasoningEfforts, ['low', 'ultra']);
   t.is(models[0].contextLength, 1000);
@@ -220,7 +242,7 @@ test('codex-pool listing: R4-18 intersection over two members; rows as M2 8.4', 
     ['a', 'b'],
     "each member's list read with its own credential",
   );
-  t.is(requests[0].query.client_version, '0.152.0');
+  t.is(requests[0].query.client_version, '0.169.0');
   t.true(requests[0].headerNames.includes('originator'));
   // The default backend: bare selection ids and the configured default row.
   const asDefault = await s.catalog.listModels({

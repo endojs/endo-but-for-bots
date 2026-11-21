@@ -399,6 +399,11 @@ Cancel aborts the attempt in flight and stops the member loop (R4-7).
   A read where no member answers: `{ rows: [], state: 'unavailable', error: texts.catalogUnavailable }`.
   Rows: `selectionId` and `default` exactly as M2 8.4 (a pool is never the default backend unless
   the operator makes it so).
+- ChatGPT discovery sends the Codex client version in the models query. The
+  provider can return different lists for different client versions on the
+  same account. The picker preserves the exact slug of each listed model,
+  including when several versions share a display name.
+  [Pinned worker verification](../JOURNAL.md#j-13010-2026-11-21-retry-session-updates-chatgpt-discovery-and-verifies-versioned-astra-models)
 - **Creation** (R4-21, R4-22, R4-23): W2.2's `catalogueModel` resolver already pins a given model
   through `Backend.resolveModel(modelId)` and refuses an empty model on a non-default backend
   (`texts.modelRequired`); a pool's `resolveModel()` without a model answers

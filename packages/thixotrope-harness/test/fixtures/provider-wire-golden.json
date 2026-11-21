@@ -482,7 +482,7 @@
       "requests": [
         {
           "method": "GET",
-          "path": "/backend-api/codex/models?client_version=0.152.0",
+          "path": "/backend-api/codex/models?client_version=0.169.0",
           "headers": [
             [
               "accept",

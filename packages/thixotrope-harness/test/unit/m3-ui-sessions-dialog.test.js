@@ -71,8 +71,9 @@ const brokenPreset = Far('Preset', {
  *
  * @param {any} fake
  * @param {Record<string, string[]>} efforts
+ * @param {Record<string, string>} [titles]
  */
-const withEfforts = async (fake, efforts) => {
+const withEfforts = async (fake, efforts, titles = {}) => {
   const inner = await E(fake.powers.operator).getFactory();
   /** @param {any} page */
   const widen = page =>
@@ -81,6 +82,7 @@ const withEfforts = async (fake, efforts) => {
       rows: page.rows.map((/** @type {any} */ row) => ({
         ...row,
         reasoningEfforts: efforts[row.modelId] ?? [],
+        title: titles[row.modelId] ?? row.title,
       })),
     });
   const factory = Far('SessionFactory', {
@@ -270,6 +272,39 @@ test.serial(
     t.is(dialog(), null);
     t.is(controller.getState().newSessionOpen, false);
     t.truthy(controller.getState().activeKey);
+    await close();
+  },
+);
+
+test.serial(
+  'versioned provider slugs remain independently selectable when titles coincide',
+  async t => {
+    const fake = makeFakePowers();
+    fake.control.addBackend('ChatGPT', {
+      models: ['gpt-6-astra', 'gpt-6.2-astra'],
+    });
+    const powers = await withEfforts(
+      fake,
+      {},
+      { 'gpt-6-astra': 'Astra', 'gpt-6.2-astra': 'Astra' },
+    );
+    const { open, choose, close, modelOptions, card } = await setup({
+      fake,
+      powers,
+    });
+    await open();
+    await choose('Backend', '1');
+    t.deepEqual(modelOptions(), [
+      uiTexts.factoryDefault,
+      'Astra — gpt-6-astra (default)',
+      'Astra — gpt-6.2-astra',
+    ]);
+    await choose('Model', '1');
+    card(0).click();
+    await flush();
+    const creates = fake.control.callsOf('SessionFactory', 'createSession');
+    t.is(creates.length, 1);
+    t.is(creates[0][2].modelId, 'gpt-6.2-astra');
     await close();
   },
 );
