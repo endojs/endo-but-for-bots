@@ -19219,3 +19219,81 @@ returned to five and its session export no longer contained `s6`. Every
 delegation tool result matched its intent by operation ID and reported success.
 The two top-level chats remain available for operator review. Together with
 J-12586 and J-12587, this passes the live M9 mail and delegation journey.
+
+### J-12589 2026-11-21 Session list, activity bubble and subscription quota
+
+The sidebar renders sessions in reverse creation order. Renaming a session
+keeps its position. A running turn shows the animated speech bubble with an
+accessible status label. An open reasoning detail shows its elapsed time
+without a second “Thinking” label. Other phases, such as a tool call, keep their text.
+The account chip now gives the duration when supplied and says how much of
+the allowance was used. The old “long 0%” meant the secondary subscription
+window showed zero percent used after rounding. If the provider omits the
+duration, the label now reads “secondary quota 0% used”. The account panel
+continues to show the provider reading and its reset time when supplied.
+
+### J-12590 2026-11-21 Live Terra turn completed with its browser closed
+
+On worker `367e78ad1d`, Chromium submitted a prompt in a dedicated ChatGPT
+session (`s7`, `gpt-5.6-terra`, low effort). It saw `t1` running and closed
+its entire browser context. A read through local control still found the turn
+running. The worker recorded completion 3,300 ms after the context closed.
+Only then did a fresh browser open the chat. It found one turn with the same
+ID and the requested final marker. J-12586 through J-12588 separately exercised
+attachment forwarding, correlated replies, spawn, ask and stop over local
+control without a submitting browser.
+
+The browser reads snapshots and subscribes to changes. It sends commands
+for operator actions. The worker accepts submissions, claims queued work,
+runs model and tool rounds, delivers mail, and records the outcome. On
+reconnect the browser can reconcile an unacknowledged send by its original
+request ID. A dictated draft is editable in the tab until submitted. The tab
+owns its microphone, playback and the choice to hear a reply.
+
+The isolated M3 reconnect regression now verifies that the gateway has zero
+connected clients while its scripted provider is still working. It observes
+the provider's own completion log, verifies durable session completion through
+local control, then reconnects and checks history and the single provider request.
+Both the setup and the strengthened acceptance case passed.
+
+Some server reads do work on demand. Opening New Session or Presets requests
+the model catalogue. A cold or stale server cache may contact the provider
+and renew an expiring credential. Headless session creation uses the same
+catalogue and can populate it itself. Speech configuration can also warm
+the configured engine. Neither operation advances an accepted turn.
+
+### J-12591 2026-11-21 Live dictation, spoken replies and replay
+
+Both speech directions were off on the pinned worker. Configured English
+Moonshine locally for speech input and the installed Piper Alba voice for
+output. The Moonshine runtime was installed and warmed once, and its saved
+command uses the local cache. The gateway had cached the earlier disabled
+settings. A configuration query now refreshes expired settings even when
+both buttons are disabled and no audio port can be opened from the UI.
+The browser also uses the signed-in tab's saved gateway for audio on a
+fragmentless navigation and unlocks Web Audio during the user's gesture.
+
+In the dedicated ChatGPT chat `s8` on Terra low, Chromium fed a prerecorded
+phrase through the microphone path. Moonshine produced “Please say the
+microphone is working” and the chat received it. With Chromium's normal
+autoplay policy the reply produced 37,653 nonzero PCM samples. With automatic
+speech muted, Replay produced another 38,415 nonzero samples. Audio buffers
+finished playing on a running Web Audio context. After an idle restart, a
+tab reopened the bare gateway address using its saved sign-in. Both controls
+were enabled and Replay produced 37,442 nonzero samples from the saved reply.
+This exercised the software audio path using a prerecorded input and headless
+output. The operator's physical microphone and speakers remain a manual check.
+
+### J-12592 2026-11-21 Two windows share one live Terra turn
+
+Two Chromium windows in one browser profile opened `s7` and loaded its
+existing history. One window sent a prompt to Terra low. Both saw the same
+running turn, `t2`, and the same completed reply. Each window's history
+grew from one turn to two. The durable worker record held one turn start,
+one settled provider round and one turn completion. The queue was empty.
+
+The automated two-client regression subscribed both authenticated clients
+before the sole submission. Both received the same completion event. The
+scripted provider recorded its two expected requests (rounds 0 and 1), and
+the echo tool started and finished exactly once with the same operation ID.
+The isolated case passed in 6.5 seconds.

@@ -71,6 +71,7 @@ const inputs = Object.freeze({
   stream: 'stream',
   stall: 'stall',
   toolHang: 'tool hang',
+  twoReaders: 'two subscribers share one echo',
 });
 
 /**
@@ -111,6 +112,17 @@ export const reconnectScript = harden({
         { chunks: [{ text: 'done' }], usage },
       ],
     },
+    {
+      input: inputs.twoReaders,
+      rounds: [
+        {
+          chunks: [{ text: 'calling' }],
+          toolCalls: [{ name: 'echo', args: JSON.stringify({ text: 'once' }) }],
+          usage,
+        },
+        { chunks: [{ text: 'done' }], usage },
+      ],
+    },
     { rounds: [{ chunks: [{ text: 'ok' }], usage }] },
   ],
 });
@@ -128,6 +140,8 @@ test.after.always(async () => {
 let gateway;
 /** @type {{ backend: any, log: () => any[] }} */
 let made;
+/** @type {any} Local control, independent of all gateway connections. */
+let localFactory;
 
 /**
  * A page: one signed-in connection and its factory.
@@ -230,6 +244,7 @@ run(
       secretsKeyFile: wrappingKey.file,
     });
     const slice = await makeSlice(state);
+    localFactory = slice.factory;
     made = await slice.makeBackend(reconnectScript);
     await E(slice.harness).configure(harden({ backends: [made.backend] }));
     gateway = await serveGateway(state, {
@@ -283,6 +298,8 @@ run(
     );
     emit({ metric: 'm3.reconnect.reattach', unit: 'ms', value: reattachMs });
     await again.feed.stop();
+    b.client.close();
+    await b.client.closed;
 
     // 5. Close the page mid-turn; another page later sees it finished.
     const c = await openPage();
@@ -296,24 +313,102 @@ run(
     const { turnId: second } = await E(r2.turn).getStatus();
     c.client.close();
     await c.client.closed;
+    const connections = async () =>
+      (await E(gateway.admin).status()).connections;
+    await waitFor(
+      async () => (await connections()) === 0,
+      10_000,
+      'all gateway sockets closed',
+    );
+    const finalLogged = () =>
+      made
+        .log()
+        .slice(logFrom)
+        .some(line => line.kind === 'round-final' && line.turnId === second);
+    t.false(
+      finalLogged(),
+      'the provider is still working after the last page closes',
+    );
+    // Observe the producer's ordinary file log without reading the session or
+    // installing any turn/list/feed subscription while it runs.
+    await waitFor(finalLogged, 60_000, 'provider closed-page round finished');
+    const localSession = await E(localFactory).findSession(key);
+    await waitFor(
+      async () =>
+        (await allTurns(localSession)).some(
+          row => row.turnId === second && row.state === 'completed',
+        ),
+      60_000,
+      'durable session completion before reconnect',
+    );
+    t.is(await connections(), 0);
     const d = await openPage();
     const dSession = await sessionOf(d, key);
-    const settled = await waitFor(
-      async () => {
-        const turns = await allTurns(dSession);
-        const tp = turns.find(x => x.turnId === second);
-        return tp && tp.state === 'completed' ? tp : undefined;
-      },
-      60_000,
-      'the closed page turn completed',
-      200,
-    );
-    t.is(settled.state, 'completed', 'closing the page cancelled nothing');
+    const history = await allTurns(dSession);
+    t.deepEqual(history.map(row => row.turnId).sort(), [turnId, second].sort());
+    t.is(history.find(row => row.turnId === second)?.state, 'completed');
     t.is(requestsFor(second, logFrom), 1);
-    b.client.close();
     d.client.close();
   },
 );
+
+run('two subscribed pages observe one turn and one echo execution', async t => {
+  const a = await openPage();
+  t.teardown(() => a.client.close());
+  const b = await openPage();
+  t.teardown(() => b.client.close());
+  const [preset] = await E(a.factory).listPresets();
+  const [backend] = await E(a.factory).listBackends();
+  const session = await E(a.factory).createSession(
+    harden({ title: 'two readers', preset, backend, at: Date.now() }),
+  );
+  const { key } = await E(session).getInfo();
+  const otherSession = await sessionOf(b, key);
+  const readers = await Promise.all([
+    attach(a, session),
+    attach(b, otherSession),
+  ]);
+  const from = made.log().length;
+  const receipt = await E(a.powers.composer).submit(
+    session,
+    inputs.twoReaders,
+    requestId(),
+  );
+  const { turnId } = await E(receipt.turn).getStatus();
+  const ends = await Promise.all(
+    readers.map(async ({ feed }) => {
+      const index = await feed.until(
+        e => (e.type === 'end' || e.type === 'abort') && e.turnId === turnId,
+        60_000,
+      );
+      return feed.events()[index];
+    }),
+  );
+  t.like(ends[0], { type: 'end', turnId, status: 'completed' });
+  t.deepEqual(ends[1], ends[0]);
+  const turns = await allTurns(otherSession);
+  t.is(turns.length, 1);
+  t.like(turns[0], { turnId, state: 'completed' });
+  t.is(inputText(turns[0].records[0]?.input), inputs.twoReaders);
+  const lines = made.log().slice(from);
+  t.deepEqual(
+    lines
+      .filter(line => line.kind === 'request' && line.turnId === turnId)
+      .map(line => line.round),
+    [0, 1],
+  );
+  const echo = lines.filter(
+    line =>
+      ['echo-start', 'echo-end'].includes(line.kind) &&
+      String(line.opId).startsWith(`${turnId}/`),
+  );
+  t.deepEqual(
+    echo.map(line => line.kind),
+    ['echo-start', 'echo-end'],
+  );
+  t.is(echo[0]?.opId, echo[1]?.opId);
+  await Promise.all(readers.map(({ feed }) => feed.stop()));
+});
 
 run(
   'acceptance 4 (protocol): refused while the daemon is down, served again on the same port',

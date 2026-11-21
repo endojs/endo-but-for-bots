@@ -1579,6 +1579,28 @@ Use an inexpensive model for test messages. In this account's catalog,
 `gpt-5.6-terra` offered low reasoning effort. The live browser run on that
 setting showed eight numbered observations in one completed reply after reload.
 
+The pinned worker also completed a live Terra turn 3.3 seconds after its
+submitting Chromium context closed. A fresh browser opened after completion
+and displayed one copy of the turn. The browser reads the current snapshot,
+subscribes to updates and sends operator actions. The worker owns accepted
+turns, queue progression, tool execution, mail, delegation and history.
+The tab keeps editable drafts, can retry an unacknowledged send with its
+original request ID, and owns its microphone and playback.
+Model discovery is a server-side read on demand. Opening a model chooser can
+refresh a stale provider catalogue and renew an expiring credential.
+Headless session creation also resolves models through that catalogue.
+[Tab-close run](../JOURNAL.md#j-12590-2026-11-21-live-terra-turn-completed-with-its-browser-closed).
+
+Two Chromium windows in one profile also observed the same running turn and
+completed reply after one submission. The pinned worker recorded one new turn
+and one provider round.
+[Two-window run](../JOURNAL.md#j-12592-2026-11-21-two-windows-share-one-live-terra-turn).
+
+In the chat UI, the newest session appears first and the animated bubble
+indicates thinking. Subscription chips show percent used per provider
+window, with the duration when available.
+[UI changes](../JOURNAL.md#j-12589-2026-11-21-session-list-activity-bubble-and-subscription-quota).
+
 If a turn fails while Subscriptions shows current usage, open the failed
 conversation. Its durable session history retains the provider error on the
 `turn-settled` record. An operator with local control access can call
@@ -1607,7 +1629,13 @@ the separate worker-retirement case.
 M6 assigns isolation to a real runtime. M8 assigns image and compaction checks to live
 providers. The M9 live repeat of attachment adoption, forwarding and asking
 a child passed in J-12586 through J-12588.
-M11 assigns speech engines, providers and microphone checks to the owner.
+M11 passed live local speech recognition, automatic reply playback and manual
+Replay in Chromium, including replay after a restart and a fragmentless reconnect.
+Refresh the signed-in tab, choose **Start listening** and allow microphone access
+to check the physical input. **Speak replies** enables audio for new replies on
+that page. **Replay** plays a saved answer. The physical microphone and speaker
+check remains with the operator.
+[Speech run](../JOURNAL.md#j-12591-2026-11-21-live-dictation-spoken-replies-and-replay).
 J-12566 records the trial scope. J-12575 records the Chromium preflight, 14 installed
 mail and delegation cases and 2,011 package tests on the selected guest.
 
@@ -2275,6 +2303,11 @@ read-only static site (P-64).
 ---
 
 ## M11. Voice
+
+The pinned UAT uses English Moonshine for recognition and Piper Alba for speech output.
+A prerecorded utterance passed through the browser to a live Terra low turn,
+then Chromium played both the automatic reply and a manual replay.
+[Live UAT](../JOURNAL.md#j-12591-2026-11-21-live-dictation-spoken-replies-and-replay).
 
 **Status: integrated with open performance gates.** Talk and the pinned voice preset passed
 with and without the environments runner (J-12725). The spoken-turn delivery gate passed
