@@ -19735,3 +19735,20 @@ and the final image on real Docker Desktop bind mounts. Its three unit tests
 passed, a fresh nested chat returned `Hello!` and stopped cleanly, the
 cloned-template test passed in 51.3s, and a second dependency preparation
 completed in 10.8s. [Operator setup](README.md#develop-the-harness-from-a-session)
+
+### J-13008 2026-11-21 Development shell unavailable after Docker Desktop quit
+
+In **Broken Session A** (s17), Docker Desktop logged a full quit at
+16:36:43 JST. The model-catalog turn began at 16:40:33. Two invocations of
+`thix-selfdev-prepare` and one of `git status` through the shell all
+returned the same startup error. The separate Git capability still read
+the seeded checkout. At 16:43:54 the turn completed with an explanation
+after 30 provider rounds. The queue was empty and the checkout was clean at
+`491ecbe14d`. The requested catalog change remains open.
+
+While the Docker socket was absent, the environments manager reported
+`ready`. Its status uses the image check saved when the adapter bound.
+The shell startup wrapper falls back to `start failed` when its error
+has no code. A follow-up check for the development milestone should stop
+the engine after a successful bind and verify the operator and session
+receive an actionable engine-offline status. [Adapter readiness](resources/environments/impl/attach.js) · [Shell startup](resources/environments/impl/runner.js)
