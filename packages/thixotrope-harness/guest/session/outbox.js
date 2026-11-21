@@ -33,6 +33,8 @@ export const makeOutbox = ({ live, rowReporter, pendingView }) => {
   let events = [];
   /** a `pending` event is owed (added last, with the queue's view at flush) */
   let pendingOwed = false;
+  /** @type {number | undefined} latest inventory revision owed this crank */
+  let inventoryRevision;
   /**
    * the merged row patch of this crank
    * @type {Record<string, any> | undefined}
@@ -43,6 +45,10 @@ export const makeOutbox = ({ live, rowReporter, pendingView }) => {
   const takeEvents = () => {
     const taken = events;
     events = [];
+    if (inventoryRevision !== undefined) {
+      taken.push(harden({ type: 'inventory', revision: inventoryRevision }));
+      inventoryRevision = undefined;
+    }
     if (pendingOwed) {
       pendingOwed = false;
       taken.push(harden({ type: 'pending', pending: pendingView() }));
@@ -69,6 +75,10 @@ export const makeOutbox = ({ live, rowReporter, pendingView }) => {
     /** A `pending` event is owed at the next flush. */
     owePending: () => {
       pendingOwed = true;
+    },
+    /** @param {number} revision */
+    oweInventory: revision => {
+      inventoryRevision = revision;
     },
     flushRow,
     /**

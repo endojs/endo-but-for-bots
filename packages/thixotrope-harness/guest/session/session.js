@@ -29,6 +29,7 @@ import { interfaces, texts } from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
 import { labelSeeds as defaultLabelSeeds, seedsFor } from './label-seeds.js';
 import { makeLabels } from './labels.js';
+import { inventoryPage } from './inventory.js';
 import { runtimeParts, makeRuntime } from './runtime-parts.js';
 import { makeQueue as defaultMakeQueue } from './queue.js';
 import { isRestartSignal as defaultIsRestartSignal } from './recovery.js';
@@ -74,9 +75,18 @@ export const makeSession = (
   } = {},
 ) => {
   let { title } = config;
+  let inventoryRevision = 0;
+  // Creation seeds precede the first possible reader and live publisher.
+  let announceInventory = false;
+  const inventoryChanged = () => {
+    inventoryRevision += 1;
+    if (announceInventory) runner.inventoryChanged(inventoryRevision);
+  };
   // M5 (2.4.1): a seed whose label is taken fails `make`.
   const labels = makeLabels({
     seeds: seedsFor(services, config, labelSeeds),
+    onChange: inventoryChanged,
+    children: () => runtime.subagents,
   });
   // The runtime parts (S4), made once, in table order; they send nothing.
   const records = makeRecordLog();
@@ -88,6 +98,7 @@ export const makeSession = (
   });
   const runtime = makeRuntime({
     labels,
+    inventoryChanged,
     services,
     config,
     contextWindow: window,
@@ -148,6 +159,7 @@ export const makeSession = (
   });
 
   runner.attach({ queue });
+  announceInventory = true;
 
   const info = () => {
     /** @type {Record<string, any>} */
@@ -248,6 +260,7 @@ export const makeSession = (
       /** @type {Record<string, any>} */
       const snapshot = {
         rev: live.rev(),
+        inventoryRevision,
         info: info(),
         pending: queue.view(),
         usage: runner.usage(),
@@ -295,6 +308,10 @@ export const makeSession = (
     /** @param {string} [cursor] */
     getHistoryPage(cursor) {
       return runner.historyPage(cursor);
+    },
+    /** @param {string} [cursor] */
+    getInventoryPage(cursor) {
+      return inventoryPage(labels, inventoryRevision, cursor);
     },
     getUsage() {
       return runner.usage();

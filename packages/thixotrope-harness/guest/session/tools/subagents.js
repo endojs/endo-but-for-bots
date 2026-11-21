@@ -29,7 +29,7 @@
  * a raw span and split into its elements (the closed reader has no list of
  * objects); each element is read by the closed reader. A `petName`
  * `subagents/<name>` names a child's handle in the part's map, any other is
- * a label of the label map (D-M9-23), which must hold an object.
+ * a held object or stored JSON value in the label map.
  *
  * Every refusal comes before any send. Refusals the factory makes (the
  * tree limit, a lost child) arrive as the rejection's message and are
@@ -43,11 +43,12 @@ import {
   textOf as mailTextOf,
   subagentLabelPrefix,
   subagentNameSource,
+  texts,
   textOf,
 } from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
 import { parseClosedArgs } from '../../lib/tool-args.js';
-import { messageOf } from '../../lib/bounded.js';
+import { fitsFrame, messageOf } from '../../lib/bounded.js';
 import { isValidLabel } from '../labels.js';
 import { fieldBytes, isStaged } from '../staging.js';
 import { inspectFor } from './inspect-client.js';
@@ -194,9 +195,10 @@ harden(readStagedArgs);
  * object binding (D-M9-23). Exported for the mail tools.
  * @param {any} context the ToolContext
  * @param {string} petName
+ * @param {boolean} [allowCopy] copy data is a payload, never an address
  * @returns {{ value: any } | { refused: string }}
  */
-export const heldObject = (context, petName) => {
+export const heldObject = (context, petName, allowCopy = false) => {
   const { labels, subagents } = context.runtime;
   if (petName.startsWith(subagentLabelPrefix)) {
     const name = petName.slice(subagentLabelPrefix.length);
@@ -207,6 +209,8 @@ export const heldObject = (context, petName) => {
   }
   const binding = labels.get(petName);
   if (binding === undefined) return { refused: textOf.unknownLabel(petName) };
+  if (allowCopy && binding.kind === 'json')
+    return { value: harden({ json: binding.text }) };
   if (binding.kind !== 'object') return { refused: notCapabilityText(petName) };
   return { value: binding.value };
 };
@@ -269,7 +273,7 @@ const attachmentsOf = (span, context) => {
       return { outcome: failed(textOf.reservedLabel(label)) };
     if (attachments.some(a => a.label === label))
       return { outcome: failed(textOf.duplicateAttachment(label)) };
-    const held = heldObject(context, parsed.values.get('petName'));
+    const held = heldObject(context, parsed.values.get('petName'), true);
     if ('refused' in held) return { outcome: failed(held.refused) };
     attachments.push(harden({ label, value: held.value }));
   }
@@ -332,18 +336,19 @@ const spawnEntry = harden({
       }
       const attached = attachmentsOf(values.get('attachments'), context);
       if ('outcome' in attached) return attached.outcome;
+      const spawnRequest = harden({
+        name,
+        attachments: attached.attachments,
+        at: part.at(),
+        ...(systemPrompt === undefined ? {} : { systemPrompt }),
+      });
+      if (attached.attachments.length && !fitsFrame(spawnRequest))
+        return failed(texts.frameLimit);
       part.spawning(name, context.turn);
       /** @type {any} */
       let handle;
       try {
-        ({ handle } = await E(part.delegation()).spawn(
-          harden({
-            name,
-            attachments: attached.attachments,
-            at: part.at(),
-            ...(systemPrompt === undefined ? {} : { systemPrompt }),
-          }),
-        ));
+        ({ handle } = await E(part.delegation()).spawn(spawnRequest));
       } finally {
         part.spawned(name, handle);
       }
@@ -384,6 +389,13 @@ const askEntry = harden({
     if ('outcome' in attached) return attached.outcome;
     const { opId } = request;
     const { generation } = context;
+    const askRequest = harden({
+      task,
+      attachments: attached.attachments,
+      at: part.at(),
+    });
+    if (attached.attachments.length && !fitsFrame(askRequest))
+      return failed(texts.frameLimit);
     const opened = part.openAsk(name, {
       opId,
       turn: context.turn,
@@ -393,7 +405,7 @@ const askEntry = harden({
     });
     if ('refused' in opened) return failed(opened.refused);
     E(opened.handle)
-      .ask(harden({ task, attachments: attached.attachments, at: part.at() }))
+      .ask(askRequest)
       .then(
         answer => part.closeAsk(opId, generation, ok(answer.text)),
         error => part.closeAsk(opId, generation, failed(messageOf(error))),

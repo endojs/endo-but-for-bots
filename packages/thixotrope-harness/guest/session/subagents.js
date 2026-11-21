@@ -5,7 +5,8 @@
  *
  * - the name -> `SubagentHandle` map (the model names a child by the name
  *   it gave at spawn; `subagents/<name>` in an attachment or recipient list
- *   is resolved here, never in the label map, D-M9-23). It is bounded by
+ *   is resolved here. The inventory exposes these same handles as managed
+ *   bindings, J-12596). It is bounded by
  *   the factory's tree limit (a parent holds a `Delegation` only below the
  *   depth limit, and `spawn` admits at most `maxDescendants` per tree) and
  *   shrinks at `stop`; after a recovery it is replaced by
@@ -66,7 +67,7 @@ const { E } = /** @type {GuestGlobals} */ (globalThis);
 
 export const subagentsPart = harden({
   name: /** @type {const} */ ('subagents'),
-  /** @param {{ services: any }} runtime */
+  /** @param {{ services: any, inventoryChanged?: () => void }} runtime */
   make: runtime => {
     /** @type {Map<string, any>} name -> SubagentHandle */
     const handles = new Map();
@@ -101,8 +102,12 @@ export const subagentsPart = harden({
       return E(held)
         .children()
         .then(list => {
+          const changed =
+            list.length !== handles.size ||
+            list.some(({ name }) => !handles.has(name));
           handles.clear();
           for (const { name, handle } of list) handles.set(name, handle);
+          if (changed) runtime.inventoryChanged?.();
         });
     };
 
@@ -110,6 +115,7 @@ export const subagentsPart = harden({
       /** The session holds a `Delegation` (below the depth limit, R4-69). */
       available: () => delegation() !== undefined,
       delegation,
+      names: () => harden([...handles.keys()]),
       /** The claim time of the current turn (spawn and ask `at`). */
       at: () => at,
       /** @param {string} name */
@@ -135,12 +141,14 @@ export const subagentsPart = harden({
        */
       spawned: (name, handle) => {
         spawning.delete(name);
-        if (handle !== undefined && !handles.has(name))
+        if (handle !== undefined && !handles.has(name)) {
           handles.set(name, handle);
+          runtime.inventoryChanged?.();
+        }
       },
       /** @param {string} name */
       unbind: name => {
-        handles.delete(name);
+        if (handles.delete(name)) runtime.inventoryChanged?.();
       },
       /**
        * Open an ask of `name` (one per child) and arm its deadline on the

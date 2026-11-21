@@ -1378,6 +1378,11 @@ export const makeTurnRunner = ({
     flush,
     /** @param {readonly any[]} events */
     publishOutside: events => live.outside(harden([...events])),
+    /** @param {number} revision */
+    inventoryChanged: revision => {
+      outbox.oweInventory(revision);
+      outbox.schedule(flush);
+    },
     lastKnownTime: () => lastKnownTime,
     see,
     /** The queue changed (Queue onChange): owe a `pending` event and the count. */

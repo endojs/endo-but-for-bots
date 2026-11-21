@@ -14,6 +14,9 @@
  *
  *   Binding = { kind: 'object', value, source }
  *           | { kind: 'json', text, bytes }
+ * Live children contribute managed object bindings under subagents/<name>.
+ * Their delegation bounds and lifecycle are independent of the ordinary
+ * petname limit. Lookup returns the same handle used for mail.
  *
  * The cached `__getMethodNames__` answer of an object binding (`lookup`) is
  * kept beside the binding (`methodsOf` / `setMethods`), so a binding stays
@@ -22,12 +25,24 @@
  * Not a record, not in the transcript, not exported (open decision O-8).
  * Guest rules.
  */
-import { reservedLabels, textOf } from '../lib/guards/session.js';
+import {
+  reservedLabels,
+  subagentLabelPrefix,
+  textOf,
+} from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
 import { utf8Bytes } from '../lib/bounded.js';
+import { parseClosedArgs } from '../lib/tool-args.js';
+
+/** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
+const { isRemotable } = /** @type {GuestGlobals} */ (globalThis);
+const copyField = harden({
+  tool: 'attachment',
+  fields: [{ name: 'v', kind: /** @type {const} */ ('raw'), required: true }],
+});
 
 /**
- * @typedef {'preset' | 'endowment' | 'adopted' | 'stored'} BindingSource
+ * @typedef {'preset' | 'endowment' | 'adopted' | 'stored' | 'subagent'} BindingSource
  *
  * @typedef {{ kind: 'object', value: any, source: BindingSource }
  *   | { kind: 'json', text: string, bytes: number }} Binding
@@ -42,6 +57,7 @@ import { utf8Bytes } from '../lib/bounded.js';
  * @property {() => string[]} list sorted
  * @property {() => number} size
  * @property {() => number} jsonBytes stored JSON bytes in all
+ * @property {(label: string, value: any, source: BindingSource) => Binding} bindAttachment
  * @property {(label: string, value: any, source: BindingSource) => Binding} bindObject
  * @property {(label: string, text: string) => Binding} bindJson
  * @property {(label: string) => boolean} remove
@@ -71,10 +87,15 @@ export const isValidLabel = label =>
 harden(isValidLabel);
 
 /**
- * @param {{ seeds?: readonly LabelSeed[] }} [options]
+ * @param {{ seeds?: readonly LabelSeed[], onChange?: () => void,
+ *   children?: () => { names: () => readonly string[], handleOf: (name: string) => any } | undefined }} [options]
  * @returns {Labels}
  */
-export const makeLabels = ({ seeds = [] } = {}) => {
+export const makeLabels = ({
+  seeds = [],
+  onChange = () => {},
+  children = () => undefined,
+} = {}) => {
   /** @type {Map<string, Binding>} */
   const map = new Map();
   /** @type {WeakMap<Binding, readonly string[]>} */
@@ -103,6 +124,7 @@ export const makeLabels = ({ seeds = [] } = {}) => {
     /** @type {Binding} */
     const binding = harden({ kind: 'object', value, source });
     map.set(label, binding);
+    onChange();
     return binding;
   };
 
@@ -121,27 +143,66 @@ export const makeLabels = ({ seeds = [] } = {}) => {
     const binding = harden({ kind: 'json', text, bytes });
     map.set(label, binding);
     jsonBytes += bytes;
+    onChange();
     return binding;
   };
 
   /** @type {Labels['remove']} */
   const remove = label => {
+    if (
+      label.startsWith(subagentLabelPrefix) &&
+      children()?.handleOf(label.slice(subagentLabelPrefix.length)) !==
+        undefined
+    ) {
+      throw Error(
+        'Use stopSubagent to stop the child and remove its managed inventory name',
+      );
+    }
     const binding = map.get(label);
     if (binding === undefined) return false;
     map.delete(label);
     if (binding.kind === 'json') jsonBytes -= binding.bytes;
+    onChange();
     return true;
   };
 
+  /** @type {Labels['bindAttachment']} */
+  const bindAttachment = (label, value, source) => {
+    if (isRemotable(value)) return bindObject(label, value, source);
+    const json = value.json;
+    if (typeof json !== 'string') throw Error('Invalid JSON attachment');
+    const read = parseClosedArgs(`{"v":${json}}`, copyField);
+    if (!read.ok || read.values.get('v') !== json.trim())
+      throw Error('Invalid JSON attachment');
+    return bindJson(label, json);
+  };
+
   for (const { label, value, source } of seeds)
-    bindObject(label, value, source);
+    bindAttachment(label, value, source);
 
   return harden({
-    get: label => map.get(label),
-    list: () => harden([...map.keys()].sort()),
-    size: () => map.size,
+    get: label => {
+      if (!label.startsWith(subagentLabelPrefix)) return map.get(label);
+      const child = children()?.handleOf(
+        label.slice(subagentLabelPrefix.length),
+      );
+      return child === undefined
+        ? undefined
+        : harden({ kind: 'object', value: child, source: 'subagent' });
+    },
+    list: () =>
+      harden(
+        [
+          ...map.keys(),
+          ...(children()?.names() ?? []).map(
+            name => subagentLabelPrefix + name,
+          ),
+        ].sort(),
+      ),
+    size: () => map.size + (children()?.names().length ?? 0),
     jsonBytes: () => jsonBytes,
     bindObject,
+    bindAttachment,
     bindJson,
     remove,
     methodsOf: binding => methods.get(binding),

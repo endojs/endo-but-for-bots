@@ -612,6 +612,7 @@ const m1aShapeBuilders = {
       record({ type: 'end', turnId: S.Id, status: S.SettledStatus }),
       record({ type: 'abort', turnId: S.Id, reason: S.Reason }),
       record({ type: 'pending', pending: S.PendingView }),
+      record({ type: 'inventory', revision: count }),
       // Environments (m6-interfaces.md 15.2, seam S-3; WX.1).
       record({
         type: 'execution',
@@ -975,6 +976,7 @@ const m1bInterfaceBuilders = {
   Timer: () =>
     M.interface('Timer', {
       sleep: M.callWhen(B.SleepMs).returns(done),
+      alarm: M.call(B.SleepMs).returns(M.remotable('Alarm')),
     }),
 
   // ---- session list feed (W1b.5) ----
@@ -1007,7 +1009,7 @@ export const m1bMethodLists = harden({
   BlobWriters: ['open'],
   BlobWriter: ['append', 'close', 'abort'],
   Content: ['read'],
-  Timer: ['sleep'],
+  Timer: ['sleep', 'alarm'],
   TurnSink: [...m1aMethodNames.TurnSink, 'progress'],
   Turn: [...m1aMethodNames.Turn, 'getContent'],
   ContextSource: ['page'],

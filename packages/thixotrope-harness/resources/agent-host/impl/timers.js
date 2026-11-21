@@ -7,6 +7,7 @@
  * Node only. Tests pass a fake with the same two methods.
  */
 import { clearTimeout, setTimeout } from 'node:timers';
+import { Far } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { interfaces } from '../../../guest/lib/interfaces.js';
@@ -49,6 +50,18 @@ export const makeTimerFacet = timers =>
     /** @param {number} ms */
     sleep: async ms => {
       await timers.delay(ms);
+    },
+    /** @param {number} ms */
+    alarm: ms => {
+      const { promise, resolve } = Promise.withResolvers();
+      const cancel = timers.after(ms, () => resolve(true));
+      return Far('Alarm', {
+        whenExpired: () => promise,
+        cancel: () => {
+          cancel();
+          resolve(false);
+        },
+      });
     },
   });
 harden(makeTimerFacet);

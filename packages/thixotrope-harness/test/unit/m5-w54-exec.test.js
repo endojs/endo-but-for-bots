@@ -143,6 +143,25 @@ const makeSource = (initial = {}) => {
     list: () => harden([...map.keys()].sort()),
     /**
      * @param {string} label
+     * @param {any} executor
+     * @param {any} facade
+     */
+    publish(label, executor, facade) {
+      if (map.has(label)) throw Error(textOf.labelTaken(label));
+      map.set(label, facade);
+      return Far('TestInvocationSupervisor', {
+        /**
+         * @param {string} method
+         * @param {string} argsJson
+         */
+        invoke(method, argsJson) {
+          log.push(['invoke', method, argsJson]);
+          return E(executor).invoke(method, argsJson);
+        },
+      });
+    },
+    /**
+     * @param {string} label
      * @param {any} value
      */
     store: (label, value) => {
@@ -260,6 +279,82 @@ test('powers forwards lookup, list, store and remove to the session source; JSON
     ),
     { status: 'ok', text: JSON.stringify(textOf.labelTaken('notes')) },
   );
+});
+
+test('a published counter transfers callable methods and the original lexical state', async t => {
+  const owner = await fresh();
+  t.deepEqual(
+    await owner.exec(
+      "let n = 0; await powers.publish('counter', { increment() { return ++n; }, add({delta}) { n += delta; return [n]; } }); return true;",
+    ),
+    { status: 'ok', text: 'true' },
+  );
+  const counter = owner.powers.map.get('counter');
+  const receiver = await fresh({ counter });
+  t.deepEqual(
+    await receiver.exec(
+      "const c = await powers.lookup('counter'); return E(c).increment();",
+    ),
+    { status: 'ok', text: '1' },
+  );
+  t.deepEqual(await E(counter).add(harden({ delta: 2 })), [3]);
+  t.deepEqual(
+    owner.powers.log.filter(([kind]) => kind === 'invoke'),
+    [
+      ['invoke', 'increment', '[]'],
+      ['invoke', 'add', '[{"delta":2}]'],
+    ],
+  );
+  await owner.exec('await powers.remove("counter"); return true;');
+  t.is(
+    await E(counter).increment(),
+    4,
+    'a held reference still reaches the same closure',
+  );
+});
+
+test('published closures keep the original lifetime of captured exec powers', async t => {
+  const owner = await fresh();
+  const published = await owner.exec(
+    'await powers.publish("lifetime", { check() { powers.list().then(() => {globalThis.result = "open"}, error => {globalThis.result = error.message}); return true; } }); return true;',
+  );
+  t.deepEqual(published, { status: 'ok', text: 'true' });
+  t.true(await E(owner.powers.map.get('lifetime')).check());
+  t.deepEqual(await owner.exec('return globalThis.result;'), {
+    status: 'ok',
+    text: JSON.stringify(texts.powersExpired),
+  });
+});
+
+test('publication requires named own methods and synchronous JSON answers', async t => {
+  const { exec, powers } = await fresh();
+  const invalid = await exec(
+    'try { await powers.publish("bad", {get bad(){return () => 0;}}); } catch(e) {return e.message;}',
+  );
+  t.deepEqual(invalid, {
+    status: 'ok',
+    text: JSON.stringify('Publish a plain record of named methods'),
+  });
+  t.false(powers.map.has('bad'));
+  await exec(
+    'await powers.publish("data", {echo(x){return x;}, nothing(){}, async later(){return 2;}}); return true;',
+  );
+  const data = powers.map.get('data');
+  await t.throwsAsync(() => E(data).echo(Far('Held', {})), {
+    message: /bounded JSON/,
+  });
+  // The wire envelope for a single string includes the JSON quotes and
+  // argument-array brackets. One extra byte is refused before dispatch.
+  const fits = 'a'.repeat(limits.labelValueBytes - 4);
+  t.is(await E(data).echo(fits), fits);
+  await t.throwsAsync(() => E(data).echo(`${fits}a`), {
+    message: /bounded JSON/,
+  });
+  await t.throwsAsync(() => E(data).nothing(), { message: /unsupported data/ });
+  await t.throwsAsync(() => E(data).later(), { message: /unsupported data/ });
+  t.deepEqual(await E(data).echo(harden({ kept: [true, null, 2] })), {
+    kept: [true, null, 2],
+  });
 });
 
 test('powers checks labels and values in the exec vat, before sending', async t => {

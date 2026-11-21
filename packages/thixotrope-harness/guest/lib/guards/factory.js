@@ -1127,7 +1127,7 @@ const postOfficeInterfaceBuilders = {
   OperatorMessage: () =>
     M.interface('OperatorMessage', {
       describe: M.call().returns(S.OperatorMessageView),
-      take: M.call(S.EdgeLabel).returns(M.remotable()),
+      take: M.call(S.EdgeLabel).returns(S.AttachmentValue),
       reply: M.callWhen(S.OperatorReply).returns(S.PostReceipt),
       dismiss: M.callWhen().returns(done),
     }),

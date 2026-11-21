@@ -569,7 +569,11 @@ test('adoptTool grants through the grants part and answers by its schema read', 
     services: { execVat },
   });
   const [good, bad] = attach(['good', 'bad']);
-  await s.send('tools', [good, bad]);
+  await s.send('tools', [
+    good,
+    bad,
+    harden({ label: 'copy', value: { json: '0' } }),
+  ]);
   t.true(s.last().tools.some((/** @type {any} */ d) => d.name === 'adoptTool'));
   s.answer([
     {
@@ -584,12 +588,20 @@ test('adoptTool grants through the grants part and answers by its schema read', 
       name: 'adoptTool',
       args: '{"messageNumber":1,"edgeName":"good","toolName":"a/b"}',
     },
+    {
+      name: 'adoptTool',
+      args: '{"messageNumber":1,"edgeName":"copy","toolName":"data"}',
+    },
   ]);
   await drain();
   t.deepEqual(resultsIn(s.last()), [
     [textOf.adoptedTool('echo', 1), false],
     [textOf.errorResult('bad schema'), true],
     [textOf.errorResult(textOf.reservedLabel('a/b')), true],
+    [
+      textOf.errorResult('A stored JSON value cannot be adopted as a tool'),
+      true,
+    ],
   ]);
   t.deepEqual(granted, [
     [good.value, 'adopted'],

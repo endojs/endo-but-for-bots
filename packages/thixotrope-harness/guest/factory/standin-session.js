@@ -98,6 +98,7 @@ const makeSession = ({ config, rowReporter }) => {
     },
     getCurrentTurn: () => undefined,
     getHistoryPage: () => harden({ turns: [] }),
+    getInventoryPage: () => harden({ rev: 0, rows: [] }),
     getUsage: () => zeroUsage,
     findTurn: () => {
       throw Error(NOT_HERE);

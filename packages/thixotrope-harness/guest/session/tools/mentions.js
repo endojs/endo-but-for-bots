@@ -30,6 +30,9 @@ import { isValidLabel } from '../labels.js';
 import { fieldBytes, isStaged } from '../staging.js';
 import { messageOf } from '../../lib/bounded.js';
 
+/** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
+const { isRemotable } = /** @type {GuestGlobals} */ (globalThis);
+
 /** @import { ToolTableEntry } from '../tool-table.js' */
 
 /** @param {string} text */
@@ -134,7 +137,7 @@ const adoptEntry = harden({
     if ('outcome' in read) return Promise.resolve(read.outcome);
     const { number, edge, name, value, runtime } = read;
     try {
-      runtime.labels.bindObject(name, value, 'adopted');
+      runtime.labels.bindAttachment(name, value, 'adopted');
     } catch (error) {
       return Promise.resolve(failed(messageOf(error)));
     }
@@ -153,6 +156,8 @@ const adoptToolEntry = harden({
     if ('outcome' in read) return read.outcome;
     const { number, name, value, runtime } = read;
     if (!isValidLabel(name)) return failed(textOf.reservedLabel(name));
+    if (!isRemotable(value))
+      return failed('A stored JSON value cannot be adopted as a tool');
     const { grants } = runtime;
     try {
       const info = await grants.schemaRead(

@@ -363,7 +363,10 @@ const methodSamples = {
       returns: shapeSamples.ContentPage,
     },
   },
-  Timer: { sleep: { args: [1000], returns: undefined } },
+  Timer: {
+    sleep: { args: [1000], returns: undefined },
+    alarm: { args: [1000], returns: far('Alarm') },
+  },
   TurnSink: {
     dispatching: { args: [0], returns: true },
     roundFinal: { args: [widenedSamples.RoundResult], returns: undefined },

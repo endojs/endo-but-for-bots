@@ -163,6 +163,7 @@ import { subagentsPart } from './subagents.js';
  *
  * @typedef {object} Runtime
  * @property {Labels} labels
+ * @property {() => void} inventoryChanged
  * @property {any} services
  * @property {any} config
  * @property {any} contextWindow the session's context window object, or
@@ -286,6 +287,7 @@ const combineHooks = all => {
 /**
  * @param {object} options
  * @param {Labels} options.labels
+ * @param {() => void} [options.inventoryChanged]
  * @param {any} options.services
  * @param {any} options.config
  * @param {any} [options.contextWindow] the session's context window
@@ -295,6 +297,7 @@ const combineHooks = all => {
  */
 export const makeRuntime = ({
   labels,
+  inventoryChanged = () => {},
   services,
   config,
   contextWindow = undefined,
@@ -309,6 +312,7 @@ export const makeRuntime = ({
   /** @type {Runtime} */
   const runtime = harden({
     labels,
+    inventoryChanged,
     services,
     config,
     contextWindow,

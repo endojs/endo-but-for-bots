@@ -341,7 +341,13 @@ export const reservedLabels = harden([
   'prototype',
 ]);
 /** `ExecPowersSource` methods the exec wrapper exposes as `powers`. */
-export const powersMethodNames = harden(['lookup', 'list', 'store', 'remove']);
+export const powersMethodNames = harden([
+  'lookup',
+  'list',
+  'store',
+  'remove',
+  'publish',
+]);
 /** States of a tool grant (`ToolGrantInfo.state`). */
 export const grantStates = harden([
   'pending',
@@ -1153,7 +1159,7 @@ const m1aShapeBuilders = {
         pending: S.PendingView,
         usage: S.UsageTotals,
       },
-      { current: S.TurnStatus },
+      { current: S.TurnStatus, inventoryRevision: count },
     ),
   RowPatch: () =>
     record(
@@ -1200,13 +1206,7 @@ const m1aShapeBuilders = {
       // M5 widening (W5.3 for W5.1; H-6): the preset's endowments.
       {
         execVat: M.remotable('ExecHandle'),
-        endowments: list(
-          record({
-            label: text(limits.endowmentLabelUnits),
-            value: M.remotable(),
-          }),
-          limits.maxEndowments,
-        ),
+        endowments: list(S.MailAttachment, limits.maxEndowments),
         // Environments (m6-interfaces.md 15.1, seam S-1; WX.1).
         workspace: M.remotable('Git'),
         shell: M.remotable('Shell'),
@@ -1343,6 +1343,29 @@ export const methodsOf = harden({
     startTurn: M.call(S.Submission).optional(count).returns(R('Turn')),
     getCurrentTurn: M.call().returns(M.or(done, view('CurrentTurn'))),
     getHistoryPage: M.call().optional(S.Cursor).returns(view('HistoryPage')),
+    getInventoryPage: M.call()
+      .optional(S.Cursor)
+      .returns(
+        record(
+          {
+            rev: count,
+            rows: list(
+              record(
+                {
+                  label: text(limits.endowmentLabelUnits),
+                  kind: M.or('value', 'object', 'subagent'),
+                },
+                {
+                  preview: text(limits.inventoryPreviewBytes),
+                  truncated: M.boolean(),
+                },
+              ),
+              limits.inventoryPageRows,
+            ),
+          },
+          { next: S.Cursor },
+        ),
+      ),
     getUsage: M.call().returns(S.UsageTotals),
   }),
   SessionInternal: () => ({
@@ -1389,6 +1412,7 @@ export const m1aMethodNames = harden({
     'startTurn',
     'getCurrentTurn',
     'getHistoryPage',
+    'getInventoryPage',
     'getUsage',
   ],
 });
@@ -1671,8 +1695,8 @@ const objectShapeBuilders = {
   /** `Composer.submit`'s optional fourth argument (M5). */
   SubmitOptions: () => record({}, { attachments: S.Attachments }),
   /** A stored JSON value as `ExecPowersSource` carries it: the model's text. */
-  JsonValue: () => record({ json: text(limits.labelValueBytes) }),
-  /** `ExecPowersSource.lookup` answer: nothing, an object, or stored JSON. */
+  // JsonValue is shared with mail attachments in base.js.
+  /** `ExecPowersSource.lookup` answer. */
   PowersValue: () => M.or(done, M.remotable(), S.JsonValue),
   /**
    * One granted tool as `SessionGrants.list` / `ToolGrant.describe` show it.
@@ -1700,9 +1724,14 @@ const objectInterfaceBuilders = {
   ExecPowersSource: () =>
     M.interface('ExecPowersSource', {
       lookup: M.call(S.Label).returns(S.PowersValue),
-      list: M.call().returns(list(S.Label, limits.maxLabels)),
+      list: M.call().returns(
+        list(S.Label, limits.maxLabels + limits.maxDescendants),
+      ),
       store: M.call(S.Label, M.or(M.remotable(), S.JsonValue)).returns(done),
       remove: M.call(S.Label).returns(M.boolean()),
+      publish: M.call(S.Label, M.remotable(), M.remotable()).returns(
+        M.remotable(),
+      ),
     }),
   /** Session vat: the session's granted tools (R3-6). */
   SessionGrants: () =>

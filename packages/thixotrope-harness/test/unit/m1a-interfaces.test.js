@@ -180,6 +180,7 @@ const vatEvents = {
   end: { type: 'end', turnId: 't1', status: 'completed' },
   abort: { type: 'abort', turnId: 't1', reason: texts.frameLimit },
   pending: { type: 'pending', pending: pendingView },
+  inventory: { type: 'inventory', revision: 2 },
 };
 const sessionRow = {
   session,
@@ -545,6 +546,7 @@ const methodSamples = {
     startTurn: { args: [{ text: 'hi' }, 5], returns: turn },
     getCurrentTurn: { args: [], returns: shapeSamples.CurrentTurn },
     getHistoryPage: { args: ['h1'], returns: shapeSamples.HistoryPage },
+    getInventoryPage: { args: [], returns: { rev: 0, rows: [] } },
     getUsage: { args: [], returns: totals },
   },
   SessionInternal: {

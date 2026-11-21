@@ -21,6 +21,7 @@ import { limits } from '../lib/limits.js';
 import { utf8Bytes } from '../lib/bounded.js';
 import { texts, textOf } from '../lib/guards/base.js';
 import { bigintsAsDecimalStrings } from './render.js';
+import { publishMethods } from './publication.js';
 import { isWrapper, MODEL_OBJECT_TEXT } from './membrane.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -108,6 +109,17 @@ export const makeCallPowers = ({ source, callE, isOpen, membrane }) => {
     return callE(source).remove(label);
   };
 
-  return harden({ lookup, list, store, remove });
+  /**
+   * @param {unknown} label
+   * @param {unknown} methods
+   */
+  const publish = async (label, methods) => {
+    if (!isOpen()) return expired();
+    if (badLabel(label)) return refuse(LABEL_TEXT);
+    return publishMethods(methods, (executor, facade) =>
+      callE(source).publish(label, executor, facade),
+    );
+  };
+  return harden({ lookup, list, store, remove, publish });
 };
 harden(makeCallPowers);

@@ -22,6 +22,7 @@ import {
   powersMethodNames,
 } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
+import { BUILTIN_PRESETS } from '../../guest/lib/preset-catalog.js';
 import { utf8Bytes } from '../../guest/lib/bounded.js';
 import {
   capabilityParagraph,
@@ -128,7 +129,11 @@ test('the guest section is Fae’s with the capability and exec paragraphs rewri
 
 test('part 2 describes M5’s per-call powers and names the tools M5 offers', t => {
   for (const method of powersMethodNames) {
-    t.true(capabilityParagraph.includes(`E(powers).${method}(`), method);
+    t.true(
+      capabilityParagraph.includes(`E(powers).${method}(`) ||
+        capabilityParagraph.includes(`powers.${method}(`),
+      method,
+    );
   }
   t.regex(
     capabilityParagraph,
@@ -288,6 +293,25 @@ test('every prompt is the base plus sections, with no stray value (Fae system-pr
         .replace('it reads as undefined', '')
         .replace('typeof target is "undefined"', '');
       t.false(/\bundefined\b|\[object |\bNaN\b/.test(said));
+    }
+  }
+});
+
+test('built-in prompt sizes preserve inline creation for the default presets', t => {
+  for (const preset of BUILTIN_PRESETS) {
+    for (const isSpoken of [false, true]) {
+      const bytes = utf8Bytes(
+        promptTextFor({ spoken: isSpoken }, { presetSnapshot: preset }),
+      );
+      // The spoken introduction and full development environment together
+      // already require staging; all other defaults fit the inline frame.
+      const staged =
+        isSpoken && ['development', 'voice'].includes(preset.label);
+      t.is(
+        bytes > limits.inlineBytes,
+        staged,
+        `${preset.label}, spoken=${isSpoken}: ${bytes} bytes`,
+      );
     }
   }
 });

@@ -423,6 +423,9 @@ export const limits = harden({
    * rule), not on how many were ever made: `remove` frees a slot.
    */
   maxLabels: 256,
+  /** Each inventory row carries at most 80 label units and 256 preview bytes. */
+  inventoryPageRows: 16,
+  inventoryPreviewBytes: 256,
   /** One stored JSON value (model text, never parsed in the session vat). */
   labelValueBytes: core.inlineBytes,
   /** All stored JSON values of one session together. */

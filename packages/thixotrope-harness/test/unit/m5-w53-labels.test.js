@@ -60,6 +60,30 @@ test('labels follow the endowment rule (R3-22)', t => {
   });
 });
 
+test('adopted copies bind as JSON and keep the original reference identity for objects', t => {
+  const labels = makeLabels();
+  const json = '{"json":"literal","nested":[1,false,null]}';
+  labels.bindAttachment('copy', harden({ json }), 'adopted');
+  t.deepEqual(labels.get('copy'), {
+    kind: 'json',
+    text: json,
+    bytes: json.length,
+  });
+  labels.bindAttachment('ref', notes, 'adopted');
+  const ref = labels.get('ref');
+  t.is(ref?.kind === 'object' && ref.value, notes);
+  for (const invalid of [
+    '{',
+    'null,"other":0',
+    JSON.stringify('界'.repeat(3000)),
+  ]) {
+    t.throws(() =>
+      labels.bindAttachment('bad', harden({ json: invalid }), 'adopted'),
+    );
+    t.is(labels.get('bad'), undefined);
+  }
+});
+
 test('no silent overwrite; remove frees the label', t => {
   const labels = makeLabels();
   labels.bindJson('x', '1');

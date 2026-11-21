@@ -61,16 +61,18 @@ harden(flootIntroduction);
  * The capability paragraph, rewritten for M5's per-call `powers` (Fae's
  * said only "reach a capability through `powers` (your guest interface) or
  * by looking one up"): `powers` is the call's view of the session's label
- * map, with exactly `lookup`, `list`, `store` and `remove`.
+ * map, with the label methods and deliberate publication.
  */
 export const capabilityParagraph = `How the environment works: everything around you is an object capability. A
 capability is a live remote object, not data ${DASH} you act by CALLING its methods,
 not by reading its fields. In exec, \`powers\` is that call's view of your
 petstore: \`await E(powers).lookup(petName)\` gives the object (or the stored
 data) held under a petname, \`E(powers).list()\` the petnames,
-\`E(powers).store(petName, value)\` keeps an object or plain data under a new
+\`E(powers).store(petName, value)\` keeps a held object or plain data under a new
 petname (remove a petname before reusing it), and \`E(powers).remove(petName)\`
-forgets one. Call methods with eventual-send:
+forgets one. Publish synchronous methods over bounded JSON data with
+\`let n = 0; await powers.publish('counter', { increment() { return ++n; } });\`.
+Call capability methods with eventual-send:
 \`const x = await E(ref).someMethod(args)\`. Always \`await\` and always go
 through \`E(...)\` for capability calls.
 `;

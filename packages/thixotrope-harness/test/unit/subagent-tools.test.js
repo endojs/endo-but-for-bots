@@ -275,7 +275,14 @@ test('spawnSubagent: name rule, the request, the handle bound, uniqueness', asyn
   const tool = Far('Tool', {});
   const { call, part } = setup({
     delegation: fake.delegation,
-    seeds: [{ label: 'notes', value: tool, source: 'endowment' }],
+    seeds: [
+      { label: 'notes', value: tool, source: 'endowment' },
+      {
+        label: 'data',
+        value: harden({ json: '[0,false,null]' }),
+        source: 'endowment',
+      },
+    ],
   });
   for (const name of ['Researcher', 'a/b', `a${'b'.repeat(63)}`, '9lives']) {
     // eslint-disable-next-line no-await-in-loop
@@ -291,7 +298,10 @@ test('spawnSubagent: name rule, the request, the handle bound, uniqueness', asyn
       call(spawnTool, {
         name: 'helper-1',
         systemPrompt: 'Be brief.',
-        attachments: [{ name: 'doc', petName: 'notes' }],
+        attachments: [
+          { name: 'doc', petName: 'notes' },
+          { name: 'data', petName: 'data' },
+        ],
       }).result,
     ),
     ['ok', mailTextOf.spawned('helper-1')],
@@ -300,7 +310,10 @@ test('spawnSubagent: name rule, the request, the handle bound, uniqueness', asyn
   t.is(request.name, 'helper-1');
   t.is(request.systemPrompt, 'Be brief.');
   t.is(request.at, 1234, 'the claim time of the current turn');
-  t.deepEqual(request.attachments, [{ label: 'doc', value: tool }]);
+  t.deepEqual(request.attachments, [
+    { label: 'doc', value: tool },
+    { label: 'data', value: { json: '[0,false,null]' } },
+  ]);
   t.is(part.handleOf('helper-1'), fake.children.get('helper-1')?.handle);
 
   t.deepEqual(await outcome(call(spawnTool, { name: 'helper-1' }).result), [
@@ -362,10 +375,6 @@ test('spawnSubagent: systemPrompt inline only; attachment refusals before any se
   t.is(
     await refused([{ name: 'x', petName: 'nothing' }]),
     textOf.unknownLabel('nothing'),
-  );
-  t.is(
-    await refused([{ name: 'x', petName: 'note' }]),
-    '"note" holds a stored value, not a capability; use lookup to read it',
   );
   t.is(
     await refused([{ name: 'x', petName: 'subagents/ghost' }]),

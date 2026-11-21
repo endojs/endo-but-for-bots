@@ -87,6 +87,23 @@ const script = harden({
       exec('const r = zz; return r === undefined;'),
       exec("const n = await E(powers).lookup('notes'); return E(n).read();"),
     ]),
+    turnOf('publish counter', [
+      exec(
+        "let n = 0; await powers.publish('counter', { increment() { return ++n; }, async unavailable() { throw Error('private detail'); } }); return true;",
+      ),
+    ]),
+    turnOf('call counter', [
+      exec(
+        "const c = await powers.lookup('counter'); return E(c).increment();",
+      ),
+      exec(
+        "const c = await powers.lookup('counter'); return E(c).increment();",
+      ),
+      exec(
+        "const c = await powers.lookup('counter'); try { await E(c).unavailable(); return false; } catch (error) {return !error.message.includes('private detail');}",
+      ),
+      call('remove', { petName: 'counter' }),
+    ]),
     turnOf('expired', [
       exec(
         "try { await keep.lookup('notes'); return 'live'; } catch (e) { return e.message; }",
@@ -231,6 +248,16 @@ run('acceptance 3 (remote), 4, 5, 8 and K7', async t => {
   t.deepEqual(undeclared, ['true', false], 'an undeclared name is undefined');
   t.deepEqual(powersResults[5], [rendered('remember the milk'), false]);
   t.true((await E(fixtures.notes).calls()).includes('read'));
+
+  const published = await runTurn(slice, session, live, 'publish counter');
+  t.deepEqual(await resultsOf(published.turn), [['true', false]]);
+  const invoked = await runTurn(slice, session, live, 'call counter');
+  t.deepEqual(await resultsOf(invoked.turn), [
+    ['1', false],
+    ['2', false],
+    ['true', false],
+    [textOf.removed('counter'), false],
+  ]);
 
   const expired = await runTurn(slice, session, live, 'expired');
   t.deepEqual(await resultsOf(expired.turn), [

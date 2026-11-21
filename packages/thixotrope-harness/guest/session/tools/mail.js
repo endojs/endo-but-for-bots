@@ -45,7 +45,7 @@ import {
 } from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
 import { parseClosedArgs } from '../../lib/tool-args.js';
-import { messageOf } from '../../lib/bounded.js';
+import { fitsFrame, messageOf } from '../../lib/bounded.js';
 import { listingText } from '../../lib/mail-text.js';
 import { fieldBytes, isStaged } from '../staging.js';
 import { readArgs } from './objects.js';
@@ -157,7 +157,7 @@ const draftOf = (context, values, staged) => {
       const pet = pets[i] ?? label;
       if (seen.has(label)) return refused(textOf.duplicateAttachment(label));
       seen.add(label);
-      const found = heldObject(context, pet);
+      const found = heldObject(context, pet, true);
       if ('refused' in found) return refused(found.refused);
       attachments.push(harden({ label, value: found.value }));
       parts.push(`@${label}`);
@@ -225,9 +225,10 @@ const post = async (context, { values, staged }, to, more, sentText) => {
   if ('outcome' in draft) return draft.outcome;
   await null;
   try {
-    const { results } = await E(context.services.mail).post(
-      harden({ to, ...draft, ...more }),
-    );
+    const request = harden({ to, ...draft, ...more });
+    if (draft.attachments.length && !fitsFrame(request))
+      return failed(mailTexts.frameLimit);
+    const { results } = await E(context.services.mail).post(request);
     const lines = results.map(
       (/** @type {any} */ r, /** @type {number} */ i) =>
         r.refused ?? sentText(i),

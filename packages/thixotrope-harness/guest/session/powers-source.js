@@ -22,6 +22,7 @@
  * Guest rules.
  */
 import { interfaces } from '../lib/guards/session.js';
+import { makePublications } from './publications.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { Labels } from './labels.js' */
@@ -31,8 +32,9 @@ const { makeExo } = /** @type {any} */ (globalThis);
 /**
  * The `ExecPowersSource` over one label map.
  * @param {Labels} labels
+ * @param {ReturnType<typeof makePublications>} [publish]
  */
-export const makePowersSource = labels =>
+export const makePowersSource = (labels, publish) =>
   makeExo('ExecPowersSource', interfaces.ExecPowersSource, {
     /** @param {string} label */
     lookup(label) {
@@ -52,6 +54,15 @@ export const makePowersSource = labels =>
       if (isRemotable(value)) labels.bindObject(label, value, 'stored');
       else labels.bindJson(label, value.json);
     },
+    /**
+     * @param {string} label
+     * @param {any} executor
+     * @param {any} facade
+     */
+    publish(label, executor, facade) {
+      if (!publish) throw Error('Publication needs an active exec call');
+      return publish(label, executor, facade);
+    },
     /** @param {string} label */
     remove(label) {
       return labels.remove(label);
@@ -67,5 +78,5 @@ harden(makePowersSource);
 export const powersPart = harden({
   name: /** @type {'powers'} */ ('powers'),
   /** @param {{ labels: Labels }} runtime */
-  make: runtime => makePowersSource(runtime.labels),
+  make: runtime => makePowersSource(runtime.labels, makePublications(runtime)),
 });

@@ -17,7 +17,6 @@ import {
   mailToolNames,
 } from '../../guest/lib/guards/session.js';
 import { limits } from '../../guest/lib/limits.js';
-import { notCapabilityText } from '../../guest/session/tools/inspection.js';
 import { mailToolEntries } from '../../guest/session/tools/mail.js';
 /* eslint-enable import/no-relative-packages */
 import {
@@ -124,6 +123,37 @@ test('send: recipients and attachments by label, the body with @edges, the sent 
   t.false('inReplyTo' in draft);
 });
 
+test('send carries a held reference and stored JSON in the same package', async t => {
+  const { context, drafts } = setup();
+  const outcome = await run(context, 'send', {
+    recipient: 'bob',
+    strings: ['use ', ' with ', ''],
+    edgeNames: ['object', 'data'],
+    petNames: ['notes', 'config'],
+  });
+  t.is(outcome.status, 'ok');
+  t.is(drafts[0].attachments[0].value, notes);
+  t.deepEqual(drafts[0].attachments[1], {
+    label: 'data',
+    value: { json: '{"a":1}' },
+  });
+});
+
+test('send refuses an expanded copy package over the frame bound before posting', async t => {
+  const { context, labels, drafts } = setup();
+  const json = JSON.stringify('a'.repeat(limits.labelValueBytes - 2));
+  labels.bindJson('big', json);
+  const outcome = await run(context, 'send', {
+    recipient: 'bob',
+    strings: [],
+    edgeNames: ['a', 'b', 'c', 'd'],
+    petNames: ['big', 'big', 'big', 'big'],
+  });
+  t.is(outcome.status, 'failed');
+  t.is(outcome.text, mailTexts.frameLimit);
+  t.is(drafts.length, 0);
+});
+
 test('send: a single recipient string; an edge without a pet name attaches its own label', async t => {
   const { context, drafts } = setup();
   const outcome = await run(context, 'send', {
@@ -179,10 +209,6 @@ test('send: refusals before any post (section 11 probes)', async t => {
     [
       { recipient: 'ann', strings: ['x'], petNames: ['missing'] },
       textOf.unknownLabel('missing'),
-    ],
-    [
-      { recipient: 'ann', strings: ['x'], petNames: ['config'] },
-      notCapabilityText('config'),
     ],
     [
       {

@@ -405,7 +405,10 @@ const m1bShapeBuilders = {
   /** One attachment of a message (R3-8): its label and the object. */
   Attachment: () => record({ label: S.EdgeLabel, value: M.remotable() }),
   /** A message's attachments (R4-99: 32 slots). */
-  Attachments: () => list(S.Attachment, limits.maxAttachments),
+  JsonValue: () => record({ json: text(limits.inlineBytes) }),
+  AttachmentValue: () => M.or(M.remotable(), S.JsonValue),
+  MailAttachment: () => record({ label: S.EdgeLabel, value: S.AttachmentValue }),
+  Attachments: () => list(S.MailAttachment, limits.maxAttachments),
   /**
    * The exec vat's `splitArgs` answer (m9-interfaces.md D-M9-14, seam S10;
    * moved here from `./mail.js` by WX.1): the arguments' JSON with every

@@ -69,7 +69,7 @@ export const objectToolDescriptions = harden({
   store: harden({
     name: 'store',
     description:
-      'Store a JSON-serializable value under a petname. The value is kept by this session and can be retrieved with lookup.',
+      'Store a JSON value under a new petname in the session inventory. In exec, use powers.store for a held capability and powers.publish for a new object with callable methods.',
     parameters: JSON.stringify({
       type: 'object',
       properties: {

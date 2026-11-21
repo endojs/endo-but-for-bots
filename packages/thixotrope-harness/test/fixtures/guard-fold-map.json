@@ -230,6 +230,26 @@
   "m5FactoryShapes.PresetSnapshot": "a copy of shapes.PresetSnapshot"
  },
  "changed": {
+  "shapes.Attachments": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
+  "shapes.SubmitOptions": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
+  "shapes.Envelope": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
+  "shapes.MailDraft": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
+  "shapes.SpawnRequest": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
+  "shapes.AskRequest": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
+  "shapes.OperatorDraft": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
+  "shapes.OperatorReply": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
+  "interfaces.Composer": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
+  "interfaces.Outbox": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
+  "interfaces.OperatorMailbox": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
+  "interfaces.OperatorMessage": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
+  "interfaces.Delegation": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
+  "interfaces.SubagentHandle": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
+  "shapes.WatchSnapshot": "J-12596: optional revision of the session inventory",
+  "interfaces.ExecPowersSource": "J-12596: supervise a published object and list live child bindings",
+  "interfaces.Timer": "J-12596: cancellable alarms supervise calls to an idle publisher",
+  "methodNames.ExecPowersSource": "J-12596: add publish",
+  "methodNames.Timer": "J-12596: add alarm",
+  "powersMethodNames": "J-12596: add publish",
   "m4Shapes.AccountsBatch": "HR-SYN-34 (F2): gains the optional closed and reason fields a closed watch answers (m4-interfaces.md 6); the keys were already in the gateway's vocabulary",
   "m4Interfaces.AccountsSubscription": "HR-SYN-34 (F2): next() answers the widened AccountsBatch",
   "shapes.HarnessStatus": "HR-GUEST-12 (step 3): gains the optional error field, the factory's failed start-listener registration (no restart recovery); the key was already in the gateway's vocabulary",
@@ -298,6 +318,8 @@
   "toolArgumentNames"
  ],
  "added": {
+  "shapes.MailAttachment": "J-12596: a named edge carrying a bounded copy or an object reference",
+  "shapes.AttachmentValue": "J-12596: an object reference or bounded JSON text on a mail edge",
   "shapes.ExecutionState": "WX.1 for M6 (m6-interfaces.md 15).1: the sandbox execution state",
   "shapes.CompactionAsk": "WX.1 for M8 (m8-interfaces.md 10) G-1: RoundRequest.compaction",
   "shapes.CompactionStarted": "WX.1 for M8 (m8-interfaces.md 10) G-1: record kind compaction-started",
@@ -325,6 +347,8 @@
  },
  "vocabularyAdded": {
   "keys": [
+   "inventoryRevision",
+   "truncated",
    "askTimeoutSeconds",
    "askedAt",
    "body",
@@ -397,6 +421,8 @@
    "workspace"
   ],
   "methods": [
+   "alarm",
+   "getInventoryPage",
    "addressOf",
    "answer",
    "ask",

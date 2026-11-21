@@ -159,6 +159,8 @@ export const m5Later = harden({
 export const seamLater = harden({
   shapes: harden([
     'SplitArgs',
+    'AttachmentValue',
+    'MailAttachment',
     'MailType',
     'MailBody',
     'FormFieldKind',

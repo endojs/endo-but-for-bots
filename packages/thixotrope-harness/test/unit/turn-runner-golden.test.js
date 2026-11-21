@@ -7,7 +7,7 @@
 // with a turn still running. Everything the vat sends (every Endpoint,
 // publisher, row reporter and archive call, in delivery order) and
 // everything it keeps (the records, history pages, usage) is digested; the
-// digest was taken on the runner before the step-3 split
+// initial digest was taken on the runner before the step-3 split
 // (`9bb9f4f2ea`), so a split that moves a record, an event, a send or a
 // promise hop changes it.
 //
@@ -30,9 +30,13 @@ const { E, Far, makePromiseKit, passStyleOf } = /** @type {GuestGlobals} */ (
   globalThis
 );
 
-/** The digest of the trace on the runner before the split. */
+/**
+ * Against the original 1,413-entry trace, publication changed the store
+ * description in 172 round requests and inventory added its revision to
+ * the watch snapshot. Every other recorded field and send is identical.
+ */
 const GOLDEN =
-  'eed428b3b8c7c558fcfedd2cde5a32683240c2ee3b60eba9be4bf7a27a1a54f7';
+  '492d175f8b392ff56cb2fecae4fd54f50eb493dc7138c58277aa89445cabcfd8';
 
 const guestRoot =
   process.env.T3_GUEST_ROOT ??
@@ -96,10 +100,12 @@ const makeTracedSession = async (trace, key) => {
     /** @param {any} request */
     seal: request => {
       trace.push(['seal', request]);
-      return E(archive.port).seal(request).then(answer => {
-        trace.push(['sealed', answer]);
-        return answer;
-      });
+      return E(archive.port)
+        .seal(request)
+        .then(answer => {
+          trace.push(['sealed', answer]);
+          return answer;
+        });
     },
   });
   const makeIncarnation = () => {
@@ -209,7 +215,11 @@ const makeTracedSession = async (trace, key) => {
       const toolCalls = [];
       for (let i = 0; i < n; i += 1) {
         toolCalls.push(
-          harden({ callId: `c${round}.${i}`, name: 'echo', args: `{"i":${i}}` }),
+          harden({
+            callId: `c${round}.${i}`,
+            name: 'echo',
+            args: `{"i":${i}}`,
+          }),
         );
       }
       req.sink.roundFinal(
@@ -376,7 +386,7 @@ const runTrace = async () => {
   return trace;
 };
 
-test('the turn runner sends and keeps exactly what it did before the split', async t => {
+test('the turn runner matches the reviewed delivery and record trace', async t => {
   const trace = await runTrace();
   const canon = makeCanon();
   const lines = trace.map(entry => JSON.stringify(canon(entry)));

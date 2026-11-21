@@ -123,3 +123,98 @@ run(
     t.is((await E(parent).getExecutionState()).state, 'stopped');
   },
 );
+
+run(
+  'a child uses delegated copy data and the same published counter',
+  async t => {
+    t.timeout(5 * 60_000);
+    const state = await startFromTemplate(template, { t });
+    const slice = await makeSlice(state);
+    const data = { json: 'ordinary field', nested: [0, false, null] };
+    const script = harden({
+      turns: [
+        commandTurn('delegate mixed values', [
+          [
+            execCall(
+              "let n = 0; await powers.publish('counter', { increment() { return ++n; } }); return true;",
+            ),
+          ],
+          [toolCall('store', { petName: 'data', value: data })],
+          [
+            toolCall('spawnSubagent', {
+              name: 'reader',
+              attachments: [
+                { name: 'counter', petName: 'counter' },
+                { name: 'seed', petName: 'data' },
+              ],
+            }),
+          ],
+          [
+            toolCall('askSubagent', {
+              name: 'reader',
+              task: 'return mixed values',
+              attachments: [{ name: 'parcel', petName: 'data' }],
+            }),
+          ],
+          [execCall("return E(await powers.lookup('counter')).increment();")],
+        ]),
+        commandTurn('return mixed values', [
+          [
+            toolCall('adopt', {
+              messageNumber: 1,
+              edgeName: 'parcel',
+              petName: 'received',
+            }),
+          ],
+          [
+            execCall(
+              "const seed = await powers.lookup('seed'); const parcel = await powers.lookup('received'); const n = await E(await powers.lookup('counter')).increment(); await powers.store('proof', {seed,parcel,n}); return true;",
+            ),
+          ],
+          [
+            toolCall('send', {
+              recipient: 'user',
+              strings: ['proof '],
+              edgeNames: ['proof'],
+            }),
+          ],
+        ]),
+        commandTurn('copy as address', [
+          [
+            toolCall('send', {
+              recipient: 'data',
+              strings: ['invalid destination'],
+            }),
+          ],
+        ]),
+      ],
+    });
+    const { backend } = await slice.makeBackend(script);
+    const parent = await startEnvironmentSession(slice, backend);
+    const live = await slice.subscribe(parent);
+    t.teardown(() => live.stop());
+    const turn = await runTurn(slice, parent, live, 'delegate mixed values');
+    const results = toolResultsOf(await turnRecords(turn.turn));
+    t.deepEqual(
+      results.map(r => r.failed),
+      [false, false, false, false, false],
+      JSON.stringify(results),
+    );
+    t.is(results.at(-1)?.result, '2');
+    const mailbox = await E(E(slice.harness).getOperator()).getMail();
+    const { messages } = await E(mailbox).list();
+    const row = messages.find(
+      (/** @type {any} */ m) => m.body === 'proof @proof',
+    );
+    t.truthy(row);
+    const { json } = await E(row.message).take('proof');
+    t.deepEqual(JSON.parse(json), { seed: data, parcel: data, n: 1 });
+    const refused = await runTurn(slice, parent, live, 'copy as address');
+    const [failure] = toolResultsOf(await turnRecords(refused.turn));
+    t.true(failure.failed);
+    t.regex(
+      failure.result,
+      /No mail recipient is held under the petname "data"/u,
+    );
+  },
+);

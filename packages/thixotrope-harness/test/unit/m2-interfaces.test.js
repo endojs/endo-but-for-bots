@@ -143,6 +143,7 @@ const M1A_METHODS = harden({
     'startTurn',
     'getCurrentTurn',
     'getHistoryPage',
+    'getInventoryPage',
     'getUsage',
   ],
   SessionInternal: ['rowSnapshot'],

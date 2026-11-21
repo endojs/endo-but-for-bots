@@ -474,6 +474,11 @@ const methodSamples = {
       args: ['x'],
       returns: true,
     },
+    publish: {
+      guard: interfaces.ExecPowersSource,
+      args: ['counter', notes, notes],
+      returns: notes,
+    },
   },
   SessionGrants: {
     grantTool: {
@@ -656,9 +661,11 @@ test('a return outside its shape is refused (33 attachments, a long label)', asy
   const exo = /** @type {any} */ (
     makeExo('ExecPowersSource', interfaces.ExecPowersSource, {
       lookup: () => harden({ json: 'x'.repeat(limits.labelValueBytes + 1) }),
-      list: () => harden(Array(limits.maxLabels + 1).fill('a')),
+      list: () =>
+        harden(Array(limits.maxLabels + limits.maxDescendants + 1).fill('a')),
       store: () => undefined,
       remove: () => true,
+      publish: () => notes,
     })
   );
   t.throws(() => exo.lookup('x'));
@@ -682,7 +689,10 @@ test('M5 names and the closed argument lists', t => {
     ['list', 'lookup', 'store', 'remove', 'describeCapability', 'readSources'],
   );
   t.deepEqual([...packageToolNames], ['adopt', 'adoptTool']);
-  t.deepEqual([...powersMethodNames], ['lookup', 'list', 'store', 'remove']);
+  t.deepEqual(
+    [...powersMethodNames],
+    ['lookup', 'list', 'store', 'remove', 'publish'],
+  );
   t.deepEqual(
     [...reservedLabels],
     ['user', 'tools', 'subagents', '__proto__', 'constructor', 'prototype'],
