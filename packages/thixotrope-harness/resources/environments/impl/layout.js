@@ -94,6 +94,7 @@ const assertKey = key => {
  * @typedef {object} Layout
  * @property {() => string} tag this state's tag (the `tag` file written on first use)
  * @property {(key: string) => EnvironmentDirs} dirsOf
+ * @property {(key: string) => boolean} hasProjectSeed
  * @property {(key: string, seed: WorkspaceSeed) => void} registerSeed
  * @property {(key: string) => Promise<void>} ensureWorkspace the repository,
  *   home and run directories, made once behind the marker (serial per key)
@@ -202,6 +203,7 @@ export const makeLayout = ({
       return tagValue;
     },
     dirsOf,
+    hasProjectSeed: key => seeds.has(key),
     registerSeed: (key, seed) => {
       assertKey(key);
       assertWorkspaceSeed(seed);

@@ -314,6 +314,14 @@ for (const binary of /** @type {const} */ (['podman', 'docker'])) {
     await runtime.start(env);
     t.deepEqual(calls(), [expectedRun(binary, env)]);
 
+    const seeded = { ...envOf('e3'), project: true };
+    await runtime.start(seeded);
+    t.true(
+      calls()[1].includes(
+        '/tmp/thix:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=0700,size=512m',
+      ),
+    );
+
     // Configured limits replace the defaults (W-12).
     const limited = setUp(t, binary, {
       settings: { pids: 64, memoryBytes: 268_435_456, cpus: 1 },
@@ -743,6 +751,37 @@ realTest('[real-runtime] the container is confined (R3-45, R7-9)', async t => {
   t.deepEqual(envLines((await run('env')).stdout), [...a3Env].sort());
   t.true(existsSync(join(env.workspace, 'w')), 'the workspace is the mount');
 });
+
+realTest(
+  '[real-runtime] only a project has private executable scratch',
+  async t => {
+    const { runtime, envOf } = realSetUp(t);
+    const env = envOf('e1');
+    await runtime.start(env);
+    const outside = await runtime.exec(
+      env,
+      ['test', '!', '-e', '/tmp/thix'],
+      execOptions,
+    );
+    t.is(outside.exitCode, 0);
+    await runtime.stop(env);
+    const project = { ...env, project: true };
+    await runtime.start(project);
+    const checked = await runtime.exec(
+      project,
+      [
+        'sh',
+        '-ec',
+        'stat -c "%u:%g:%a" /tmp/thix; stat -f -c %T /tmp/thix; ' +
+          'cp /bin/true /tmp/thix/probe; /tmp/thix/probe; ' +
+          'cp /bin/true /tmp/probe; ! /tmp/probe',
+      ],
+      execOptions,
+    );
+    t.is(checked.exitCode, 0);
+    t.is(decode(checked.stdout), '1000:1000:700\ntmpfs\n');
+  },
+);
 
 realTest('[real-runtime] timeout, stop and sweep', async t => {
   const { runtime, envOf, realTag } = realSetUp(t);

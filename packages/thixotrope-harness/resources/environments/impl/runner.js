@@ -48,6 +48,7 @@ import {
  *   uses (`layout.js`, contract 5.2)
  * @property {() => string} tag
  * @property {(key: string) => { workspace: string, home: string, run: string }} dirsOf
+ * @property {(key: string) => boolean} [hasProjectSeed]
  * @property {(key: string) => Promise<void>} ensureWorkspace
  */
 
@@ -129,6 +130,7 @@ export const makeRunner = ({ runtime, settings, layout, timers }) => {
       home,
       run,
       settings,
+      ...(layout.hasProjectSeed?.(key) && { project: true }),
     });
   };
 

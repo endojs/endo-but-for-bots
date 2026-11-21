@@ -209,10 +209,17 @@ test('Git-first and shell-first sessions get independent writable project checko
   const { seed, bundle } = makeSeed(stateDir);
   const layout = makeLayout({ stateDir });
   const settings = harden({ runtime: 'fake', allowedCommands: ['sh'] });
+  const runtime = defaultRuntimes.fake();
   const parts = makeBindingParts({
     settings,
     layout,
-    runtime: defaultRuntimes.fake(),
+    runtime: {
+      ...runtime,
+      start: env => {
+        t.true(env.project);
+        return runtime.start(env);
+      },
+    },
     tag: layout.tag(),
     timers: makeTimers(),
     trace: () => {},

@@ -26,12 +26,18 @@ const run = promisify(execFile);
 const presetName = 'Thixotrope development';
 const { workspaceSeedLabel: markerLabel } =
   await import('../guest/lib/workspace-seed.js');
-const instructions = [
+const projectWorkflow = [
   'You are developing the Thixotrope harness in your own persistent Git checkout at /workspace.',
   'On first use, run sh -c "cd /workspace && thix-selfdev-prepare" to install the locked Linux dependencies and build the worker boot bundles offline.',
   'Run package commands from /workspace/packages/thixotrope-harness. For example, run corepack yarn test test/unit/m5-w58-presets.test.js.',
-  'Reproduce the issue with a focused test, edit the checkout and rerun the test. Return git diff HEAD for review. For a nested supervisor use a short private state directory under /home/node, where its staged Linux worker can execute.',
+  'Reproduce the issue with a focused test, edit the checkout and rerun the test. Return git diff HEAD for review.',
 ].join(' ');
+const instructions = `${projectWorkflow} For nested integration tests set THIX_HARNESS_TMP=/tmp/thix. For a separate supervisor create a short private state directory on that same Linux scratch mount.`;
+// Upgrade our earlier published defaults while preserving operator edits.
+const earlierInstructions = [
+  'Use a separate short /tmp state path for nested supervisors.',
+  'For a nested supervisor use a short private state directory under /home/node, where its staged Linux worker can execute.',
+].map(suffix => `${projectWorkflow} ${suffix}`);
 
 /**
  * @param {string} state
@@ -151,7 +157,16 @@ const savePreset = async (catalog, admin, seed, legacy) => {
     (prior.template !== 'development' || previousSeed?.project !== seed.project)
   )
     throw Error('The project preset name is already in use');
-  if (previousSeed?.commit === seed.commit && Boolean(marker) === legacy) {
+  const prompt =
+    prior?.instructions === undefined ||
+    earlierInstructions.includes(prior.instructions)
+      ? instructions
+      : prior.instructions;
+  if (
+    previousSeed?.commit === seed.commit &&
+    Boolean(marker) === legacy &&
+    prior.instructions === prompt
+  ) {
     if (!prior.available) throw Error(prior.unavailableReason);
     return;
   }
@@ -169,7 +184,7 @@ const savePreset = async (catalog, admin, seed, legacy) => {
     description:
       prior?.description ??
       'Develop and test Thixotrope in a private checkout of the configured project revision.',
-    instructions: prior?.instructions ?? instructions,
+    instructions: prompt,
     networkPolicy: prior?.networkPolicy ?? 'off',
     objects: prior?.objects ?? [
       { kind: 'git-workspace', label: 'workspace' },

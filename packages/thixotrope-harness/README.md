@@ -64,8 +64,10 @@ use that same checkout. The package is `/workspace/packages/thixotrope-harness`.
 The preset tells the model how to set up the locked Linux dependencies on
 first use. Reopen the session to resume an edit. Ask for `git diff HEAD` to
 review tracked changes, and stage new files before requesting the diff.
-For integration debugging, put the nested supervisor’s state in a short
-private path under `/home/node` so its staged Linux worker can execute.
+For integration debugging, set `THIX_HARNESS_TMP=/tmp/thix`. For a manually
+started supervisor, create a state directory under that path. This private
+Linux filesystem supports Unix sockets and executable workers. Its contents
+last for the lifetime of the container. Source and edits stay on `/workspace`.
 
 An operator can publish the preset to a running, provisioned state. From
 `packages/thixotrope-harness`, with Docker running and a full project checkout:

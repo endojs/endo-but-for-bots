@@ -48,6 +48,7 @@ import { environmentTextOf } from '../../../guest/lib/guards/environments.js';
  * @property {string} key the manager's `e<n>`
  * @property {string} name the container name, `thix-<tag>-<key>`
  * @property {string} tag this state's tag
+ * @property {boolean} [project] a validated project seed belongs to this session
  * @property {string} workspace the workspace directory (`/workspace`)
  * @property {string} home the home directory (`/home/node`)
  * @property {string} run the fake runtime's process-group records

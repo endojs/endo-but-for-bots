@@ -1,43 +1,15 @@
 #!/bin/sh
-# Exercise the tagged checkout inside a disposable offline container.
+# Run a seeded checkout with the normal OCI adapter and real host bind mounts.
 set -eu
-if [ "${1:-}" != --inside ]; then
-  image=${1:?usage: smoke.sh repository@sha256:digest [git-ref]}
-  here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-  repo=$(git -C "$here" rev-parse --show-toplevel)
-  git -C "$repo" archive "${2:-HEAD}" -- package.json yarn.lock .yarnrc.yml \
-    'ava-*.mjs' packages rust/endo/xsnap/src/polyfills.js |
-    docker run --rm --interactive --pull never --network none --cap-drop ALL \
-      --security-opt no-new-privileges --read-only --user 1000:1000 \
-      --pids-limit 1024 --cpus 2 --memory 4g --tmpfs /tmp \
-      --tmpfs /workspace:uid=1000,gid=1000,size=2600m,exec \
-      --tmpfs /home/node:uid=1000,gid=1000,exec --env HOME=/home/node \
-      --mount "type=bind,src=$here/smoke.sh,dst=/smoke.sh,readonly" \
-      "$image" env -i HOME=/home/node PATH=/home/node/.cargo/bin:/usr/local/bin:/usr/bin:/bin \
-        CARGO_HOME=/home/node/.cargo RUSTUP_HOME=/home/node/.rustup \
-        CARGO_TARGET_DIR=/home/node/target LANG=C.UTF-8 sh /smoke.sh --inside
-  exit
-fi
-
-cd /workspace
-tar -xf -
-test "$(corepack yarn --version)" = 4.13.0
-test "$(yarn --version)" = 4.13.0
-thix-selfdev-prepare
-cd packages/thixotrope-harness
-yarn test test/unit/session-inventory.test.js
-cd ../..
-thix=packages/thixotrope/bin/thix.js
-# The supervisor copies its executable worker into this private state.
-state=/home/node/selfdev
-node "$thix" serve "$state" > /tmp/selfdev-serve.log 2>&1 &
-pid=$!
-for i in $(seq 1 60); do
-  if [ -S "$state/control.sock" ]; then break; fi
-  if ! kill -0 "$pid" 2>/dev/null; then cat /tmp/selfdev-serve.log; exit 1; fi
-  sleep 1
-done
-node "$thix" status "$state"
-node "$thix" stop "$state"
-wait "$pid"
-thix-selfdev-prepare
+image=${1:?usage: smoke.sh repository@sha256:digest [git-ref]}
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+repo=$(git -C "$here" rev-parse --show-toplevel)
+root=$(mktemp -d)
+trap 'rm -rf "$root"' EXIT
+mkdir -m 700 "$root/workspace" "$root/home"
+git -C "$repo" archive "${2:-HEAD}" -- package.json yarn.lock .yarnrc.yml \
+  'ava-*.mjs' packages rust/endo/xsnap/src/polyfills.js |
+  tar -xf - -C "$root/workspace"
+git -C "$root/workspace" init -q
+git -C "$root/workspace" -c user.name=Test -c user.email=test@example.invalid commit -qm seed --allow-empty
+node "$here/smoke.mjs" "$image" "$root"

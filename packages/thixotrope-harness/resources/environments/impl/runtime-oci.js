@@ -352,6 +352,14 @@ export const makeOciRuntime = ({
       '--read-only',
       '--tmpfs',
       '/tmp',
+      // A nested supervisor needs private Unix sockets and executes a staged
+      // worker from its state. Desktop bind mounts cannot chmod a Unix socket.
+      ...(env.project
+        ? [
+            '--tmpfs',
+            '/tmp/thix:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=0700,size=512m',
+          ]
+        : []),
       '--security-opt',
       'no-new-privileges',
       '--network',

@@ -355,6 +355,14 @@ environments ADAPTER (Node): workspaces, git (@endo/git), runner (fake | podman 
    └── agent-host BlobWriters / Content (adapter to adapter, for staged results and arguments)
 ```
 
+Project development sessions also receive a private Linux tmpfs at
+`/tmp/thix` (512 MiB, UID/GID 1000, mode 0700, `exec,nosuid,nodev`).
+The native layout selects it from the authenticated seed when starting the
+container. Nested supervisors need Linux Unix-socket permission changes and
+an executable state directory for their staged worker. Ordinary environments
+keep their existing mounts. The scratch volume is ephemeral. The checkout
+and the session home persist on their original volumes.
+
 ### 3.2 `EnvironmentsAdmin` (manager vat; inventory `environmentsAdmin`)
 
 | method | caller | crank | mode | largest message | retired break means | heaviest crank |

@@ -19663,3 +19663,21 @@ code, timeout and cleanup. Docker Desktop exposes inert tunnel entries in its
 isolated network namespace. The confinement test now checks interface state,
 addresses and routes. The final development image passed the offline smoke
 with manifest `sha256:66cbcdffa43aa016f5e4d26f866c3e3258d6dc9b969b339df0d72d53889457a9`.
+
+### J-13006 2026-11-21 Nested harness on the pinned Mac worker
+
+Terra’s live project session reproduced an inventory cursor assertion,
+changed the implementation and passed all four focused tests. A later turn
+obtained the same patch through the workspace Git capability. Its 1,530
+bytes passed `git apply --check --index` on a clean checkout of the original
+revision. SHA-256 `294bddc6a55b296de5eedf2240fff36b5cb00687aeb0c48d31f96fe81b35207e`.
+
+The live nested test caught a difference from the first image smoke. Docker
+Desktop's Mac-backed home supports opening a Unix socket but rejected
+`chmod(peers.sock)` with EINVAL. The smoke’s Linux-backed home had accepted it.
+The harness stages an executable worker in that same state directory. A
+seeded session now receives a private, executable Linux tmpfs at `/tmp/thix`
+for nested state. The host checkout and normal temporary directory retain
+their original mount settings. The image smoke now exercises the production
+OCI adapter and host bind mounts. The pinned environments adapter was
+restarted by itself so the live session could exercise the corrected mount.
