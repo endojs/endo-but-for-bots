@@ -357,7 +357,8 @@
   "texts.runnerRequired": "WX.1 for M6 (m6-interfaces.md 15).2 (R3-21)",
   "shapes.WorkspaceSeed": "The pinned project and source commit for a development workspace.",
   "m4Shapes.QuotaSeries": "A provider window with a bounded list of observed quota records.",
-  "m4Shapes.MemberHistory": "A member label, provider and bounded list of quota windows.",
+  "m4Shapes.MemberHistory": "A member label, provider, bounded quota windows and optional observed credit wallet records.",
+  "m4Shapes.CreditRecord": "A bounded observed decimal wallet balance and its confirmation times, using existing gateway vocabulary.",
   "m4Shapes.PoolHistory": "A bounded page of member histories with the pool backend, kind, label and optional next offset.",
   "m4Shapes.QuotaRecord": "One observed quota percentage with its first reading time and optional repeat count, latest confirmation and reported reset."
  },

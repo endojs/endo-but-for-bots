@@ -390,13 +390,25 @@ const m4ShapeBuilders = {
       },
       { windowMinutes: count },
     ),
+  /** Observed credit wallet balance, in the provider's decimal precision. */
+  CreditRecord: () =>
+    record(
+      {
+        from: text(subscriptionLimits.timeUnits),
+        value: text(subscriptionLimits.creditBalanceUnits),
+      },
+      { to: text(subscriptionLimits.timeUnits), count },
+    ),
   /** One member's observed quota history (no credential, no store key). */
   MemberHistory: () =>
-    record({
-      label: S.Label,
-      provider: T.Provider,
-      windows: list(T.QuotaSeries, subscriptionLimits.maxWindows),
-    }),
+    record(
+      {
+        label: S.Label,
+        provider: T.Provider,
+        windows: list(T.QuotaSeries, subscriptionLimits.maxWindows),
+      },
+      { credits: list(T.CreditRecord, subscriptionLimits.historySamples) },
+    ),
   /**
    * `Accounts.history(pool, offset?)`: one read-only page of a pool's
    * members, in member order; `next` is the offset of the following page.

@@ -16,6 +16,8 @@
  * Node only.
  */
 
+import { isCreditBalance } from './credit-history.js';
+
 /** @typedef {(name: string) => string | null | undefined} HeaderGetter */
 /** @typedef {import('./types.js').Reading} Reading */
 /** @typedef {import('./types.js').ReadingWindow} ReadingWindow */
@@ -111,16 +113,18 @@ const codexReading = (get, nowMs) => {
   }
   const hasCredits = flag(get, 'x-codex-credits-has-credits');
   const unlimited = flag(get, 'x-codex-credits-unlimited');
-  const balanceText = text(get, 'x-codex-credits-balance');
-  const balance = /^-?\d{1,24}(\.\d{1,12})?$/.test(balanceText)
-    ? balanceText
-    : undefined;
+  const rawBalance = get('x-codex-credits-balance');
+  const balance =
+    typeof rawBalance === 'string' && rawBalance.length <= MAX_HEADER_CHARS
+      ? rawBalance.trim()
+      : undefined;
   /** @type {string | undefined} */
   let credits;
-  if (balance !== undefined) credits = balance;
-  else if (unlimited === true) credits = 'unlimited';
+  if (unlimited === true) credits = 'unlimited';
+  else if (isCreditBalance(balance)) credits = balance;
   else if (hasCredits !== undefined)
     credits = hasCredits ? 'available' : 'none';
+  else if (typeof rawBalance === 'string') credits = 'unavailable';
   const reached = CODEX_REACHED.includes(
     text(get, 'x-codex-rate-limit-reached-type'),
   );

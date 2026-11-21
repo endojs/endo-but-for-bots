@@ -6,7 +6,7 @@
  * `remembered` (R4-84) until the provider is read again.
  *
  * Format: `{ format: 'thixotrope-harness-readings-3', members: [{ key,
- * provider, reading, history? }] }` (`history`: the observed quota samples
+ * provider, reading, history?, credits? }] }` (`history`: the observed quota samples
  * per window, `quota-history.js`; formats 1 and 2 load with none). `key` is the credential's store key (`k<n>`): it
  * names the entry on disk and never leaves the adapter (M1b 17.3). A reading
  * holds windows, plan, credits and times only: no token, no header value,
@@ -30,6 +30,7 @@ import { pid } from 'node:process';
 import { subscriptionLimits } from '../../../../guest/lib/subscription-limits.js';
 import { limits } from '../../../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
+import { checkCredits } from './credit-history.js';
 import { checkHistory } from './quota-history.js';
 
 /** @import { Reading, ReadingWindow } from './types.js' */
@@ -137,6 +138,7 @@ harden(checkReading);
  * @property {string} key the credential's store key
  * @property {'claude' | 'codex'} provider
  * @property {Reading} reading `source: 'remembered'` when loaded
+ * @property {import('./credit-history.js').CreditRecord[]} [credits]
  * @property {HistorySeries[]} [history] observed quota samples per window
  */
 
@@ -188,8 +190,15 @@ export const loadReadings = file => {
       seen.add(key);
       // Older formats kept no history: it starts empty, never backfilled.
       const history =
-        parsed.format === READINGS_FORMAT ? checkHistory(candidate.history) : [];
+        parsed.format === READINGS_FORMAT
+          ? checkHistory(candidate.history)
+          : [];
+      const credits =
+        parsed.format === READINGS_FORMAT
+          ? checkCredits(candidate.credits)
+          : [];
       entries.push({
+        ...(credits.length ? { credits } : {}),
         key,
         provider,
         reading,
@@ -211,15 +220,14 @@ export const formatReadings = entries =>
     format: READINGS_FORMAT,
     members: entries
       .slice(0, MAX_ENTRIES)
-      .map(({ key, provider, reading, history }) => {
+      .map(({ key, provider, reading, history, credits }) => {
         const { source: _source, ...kept } = reading;
         return {
           key,
           provider,
           reading: kept,
-          ...(history === undefined || history.length === 0
-            ? {}
-            : { history }),
+          ...(credits?.length ? { credits } : {}),
+          ...(history === undefined || history.length === 0 ? {} : { history }),
         };
       }),
   })}\n`;

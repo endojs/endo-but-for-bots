@@ -62,6 +62,8 @@ export const subscriptionLimits = harden({
    * about 100 KB at most); `next` names the following page.
    */
   historyPageMembers: 4,
+  /** Optional sign, 24 integer digits, decimal point and 12 decimal places. */
+  creditBalanceUnits: 38,
   /** A plan or credit label shown to a person. */
   planUnits: 128,
   /** An ISO 8601 time as text (`2026-11-18T02:11:49.000Z` is 24). */

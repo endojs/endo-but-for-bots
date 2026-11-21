@@ -119,6 +119,7 @@ test('nothing of the upstream’s choosing gets through', t => {
     at: NOW,
     source: 'observed',
     windows: [{ name: 'primary', usedPercent: 12 }],
+    credits: 'unavailable',
     limitReached: false,
   });
   t.is(

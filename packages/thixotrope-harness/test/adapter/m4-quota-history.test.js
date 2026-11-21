@@ -44,8 +44,8 @@ const iso = (/** @type {number} */ ms) => new Date(ms).toISOString();
 
 const makeTimers = () =>
   harden({
-    after: (/** @type {number} */ _ms, /** @type {() => void} */ _fn) =>
-      () => {},
+    after:
+      (/** @type {number} */ _ms, /** @type {() => void} */ _fn) => () => {},
   });
 
 /**
@@ -221,7 +221,11 @@ test('Claude: header readings become samples per window; duplicates extend; hist
   const { core } = await setup(t);
   const pool = Far('Backend', {});
   const claude = memberEntry('claude-max', 'k1', 'claude');
-  core.register(pool, { kind: 'claude-pool', label: 'team', members: [claude] });
+  core.register(pool, {
+    kind: 'claude-pool',
+    label: 'team',
+    members: [claude],
+  });
   core.observe(pool, claude, claudeHeaders(T0, 0.1, 0.4));
   core.observe(pool, claude, claudeHeaders(T0 + MIN, 0.1, 0.4));
   core.observe(pool, claude, claudeHeaders(T0 + 2 * MIN, 0.1, 0.4));
@@ -232,6 +236,7 @@ test('Claude: header readings become samples per window; duplicates extend; hist
   const [member] = history.members;
   t.is(member.label, 'claude-max');
   t.is(member.provider, 'claude');
+  t.false('credits' in member);
   t.false(JSON.stringify(member).includes('k1'), 'no store key');
   t.deepEqual(member.windows, [
     {
@@ -245,7 +250,11 @@ test('Claude: header readings become samples per window; duplicates extend; hist
           to: iso(T0 + 2 * MIN),
           count: 3,
         },
-        { from: iso(T0 + 20 * MIN), usedPercent: 25, resetsAt: iso(T0 + 4 * HOUR) },
+        {
+          from: iso(T0 + 20 * MIN),
+          usedPercent: 25,
+          resetsAt: iso(T0 + 4 * HOUR),
+        },
       ],
     },
     {
@@ -371,7 +380,11 @@ test('persistence: history survives an incarnation; format 2 loads with none; no
   const { core, file, make } = await setup(t);
   const pool = Far('Backend', {});
   const claude = memberEntry('claude-max', 'k1', 'claude');
-  core.register(pool, { kind: 'claude-pool', label: 'team', members: [claude] });
+  core.register(pool, {
+    kind: 'claude-pool',
+    label: 'team',
+    members: [claude],
+  });
   core.observe(pool, claude, claudeHeaders(T0, 0.1, 0.4));
   core.observe(pool, claude, claudeHeaders(T0 + 30 * MIN, 0.3, 0.45));
   const before = await core.accounts.history(pool);
@@ -384,7 +397,11 @@ test('persistence: history survives an incarnation; format 2 loads with none; no
   t.is(loadReadings(file)[0].history?.[0].samples.length, 2);
 
   const again = make();
-  again.register(pool, { kind: 'claude-pool', label: 'team', members: [claude] });
+  again.register(pool, {
+    kind: 'claude-pool',
+    label: 'team',
+    members: [claude],
+  });
   t.deepEqual(await again.accounts.history(pool), before);
   // The next reading in the new incarnation appends to the kept series.
   again.observe(pool, claude, claudeHeaders(T0 + HOUR, 0.4, 0.5));
@@ -421,7 +438,11 @@ test('persistence: history survives an incarnation; format 2 loads with none; no
     }),
   );
   const legacy = make();
-  legacy.register(pool, { kind: 'claude-pool', label: 'team', members: [claude] });
+  legacy.register(pool, {
+    kind: 'claude-pool',
+    label: 'team',
+    members: [claude],
+  });
   t.is(legacy.accounts.list().pools[0].members[0].provenance, 'remembered');
   t.deepEqual((await legacy.accounts.history(pool)).members[0].windows, []);
   await legacy.close();
@@ -440,14 +461,20 @@ test('Claude usage reads share the header windows (same series)', async t => {
   });
   const pool = Far('Backend', {});
   const claude = memberEntry('claude-max', 'k1', 'claude');
-  core.register(pool, { kind: 'claude-pool', label: 'team', members: [claude] });
+  core.register(pool, {
+    kind: 'claude-pool',
+    label: 'team',
+    members: [claude],
+  });
   core.observe(pool, claude, claudeHeaders(T0, 0.1, 0.4));
   at(T0 + 10 * MIN);
   await core.accounts.refresh(pool);
   const { windows: series } = (await core.accounts.history(pool)).members[0];
   t.is(series.length, 2);
   t.deepEqual(
-    series.map((/** @type {any} */ s) => s.records.map((/** @type {any} */ x) => x.usedPercent)),
+    series.map((/** @type {any} */ s) =>
+      s.records.map((/** @type {any} */ x) => x.usedPercent),
+    ),
     [
       [10, 30],
       [40, 41],
@@ -459,7 +486,11 @@ test('review: two equal readings 15 minutes apart are one record of count 2; the
   const { core } = await setup(t);
   const pool = Far('Backend', {});
   const claude = memberEntry('claude-max', 'k1', 'claude');
-  core.register(pool, { kind: 'claude-pool', label: 'team', members: [claude] });
+  core.register(pool, {
+    kind: 'claude-pool',
+    label: 'team',
+    members: [claude],
+  });
   const weekReset = T0 + 3 * 24 * HOUR;
   /**
    * @param {number} at
@@ -578,7 +609,11 @@ test('review: Codex weekly windows are recorded in whichever slot reported them'
   const pool = Far('Backend', {});
   const codex = memberEntry('codex-free', 'k1', 'codex');
   const plus = memberEntry('codex-plus', 'k2', 'codex');
-  core.register(pool, { kind: 'codex-pool', label: 'codex', members: [codex, plus] });
+  core.register(pool, {
+    kind: 'codex-pool',
+    label: 'codex',
+    members: [codex, plus],
+  });
   core.observe(pool, codex, snapshot);
   // Headers of another account naming the weekly window as the secondary.
   core.observe(
@@ -610,4 +645,103 @@ test('review: Codex weekly windows are recorded in whichever slot reported them'
       ['secondary', 10_080],
     ],
   ]);
+});
+
+test('credit wallet records only real decimal observations, survives restart and starts a new series after a gap', async t => {
+  let reads = 0;
+  let full = readingFromCodexUsage(
+    { credits: { balance: '62500.0000000000' } },
+    T0,
+  );
+  const { core, make } = await setup(t, {
+    readers: {
+      usage: async () => {
+        reads += 1;
+        return full;
+      },
+    },
+  });
+  const pool = Far('Backend', {});
+  const member = memberEntry('member', 'k1', 'codex');
+  const info = {
+    kind: /** @type {const} */ ('codex-pool'),
+    label: 'pool',
+    members: [member],
+  };
+  core.register(pool, info);
+  const creditsOf = async (/** @type {typeof core} */ service) => {
+    const page = await service.accounts.history(pool);
+    return page.members[0].credits;
+  };
+  t.is(await creditsOf(core), undefined);
+  await core.accounts.refresh(pool);
+  const header = (
+    /** @type {Record<string, string>} */ headers,
+    /** @type {number} */ offset,
+  ) =>
+    core.observe(
+      pool,
+      member,
+      /** @type {any} */ (
+        readingFromHeaders(getter(headers), T0 + offset * MIN)
+      ),
+    );
+  header({ 'x-codex-primary-used-percent': '13' }, 1);
+  t.deepEqual(await creditsOf(core), [
+    { from: iso(T0), value: '62500.0000000000' },
+  ]);
+  header({ 'x-codex-credits-balance': '62500.00' }, 2);
+  header({ 'x-codex-credits-balance': '62500.00' }, 2);
+  const exact = '999999999999999999999999.000000000001';
+  header({ 'x-codex-credits-balance': exact }, 3);
+  header({ 'x-codex-credits-balance': '0' }, 4);
+  await core.flush();
+  const again = make();
+  t.teardown(() => again.close());
+  again.register(pool, info);
+  t.deepEqual(await creditsOf(again), [
+    { from: iso(T0), value: '62500.00', to: iso(T0 + 2 * MIN), count: 2 },
+    { from: iso(T0 + 3 * MIN), value: exact },
+    { from: iso(T0 + 4 * MIN), value: '0' },
+  ]);
+  t.is(reads, 1, 'passive history and restart did not fetch usage');
+  again.register(pool, { ...info, members: [{ ...member, state: 'retired' }] });
+  await again.accounts.refresh(pool);
+  t.is(reads, 1, 'retired accounts are never refreshed');
+  t.is(
+    (await creditsOf(again)).at(-1).value,
+    '0',
+    'past evidence remains readable',
+  );
+  again.register(pool, info);
+  const restartedHeader = (
+    /** @type {Record<string, string>} */ headers,
+    /** @type {number} */ offset,
+  ) =>
+    again.observe(
+      pool,
+      member,
+      /** @type {any} */ (
+        readingFromHeaders(getter(headers), T0 + offset * MIN)
+      ),
+    );
+  restartedHeader(
+    { 'x-codex-credits-unlimited': 'true', 'x-codex-credits-balance': '0' },
+    5,
+  );
+  t.is(await creditsOf(again), undefined);
+  restartedHeader({ 'x-codex-credits-balance': '11.5' }, 6);
+  t.deepEqual(await creditsOf(again), [
+    { from: iso(T0 + 6 * MIN), value: '11.5' },
+  ]);
+  restartedHeader({ 'x-codex-credits-balance': 'unknown' }, 7);
+  t.is(await creditsOf(again), undefined);
+  for (let i = 0; i < 51; i += 1)
+    restartedHeader({ 'x-codex-credits-balance': String(i) }, i + 8);
+  const bounded = await creditsOf(again);
+  t.is(bounded.length, 48);
+  t.is(bounded[0].value, '3');
+  full = readingFromCodexUsage({}, T0 + 60 * MIN);
+  await again.accounts.refresh(pool);
+  t.is(await creditsOf(again), undefined);
 });

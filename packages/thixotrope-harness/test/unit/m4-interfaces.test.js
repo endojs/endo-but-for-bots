@@ -117,7 +117,14 @@ const quotaSeries = {
   windowMinutes: 10_080,
   records: [quotaRecord],
 };
+const creditRecord = {
+  from: ISO,
+  to: ISO,
+  count: 2,
+  value: '62500.0000000000',
+};
 const memberHistory = {
+  credits: [creditRecord],
   label: 'first',
   provider: 'codex',
   windows: [quotaSeries],
@@ -194,6 +201,7 @@ const shapeSamples = {
   AccountsView: { rev: 3, pools: [poolAccounts] },
   AccountsBatch: { rev: 4, pools: [poolAccounts] },
   QuotaRecord: quotaRecord,
+  CreditRecord: creditRecord,
   QuotaSeries: quotaSeries,
   MemberHistory: memberHistory,
   PoolHistory: poolHistory,

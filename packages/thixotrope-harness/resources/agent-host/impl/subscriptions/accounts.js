@@ -70,6 +70,7 @@ import {
   loadReadings,
   makeReadingsWriter,
 } from './account-file.js';
+import { isCreditBalance, observeCredits } from './credit-history.js';
 import { recordObservation } from './quota-history.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -366,14 +367,13 @@ export const makeAccounts = ({
       ...(end < members.length ? { next: end } : {}),
       members: harden(
         members.slice(start, end).map(entry => {
-          const stored = fileEntries.get(entry.key);
-          const series =
-            stored !== undefined && stored.provider === entry.provider
-              ? (stored.history ?? [])
-              : [];
+          const saved = fileEntries.get(entry.key);
+          const stored = saved?.provider === entry.provider ? saved : undefined;
+          const series = stored?.history ?? [];
           return harden({
             label: labelText(entry.label),
             provider: entry.provider,
+            ...(stored?.credits?.length ? { credits: stored.credits } : {}),
             windows: harden(
               series.slice(0, subscriptionLimits.maxWindows).map(window =>
                 harden({
@@ -557,9 +557,10 @@ export const makeAccounts = ({
     // The windows this reading itself reported (a Codex header slot filled
     // with zeroes reports nothing); merged windows below are not observed.
     const reported = new Set(
-      (partial ? reading.windows.filter(hasWindowEvidence) : reading.windows).map(
-        window => window.name,
-      ),
+      (partial
+        ? reading.windows.filter(hasWindowEvidence)
+        : reading.windows
+      ).map(window => window.name),
     );
     if (partial) {
       // Inference headers update individual slots. A full usage read below
@@ -593,18 +594,23 @@ export const makeAccounts = ({
       fileEntries.has(entry.key) ||
       fileEntries.size < subscriptionLimits.maxMembers
     ) {
-      const prior = fileEntries.get(entry.key);
-      const priorHistory =
-        prior !== undefined && prior.provider === entry.provider
-          ? (prior.history ?? [])
-          : [];
+      const saved = fileEntries.get(entry.key);
+      const prior = saved?.provider === entry.provider ? saved : undefined;
+      const priorHistory = prior?.history ?? [];
       const history =
         recordObservation(
           priorHistory,
           kept.at,
           kept.windows.filter(window => reported.has(window.name)),
         ) ?? priorHistory;
+      const credits = observeCredits(
+        prior?.credits ?? [],
+        isoOf(reading.at),
+        reading.credits,
+        fromHeaders,
+      );
       fileEntries.set(entry.key, {
+        ...(credits.length ? { credits: harden(credits) } : {}),
         key: entry.key,
         provider: entry.provider,
         reading: kept,
@@ -1101,10 +1107,7 @@ export const readingFromCodexUsage = (payload, nowMs) => {
   const credits = payload.credits;
   if (credits !== null && typeof credits === 'object') {
     if (credits.unlimited === true) reading.credits = 'unlimited';
-    else if (
-      typeof credits.balance === 'string' &&
-      /^-?\d{1,24}(\.\d{1,12})?$/.test(credits.balance)
-    )
+    else if (isCreditBalance(credits.balance))
       reading.credits = credits.balance;
   }
   const resets = payload.rate_limit_reset_credits;
