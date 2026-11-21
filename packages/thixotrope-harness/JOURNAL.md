@@ -19907,3 +19907,63 @@ The isolated M4 integration exercised admission and both providers' wire formats
 The full unit and adapter suite passed 1,891 tests with eight gated skips.
 Both M5 browser tests passed. The M3 Send now browser case needed an
 isolated rerun and passed there.
+
+### J-13016 2026-11-21 Subscription pool usage history developed inside the harness
+
+The operator requested a graph of available pool capacity for both providers,
+projected usage, and markers at the providers' weekly resets. Session `s22`,
+**Subscription pool usage history and forecasts**, started from the pinned
+Thixotrope development checkout at `732286d42f`. Its model is
+`claude-opus-5-5` with medium effort.
+
+Before rollout the native readings store retained one confirmed reading per
+account. A private checkpoint captured the three readings with their original
+observation and reset times. The earlier Haiku tool result also retained a dated
+weekly reading for each Claude account. Weekly windows span 10,080 minutes and
+can occupy a different slot on each provider.
+
+Opus committed its first implementation as `1de6fd0790` inside the session.
+The adapter records observed windows and serves bounded history through
+`Accounts.history(pool)`. The Subscriptions panel shows the remaining percentage
+with its observation time and each reported weekly reset in UTC. The first
+review exercised the chart at 375 and 1,280 pixels and ran the accounts integration
+through a worker restart. A second turn in the same session took up the review
+of flat usage, reset boundaries, a clock for open panels and narrow-screen labels.
+
+The pinned browser initially showed one weekly series for each of three accounts.
+Fresh readings at 10:46 UTC gave ChatGPT 5% remaining, Primary Claude 0% and
+Secondary Claude 87%. The native account refresh had returned remembered readings
+on a cold adapter until the pool specification was available. The fix resolves
+the configured endpoint on explicit refresh. A cold lookup shares one call across
+members and reads no provider model catalogue.
+
+The ChatGPT usage endpoint also returned a separate numeric credit balance of
+62,500. Neither Claude account supplied a credit balance. Session `s22` received
+a third, focused turn to add the balance graph. Weekly quota and credit balance
+have independent units. A weekly quota reset supplies no evidence of a credit top-up.
+
+At 10:56:52 UTC the first operator refresh after another native restart acquired
+the genuine pool specifications and returned fresh observations. The existing
+Chromium tab showed 4% weekly quota remaining for ChatGPT and 86% for Secondary
+Claude, with dashed projections for both. Primary Claude showed 0% and its next
+weekly reset. The previous observations survived the restart. The credit graph
+showed exactly 62,500 credits for ChatGPT. The Claude graphs used their reported
+weekly percentages. Desktop and 375-pixel layouts passed in the signed-in browser.
+
+The final unit and adapter suite passed 1,926 tests with eight gated skips.
+Both M4 browser acceptance tests passed. The worker integration verified the
+saved percentage, observation timestamp and reset time across a restart,
+and verified that passive reads added neither a provider request nor a sample.
+The credit regression covers unchanged readings, debits, top-ups, zero and
+negative balances, and exact decimal values beyond JavaScript number precision.
+The development preset now publishes `fbf395a356`, which includes the credit
+chart, so a new coding session can open and debug the integrated feature.
+
+At 11:07:24 UTC on November 21 the operator refresh confirmed the same
+62,500-credit balance as the 10:56:52 reading. The spending forecast was
+flat through 12:07 UTC. Weekly quota at that observation was 4% remaining
+on ChatGPT, 0% on Primary Claude and 86% on Secondary Claude. The two active
+accounts had weekly projections. All three accounts had provider-reported
+weekly reset markers.
+The open wallet chart moved from one reading to two and showed the one-hour
+forecast without a page reload.
