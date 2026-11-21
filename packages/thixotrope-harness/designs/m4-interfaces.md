@@ -197,7 +197,7 @@ operator's root authority, R7-22; this keeps `AgentHostAdmin`, which M3 extends,
 | `CredentialOps.auditReader()`, `accounts()` | same | manager | answered | tiny | same |
 | `CredentialOps.poolsChanged()` | same | manager (`retirePool`, `PoolMember.retire`) | answered, no argument (as built, X-FIX J-10051: guard `M.call().returns(undefined)`; XB had it sendOnly); the retirement awaits the answer | tiny | lost with a retired adapter: harmless (the retirement ignores the failure and returns), a new incarnation loads every pool afresh; the adapter also re-reads a used pool's state when it is older than `poolStateRefreshMs` (600,000 ms), the safety net |
 | `AuditReader.page({ secret?, limit?, before? })` | `SecretsAdmin.auditReader()` | gateway (in process), CLI, tests | answered | <= 1,000 events, never into a vat | restart: get a new reader |
-| `Accounts.list()`, `forBackend(pool)`, `forSession(session)`, `refresh(pool?)`, `watch(rev?)` | `SubscriptionsAdmin.accounts()` | gateway (in process), CLI, tests | answered | adapter-local | restart: get a new one |
+| `Accounts.list()`, `forBackend(pool)`, `forSession(session)`, `history(pool)`, `refresh(pool?)`, `watch(rev?)` | `SubscriptionsAdmin.accounts()` | gateway (in process), CLI, tests | answered | adapter-local | restart: get a new one |
 | `AccountsSubscription.next()`, `close()` | `Accounts.watch()` | gateway | answered | one `AccountsBatch` | restart: re-watch; idle (no `next()` call for 60 s): evicted, its next `next()` answers `{ rev, pools: [], closed: true, reason: 'idle' }` (HR-SYN-34, F2; it rejected with `m4Texts.accountsWatchClosed` before) and the page calls `watch(lastRev)` (6) |
 | `gatewayExtension` of `AH/gateway/extensions/m4-secrets.js` (W4.6) | loaded by M3's `GW/extensions.js` at adapter start | M3's bridge | - | - | - |
 | pool provider (`claudePoolKind`, `codexPoolKind` in `backendKinds`) | `backendKinds` hook (H-4) | the endpoint, per round | in process | - | - |
@@ -467,8 +467,9 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   next request carries the rendered text as a tool result that is not an error.
 - **Banked reset credits** (R4-86): shown read-only with their expiry; no redeem (decision 8).
 - **Readings file**: `<state>/agent-host/subscriptions/readings.json`, `{ format:
-  'thixotrope-harness-readings-2', members: [{ key, provider, reading }] }`, no token, no header
-  value, no body; written temp + rename + fsync at most every 5 s.
+  'thixotrope-harness-readings-3', members: [{ key, provider, reading, history? }] }`, no token,
+  no header value, no body; written temp + rename + fsync at most every 5 s. Formats 2 and 1
+  still load, with no history.
   A full Codex usage refresh establishes the account's window list.
   Inference headers update individual confirmed windows. Positive usage, a positive
   duration or a reset timestamp can establish a window from headers alone.
@@ -476,6 +477,29 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   When loading version 1, the adapter drops ambiguous Codex entries that recorded only zero.
   The chip displays current or remembered provider windows. The Subscriptions panel
   also lists operator-declared windows and identifies their source.
+- **Quota history** (`AH/subscriptions/quota-history.js`): each kept provider reading (headers or
+  usage read) appends the windows that reading itself reported as samples `{ at, usedPercent,
+  resetsAtMs?, lastAt? }` to the `history` of its readings-file entry, one series per window
+  (`name` + `windowMinutes`). Keyed by the member's store key and provider (a key that now names
+  another provider's account starts empty). A reading repeating the last sample (same used
+  percent to 0.01, same reset within 2 min) only moves its `lastAt`; one not newer than the last
+  confirmation is dropped; a zero-filled Codex header slot is not a sample. Bounded:
+  `subscriptionLimits.historySamples` (48) per series, `maxWindows` series per member. Never
+  backfilled: older formats and the remembered reading add no sample.
+  `Accounts.history(pool) -> PoolHistory | undefined` answers it on demand (ISO times; member
+  label and provider, no store key), at most 16 x 4 x 48 samples, well under `wsMessageBytes`;
+  it is not part of `AccountsBatch` (the push stays one small view per change) and the page asks
+  again when `rev` moves.
+- **Quota graph** (`ui/src/accounts/QuotaGraph.js`, `quota-projection.js`): per pool member and
+  window, an SVG of remaining quota % (100 - the provider's used %; no credit unit is derived)
+  against UTC time, with the observed readings, a dashed projection, a "now" line and a weekly
+  reset marker, plus a text equivalent (`aria-label`, status line, readings table). The
+  projection is linear from the current period's first reading to its latest confirmation and
+  stops at the reported reset; it is shown only with at least 2 distinct readings spanning 10 min
+  in the current period (a new reported reset or a fall in usage starts one), the newest within a
+  quarter of the window (30 min .. 6 h), and a reported reset still ahead; otherwise the status
+  says why. The weekly marker is only the reset the newest reading of a 10,080-minute window
+  reported, while it is still ahead; later weeks are not extrapolated.
 
 ---
 

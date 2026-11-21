@@ -361,6 +361,46 @@ const m4ShapeBuilders = {
       },
       { closed: M.boolean(), reason: M.or('idle', 'client', 'stopped') },
     ),
+  /**
+   * One observed quota reading of a window (`quota-history.js`): when it
+   * was read, the used percent the provider reported, the reset it
+   * reported, and the last time a reading repeated the same value.
+   */
+  QuotaSample: () =>
+    record(
+      {
+        at: text(subscriptionLimits.timeUnits),
+        usedPercent: atMost(100),
+      },
+      {
+        resetsAt: text(subscriptionLimits.timeUnits),
+        lastAt: text(subscriptionLimits.timeUnits),
+      },
+    ),
+  /** The observed samples of one provider window, oldest first. */
+  QuotaSeries: () =>
+    record(
+      {
+        name: M.or('primary', 'secondary', 'other'),
+        samples: list(T.QuotaSample, subscriptionLimits.historySamples),
+      },
+      { windowMinutes: count },
+    ),
+  /** One member's observed quota history (no credential, no store key). */
+  MemberHistory: () =>
+    record({
+      label: S.Label,
+      provider: T.Provider,
+      series: list(T.QuotaSeries, subscriptionLimits.maxWindows),
+    }),
+  /** `Accounts.history(pool)`: the members of one pool, in member order. */
+  PoolHistory: () =>
+    record({
+      backend: R('Backend'),
+      kind: T.PoolKind,
+      label: S.Label,
+      members: list(T.MemberHistory, subscriptionLimits.maxPoolMembers),
+    }),
 };
 
 /** Shapes of M4, by name (built on first use). */
@@ -483,6 +523,7 @@ const m4InterfaceBuilders = {
       list: M.call().returns(T.AccountsView),
       forBackend: M.callWhen(R('Backend')).returns(M.or(done, T.PoolAccounts)),
       forSession: M.callWhen(R('Session')).returns(M.or(done, T.PoolAccounts)),
+      history: M.callWhen(R('Backend')).returns(M.or(done, T.PoolHistory)),
       refresh: M.callWhen().optional(R('Backend')).returns(T.AccountsView),
       watch: M.call().optional(count).returns(R('AccountsSubscription')),
     }),
@@ -541,7 +582,7 @@ export const m4MethodNames = harden({
     'poolsChanged',
   ],
   AuditReader: ['page'],
-  Accounts: ['list', 'forBackend', 'forSession', 'refresh', 'watch'],
+  Accounts: ['list', 'forBackend', 'forSession', 'history', 'refresh', 'watch'],
   AccountsSubscription: ['next', 'close'],
 });
 

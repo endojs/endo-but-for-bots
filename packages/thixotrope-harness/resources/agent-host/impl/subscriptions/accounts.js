@@ -40,6 +40,11 @@
  *   so a looping model cannot hammer the providers' usage endpoints.
  * - **Readings file** (`account-file.js`): loaded lazily at the first use
  *   in an incarnation; written at most every `readingsFlushMs`.
+ * - **Quota history** (`quota-history.js`): every kept reading also
+ *   records the windows it reported as observed samples (per member key,
+ *   provider and window; deduplicated, bounded, kept in the readings file);
+ *   `history(pool)` answers them for the panel's graph. Read-only, answered
+ *   on demand (not pushed: the push stays one small view per change).
  *
  * Nothing here holds or logs a credential: the usage reader receives the
  * access token from its caller per read and puts only status codes in its
@@ -63,6 +68,7 @@ import {
   loadReadings,
   makeReadingsWriter,
 } from './account-file.js';
+import { recordObservation } from './quota-history.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { MemberEntry, Reading, ReadingWindow, AccountsCore } from './types.js' */
@@ -338,6 +344,59 @@ export const makeAccounts = ({
       ),
     });
 
+  /**
+   * The observed quota history of one pool's members (`PoolHistory`): ISO
+   * times, used percent as the provider reported it. A member with no
+   * sample (or whose key now names another provider's account) has none.
+   * @param {any} backend
+   * @param {PoolInfo} info
+   */
+  const poolHistory = (backend, info) =>
+    harden({
+      backend,
+      kind: info.kind,
+      label: labelText(info.label),
+      members: harden(
+        info.members.slice(0, subscriptionLimits.maxPoolMembers).map(entry => {
+          const stored = fileEntries.get(entry.key);
+          const series =
+            stored !== undefined && stored.provider === entry.provider
+              ? (stored.history ?? [])
+              : [];
+          return harden({
+            label: labelText(entry.label),
+            provider: entry.provider,
+            series: harden(
+              series.slice(0, subscriptionLimits.maxWindows).map(window =>
+                harden({
+                  name: window.name,
+                  ...(window.windowMinutes === undefined
+                    ? {}
+                    : { windowMinutes: window.windowMinutes }),
+                  samples: harden(
+                    window.samples
+                      .slice(-subscriptionLimits.historySamples)
+                      .map(sample =>
+                        harden({
+                          at: /** @type {string} */ (isoOf(sample.at)),
+                          usedPercent: sample.usedPercent,
+                          ...(isoOf(sample.resetsAtMs) === undefined
+                            ? {}
+                            : { resetsAt: isoOf(sample.resetsAtMs) }),
+                          ...(isoOf(sample.lastAt) === undefined
+                            ? {}
+                            : { lastAt: isoOf(sample.lastAt) }),
+                        }),
+                      ),
+                  ),
+                }),
+              ),
+            ),
+          });
+        }),
+      ),
+    });
+
   /** The whole view at the current `rev`, built once per `rev`. */
   const view = () => {
     ensureLoaded();
@@ -483,6 +542,13 @@ export const makeAccounts = ({
     const previous = readingOf(entry);
     if (previous !== undefined && previous.at > reading.at) return false;
     const partial = fromHeaders && entry.provider === 'codex';
+    // The windows this reading itself reported (a Codex header slot filled
+    // with zeroes reports nothing); merged windows below are not observed.
+    const reported = new Set(
+      (partial ? reading.windows.filter(hasWindowEvidence) : reading.windows).map(
+        window => window.name,
+      ),
+    );
     if (partial) {
       // Inference headers update individual slots. A full usage read below
       // replaces the inventory, including slots or metadata it has removed.
@@ -515,10 +581,22 @@ export const makeAccounts = ({
       fileEntries.has(entry.key) ||
       fileEntries.size < subscriptionLimits.maxMembers
     ) {
+      const prior = fileEntries.get(entry.key);
+      const priorHistory =
+        prior !== undefined && prior.provider === entry.provider
+          ? (prior.history ?? [])
+          : [];
+      const history =
+        recordObservation(
+          priorHistory,
+          kept.at,
+          kept.windows.filter(window => reported.has(window.name)),
+        ) ?? priorHistory;
       fileEntries.set(entry.key, {
         key: entry.key,
         provider: entry.provider,
         reading: kept,
+        ...(history.length === 0 ? {} : { history: harden(history) }),
       });
       writer.update(entriesForFile);
     }
@@ -663,6 +741,12 @@ export const makeAccounts = ({
       if (backend === undefined) return undefined;
       const info = await poolInfoOf(backend);
       return info === undefined ? undefined : poolAccounts(backend, info);
+    },
+    /** @param {any} backend */
+    history: async backend => {
+      ensureLoaded();
+      const info = await poolInfoOf(backend);
+      return info === undefined ? undefined : poolHistory(backend, info);
     },
     /** @param {any} [backend] */
     refresh: async backend => {

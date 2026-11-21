@@ -51,6 +51,13 @@ export const subscriptionLimits = harden({
   // ---- accounts (R4-84, R4-85, R6-54) ----
   /** Rate-limit windows in one reading (primary, secondary, and spares). */
   maxWindows: 4,
+  /**
+   * Observed quota samples kept per member and window (the newest; a read
+   * that repeats the last sample extends it instead of adding one). Bounds
+   * the readings file and one `Accounts.history` answer (16 members x 4
+   * windows x 48 samples).
+   */
+  historySamples: 48,
   /** A plan or credit label shown to a person. */
   planUnits: 128,
   /** An ISO 8601 time as text (`2026-11-18T02:11:49.000Z` is 24). */

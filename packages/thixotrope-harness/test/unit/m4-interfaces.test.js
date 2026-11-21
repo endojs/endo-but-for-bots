@@ -105,6 +105,28 @@ const poolAccounts = {
   selection: 'auto',
   members: [memberAccount],
 };
+const quotaSample = {
+  at: ISO,
+  usedPercent: 40,
+  resetsAt: ISO,
+  lastAt: ISO,
+};
+const quotaSeries = {
+  name: 'secondary',
+  windowMinutes: 10_080,
+  samples: [quotaSample],
+};
+const memberHistory = {
+  label: 'first',
+  provider: 'codex',
+  series: [quotaSeries],
+};
+const poolHistory = {
+  backend,
+  kind: 'codex-pool',
+  label: 'codex',
+  members: [memberHistory],
+};
 const poolSpec = {
   kind: 'claude-pool',
   label: 'claude',
@@ -169,6 +191,10 @@ const shapeSamples = {
   PoolAccounts: poolAccounts,
   AccountsView: { rev: 3, pools: [poolAccounts] },
   AccountsBatch: { rev: 4, pools: [poolAccounts] },
+  QuotaSample: quotaSample,
+  QuotaSeries: quotaSeries,
+  MemberHistory: memberHistory,
+  PoolHistory: poolHistory,
 };
 
 /**
@@ -339,6 +365,7 @@ const methodSamples = {
     list: { args: [], returns: shapeSamples.AccountsView },
     forBackend: { args: [backend], returns: poolAccounts },
     forSession: { args: [session], returns: undefined },
+    history: { args: [backend], returns: poolHistory },
     refresh: { args: [backend], returns: shapeSamples.AccountsView },
     watch: { args: [3], returns: far('AccountsSubscription') },
   },

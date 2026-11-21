@@ -262,9 +262,14 @@ export const memberAccount = (fields = {}) =>
  * `evict(index)` closes that subscriber (its waiting or next `next()`
  * answers `{ closed: true, reason: 'idle' }`, as the adapter's does).
  *
- * @param {{ pools?: any[], sessions?: Map<any, any> }} [options]
+ * @param {{ pools?: any[], sessions?: Map<any, any>, histories?: Map<any, any> }} [options]
+ *   `histories`: `PoolHistory` by pool backend, for `history(pool)`
  */
-export const makeFakeAccounts = ({ pools = [], sessions = new Map() } = {}) => {
+export const makeFakeAccounts = ({
+  pools = [],
+  sessions = new Map(),
+  histories = new Map(),
+} = {}) => {
   /** @type {any[][]} */
   const calls = [];
   let view = harden({ rev: 1, pools: harden([...pools]) });
@@ -304,6 +309,11 @@ export const makeFakeAccounts = ({ pools = [], sessions = new Map() } = {}) => {
       calls.push(['Accounts', 'forSession', session]);
       const backend = sessions.get(session);
       return view.pools.find(pool => pool.backend === backend) ?? undefined;
+    },
+    /** @param {any} backend `PoolHistory` from `histories`, by backend */
+    history: backend => {
+      calls.push(['Accounts', 'history', backend]);
+      return histories.get(backend);
     },
     /** @param {any} [backend] */
     refresh: backend => {

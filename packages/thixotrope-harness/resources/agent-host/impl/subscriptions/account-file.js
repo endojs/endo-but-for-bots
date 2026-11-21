@@ -5,8 +5,9 @@
  * of each member's account, so a restarted adapter can show it as
  * `remembered` (R4-84) until the provider is read again.
  *
- * Format: `{ format: 'thixotrope-harness-readings-2', members: [{ key,
- * provider, reading }] }`. `key` is the credential's store key (`k<n>`): it
+ * Format: `{ format: 'thixotrope-harness-readings-3', members: [{ key,
+ * provider, reading, history? }] }` (`history`: the observed quota samples
+ * per window, `quota-history.js`; formats 1 and 2 load with none). `key` is the credential's store key (`k<n>`): it
  * names the entry on disk and never leaves the adapter (M1b 17.3). A reading
  * holds windows, plan, credits and times only: no token, no header value,
  * no provider body (D-6). Whatever the file holds is re-checked on load and
@@ -29,11 +30,14 @@ import { pid } from 'node:process';
 import { subscriptionLimits } from '../../../../guest/lib/subscription-limits.js';
 import { limits } from '../../../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
+import { checkHistory } from './quota-history.js';
 
 /** @import { Reading, ReadingWindow } from './types.js' */
+/** @import { HistorySeries } from './quota-history.js' */
 
 const LEGACY_FORMAT = 'thixotrope-harness-readings-1';
-export const READINGS_FORMAT = 'thixotrope-harness-readings-2';
+const NO_HISTORY_FORMAT = 'thixotrope-harness-readings-2';
+export const READINGS_FORMAT = 'thixotrope-harness-readings-3';
 /** The file never holds more entries than the manager keeps members. */
 const MAX_ENTRIES = subscriptionLimits.maxMembers;
 /** A store key is `k<n>`; anything else in the file is dropped. */
@@ -133,6 +137,7 @@ harden(checkReading);
  * @property {string} key the credential's store key
  * @property {'claude' | 'codex'} provider
  * @property {Reading} reading `source: 'remembered'` when loaded
+ * @property {HistorySeries[]} [history] observed quota samples per window
  */
 
 /**
@@ -155,7 +160,9 @@ export const loadReadings = file => {
   if (
     parsed === null ||
     typeof parsed !== 'object' ||
-    (parsed.format !== READINGS_FORMAT && parsed.format !== LEGACY_FORMAT) ||
+    (parsed.format !== READINGS_FORMAT &&
+      parsed.format !== NO_HISTORY_FORMAT &&
+      parsed.format !== LEGACY_FORMAT) ||
     !Array.isArray(parsed.members)
   )
     return [];
@@ -179,7 +186,15 @@ export const loadReadings = file => {
         reading.windows = reading.windows.filter(hasWindowEvidence);
       }
       seen.add(key);
-      entries.push({ key, provider, reading });
+      // Older formats kept no history: it starts empty, never backfilled.
+      const history =
+        parsed.format === READINGS_FORMAT ? checkHistory(candidate.history) : [];
+      entries.push({
+        key,
+        provider,
+        reading,
+        ...(history.length === 0 ? {} : { history }),
+      });
     }
   }
   return entries;
@@ -194,10 +209,19 @@ harden(loadReadings);
 export const formatReadings = entries =>
   `${JSON.stringify({
     format: READINGS_FORMAT,
-    members: entries.slice(0, MAX_ENTRIES).map(({ key, provider, reading }) => {
-      const { source: _source, ...kept } = reading;
-      return { key, provider, reading: kept };
-    }),
+    members: entries
+      .slice(0, MAX_ENTRIES)
+      .map(({ key, provider, reading, history }) => {
+        const { source: _source, ...kept } = reading;
+        return {
+          key,
+          provider,
+          reading: kept,
+          ...(history === undefined || history.length === 0
+            ? {}
+            : { history }),
+        };
+      }),
   })}\n`;
 harden(formatReadings);
 

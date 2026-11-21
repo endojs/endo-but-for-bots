@@ -58,3 +58,113 @@
   border-color: var(--fl-red);
   color: var(--fl-red);
 }
+/* Quota history graphs (QuotaGraph.js). */
+.m4-quota {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-top: 0.3rem;
+}
+.m4-quota h4 {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.m4-quota-member {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.m4-quota-graph {
+  margin: 0;
+  max-width: 36rem;
+}
+.m4-quota-graph figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.6rem;
+  font-size: 0.8rem;
+}
+.m4-quota-name {
+  font-weight: 600;
+}
+.m4-quota-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-size: 8px;
+}
+.m4-quota-svg text {
+  fill: var(--fl-text-muted);
+}
+.m4-quota-tick line {
+  stroke: var(--fl-border);
+  stroke-width: 0.5;
+}
+.m4-quota-axis {
+  stroke: var(--fl-text-muted);
+  stroke-width: 0.8;
+}
+.m4-quota-observed {
+  stroke: var(--fl-accent);
+  stroke-width: 1.8;
+}
+.m4-quota-dot {
+  fill: var(--fl-accent);
+}
+.m4-quota-projected {
+  stroke: var(--fl-amber);
+  stroke-width: 1.6;
+}
+.m4-quota-now {
+  stroke: var(--fl-text-muted);
+  stroke-width: 0.6;
+  stroke-dasharray: 2 2;
+}
+.m4-quota-reset line {
+  stroke: var(--fl-red);
+  stroke-width: 1.2;
+}
+.m4-quota-svg .m4-quota-reset text {
+  fill: var(--fl-red);
+}
+.m4-quota-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.8rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.75rem;
+}
+.m4-quota-legend li::before {
+  content: '';
+  display: inline-block;
+  width: 1.2rem;
+  margin-right: 0.3rem;
+  vertical-align: middle;
+  border-top: 2px solid var(--fl-accent);
+}
+.m4-quota-legend li.projected::before {
+  border-top: 2px dashed var(--fl-amber);
+}
+.m4-quota-legend li.reset::before {
+  width: 0;
+  height: 0.8rem;
+  border-top: 0;
+  border-left: 2px solid var(--fl-red);
+}
+.m4-quota-status {
+  margin: 0;
+  font-size: 0.8rem;
+}
+.m4-quota-readings {
+  font-size: 0.75rem;
+}
+.m4-quota-readings table {
+  border-collapse: collapse;
+}
+.m4-quota-readings th,
+.m4-quota-readings td {
+  padding: 0.1rem 0.5rem 0.1rem 0;
+  text-align: left;
+}

@@ -5,13 +5,16 @@
  * (`feed.js`), with Refresh for all pools or one (`Accounts.refresh`, on
  * demand only). Per member: plan, windows (percent used, reset), status,
  * credits, banked resets (read-only: no redeem, decision 8) and the
- * provenance of the figures. Selection is always `auto` (D-M4-6).
+ * provenance of the figures. Selection is always `auto` (D-M4-6). Under
+ * each pool, the members' observed quota history as graphs with
+ * projections and confirmed weekly resets (`QuotaGraph.js`).
  */
 import { h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 
 import { accountsFeed } from './feed.js';
 import { accountBlocked, accountRows } from './labels.js';
+import { PoolQuotaHistory } from './QuotaGraph.js';
 
 /** @import { FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
@@ -141,6 +144,14 @@ export const SubscriptionsPanel = ({ context, now = Date.now }) => {
       pool.members.length === 0
         ? h('p', { class: 'm4-note' }, subscriptionsTexts.noMembers)
         : h('ul', { class: 'm4-account-list' }, pool.members.map(member)),
+      feed && pool.members.length !== 0
+        ? h(PoolQuotaHistory, {
+            feed,
+            pool,
+            rev: Number(view?.rev ?? 0),
+            nowMs,
+          })
+        : null,
     );
 
   const shownError = error || feedError;
