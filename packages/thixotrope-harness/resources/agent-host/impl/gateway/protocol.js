@@ -239,7 +239,8 @@ export const uiTextOf = Object.freeze({
   thoughtFor: (seconds, running) => {
     const m = Math.floor(seconds / 60);
     const s = Math.floor(seconds % 60);
-    return running ? `Thinking… (${m}m${s}s)` : `Thought for ${m}m${s}s`;
+    const elapsed = `${m}m${s}s`;
+    return running ? elapsed : `Thought for ${elapsed}`;
   },
   /**
    * R6-39.

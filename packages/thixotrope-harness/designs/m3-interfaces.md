@@ -904,7 +904,7 @@ answers `fetch`) and `contract-m3.js` (`gatewayTexts`, `uiTexts`, `uiTextOf`).
 | `uiTextOf.confirmDelete(t)` | `Delete "<t>"?` | R6-37 |
 | `uiTextOf.rowCounts(m, q)` | `<m> messages · <q> queued` | R6-36 |
 | `uiTextOf.usage(up, down, p)` | `↑<up> ↓<down> · ctx <p>%` | R6-52 |
-| `uiTextOf.thoughtFor(s, running)` | `Thought for 1m2s` / `Thinking… (0m5s)` | R6-45 |
+| `uiTextOf.thoughtFor(s, running)` | `Thought for 1m2s` when complete, `0m5s` alongside the animated bubble while running | R6-45 |
 | `uiTexts.pageTitle` | `Familiar` | R6-8 |
 | the rest of `uiTexts` | composer, queue and recovery labels | R6-40, R6-44, R6-45 |
 

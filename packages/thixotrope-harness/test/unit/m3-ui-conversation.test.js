@@ -163,6 +163,7 @@ test.serial(
 test.serial(
   'tool groups, "Thought for", exec highlight and the raw view',
   async t => {
+    t.is(uiTextOf.thoughtFor(62, true), '1m2s');
     const fake = makeFakePowers({ sessions: [{ key: 'a' }] });
     const { dom, controller, $, $$ } = await open({ fake, key: 'a' });
     await controller.send('compute');
