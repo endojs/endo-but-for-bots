@@ -365,6 +365,13 @@ Cancel aborts the attempt in flight and stops the member loop (R4-7).
   symbolic facts only (codes, types, params, reasons; never prose, a request id or a body);
   non-200 `m4TextOf.subscriptionHttp(status)`; empty `m4Texts.emptyResponsesOutput`. Effort
   `ultra` is sent as `max` (R4-23, hosted-agent `codex-reasoning.js`).
+  A successful HTTP response can omit Content-Type. The adapter then applies
+  the usual SSE byte limits and requires a complete Responses stream. An
+  explicit incompatible media type fails. For a headerless framing failure,
+  the turn records the HTTP status and whether the parser saw an SSE event.
+  A named SSE error can supply its type through the event name. Completed
+  output items can omit their index and fill unclaimed positions in arrival
+  order. J-12584 and J-12585 cover the live failure and fix.
 - **Both**: redirects refused (M2 `http.js` already sets `redirect: 'error'`, R7-29); request
   timeout `PoolSpec.timeoutMs` or 1 h (R4-93); no prompt-cache breakpoints (R4-30); rate-limit
   headers of every answer go to `onReading`; no header value, body or token is ever logged or

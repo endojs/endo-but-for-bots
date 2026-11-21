@@ -19141,3 +19141,42 @@ to the existing slot. Checked the Secrets panel's file picker, write confirmatio
 generation display and the subscription parser's Codex login format. The milestone
 guide records those steps for the local single-account trial. The gateway was
 listening on loopback port 7831. Credential entry and the live chat are pending.
+
+### J-12584 2026-11-21 Guided UAT first live ChatGPT failure
+
+The local subscription usage endpoint returned a fresh reading. In the operator's
+session `s1`, the first turn on `gpt-5.6-luna` started at 11:20:48.977 JST,
+dispatched and settled 1,087 ms later with `stream.unreadable`. The session's
+`getHistoryPage()` returned the error on its `turn-settled` record. The supervisor
+and gateway logs reported no corresponding failure.
+
+Added fixed diagnostic categories to the native Responses adapter, then reloaded
+it against the same state and worker. The operator authorized one short prompt
+in a separate chat. Session `s2` reproduced the error and reported `mime=missing`.
+The adapter received a successful HTTP status and discarded the body because
+the response lacked a Content-Type header. That run therefore establishes
+neither the body's format nor what the model returned. The original session
+and its credential were retained.
+
+### J-12585 2026-11-21 Live ChatGPT chat and browser reload passed on Terra
+
+The native adapter now reads a successful headerless response through the
+bounded SSE parser and requires Responses completion. Explicit incompatible
+media types, partial streams and empty answers still fail. It also recognizes
+named SSE errors and completed items without an output index. The worker
+remained `367e78ad1d` and the local gateway resumed on port 7831 with the
+existing credential, pool and session history.
+
+The operator prefers inexpensive models for test traffic. The live catalog
+offered `gpt-5.6-terra` with low effort. In a new Chat only session `s3`,
+turn `t1` returned the requested word, “moonlight”. In Chromium, turn `t2`
+asked for eight numbered observations about the moon. Reloading after visible
+assistant text showed exactly one turn, one copy of the prompt and one completed
+reply with eight numbered observations. This passes the live chat and reconnect
+journey. The original Luna turn remains recorded as failed.
+
+Adapter fix `94ef9b2d17` passed 37 focused SSE, Codex wire, pool provider and
+provider wiring tests, package type checking, and the installed M4 wire
+regression (acceptance 8 and 9, exit 0). The regression used a short private
+state path for the macOS control socket. ESLint reported its two existing
+safe-await warnings in the touched files and no errors.

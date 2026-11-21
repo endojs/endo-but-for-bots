@@ -1542,10 +1542,13 @@ and sends the request to the Anthropic Messages API. A warm session normally kee
 last successful member. [Subscription provisioning](../scripts/provision-steps/40-subscriptions.js)
 and the [pool contract](m4-interfaces.md#52-one-round-on-a-pool-w46-providerjs) describe this path.
 
-For the ChatGPT trial, **ChatGPT Account 1** is an empty member of the registered
-**ChatGPT** backend (`codex-pool`). The pinned build has a credential import form
-and lacks a **Continue with ChatGPT** action. Browser enrollment and the first
-live chat are pending (J-12581–12582).
+For the ChatGPT trial, **ChatGPT Account 1** is the sole member of the registered
+**ChatGPT** backend (`codex-pool`). The operator supplied its credential and
+Subscriptions returned a fresh usage reading. The first live turn failed while
+reading the inference response (J-12584). After the native adapter fix, the
+live chat and mid-stream browser reload passed on Terra (J-12585). The pinned
+build has a credential import form and lacks a **Continue with ChatGPT** action
+(J-12581–12582).
 
 The operator kept the pool design for the single-account trial (J-12583).
 To attach the first account in the current build:
@@ -1571,6 +1574,18 @@ For the first live turn, send “Write eight numbered, one-sentence observations
 the moon.” Reload once text starts appearing. Check that the same conversation shows
 one copy of the prompt and one completed reply. Record the provider label and model
 ID with the outcome.
+
+Use an inexpensive model for test messages. In this account's catalog,
+`gpt-5.6-terra` offered low reasoning effort. The live browser run on that
+setting showed eight numbered observations in one completed reply after reload.
+
+If a turn fails while Subscriptions shows current usage, open the failed
+conversation. Its durable session history retains the provider error on the
+`turn-settled` record. An operator with local control access can call
+`getHistoryPage()` on the session and read the error there. Usage refresh
+and inference are separate requests. A fresh usage reading verifies only the
+former. The gateway and supervisor logs in the local UAT directory cover
+process startup and transport.
 
 Default provisioning installs the base harness. The operator supplies a backend and
 configures the runner and speech services for the corresponding journeys. Record the worker digest, backend/model, runner or audio device,
