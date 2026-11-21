@@ -1542,13 +1542,19 @@ and sends the request to the Anthropic Messages API. A warm session normally kee
 last successful member. [Subscription provisioning](../scripts/provision-steps/40-subscriptions.js)
 and the [pool contract](m4-interfaces.md#52-one-round-on-a-pool-w46-providerjs) describe this path.
 
-For the ChatGPT trial, the registered provider is **ChatGPT** (`codex-pool`) and its
-first member is **ChatGPT Account 1**. One member is sufficient. The tester can supply
-that member’s Codex subscription login JSON through the header menu under **Secrets →
-ChatGPT Account 1 → Replace value**, using the local file picker and **Send**. The
-subscription parser accepts at most 8,192 UTF-8 bytes. After authorization, open
-**New Session**, choose **ChatGPT**, select a model returned by discovery, then choose
-**Chat only**. J-12581 records the initial registration.
+For the ChatGPT trial, **ChatGPT Account 1** is an empty member of the registered
+**ChatGPT** backend (`codex-pool`). The pinned build has a credential import form
+and lacks a **Continue with ChatGPT** action. Browser enrollment and the first
+live chat are pending (J-12581–12582).
+
+OpenAI provides browser sign-in for a locally hosted app such as Thixotrope.
+The tester authorizes Thixotrope by name and grants permission to use their
+eligible plan. Thixotrope can then discover models and call the Responses API
+for that user. OpenAI prohibits pooling plan usage, rotating accounts to bypass
+limits and fulfilling another user's requests with the subscription. A browser
+UAT therefore needs a connection bound to the signed-in user, outside the
+shared account selector. [Integration guide](https://developers.openai.com/siwc/token-sharing-open-source)
+and [Sign in with ChatGPT terms §3.1](https://openai.com/policies/sign-in-with-chatgpt-terms/).
 
 For the first live turn, send “Write eight numbered, one-sentence observations about
 the moon.” Reload once text starts appearing. Check that the same conversation shows

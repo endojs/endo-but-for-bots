@@ -19117,3 +19117,19 @@ name through the existing subscriptions provision step. Read-back through the fa
 and subscription manager showed the same active `ChatGPT` backend, kind `codex-pool`,
 with exactly that one member. The credential was empty at registration. Account
 authorization, live model discovery and the first chat/reconnect verdict are pending.
+
+### J-12582 2026-11-21 Guided UAT browser enrollment for ChatGPT
+
+The tester requested browser sign-in for the first account. The pinned UI offers
+credential import. The subscription login helper has no default Codex authorization
+URL or redirect, and the running harness has no ChatGPT browser enrollment action.
+The registered slot is still empty. No account was linked or live turn sent.
+
+OpenAI documents a direct flow for locally hosted clients. The user authorizes the
+app under its own name, selects a workspace and can grant use of an eligible plan
+for Responses API calls. Thixotrope can own the session and tools throughout.
+OpenAI's plan terms prohibit pooling usage and using one user's account for another
+user's requests. This calls for a personal ChatGPT connection bound to the user.
+The previous credential-import instruction does not test that flow.
+[OpenAI integration guide](https://developers.openai.com/siwc/token-sharing-open-source)
+and [plan usage terms §3.1](https://openai.com/policies/sign-in-with-chatgpt-terms/).
