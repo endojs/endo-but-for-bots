@@ -19549,3 +19549,11 @@ The session’s existing ordinary petname rules still admit single components;
 managed children supply the `subagents/` hierarchy on this installation.
 All 24 shell, session and build tests passed. The installed Chromium regression
 for live adoption, session switching and drawer collapse also passed.
+
+### J-13002 2026-11-21 Operator accepted the physical voice test
+
+The operator reported that the guided physical microphone and speaker test
+passed. The procedure in the Terra voice chat covered dictating one prompt,
+hearing its reply automatically, and playing the saved reply with Speak replies
+off. This closes the manual device check left open in J-12591. The earlier
+Chromium run provides the separate audio-buffer and reconnect evidence.

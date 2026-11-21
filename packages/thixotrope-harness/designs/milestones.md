@@ -1670,8 +1670,9 @@ Refresh the signed-in tab, choose **Start listening** and allow microphone acces
 to check the physical input. **Speak replies** enables audio for new replies on
 that page. **Play message** sits to the right of the assistant bubble, aligned with its bottom edge.
 The transcript leaves a small vertical gap between messages and between turns.
-The physical microphone and speaker
-check remains with the operator.
+The operator reported that the physical microphone and speaker check passed,
+including dictation, automatic playback and playing the saved reply.
+[Physical-device UAT](../JOURNAL.md#j-13002-2026-11-21-operator-accepted-the-physical-voice-test)
 [Speech run](../JOURNAL.md#j-12591-2026-11-21-live-dictation-spoken-replies-and-replay).
 J-12566 records the trial scope. J-12575 records the Chromium preflight, 14 installed
 mail and delegation cases and 2,011 package tests on the selected guest.
