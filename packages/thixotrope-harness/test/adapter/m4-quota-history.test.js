@@ -2,9 +2,11 @@
 // Quota history (quota-history.js, accounts.js `history`, account-file.js
 // format 3): observed samples per member key, provider and window, from
 // Claude and Codex rate-limit headers and usage reads; duplicate reads
-// extend a sample instead of adding one; bounded; durable across
-// incarnations; older files load with no history (never backfilled); no
-// store key or credential in an answer. Node adapter tests, fake clock.
+// extend a sample (count, last confirmation, latest reported reset)
+// instead of adding one; bounded; read in pages; durable across
+// incarnations; older files (the v2 migration) load with no history (never
+// backfilled); weekly windows in either slot; no store key or credential in
+// an answer. Node adapter tests, fake clock.
 import '../unit/_m1a-prelude.js';
 
 import test from '@endo/ses-ava/test.js';
@@ -129,8 +131,15 @@ test('recordObservation: append on change, extend on a duplicate, drop out of or
   series = /** @type {any} */ (
     recordObservation(series, T0 + MIN, [window(10, T0 + HOUR + 30_000)])
   );
+  // The latest reported reset is kept (providers recompute it each read).
   t.deepEqual(series[0].samples, [
-    { at: T0, usedPercent: 10, resetsAtMs: T0 + HOUR, lastAt: T0 + MIN },
+    {
+      at: T0,
+      usedPercent: 10,
+      resetsAtMs: T0 + HOUR + 30_000,
+      lastAt: T0 + MIN,
+      count: 2,
+    },
   ]);
   // Older than the last confirmation: nothing changes.
   t.is(recordObservation(series, T0 + 30_000, [window(50)]), undefined);
@@ -224,32 +233,34 @@ test('Claude: header readings become samples per window; duplicates extend; hist
   t.is(member.label, 'claude-max');
   t.is(member.provider, 'claude');
   t.false(JSON.stringify(member).includes('k1'), 'no store key');
-  t.deepEqual(member.series, [
+  t.deepEqual(member.windows, [
     {
       name: 'primary',
       windowMinutes: 300,
-      samples: [
+      records: [
         {
-          at: iso(T0),
+          from: iso(T0),
           usedPercent: 10,
           resetsAt: iso(T0 + 4 * HOUR),
-          lastAt: iso(T0 + 2 * MIN),
+          to: iso(T0 + 2 * MIN),
+          count: 3,
         },
-        { at: iso(T0 + 20 * MIN), usedPercent: 25, resetsAt: iso(T0 + 4 * HOUR) },
+        { from: iso(T0 + 20 * MIN), usedPercent: 25, resetsAt: iso(T0 + 4 * HOUR) },
       ],
     },
     {
       name: 'secondary',
       windowMinutes: 10_080,
-      samples: [
+      records: [
         {
-          at: iso(T0),
+          from: iso(T0),
           usedPercent: 40,
           resetsAt: iso(T0 + 72 * HOUR),
-          lastAt: iso(T0 + 2 * MIN),
+          to: iso(T0 + 2 * MIN),
+          count: 3,
         },
         {
-          at: iso(T0 + 20 * MIN),
+          from: iso(T0 + 20 * MIN),
           usedPercent: 42,
           resetsAt: iso(T0 + 72 * HOUR),
         },
@@ -329,23 +340,25 @@ test('Codex: usage reads and header slots record only what each reading reported
   const [member] = history.members;
   t.is(member.provider, 'codex');
   const byMinutes = Object.fromEntries(
-    member.series.map((/** @type {any} */ s) => [s.windowMinutes, s.samples]),
+    member.windows.map((/** @type {any} */ s) => [s.windowMinutes, s.records]),
   );
   t.deepEqual(byMinutes[300], [
-    { at: iso(T0), usedPercent: 20, resetsAt: iso(T0 + 2 * HOUR) },
+    { from: iso(T0), usedPercent: 20, resetsAt: iso(T0 + 2 * HOUR) },
     {
-      at: iso(T0 + 30 * MIN),
+      from: iso(T0 + 30 * MIN),
       usedPercent: 35,
       resetsAt: iso(T0 + 2 * HOUR),
-      lastAt: iso(T0 + 40 * MIN),
+      to: iso(T0 + 40 * MIN),
+      count: 2,
     },
   ]);
   t.deepEqual(byMinutes[10_080], [
     {
-      at: iso(T0),
+      from: iso(T0),
       usedPercent: 55,
       resetsAt: iso(T0 + 120 * HOUR),
-      lastAt: iso(T0 + 40 * MIN),
+      to: iso(T0 + 40 * MIN),
+      count: 2,
     },
   ]);
   t.false(
@@ -376,14 +389,14 @@ test('persistence: history survives an incarnation; format 2 loads with none; no
   // The next reading in the new incarnation appends to the kept series.
   again.observe(pool, claude, claudeHeaders(T0 + HOUR, 0.4, 0.5));
   const after = await again.accounts.history(pool);
-  t.is(after.members[0].series[0].samples.length, 3);
+  t.is(after.members[0].windows[0].records.length, 3);
   await again.close();
 
   // A key now naming another provider's account starts empty.
   const swapped = make();
   const codex = memberEntry('same-key', 'k1', 'codex');
   swapped.register(pool, { kind: 'codex-pool', label: 'c', members: [codex] });
-  t.deepEqual((await swapped.accounts.history(pool)).members[0].series, []);
+  t.deepEqual((await swapped.accounts.history(pool)).members[0].windows, []);
   await swapped.close();
 
   // Format 2 (no history): the remembered reading is shown, nothing backfilled.
@@ -410,7 +423,7 @@ test('persistence: history survives an incarnation; format 2 loads with none; no
   const legacy = make();
   legacy.register(pool, { kind: 'claude-pool', label: 'team', members: [claude] });
   t.is(legacy.accounts.list().pools[0].members[0].provenance, 'remembered');
-  t.deepEqual((await legacy.accounts.history(pool)).members[0].series, []);
+  t.deepEqual((await legacy.accounts.history(pool)).members[0].windows, []);
   await legacy.close();
 });
 
@@ -431,13 +444,170 @@ test('Claude usage reads share the header windows (same series)', async t => {
   core.observe(pool, claude, claudeHeaders(T0, 0.1, 0.4));
   at(T0 + 10 * MIN);
   await core.accounts.refresh(pool);
-  const { series } = (await core.accounts.history(pool)).members[0];
+  const { windows: series } = (await core.accounts.history(pool)).members[0];
   t.is(series.length, 2);
   t.deepEqual(
-    series.map((/** @type {any} */ s) => s.samples.map((/** @type {any} */ x) => x.usedPercent)),
+    series.map((/** @type {any} */ s) => s.records.map((/** @type {any} */ x) => x.usedPercent)),
     [
       [10, 30],
       [40, 41],
     ],
   );
+});
+
+test('review: two equal readings 15 minutes apart are one record of count 2; the latest reset is kept', async t => {
+  const { core } = await setup(t);
+  const pool = Far('Backend', {});
+  const claude = memberEntry('claude-max', 'k1', 'claude');
+  core.register(pool, { kind: 'claude-pool', label: 'team', members: [claude] });
+  const weekReset = T0 + 3 * 24 * HOUR;
+  /**
+   * @param {number} at
+   * @param {number} reset
+   */
+  const read = (at, reset) =>
+    /** @type {any} */ (
+      readingFromHeaders(
+        getter({
+          'anthropic-ratelimit-unified-7d-utilization': '0.6',
+          'anthropic-ratelimit-unified-7d-reset': String(reset / 1000),
+          'anthropic-ratelimit-unified-status': 'allowed',
+        }),
+        at,
+      )
+    );
+  // 40% remaining at 10:00 and again at 10:15; the provider recomputed the
+  // reset one second later the second time (within the tolerance).
+  core.observe(pool, claude, read(T0 + 10 * HOUR, weekReset));
+  core.observe(pool, claude, read(T0 + 10 * HOUR + 15 * MIN, weekReset + 1000));
+  const history = await core.accounts.history(pool);
+  t.true(matches(history, m4Shapes.PoolHistory));
+  const [weekly] = history.members[0].windows;
+  t.is(weekly.name, 'secondary');
+  t.is(weekly.windowMinutes, 10_080);
+  t.deepEqual(weekly.records, [
+    {
+      from: iso(T0 + 10 * HOUR),
+      to: iso(T0 + 10 * HOUR + 15 * MIN),
+      count: 2,
+      usedPercent: 60,
+      resetsAt: iso(weekReset + 1000),
+    },
+  ]);
+  // A third repeat counts on; a reading not newer is dropped, not counted.
+  core.observe(pool, claude, read(T0 + 10 * HOUR + 30 * MIN, weekReset + 2000));
+  core.observe(pool, claude, read(T0 + 10 * HOUR + 20 * MIN, weekReset + 2000));
+  const [again] = (await core.accounts.history(pool)).members[0].windows;
+  t.is(again.records.length, 1);
+  t.is(again.records[0].count, 3);
+  t.is(again.records[0].to, iso(T0 + 10 * HOUR + 30 * MIN));
+  t.is(again.records[0].resetsAt, iso(weekReset + 2000));
+  // A reset beyond the tolerance is a new record, not an extension.
+  core.observe(pool, claude, read(T0 + 11 * HOUR, weekReset + 7 * 24 * HOUR));
+  const [split] = (await core.accounts.history(pool)).members[0].windows;
+  t.is(split.records.length, 2);
+  t.is(split.records[1].count, undefined);
+});
+
+test('review: count survives the file; a damaged count is read as 2', t => {
+  const kept = checkHistory([
+    {
+      name: 'primary',
+      windowMinutes: 300,
+      samples: [
+        { at: T0, usedPercent: 5, lastAt: T0 + MIN, count: 7 },
+        { at: T0 + 2 * MIN, usedPercent: 6, lastAt: T0 + 3 * MIN, count: -1 },
+        { at: T0 + 4 * MIN, usedPercent: 7, count: 9 },
+      ],
+    },
+  ]);
+  t.deepEqual(
+    kept[0].samples.map(sample => sample.count),
+    [7, 2, undefined],
+    'a count goes with a last confirmation only',
+  );
+});
+
+test('review: history is read in bounded pages of historyPageMembers', async t => {
+  const { core } = await setup(t);
+  const pool = Far('Backend', {});
+  const members = Array.from({ length: 6 }, (_, i) =>
+    memberEntry(`m${i}`, `k${i + 1}`, 'claude'),
+  );
+  core.register(pool, { kind: 'claude-pool', label: 'team', members });
+  for (const member of members) {
+    core.observe(pool, member, claudeHeaders(T0, 0.1, 0.4));
+  }
+  const first = await core.accounts.history(pool);
+  t.true(matches(first, m4Shapes.PoolHistory));
+  t.is(first.members.length, subscriptionLimits.historyPageMembers);
+  t.is(first.next, subscriptionLimits.historyPageMembers);
+  const second = await core.accounts.history(pool, first.next);
+  t.true(matches(second, m4Shapes.PoolHistory));
+  t.deepEqual(
+    second.members.map((/** @type {any} */ m) => m.label),
+    ['m4', 'm5'],
+  );
+  t.is(second.next, undefined);
+  t.deepEqual((await core.accounts.history(pool, 99)).members, []);
+  // The page bound is the guard's: a page of more members is refused.
+  t.false(
+    matches(
+      harden({ ...first, members: [...first.members, ...second.members] }),
+      m4Shapes.PoolHistory,
+    ),
+  );
+});
+
+test('review: Codex weekly windows are recorded in whichever slot reported them', async t => {
+  const snapshot = readingFromCodexUsage(
+    {
+      plan_type: 'free',
+      rate_limit: {
+        // A plan with only a weekly window reports it as the primary.
+        primary_window: {
+          used_percent: 30,
+          limit_window_seconds: 604_800,
+          reset_at: (T0 + 4 * 24 * HOUR) / 1000,
+        },
+      },
+    },
+    T0,
+  );
+  const { core } = await setup(t, { readers: { usage: async () => snapshot } });
+  const pool = Far('Backend', {});
+  const codex = memberEntry('codex-free', 'k1', 'codex');
+  const plus = memberEntry('codex-plus', 'k2', 'codex');
+  core.register(pool, { kind: 'codex-pool', label: 'codex', members: [codex, plus] });
+  core.observe(pool, codex, snapshot);
+  // Headers of another account naming the weekly window as the secondary.
+  core.observe(
+    pool,
+    plus,
+    /** @type {any} */ (
+      readingFromHeaders(
+        getter({
+          'x-codex-primary-used-percent': '12',
+          'x-codex-primary-window-minutes': '300',
+          'x-codex-primary-reset-at': String((T0 + 2 * HOUR) / 1000),
+          'x-codex-secondary-used-percent': '44',
+          'x-codex-secondary-window-minutes': '10080',
+          'x-codex-secondary-reset-at': String((T0 + 3 * 24 * HOUR) / 1000),
+        }),
+        T0 + MIN,
+      )
+    ),
+  );
+  const history = await core.accounts.history(pool);
+  t.true(matches(history, m4Shapes.PoolHistory));
+  const slots = history.members.map((/** @type {any} */ member) =>
+    member.windows.map((/** @type {any} */ w) => [w.name, w.windowMinutes]),
+  );
+  t.deepEqual(slots, [
+    [['primary', 10_080]],
+    [
+      ['primary', 300],
+      ['secondary', 10_080],
+    ],
+  ]);
 });

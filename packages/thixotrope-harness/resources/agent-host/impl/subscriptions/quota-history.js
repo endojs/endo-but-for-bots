@@ -12,17 +12,21 @@
  * - **Observed only**: a sample is appended when a provider reading
  *   arrives (inference headers or an on-demand usage read), at the time
  *   the reading was taken. Nothing is interpolated or backfilled; an entry
- *   loaded from an older file format starts with no history, and the
- *   remembered last reading is not turned into a sample.
+ *   loaded from an older file format (1, or the v2 migration) starts with
+ *   no history, and the remembered last reading is not turned into a
+ *   sample.
  * - **Units as supplied**: `usedPercent` (0..100) as the provider reported
  *   it (Claude's utilisation fraction x 100, Codex's used percent) and the
  *   reset time it reported, if any. No credit unit is derived.
  * - **Deduplicated**: a reading that repeats the last sample of its window
  *   (same used percent to 0.01, same reset within `RESET_TOLERANCE_MS`)
- *   extends that sample's `lastAt` instead of adding one, so repeated
- *   headers of a busy session cost nothing and the sample still says how
- *   long the value was confirmed. A reading not newer than the last
- *   confirmation is dropped.
+ *   extends that sample instead of adding one: `lastAt` becomes its time,
+ *   `count` the number of readings it stands for, and its reset the newer
+ *   reported one (providers recompute a reset by a second or two each
+ *   read). Repeated headers of a busy session cost nothing, and the sample
+ *   still says truthfully how many readings confirmed the value from when
+ *   to when; nothing between `at` and `lastAt` is implied. A reading not
+ *   newer than the last confirmation is dropped.
  * - **Bounded**: at most `subscriptionLimits.historySamples` samples per
  *   window (oldest dropped) and `subscriptionLimits.maxWindows` windows per
  *   member (the least recently observed dropped).
@@ -51,6 +55,8 @@ export const RESET_TOLERANCE_MS = 120_000;
  * @property {number} [resetsAtMs] the reset the provider reported
  * @property {number} [lastAt] the last time a reading confirmed this same
  *   value (ms; absent when only one reading did)
+ * @property {number} [count] the readings this sample stands for (2 or
+ *   more, with `lastAt`; absent for one)
  *
  * @typedef {object} HistorySeries
  * @property {'primary' | 'secondary' | 'other'} name
@@ -90,18 +96,6 @@ const sameWindow = (a, b) =>
 const seenAt = sample => sample.lastAt ?? sample.at;
 
 /**
- * The history kept after `windows` of a reading taken at `at` were
- * observed; `series` is not changed. Answers `undefined` when nothing
- * changed (every window was a duplicate older than or equal to what is
- * kept, or there was no window).
- *
- * @param {readonly HistorySeries[]} series
- * @param {number} at
- * @param {readonly ReadingWindow[]} windows the windows this reading
- *   reported (never windows carried over from an earlier reading)
- * @returns {HistorySeries[] | undefined}
- */
-/**
  * Record one window of a reading into `next` (copies, changed in place).
  * Answers whether anything changed.
  *
@@ -131,7 +125,16 @@ const observeWindow = (next, at, window) => {
     last.usedPercent === usedPercent &&
     sameReset(last.resetsAtMs, resetsAtMs)
   ) {
-    entry.samples[entry.samples.length - 1] = { ...last, lastAt: at };
+    entry.samples[entry.samples.length - 1] = {
+      ...last,
+      // The latest report of the same reset wins (within the tolerance).
+      ...(resetsAtMs === undefined ? {} : { resetsAtMs }),
+      lastAt: at,
+      count: Math.min(
+        Number.MAX_SAFE_INTEGER,
+        (last.count ?? (last.lastAt === undefined ? 1 : 2)) + 1,
+      ),
+    };
     return true;
   }
   entry.samples.push({
@@ -147,6 +150,18 @@ const observeWindow = (next, at, window) => {
   return true;
 };
 
+/**
+ * The history kept after `windows` of a reading taken at `at` were
+ * observed; `series` is not changed. Answers `undefined` when nothing
+ * changed (every window was a duplicate older than or equal to what is
+ * kept, or there was no window).
+ *
+ * @param {readonly HistorySeries[]} series
+ * @param {number} at
+ * @param {readonly ReadingWindow[]} windows the windows this reading
+ *   reported (never windows carried over from an earlier reading)
+ * @returns {HistorySeries[] | undefined}
+ */
 export const recordObservation = (series, at, windows) => {
   if (!isTime(at) || windows.length === 0) return undefined;
   /** @type {HistorySeries[]} */
@@ -189,7 +204,7 @@ const checkSamples = samples => {
     ? samples.slice(-subscriptionLimits.historySamples)
     : [];
   for (const sample of candidates) {
-    const { at, usedPercent, resetsAtMs, lastAt } =
+    const { at, usedPercent, resetsAtMs, lastAt, count } =
       sample !== null && typeof sample === 'object' ? sample : {};
     const previous = kept.at(-1);
     if (
@@ -201,7 +216,17 @@ const checkSamples = samples => {
         at,
         usedPercent: roundPercent(usedPercent),
         ...(isTime(resetsAtMs) ? { resetsAtMs } : {}),
-        ...(isTime(lastAt) && lastAt > at ? { lastAt } : {}),
+        ...(isTime(lastAt) && lastAt > at
+          ? {
+              lastAt,
+              count:
+                typeof count === 'number' &&
+                Number.isSafeInteger(count) &&
+                count >= 2
+                  ? count
+                  : 2,
+            }
+          : {}),
       });
     }
   }

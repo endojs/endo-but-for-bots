@@ -362,27 +362,31 @@ const m4ShapeBuilders = {
       { closed: M.boolean(), reason: M.or('idle', 'client', 'stopped') },
     ),
   /**
-   * One observed quota reading of a window (`quota-history.js`): when it
-   * was read, the used percent the provider reported, the reset it
-   * reported, and the last time a reading repeated the same value.
+   * One observed quota record of a window (`quota-history.js`): the used
+   * percent the provider reported, first read `from`, and when `count` (2
+   * or more) readings repeated it, last confirmed `to`; the reset the
+   * provider reported (the latest report of it). Nothing between `from`
+   * and `to` is implied. Keys are the gateway vocabulary's own (no new key:
+   * the pinned vocabulary admits it).
    */
-  QuotaSample: () =>
+  QuotaRecord: () =>
     record(
       {
-        at: text(subscriptionLimits.timeUnits),
+        from: text(subscriptionLimits.timeUnits),
         usedPercent: atMost(100),
       },
       {
+        to: text(subscriptionLimits.timeUnits),
+        count,
         resetsAt: text(subscriptionLimits.timeUnits),
-        lastAt: text(subscriptionLimits.timeUnits),
       },
     ),
-  /** The observed samples of one provider window, oldest first. */
+  /** The observed records of one provider window, oldest first. */
   QuotaSeries: () =>
     record(
       {
         name: M.or('primary', 'secondary', 'other'),
-        samples: list(T.QuotaSample, subscriptionLimits.historySamples),
+        records: list(T.QuotaRecord, subscriptionLimits.historySamples),
       },
       { windowMinutes: count },
     ),
@@ -391,16 +395,22 @@ const m4ShapeBuilders = {
     record({
       label: S.Label,
       provider: T.Provider,
-      series: list(T.QuotaSeries, subscriptionLimits.maxWindows),
+      windows: list(T.QuotaSeries, subscriptionLimits.maxWindows),
     }),
-  /** `Accounts.history(pool)`: the members of one pool, in member order. */
+  /**
+   * `Accounts.history(pool, offset?)`: one read-only page of a pool's
+   * members, in member order; `next` is the offset of the following page.
+   */
   PoolHistory: () =>
-    record({
-      backend: R('Backend'),
-      kind: T.PoolKind,
-      label: S.Label,
-      members: list(T.MemberHistory, subscriptionLimits.maxPoolMembers),
-    }),
+    record(
+      {
+        backend: R('Backend'),
+        kind: T.PoolKind,
+        label: S.Label,
+        members: list(T.MemberHistory, subscriptionLimits.historyPageMembers),
+      },
+      { next: count },
+    ),
 };
 
 /** Shapes of M4, by name (built on first use). */
@@ -523,7 +533,9 @@ const m4InterfaceBuilders = {
       list: M.call().returns(T.AccountsView),
       forBackend: M.callWhen(R('Backend')).returns(M.or(done, T.PoolAccounts)),
       forSession: M.callWhen(R('Session')).returns(M.or(done, T.PoolAccounts)),
-      history: M.callWhen(R('Backend')).returns(M.or(done, T.PoolHistory)),
+      history: M.callWhen(R('Backend'))
+        .optional(count)
+        .returns(M.or(done, T.PoolHistory)),
       refresh: M.callWhen().optional(R('Backend')).returns(T.AccountsView),
       watch: M.call().optional(count).returns(R('AccountsSubscription')),
     }),

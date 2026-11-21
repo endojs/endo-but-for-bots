@@ -54,10 +54,14 @@ export const subscriptionLimits = harden({
   /**
    * Observed quota samples kept per member and window (the newest; a read
    * that repeats the last sample extends it instead of adding one). Bounds
-   * the readings file and one `Accounts.history` answer (16 members x 4
-   * windows x 48 samples).
+   * the readings file and the `Accounts.history` pages.
    */
   historySamples: 48,
+  /**
+   * Members in one `Accounts.history` page (4 x 4 windows x 48 samples,
+   * about 100 KB at most); `next` names the following page.
+   */
+  historyPageMembers: 4,
   /** A plan or credit label shown to a person. */
   planUnits: 128,
   /** An ISO 8601 time as text (`2026-11-18T02:11:49.000Z` is 24). */

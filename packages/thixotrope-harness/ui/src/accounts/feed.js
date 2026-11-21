@@ -36,8 +36,9 @@ export const REWATCH_LIMIT = 3;
  *   (on demand only, R4-85)
  * @property {(session: any) => Promise<any>} forSession `PoolAccounts` of
  *   the session's pool, or undefined
- * @property {(backend: any) => Promise<any>} history `PoolHistory` of one
- *   pool (observed quota samples), or undefined; asked on demand
+ * @property {(backend: any, offset?: number) => Promise<any>} history one
+ *   `PoolHistory` page of a pool (observed quota records; `next` names the
+ *   following page), or undefined; asked on demand, read-only
  */
 
 /**
@@ -187,9 +188,11 @@ const makeFeed = powers => {
       const target = await accounts();
       return E(target).forSession(session);
     },
-    history: async backend => {
+    history: async (backend, offset = 0) => {
       const target = await accounts();
-      return E(target).history(backend);
+      return offset === 0
+        ? E(target).history(backend)
+        : E(target).history(backend, offset);
     },
   });
 };

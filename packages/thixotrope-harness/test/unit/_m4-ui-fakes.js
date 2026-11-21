@@ -263,7 +263,9 @@ export const memberAccount = (fields = {}) =>
  * answers `{ closed: true, reason: 'idle' }`, as the adapter's does).
  *
  * @param {{ pools?: any[], sessions?: Map<any, any>, histories?: Map<any, any> }} [options]
- *   `histories`: `PoolHistory` by pool backend, for `history(pool)`
+ *   `histories`: by pool backend, for `history(pool, offset?)`: one
+ *   `PoolHistory`, an array of pages (by page index, offsets 0, 4, 8...),
+ *   an `Error` to reject with, or a function of the offset
  */
 export const makeFakeAccounts = ({
   pools = [],
@@ -310,10 +312,17 @@ export const makeFakeAccounts = ({
       const backend = sessions.get(session);
       return view.pools.find(pool => pool.backend === backend) ?? undefined;
     },
-    /** @param {any} backend `PoolHistory` from `histories`, by backend */
-    history: backend => {
-      calls.push(['Accounts', 'history', backend]);
-      return histories.get(backend);
+    /**
+     * @param {any} backend `PoolHistory` from `histories`, by backend
+     * @param {number} [offset]
+     */
+    history: (backend, offset = 0) => {
+      calls.push(['Accounts', 'history', backend, offset]);
+      const held = histories.get(backend);
+      if (typeof held === 'function') return held(offset);
+      if (held instanceof Error) throw held;
+      if (Array.isArray(held)) return held[offset / 4];
+      return offset === 0 ? held : undefined;
     },
     /** @param {any} [backend] */
     refresh: backend => {

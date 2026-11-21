@@ -297,7 +297,9 @@
   "shapes.PresetRecord": "Development presets may identify a pinned workspace seed.",
   "shapes.PresetView": "Development presets may identify a pinned workspace seed.",
   "interfaces.PresetCatalog": "Development presets may identify a pinned workspace seed.",
-  "interfaces.Preset": "Development presets may identify a pinned workspace seed."
+  "interfaces.Preset": "Development presets may identify a pinned workspace seed.",
+  "m4Interfaces.Accounts": "Accounts.history(backend, offset?) returns a bounded page of observed quota history, or undefined for an unknown pool.",
+  "m4MethodNames.Accounts": "Accounts gains history, a method name already in the gateway vocabulary."
  },
  "exportsRemoved": [
   "m1bInterfaces",
@@ -353,7 +355,11 @@
   "texts.commandStopped": "WX.1 for M6 (m6-interfaces.md 15).1",
   "texts.notBuiltYet": "WX.1: the refusal of a guarded method whose lane has not merged (deliverMail, getMail, getVoice); deleted by the group fold",
   "texts.runnerRequired": "WX.1 for M6 (m6-interfaces.md 15).2 (R3-21)",
-  "shapes.WorkspaceSeed": "The pinned project and source commit for a development workspace."
+  "shapes.WorkspaceSeed": "The pinned project and source commit for a development workspace.",
+  "m4Shapes.QuotaSeries": "A provider window with a bounded list of observed quota records.",
+  "m4Shapes.MemberHistory": "A member label, provider and bounded list of quota windows.",
+  "m4Shapes.PoolHistory": "A bounded page of member histories with the pool backend, kind, label and optional next offset.",
+  "m4Shapes.QuotaRecord": "One observed quota percentage with its first reading time and optional repeat count, latest confirmation and reported reset."
  },
  "vocabularyAdded": {
   "keys": [

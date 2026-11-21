@@ -91,7 +91,39 @@
   display: block;
   width: 100%;
   height: auto;
-  font-size: 8px;
+  font-size: 10px;
+}
+.m4-quota-latest {
+  font-variant-numeric: tabular-nums;
+}
+.m4-quota-error {
+  color: var(--fl-amber);
+}
+.m4-quota-inset {
+  margin-top: 0.3rem;
+  padding: 0.2rem 0.3rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 4px;
+}
+.m4-quota-inset-title {
+  margin: 0;
+  font-size: 0.75rem;
+}
+.m4-quota-svg .m4-quota-marker-label {
+  font-size: 9px;
+  font-weight: 600;
+}
+/* Narrow screens: every other time label goes; the rest stay legible. */
+@media (max-width: 480px) {
+  .m4-quota-svg {
+    font-size: 12px;
+  }
+  .m4-quota-time.minor text {
+    display: none;
+  }
+  .m4-quota-readings table {
+    font-size: 0.7rem;
+  }
 }
 .m4-quota-svg text {
   fill: var(--fl-text-muted);
@@ -115,14 +147,16 @@
   stroke: var(--fl-amber);
   stroke-width: 1.6;
 }
-.m4-quota-now {
+.m4-quota-now line {
   stroke: var(--fl-text-muted);
-  stroke-width: 0.6;
-  stroke-dasharray: 2 2;
+  stroke-width: 1;
+}
+.m4-quota-svg .m4-quota-now text {
+  fill: var(--fl-text-muted);
 }
 .m4-quota-reset line {
   stroke: var(--fl-red);
-  stroke-width: 1.2;
+  stroke-width: 1.6;
 }
 .m4-quota-svg .m4-quota-reset text {
   fill: var(--fl-red);
@@ -146,6 +180,12 @@
 }
 .m4-quota-legend li.projected::before {
   border-top: 2px dashed var(--fl-amber);
+}
+.m4-quota-legend li.now::before {
+  width: 0;
+  height: 0.8rem;
+  border-top: 0;
+  border-left: 2px dotted var(--fl-text-muted);
 }
 .m4-quota-legend li.reset::before {
   width: 0;

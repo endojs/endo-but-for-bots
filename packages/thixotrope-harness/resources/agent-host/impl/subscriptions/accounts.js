@@ -43,8 +43,10 @@
  * - **Quota history** (`quota-history.js`): every kept reading also
  *   records the windows it reported as observed samples (per member key,
  *   provider and window; deduplicated, bounded, kept in the readings file);
- *   `history(pool)` answers them for the panel's graph. Read-only, answered
- *   on demand (not pushed: the push stays one small view per change).
+ *   `history(pool, offset?)` answers them for the panel's graph in pages
+ *   of `historyPageMembers`. Read-only, adapter-local like the rest of
+ *   `Accounts` (no vat or factory method), answered on demand (not pushed:
+ *   the push stays one small view per change).
  *
  * Nothing here holds or logs a credential: the usage reader receives the
  * access token from its caller per read and puts only status codes in its
@@ -345,19 +347,25 @@ export const makeAccounts = ({
     });
 
   /**
-   * The observed quota history of one pool's members (`PoolHistory`): ISO
-   * times, used percent as the provider reported it. A member with no
-   * sample (or whose key now names another provider's account) has none.
+   * One page of the observed quota history of a pool's members
+   * (`PoolHistory`): ISO times, used percent as the provider reported it.
+   * A member with no sample (or whose key now names another provider's
+   * account) has none.
    * @param {any} backend
    * @param {PoolInfo} info
+   * @param {number} offset
    */
-  const poolHistory = (backend, info) =>
-    harden({
+  const poolHistory = (backend, info, offset) => {
+    const members = info.members.slice(0, subscriptionLimits.maxPoolMembers);
+    const start = Math.min(Math.floor(offset), members.length);
+    const end = start + subscriptionLimits.historyPageMembers;
+    return harden({
       backend,
       kind: info.kind,
       label: labelText(info.label),
+      ...(end < members.length ? { next: end } : {}),
       members: harden(
-        info.members.slice(0, subscriptionLimits.maxPoolMembers).map(entry => {
+        members.slice(start, end).map(entry => {
           const stored = fileEntries.get(entry.key);
           const series =
             stored !== undefined && stored.provider === entry.provider
@@ -366,26 +374,29 @@ export const makeAccounts = ({
           return harden({
             label: labelText(entry.label),
             provider: entry.provider,
-            series: harden(
+            windows: harden(
               series.slice(0, subscriptionLimits.maxWindows).map(window =>
                 harden({
                   name: window.name,
                   ...(window.windowMinutes === undefined
                     ? {}
                     : { windowMinutes: window.windowMinutes }),
-                  samples: harden(
+                  records: harden(
                     window.samples
                       .slice(-subscriptionLimits.historySamples)
                       .map(sample =>
                         harden({
-                          at: /** @type {string} */ (isoOf(sample.at)),
+                          from: /** @type {string} */ (isoOf(sample.at)),
                           usedPercent: sample.usedPercent,
+                          ...(isoOf(sample.lastAt) === undefined
+                            ? {}
+                            : {
+                                to: isoOf(sample.lastAt),
+                                count: sample.count ?? 2,
+                              }),
                           ...(isoOf(sample.resetsAtMs) === undefined
                             ? {}
                             : { resetsAt: isoOf(sample.resetsAtMs) }),
-                          ...(isoOf(sample.lastAt) === undefined
-                            ? {}
-                            : { lastAt: isoOf(sample.lastAt) }),
                         }),
                       ),
                   ),
@@ -396,6 +407,7 @@ export const makeAccounts = ({
         }),
       ),
     });
+  };
 
   /** The whole view at the current `rev`, built once per `rev`. */
   const view = () => {
@@ -742,11 +754,16 @@ export const makeAccounts = ({
       const info = await poolInfoOf(backend);
       return info === undefined ? undefined : poolAccounts(backend, info);
     },
-    /** @param {any} backend */
-    history: async backend => {
+    /**
+     * @param {any} backend
+     * @param {number} [offset] the first member of the page (`next`)
+     */
+    history: async (backend, offset = 0) => {
       ensureLoaded();
       const info = await poolInfoOf(backend);
-      return info === undefined ? undefined : poolHistory(backend, info);
+      return info === undefined
+        ? undefined
+        : poolHistory(backend, info, offset);
     },
     /** @param {any} [backend] */
     refresh: async backend => {

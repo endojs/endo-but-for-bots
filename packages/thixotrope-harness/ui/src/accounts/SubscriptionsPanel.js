@@ -149,7 +149,7 @@ export const SubscriptionsPanel = ({ context, now = Date.now }) => {
             feed,
             pool,
             rev: Number(view?.rev ?? 0),
-            nowMs,
+            now,
           })
         : null,
     );

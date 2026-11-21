@@ -54,6 +54,18 @@ See the [milestone outcomes](designs/milestones.md) for measured results and out
 Operators can use the [guided user acceptance checklist](designs/milestones.md#guided-user-acceptance-on-the-integrated-stack)
 for chat, mail, delegation, workspace images and voice.
 
+### See subscription quota and weekly resets
+
+Open **Subscriptions** from the harness menu. Under each pool, **Quota history**
+shows the percentage remaining for each account and window. The solid line
+shows provider readings. A dashed line projects the observed usage rate to the
+reported reset, or to exhaustion if it comes sooner. Weekly reset markers and
+observation times use UTC. Expand **Readings** for the exact values.
+
+The harness records usage reported during provider calls and when you select
+**Refresh**. Opening the chart reads existing history. A forecast requires
+two observations at least ten minutes apart in the same quota period.
+
 ### Develop the harness from a session
 
 Open **New session** and choose **Thixotrope development** to use its saved

@@ -160,6 +160,17 @@ run(
       ),
       'the usage read (claude-usage.json)',
     );
+    const history = await E(accounts).history(backend);
+    const weekly = memberOf(history, 'member decl').windows.find(
+      (/** @type {any} */ series) => series.windowMinutes === 10_080,
+    );
+    t.deepEqual(weekly.records, [
+      {
+        from: memberOf(afterRefresh, 'member decl').at,
+        usedPercent: 61,
+        resetsAt: '2026-11-22T00:00:00.000Z',
+      },
+    ]);
     await E(subscription).close();
 
     // The model's part (XC): accountStatus is offered through the session's
@@ -219,6 +230,8 @@ run(
     });
 
     // Restart (readings flushed within 5 s): remembered, before any round.
+    const savedHistory = await E(accounts).history(backend);
+    const readsAtRestart = reads();
     await delay(6000);
     await m4.state.restart();
     await m4.refresh();
@@ -229,6 +242,13 @@ run(
     t.truthy(remembered, 'a pool not used since the restart is described');
     t.is(memberOf(remembered, 'member obs').provenance, 'remembered');
     t.is(memberOf(remembered, 'member decl').provenance, 'remembered');
+    const restored = await E(accounts2).history(samePool);
+    t.deepEqual(restored.members, savedHistory.members);
+    t.deepEqual(
+      (await E(accounts2).history(samePool)).members,
+      restored.members,
+    );
+    t.is(reads(), readsAtRestart, 'passive history reads do not fetch usage');
     t.is(posts(server).length, before + 2, 'no round after the restart');
   },
 );

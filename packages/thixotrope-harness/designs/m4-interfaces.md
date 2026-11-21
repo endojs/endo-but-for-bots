@@ -197,7 +197,7 @@ operator's root authority, R7-22; this keeps `AgentHostAdmin`, which M3 extends,
 | `CredentialOps.auditReader()`, `accounts()` | same | manager | answered | tiny | same |
 | `CredentialOps.poolsChanged()` | same | manager (`retirePool`, `PoolMember.retire`) | answered, no argument (as built, X-FIX J-10051: guard `M.call().returns(undefined)`; XB had it sendOnly); the retirement awaits the answer | tiny | lost with a retired adapter: harmless (the retirement ignores the failure and returns), a new incarnation loads every pool afresh; the adapter also re-reads a used pool's state when it is older than `poolStateRefreshMs` (600,000 ms), the safety net |
 | `AuditReader.page({ secret?, limit?, before? })` | `SecretsAdmin.auditReader()` | gateway (in process), CLI, tests | answered | <= 1,000 events, never into a vat | restart: get a new reader |
-| `Accounts.list()`, `forBackend(pool)`, `forSession(session)`, `history(pool)`, `refresh(pool?)`, `watch(rev?)` | `SubscriptionsAdmin.accounts()` | gateway (in process), CLI, tests | answered | adapter-local | restart: get a new one |
+| `Accounts.list()`, `forBackend(pool)`, `forSession(session)`, `history(pool, offset?)`, `refresh(pool?)`, `watch(rev?)` | `SubscriptionsAdmin.accounts()` | gateway (in process), CLI, tests | answered | adapter-local | restart: get a new one |
 | `AccountsSubscription.next()`, `close()` | `Accounts.watch()` | gateway | answered | one `AccountsBatch` | restart: re-watch; idle (no `next()` call for 60 s): evicted, its next `next()` answers `{ rev, pools: [], closed: true, reason: 'idle' }` (HR-SYN-34, F2; it rejected with `m4Texts.accountsWatchClosed` before) and the page calls `watch(lastRev)` (6) |
 | `gatewayExtension` of `AH/gateway/extensions/m4-secrets.js` (W4.6) | loaded by M3's `GW/extensions.js` at adapter start | M3's bridge | - | - | - |
 | pool provider (`claudePoolKind`, `codexPoolKind` in `backendKinds`) | `backendKinds` hook (H-4) | the endpoint, per round | in process | - | - |
@@ -479,27 +479,46 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   also lists operator-declared windows and identifies their source.
 - **Quota history** (`AH/subscriptions/quota-history.js`): each kept provider reading (headers or
   usage read) appends the windows that reading itself reported as samples `{ at, usedPercent,
-  resetsAtMs?, lastAt? }` to the `history` of its readings-file entry, one series per window
-  (`name` + `windowMinutes`). Keyed by the member's store key and provider (a key that now names
-  another provider's account starts empty). A reading repeating the last sample (same used
-  percent to 0.01, same reset within 2 min) only moves its `lastAt`; one not newer than the last
-  confirmation is dropped; a zero-filled Codex header slot is not a sample. Bounded:
-  `subscriptionLimits.historySamples` (48) per series, `maxWindows` series per member. Never
-  backfilled: older formats and the remembered reading add no sample.
-  `Accounts.history(pool) -> PoolHistory | undefined` answers it on demand (ISO times; member
-  label and provider, no store key), at most 16 x 4 x 48 samples, well under `wsMessageBytes`;
-  it is not part of `AccountsBatch` (the push stays one small view per change) and the page asks
-  again when `rev` moves.
+  resetsAtMs?, lastAt?, count? }` to the `history` of its readings-file entry, one series per
+  window (`name` + `windowMinutes`; a 10,080-minute window is weekly in either the `primary` or
+  the `secondary` slot, of either provider). Keyed by the member's store key and provider (a key
+  that now names another provider's account starts empty). A reading repeating the last sample
+  (same used percent to 0.01, same reset within 2 min) is not a new sample: it moves `lastAt`,
+  counts in `count` (2 or more; the readings the sample stands for) and keeps the newest reported
+  reset; one not newer than the last confirmation is dropped; a zero-filled Codex header slot is
+  not a sample. No intermediate point is ever made. Bounded: `subscriptionLimits.historySamples`
+  (48) per series, `maxWindows` series per member. Never backfilled: older formats and the
+  remembered reading add no sample.
+  `Accounts.history(pool, offset?) -> PoolHistory | undefined` answers it on demand, read-only,
+  in pages of `subscriptionLimits.historyPageMembers` (4) members from `offset`; `next` is the
+  offset of the next page while more remain. Shapes (all keys of the pinned vocabulary):
+  `PoolHistory { backend, kind, label, members, next? }`, `MemberHistory { label, provider,
+  windows }` (no store key), `QuotaSeries { name, records, windowMinutes? }`, `QuotaRecord {
+  from, usedPercent, to?, count?, resetsAt? }` (ISO times; `to` and `count` together, for a
+  repeated value). A page is at most 4 x 4 x 48 records, well under `wsMessageBytes`; history is
+  not part of `AccountsBatch` (the push stays one small view per change) and the page asks again
+  when `rev` moves.
 - **Quota graph** (`ui/src/accounts/QuotaGraph.js`, `quota-projection.js`): per pool member and
   window, an SVG of remaining quota % (100 - the provider's used %; no credit unit is derived)
   against UTC time, with the observed readings, a dashed projection, a "now" line and a weekly
   reset marker, plus a text equivalent (`aria-label`, status line, readings table). The
   projection is linear from the current period's first reading to its latest confirmation and
-  stops at the reported reset; it is shown only with at least 2 distinct readings spanning 10 min
-  in the current period (a new reported reset or a fall in usage starts one), the newest within a
-  quarter of the window (30 min .. 6 h), and a reported reset still ahead; otherwise the status
-  says why. The weekly marker is only the reset the newest reading of a 10,080-minute window
-  reported, while it is still ahead; later weeks are not extrapolated.
+  stops at the reported reset; it is shown only with at least 2 real reading times spanning
+  10 min in the current period (a record's first read and its last confirmation are two, so an
+  unchanged pair is a flat forecast), the newest within a quarter of the window (30 min .. 6 h),
+  and a reported reset still ahead; otherwise the status says why. A period starts where usage
+  falls, where the previous reading's reset has passed, or where the reported reset changes by
+  more than 2 min; the drawn traces split at the same places. The weekly marker is only the reset
+  the newest reading of a 10,080-minute window reported, while it is still ahead; later weeks are
+  not extrapolated. An open view advances its own clock every 30 s while a graph is shown, so a
+  projection that went stale or reached its reset, and a passed marker, go without a read. The
+  caption gives the latest remaining % and when it was confirmed; "now" (grey, dotted, labelled
+  below) and the reset (red, solid, labelled above) differ in colour, line and label; time ticks
+  fall on whole quarter hours, hours, 6 hours or days (UTC). When the observed readings would be
+  drawn under a quarter of the plot wide (a weekly reset days away), a zoomed "recent readings"
+  inset shows the observed span; the readings table lists each record newest first with its first
+  read, last confirmation, count and reported reset. A failed history read keeps the last graph
+  and says so beside it (`role=status`).
 
 ---
 
