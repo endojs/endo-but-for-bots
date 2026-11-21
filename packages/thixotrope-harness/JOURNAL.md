@@ -19417,3 +19417,94 @@ On the operator's pinned gateway at 1,200 px, the session list stayed
 the inventory fit inside the screen beneath the header. In a two-window
 check an observer saw Terra add and remove a temporary alias to the
 published counter, with its value and the child's original binding intact.
+
+### J-12598 2026-11-21 Inspect a delegated session and return to its parent
+
+The operator chose drill-down with a parent breadcrumb. A managed inventory row
+opens the child’s own session subscription, transcript and inventory. The
+root session stays selected in the sidebar. Following an ancestor breadcrumb
+restores its draft, transcript mode and reading position. The child view has
+no composer or session mutation controls.
+
+The signed-in operator resolves a child through the factory’s recorded parent
+relationship and the child’s immutable session key. A stopped child cannot be
+mistaken for a replacement using the same alias. The model-facing handle keeps
+its delegation methods. An installed test covered two parents with a child of
+the same name, stop and recreation, and a stale key.
+
+Chromium opened two siblings, checked each transcript and inventory, dropped
+and reconnected the socket, and returned through the parent. Provider call
+counts, turn IDs and durable tool results were identical before and after
+inspection. Stopping the inspected child in a separate action returned the
+reconnected viewer to its parent. The final operator-interface run took 84.3 s
+including fixture setup. A controller and layout test restored an ancestor’s
+turn on its third history page at the original 25 px scroll offset.
+
+The original UAT factory predates the operator lookup. Its private delegation
+table persists with its sessions. For this installation the gateway now serves
+a durable operator facet in workspace `w`. It returns the original SessionFactory
+and maps the previously verified parent s10, alias `scout` and child s11 by
+their actual session references. The provisioner checked the saved spawn, ask,
+child tool result and inventory bindings before registering the pair. Looking
+up that pair checks both original references again. Other legacy pairs need
+verified registration or a factory migration. A newly provisioned current
+factory resolves every live child from its own tree.
+
+On the pinned gateway Chromium opened Scout from the existing Terra counter chat,
+read Scout’s counted reply and `shared-counter`, and returned to the parent’s
+`counter` and unsent draft. The parent and child kept the same turn IDs and
+inventory revisions (4 and 1). No provider prompt was sent.
+The full unit and adapter run passed 1,872 tests with six skipped. The installed
+operator test, real Chromium regression and package TypeScript checks also passed.
+
+### J-12599 2026-11-21 Time from New Session to an editable chat
+
+Two Chromium runs on the operator’s state selected the chat-only preset and
+GPT-5.6-Terra. The stopwatch started on the preset click. The browser recorded
+CapTP request and reply times and checked when the new draft accepted input.
+The resulting sessions, s12 and s13, contained zero turns. A separate attempt
+with Factory default was refused because this installation has no default backend.
+
+| Pinned gateway measurement | First create | Second create |
+| --- | ---: | ---: |
+| Factory createSession round trip | 6,140 ms | 5,853 ms |
+| Sidebar row appeared after click | 6,199 ms | 5,909 ms |
+| Editable draft after click | 6,266 ms | 5,976 ms |
+| getInfo round trip | 31 ms | 29 ms |
+| watch round trip | 37 ms | 47 ms |
+
+The factory call accounted for 98% of each wait. The configured and available
+spare session counts were both zero, as were the exec counts. Provisioning
+defaults to the M1a cold profile unless given a pool. On a miss the factory
+creates a worker, starts staging, sends each session-program piece in order,
+evaluates the program, initializes it and binds the new session. A ready
+spare has already loaded and evaluated the program. These timings measure
+the complete factory call, including setup and binding. They do not split it
+into byte transfer, compilation, collection and other worker costs.
+
+In a separate exclusive run the only configuration change between arms was
+the target number of spare session workers. The same clone used the pinned
+worker `367e78ad1db3`, allocation GC, a 2 s idle sleep, a chat-only preset,
+a scripted backend and zero exec spares. The current session program was
+150,764 bytes, staged in seven pieces, SHA-256 `70805a15790f7ac3…`. The
+original operator state kept its existing pool settings.
+
+| Pool before each public factory call | Individual milliseconds | Median |
+| --- | --- | ---: |
+| Zero session spares | 5,826, 5,600, 5,619, 5,438 | 5,610 ms |
+| One ready session spare | 1,103, 1,077, 1,121, 925 | 1,090 ms |
+
+One ready spare saved 4.52 s (81%) at the median. Configuring the first spare
+and waiting for it took 4.67 s. After every warm creation the pool had zero
+ready and one refilling. Cold creates counted 31 daemon-wide deliveries and
+two wakes each. Warm creates counted 9–11 deliveries and one wake each,
+including activity from the refill. Four sequential samples per arm measure
+the cost of a prepared spare; burst and tail latency require a separate run.
+
+To repeat in an isolated state, use the fixtures behind `perf/pool.perf.mjs`
+and `perf/session.perf.mjs`. Keep the same backend and preset. Configure
+`{ spareSessions: 0, spareExec: 0 }`, wait for `HarnessRoot.whenSettled()`
+and time four awaited `SessionFactory.createSession` calls. Repeat with
+`spareSessions: 1`, waiting for settlement and checking one ready spare
+before each sample. Time the initial configure-and-settle separately and
+leave provider submissions outside both windows.

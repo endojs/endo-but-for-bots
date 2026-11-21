@@ -351,7 +351,9 @@ revision, with a preview of at most 256 UTF-8 bytes for a stored value.
 The browser receives the label and kind of a capability. Removing a
 binding updates the view. Someone who already holds its value keeps it.
 The parent owns the lifecycle of each managed `subagents/<name>` binding
-through the delegation tools.
+through the delegation tools. In the operator view, each managed child row opens
+its session and inventory. An ordinary object stays an inventory entry even when
+its value happens to be a transferable subagent handle.
 
 To share stateful behavior, publish the object's named methods from eval.
 

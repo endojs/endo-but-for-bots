@@ -366,6 +366,14 @@ Delegating a published object shares its identity. The child can call
 its methods after the creating eval finishes. A copied value is bound as
 data and cannot be used as a mail address.
 
+**Operator inspection (J-12598).** `Operator.findSubagentSession(parent, name, expectedKey?)`
+returns the live session bound to that alias in the given parent’s delegation tree.
+New managed inventory rows include the immutable `childKey`. The browser supplies it
+when opening a row or rebuilding its breadcrumb after reconnect. Stopped, lost or
+replaced children fail the lookup. A model with a transferable `SubagentHandle`
+keeps the existing `describe`, `ask`, `cancelAsk` and `stop` interface. Inspection
+uses ordinary session and inventory subscriptions and sends no task to the child.
+
 The object-only factory from earlier installations accepts published
 references. Direct JSON attachments require the factory and receiving
 session guards that admit the copy representation.

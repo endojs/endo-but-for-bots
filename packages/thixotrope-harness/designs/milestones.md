@@ -1511,12 +1511,24 @@ The human trial and the real-service repeats still need recorded outcomes.
 | Chat and reconnect | Sign in through the gateway, create a session on a configured backend, send a turn, and reload while it streams. The transcript should contain the input once and show its completed answer. |
 | Mail and delegation | From an operator client using `getMail()`, give a sender the recipient's address. Have the sender forward a package, then spawn, ask and stop a named child. Check the recipient's turn, the correlated reply, the child's answer and its removal. The operator Home inbox and mail CLI belong to M12. |
 | Shared inventory counter | Open Agent inventory on the parent. Have Terra publish a JavaScript counter, increment it, attach it to a child, and have the child increment it. A third increment by the parent should return 3. The open pane should show the counter and the child handle as they are bound. |
+| Inspect a delegated session | In the parent’s inventory, open `subagents/scout`. Read Scout’s transcript and inventory, then follow the parent breadcrumb back to the previous draft and reading position. Opening and returning should leave the turn counts unchanged. |
 | Workspace and images | With a configured runner, create a development session, inspect its Git workspace and ask it to view a known image there. Verify what the live backend sees. Stop the parent and confirm that its child can still use its own workspace. |
 | Voice and context | With speech engines, a runner and the pinned voice backend configured, start Talk, speak, interrupt playback and replay the answer. On a live provider, cross the context threshold and check that the next answer uses the compacted history coherently. |
 
 In the live Terra low counter run the parent, child and parent returned 1,
 2 and 3 from their own exec calls. The open inventory showed the published
 counter and the newly created child. [Saved turn evidence](../JOURNAL.md#j-12596-2026-11-21-observable-session-inventories-and-shared-objects).
+
+The live counter chat also passed child inspection. Open `subagents/scout` to
+read the child’s own reply and `shared-counter`; follow the parent breadcrumb
+to recover the parent’s draft and inventory. Current factories resolve children
+directly. The retained UAT factory has a verified registration for this pair.
+[Inspection and compatibility](../JOURNAL.md#j-12598-2026-11-21-inspect-a-delegated-session-and-return-to-its-parent)
+
+The pinned UAT has zero session spares. Two empty chats took 5.98 and 6.27 s
+to become editable. An isolated same-binary comparison measured median factory
+creation at 5.61 s cold and 1.09 s with one spare ready. The first spare took
+4.67 s to prepare. [Creation measurements](../JOURNAL.md#j-12599-2026-11-21-time-from-new-session-to-an-editable-chat)
 
 From the harness package, with the [workspace dependencies and pinned worker installed](../README.md#build-what-the-tests-run),
 build the browser assets and start the supervisor on a short, fresh local state path.

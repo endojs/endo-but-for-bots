@@ -77,6 +77,23 @@ The automatic reply to a completed package sent a checked `Outbox.post` and disc
 
 On the pinned worker, the immediately preceding full run recorded 216.441 ms ACK and 168 completed posts in 61.282 s (2.741/s). The one-way automatic reply recorded 160.827 ms and 196 in 61.059 s (3.210/s) in the same unscaled benchmark, including the final dismissal drain. Fresh hub growth was 0.968×. Session-to-session delivery was 359 ms against 300 ms. Both runs used the same factory code. This is one full run per revision; the measured difference includes run-to-run variation. For other mail operations, first establish whether any caller consumes a result or depends on its failure before considering a one-way send. [Release measurements](../JOURNAL.md#j-12553-2026-11-20-wxf-pinned-worker-meets-ack-and-throughput-together)
 
+## Creating a chat on the pinned worker
+
+Two empty sessions took 5.98 and 6.27 seconds from a preset click to an editable
+draft. In both cases 98% of the time was inside `createSession`. This UAT state
+had a target of zero spare session workers. In a separate four-create-per-arm
+comparison on the same pinned binary, a ready spare cut median factory time
+from 5.61 s to 1.09 s. Preparing the first spare took 4.67 s. The pool consumes
+it on use and starts a refill. A burst can still pay the cold cost before a
+new spare is ready.
+
+For an Ironhorse investigation, record the ready-spare count at the instant
+of each creation. On a cold miss, time worker allocation, serial delivery of
+the staged program pieces, and evaluation separately. On a hit, trace the
+remaining `make` crank, collection and final binding. Daemon-wide counters
+also include work from refilling the pool. For a browser report, time until
+the draft accepts input as well as the factory call. [Measurements and reproduction](../JOURNAL.md#j-12599-2026-11-21-time-from-new-session-to-an-editable-chat)
+
 ## Earlier factory and startup measurements
 
 | Observation | Workload and evidence | What to investigate |
