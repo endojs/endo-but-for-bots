@@ -19622,3 +19622,44 @@ The session program installs that source before publishing the new session.
 This permits an in-place rollout with the original operator and provider.
 The ordinary development preset continues to start with an empty repository.
 [Operator procedure](README.md#develop-the-harness-from-a-session)
+
+### J-13005 2026-11-21 Live project preset and Docker command completion
+
+The development image passed its offline Linux arm64 smoke test as UID 1000
+with a read-only root, two CPUs and 4 GiB of memory. Cold dependency
+preparation took 55 seconds on the smoke test’s temporary filesystem. Three
+harness inventory tests passed. A nested Ironhorse supervisor started, answered
+status, and shut down in `/home/node/selfdev`. Its state directory must support
+executing the worker that the nested supervisor stages there. Repeating the
+dependency install took six seconds. The local image manifest is
+`sha256:356facef36c7355a192e931f30e9b6b6057eebd0eeefd546d7f135708fa6438f`.
+
+On the pinned supervisor, the browser’s project card created a session with
+ChatGPT, Terra and low effort. Reopening the sidebar row showed zero queued
+or submitted messages. In a separate Terra chat the shell verified
+`51760a3996a32667388ead9fc42f04e993cd5118` on a clean `main` branch with
+an independent object store and no remotes.
+
+Live tool results exposed a runner bug. A slow shell command could report exit
+0 after its first output while Yarn was still writing the checkout. A
+disposable production Docker test reproduced it with a delayed write to each
+stream and exit 37. The runner now keeps the container exec attached to a
+waiting shell. The same Docker check observed both complete streams and exit
+37. The command group remained cancellable. [Runner](resources/environments/impl/runtime-oci.js)
+
+**Cold-start measurement.** On the pinned Mac worker, the first in-session
+Yarn install took 2m57s and compiled native SQLite. The two JavaScript worker
+bundles built afterwards. The preceding checkout probe had already read the
+correct Git commit. Measure dependency linking and native compilation
+separately from session creation and Ironhorse deliveries when profiling the
+first developer turn. Reopening the session reuses its installed dependencies.
+
+The completed Docker confinement run on the project image also exposed six
+image-defined variables in a session command. The adapter now grants exactly
+the six documented environment entries. Image-specific Corepack and Yarn
+settings live in their tool launchers. Both the development and Alpine images
+passed all 35 runner checks, including both output streams, the actual exit
+code, timeout and cleanup. Docker Desktop exposes inert tunnel entries in its
+isolated network namespace. The confinement test now checks interface state,
+addresses and routes. The final development image passed the offline smoke
+with manifest `sha256:66cbcdffa43aa016f5e4d26f866c3e3258d6dc9b969b339df0d72d53889457a9`.

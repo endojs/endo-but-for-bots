@@ -45,7 +45,7 @@
  *
  * Not exported (documented losses): exec scope bindings (the exec vat's
  * scope is not in any record); workspace files and shell home (the imported
- * environment starts empty); secret values (re-create them); preset
+ * environment starts at its pinned base commit or with an empty repository); secret values (re-create them); preset
  * endowments and built-in presets' edits (objects are not exported; a
  * built-in comes back as shipped). An archived turn's records come back in segment order: tool results
  * in call order, and a `TurnResolved` sealed after its turn right after it.

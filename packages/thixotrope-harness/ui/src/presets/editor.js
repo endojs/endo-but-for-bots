@@ -21,6 +21,7 @@
  */
 import { E } from '@endo/far';
 
+import { workspaceSeedLabel } from '../../../guest/lib/workspace-seed.js';
 import { fitsPresetRecord } from './size.js';
 import { presetTexts, presetTooLarge } from './texts.js';
 
@@ -41,6 +42,7 @@ const messageOf = error =>
  * @property {string} instructions
  * @property {string} networkPolicy
  * @property {{ project: string, commit: string }} [workspaceSeed]
+ * @property {any} [projectSource] the compatibility marker of an older factory
  * @property {any} [backend] a `Backend` presence, or undefined (factory default)
  * @property {string} modelId '' for none
  * @property {string} reasoningEffort '' for none
@@ -91,9 +93,16 @@ export const formOf = view => ({
   objects: (view.objects ?? []).map(
     /** @param {any} object */ ({ kind, label }) => ({ kind, label }),
   ),
-  endowments: (view.endowments ?? []).map(
-    /** @param {any} endowment */ ({ label, value }) => ({ label, value }),
-  ),
+  projectSource: view.endowments?.find(
+    /** @param {any} entry */ entry => entry.label === workspaceSeedLabel,
+  )?.value,
+  endowments: (view.endowments ?? [])
+    .filter(
+      /** @param {any} entry */ entry => entry.label !== workspaceSeedLabel,
+    )
+    .map(
+      /** @param {any} endowment */ ({ label, value }) => ({ label, value }),
+    ),
 });
 harden(formOf);
 
@@ -114,7 +123,12 @@ export const recordOf = form =>
       ? { workspaceSeed: form.workspaceSeed }
       : {}),
     objects: form.objects.map(({ kind, label }) => ({ kind, label })),
-    endowments: form.endowments.map(({ label, value }) => ({ label, value })),
+    endowments: [
+      ...form.endowments.map(({ label, value }) => ({ label, value })),
+      ...(form.template === 'development' && form.projectSource
+        ? [{ label: workspaceSeedLabel, value: form.projectSource }]
+        : []),
+    ],
     ...(form.backend === undefined ? {} : { backend: form.backend }),
     ...(form.modelId === '' ? {} : { modelId: form.modelId }),
     ...(form.reasoningEffort === ''

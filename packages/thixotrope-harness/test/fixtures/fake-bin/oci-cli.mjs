@@ -7,10 +7,9 @@
 // the cases the runtime tells apart (absent image, name in use, missing or
 // stopped container, engine unreachable).
 //
-// `exec <name> [setsid] <argv...>` runs argv as a host process in the
-// container's workspace mount, with exactly the container's `--env`
-// variables, in a new process group when `setsid` leads (as in the
-// container), and `/tmp/...` arguments mapped into the fake's own
+// `exec` runs argv as a host process in the workspace mount, with the
+// container's `--env` variables, a fresh process group for a wrapped
+// command, and `/tmp/...` arguments mapped into the fake's own
 // per-container directory. It is not a sandbox: tests only.
 //
 // The state directory:
@@ -222,8 +221,11 @@ if (sub === 'image exists' && podman) {
     }
     fail(`Error response from daemon: container ${name} is not running`, 1);
   }
-  const detached = argv[0] === 'setsid';
-  const words = (detached ? argv.slice(1) : argv).map(word =>
+  const detached =
+    argv[0] === 'sh' &&
+    argv[1] === '-c' &&
+    argv[2] === 'setsid "$@" & wait "$!"';
+  const words = (detached ? argv.slice(4) : argv).map(word =>
     word.startsWith('/tmp/') ? join(dir, 'tmp', name, word.slice(5)) : word,
   );
   const child = spawn(words[0], words.slice(1), {

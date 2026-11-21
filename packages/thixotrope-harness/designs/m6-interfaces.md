@@ -602,9 +602,10 @@ Cost: + one manager crank on the path (about 75 ms) + 3 handles into the session
 2. Manager crank: refuse if stopped/released; `E(ops).port(key)`; the adapter makes the `ShellPort`
    (no disk work yet); answer crank forwards.
 3. Session crank: keep the port; send `E(port).runCommand({ opId, args, writers, content? })`.
-4. Adapter: parse args; ensure the workspace (create, `git init -b main`, empty commit
-   "Initialize workspace", ready marker) and home; `runtime.start(env)` if not running; exec;
-   collect; bound; stage if large; answer.
+4. The adapter parses the arguments and ensures the workspace and home (5.1). An ordinary
+   workspace begins on `main` with the empty commit "Initialize workspace". A project workspace
+   begins at its pinned commit. The adapter calls `runtime.start(env)` when needed, executes the
+   command, collects its bounded output and stages large results before answering.
 5. Session crank: record the result (`tool-result`), publish, issue the next call.
 
 Later commands skip 1-2. Deliveries per command: 1 session delivery (5), 0 manager deliveries.
@@ -692,7 +693,7 @@ flight on a `ShellPort` breaks: D-M6-5. Exec-path calls in flight: reads retried
   tag                       # this state's container label value: sha256(realpath(state))[0:16], rewritten at each bind
   projects/thixotrope/<commit>.bundle  # operator-installed source with refs/heads/seed
   sessions/e<n>/workspace-seed  # records successful checkout outside the container mounts
-  sessions/e<n>/workspace/  # the git repository (/workspace); `.thix-ready` marker in .git after init + empty commit
+  sessions/e<n>/workspace/  # the private git repository mounted at /workspace
   sessions/e<n>/home/       # /home/node (R3-46)
   sessions/e<n>/run/        # fake runtime: one file per live process group (pgid, start time)
   trash/                    # releases in progress; emptied at bind
@@ -1106,7 +1107,7 @@ No other core change is needed; CC-093..CC-099 are unused.
 | O-6 | A failed environment stop: quarantine (R4-81) or retry (D-16)? | retry at the next adapter start and before the next start of that environment |
 | O-7 | Git surface: linked worktrees, tree views, commit stream, `show`, `revParse`, `detach`, `checkoutConflict` | not in M6; backlog |
 | O-8 | Where the resource's guard table lives (D-M6-10) | `guest/lib/guards/environments.js`, excluded from the gateway vocabulary as not browser-sendable (settled from X-11; the W6.0 draft had it beside the resource) |
-| O-9 | Export and import of a session with an environment | workspace and home are not exported; an imported shell session gets a fresh empty workspace (stated in the export's notes); the execution state is exported, and an imported stopped session stays stopped with its new environment withdrawn (X-07, 4.5) |
+| O-9 | Export and import of a session with an environment | JSONL restores the execution state and creates a fresh workspace at the pinned commit, or an empty repository for an ordinary preset. It omits workspace edits and home files. A stopped session stays stopped with its new environment withdrawn (X-07, 4.5) |
 | O-10 | Fixed texts: Fae's words where they exist; `noEnvironmentToStop`, `commandOutcomeUnknown`, `commandStopped`, `outcomeUnknown`, `runnerRequired` reworded by the harness | as written in section 15 |
 | O-11 | The data-reference spike's step 1 for this resource and M8's images (X-06) | not adopted in this group: M6 W6.2 builds `openImage` with adapter-side pages, both lanes accept the hub-log cost, CC-100 asked once; the seams if adopted are `EVI/blob-access.js` and `EVI/image-source.js` (D-M6-6) |
 | O-12 | The session program limit (240,000; 27,517 left on the step-3 tree for four lanes whose likely sum is 257-267 K, X-01) | raise `sessionProgramBytes` (about +1.1 s on the cold create per +55 KB, hidden by the spare pool, J-10192); M6 asks a cap of 9,000 bytes (D-M6-18); W6.4 waits for the ruling and the PM's caps |

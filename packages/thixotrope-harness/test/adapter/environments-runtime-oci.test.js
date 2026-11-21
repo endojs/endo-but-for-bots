@@ -390,16 +390,19 @@ for (const binary of /** @type {const} */ (['podman', 'docker'])) {
     t.false(result.stdoutCut);
     t.true(result.ms >= 0);
     const [execArgv] = calls();
-    t.deepEqual(execArgv.slice(0, 6), [
+    t.deepEqual(execArgv.slice(0, 9), [
       'exec',
       env.name,
-      'setsid',
+      'sh',
+      '-c',
+      'setsid "$@" & wait "$!"',
+      'sh',
       'sh',
       '-c',
       'echo $$ > "$0"; "$@"; s=$?; rm -f "$0"; exit $s',
     ]);
-    t.regex(execArgv[6], /^\/tmp\/thix-c[0-9]+\.pid$/);
-    t.deepEqual(execArgv.slice(7), argv);
+    t.regex(execArgv[9], /^\/tmp\/thix-c[0-9]+\.pid$/);
+    t.deepEqual(execArgv.slice(10), ['env', '-i', ...a3Env, ...argv]);
 
     const envResult = await runtime.exec(env, ['env'], execOptions);
     t.deepEqual(
@@ -453,7 +456,7 @@ for (const binary of /** @type {const} */ (['podman', 'docker'])) {
     t.is(decode(otherResult.stdout), 'done\n', 'the other command ran on');
     t.is(otherResult.exitCode, 0);
     const signals = calls().filter(
-      argv => argv[0] === 'exec' && argv[2] === 'sh',
+      argv => argv[0] === 'exec' && argv[5]?.startsWith('/tmp/thix-c'),
     );
     t.is(signals.length, 1);
     t.is(signals[0].at(-1), 'TERM');
@@ -475,7 +478,9 @@ for (const binary of /** @type {const} */ (['podman', 'docker'])) {
     t.true(took >= 650 && took < 2500, `ended ${took} ms after the start`);
     t.deepEqual(
       calls()
-        .filter(argv => argv[0] === 'exec' && argv[2] === 'sh')
+        .filter(
+          argv => argv[0] === 'exec' && argv[5]?.startsWith('/tmp/thix-c'),
+        )
         .map(argv => argv.at(-1)),
       ['TERM', 'KILL'],
     );
@@ -653,6 +658,27 @@ const realSetUp = t => {
   return { runtime, envOf, realTag };
 };
 
+realTest(
+  '[real-runtime] exec waits for delayed output and exit status',
+  async t => {
+    const { runtime, envOf } = realSetUp(t);
+    const env = envOf('e1');
+    await runtime.start(env);
+    const result = await runtime.exec(
+      env,
+      [
+        'sh',
+        '-c',
+        'printf first; sleep 1; printf last; printf error >&2; exit 37',
+      ],
+      execOptions,
+    );
+    t.is(result.exitCode, 37);
+    t.is(decode(result.stdout), 'firstlast');
+    t.is(decode(result.stderr), 'error');
+  },
+);
+
 realTest('[real-runtime] an absent digest is refused', async t => {
   const { runtime } = realSetUp(t);
   t.deepEqual(await checkImagePin({ runtime, image: realImage }), { ok: true });
@@ -677,15 +703,44 @@ realTest('[real-runtime] the container is confined (R3-45, R7-9)', async t => {
   t.not((await run('touch /etc/x')).exitCode, 0, 'read-only root');
   t.not((await run('touch /x')).exitCode, 0, 'read-only root');
   t.is((await run('touch /workspace/w /home/node/h /tmp/t')).exitCode, 0);
-  t.is(decode((await run('ls /sys/class/net')).stdout).trim(), 'lo');
-  // The runtimes add HOSTNAME (and podman `container`): recorded by the
-  // owner run, neither is a host variable or a credential.
-  t.deepEqual(
-    envLines((await run('env')).stdout).filter(
-      line => !/^(?:HOSTNAME|container)=/.test(line),
+  // Linux may retain unconfigured tunnel devices in an isolated netns.
+  // Check UP interfaces, assigned addresses and routes in the namespace.
+  const read = async (/** @type {string} */ script) => {
+    const { exitCode, stdout } = await run(script);
+    t.is(exitCode, 0, script);
+    return decode(stdout).trim();
+  };
+  t.is(
+    await read(
+      'for d in /sys/class/net/*; do [ -f "$d/flags" ] || continue; ' +
+        'read -r flags < "$d/flags" || exit 1; ' +
+        'if [ $((flags & 1)) -ne 0 ]; then basename "$d"; fi; done',
     ),
-    [...a3Env].sort(),
+    'lo',
   );
+  // Each host LOCAL entry in the kernel IPv4 trie follows its address.
+  const ipv4 = await read(
+    `awk '/host LOCAL/ {print addr} {addr=$NF}' /proc/net/fib_trie`,
+  );
+  t.true(
+    ipv4.split('\n').every(address => /^127\./.test(address)),
+    ipv4,
+  );
+  t.is(await read(`awk 'NR > 1 && $1 != "lo"' /proc/net/route`), '');
+  // An IPv4-only Linux kernel can omit both IPv6 files.
+  t.is(
+    await read(
+      `if [ -e /proc/net/if_inet6 ]; then awk '$1 != "00000000000000000000000000000001" || $6 != "lo"' /proc/net/if_inet6; fi`,
+    ),
+    '',
+  );
+  t.is(
+    await read(
+      `if [ -e /proc/net/ipv6_route ]; then awk '$NF != "lo"' /proc/net/ipv6_route; fi`,
+    ),
+    '',
+  );
+  t.deepEqual(envLines((await run('env')).stdout), [...a3Env].sort());
   t.true(existsSync(join(env.workspace, 'w')), 'the workspace is the mount');
 });
 

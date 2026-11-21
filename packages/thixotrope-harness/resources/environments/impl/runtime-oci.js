@@ -15,7 +15,7 @@
  * (`--userns keep-id:uid=1000,gid=1000`), so the files a command writes
  * belong to the daemon's user on the host (`[real-runtime: podman]`).
  *
- * A command runs as `exec <name> setsid sh -c <wrapper> <pidfile> <argv...>`:
+ * A waiting shell launches `setsid sh -c <wrapper> <pidfile> <argv...>`:
  * the wrapper records its pid (the new group's id) in the container's
  * `/tmp`, runs argv without any shell interpolation of it, and removes the
  * record when argv ends. A timeout sends SIGTERM to that group inside the
@@ -67,12 +67,16 @@ const containerHome = '/home/node';
 const containerHostPath = '/usr/local/bin:/usr/bin:/bin';
 
 /** A.3's variables as the container sees them (R3-45: nothing else). */
-const containerEnv = fakeCommandEnv(containerHome, containerHostPath);
+const commandEnvironment = harden(
+  Object.entries(fakeCommandEnv(containerHome, containerHostPath)).map(
+    ([name, value]) => `${name}=${value}`,
+  ),
+);
 
 /**
  * Host variables the runtime CLI itself may need to reach its engine
  * (rootless podman's runtime directory, a docker context). They configure
- * the CLI process only; the container's environment is `containerEnv`.
+ * the CLI process only; commands receive the entries of `commandEnvironment`.
  */
 const cliEnvNames = harden([
   'PATH',
@@ -366,10 +370,7 @@ export const makeOciRuntime = ({
       `${mountable(env.home)}:${containerHome}:rw`,
       '--workdir',
       '/workspace',
-      ...Object.entries(containerEnv).flatMap(([name, value]) => [
-        '--env',
-        `${name}=${value}`,
-      ]),
+      ...commandEnvironment.flatMap(entry => ['--env', entry]),
       settings.image,
       'sleep',
       'infinity',
@@ -434,7 +435,27 @@ export const makeOciRuntime = ({
     const pidFile = `/tmp/thix-c${commands}.pid`;
     const started = performance.now();
     const call = exec(
-      ['exec', name, 'setsid', 'sh', '-c', commandWrapper, pidFile, ...argv],
+      // An OCI exec process may already lead a process group. setsid then
+      // forks and returns success immediately. Launch it as a child of the
+      // noninteractive shell so it can become session leader without forking.
+      [
+        'exec',
+        name,
+        'sh',
+        '-c',
+        'setsid "$@" & wait "$!"',
+        'sh',
+        'sh',
+        '-c',
+        commandWrapper,
+        pidFile,
+        // Image ENV defaults are inherited by OCI exec. A command receives
+        // only the environment granted by the harness, even on a custom image.
+        'env',
+        '-i',
+        ...commandEnvironment,
+        ...argv,
+      ],
       { streamBytes },
     );
     let timedOut = false;

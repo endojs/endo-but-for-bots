@@ -9,7 +9,7 @@ trap 'rm -rf "$ctx"' EXIT
 mkdir "$ctx/rust-src" "$ctx/manifests"
 git -C "$repo" archive "$ref" -- Cargo.toml Cargo.lock rust | tar -x -C "$ctx/rust-src"
 git -C "$repo" archive "$ref" -- package.json yarn.lock .yarnrc.yml ':(glob)packages/*/package.json' | tar -x -C "$ctx/manifests"
-cp "$here/prepare.sh" "$ctx/prepare.sh"
+cp "$here/prepare.sh" "$here/yarn-tools.sh" "$ctx/"
 image="thix-selfdev:${ref}"
 base=node@sha256:e0d149b4727ac0c20d9774e801e423d7a946a0bffced886f42cfe9cd3c67820a
 if ! docker image inspect "$base" >/dev/null 2>&1; then docker pull "$base" >&2; fi
@@ -18,4 +18,11 @@ if ! docker image inspect "$base" >/dev/null 2>&1; then docker pull "$base" >&2;
 base_tag=thix-selfdev-node:e0d149b4727a
 docker tag "$base" "$base_tag"
 docker build --build-arg "NODE_IMAGE=$base_tag" --file "$here/Containerfile" --tag "$image" "$ctx" >&2
-docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image"
+pin=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" |
+  awk '/^thix-selfdev@sha256:[0-9a-f]+$/ {print; exit}')
+if [ -z "$pin" ]; then
+  echo 'Docker did not record a local repository digest. Use the containerd image store.' >&2
+  exit 1
+fi
+docker image inspect "$pin" >/dev/null
+printf '%s\n' "$pin"

@@ -24,12 +24,13 @@ const { isDigestPin } =
 
 const run = promisify(execFile);
 const presetName = 'Thixotrope development';
-const markerLabel = 'thixotrope-project-source';
+const { workspaceSeedLabel: markerLabel } =
+  await import('../guest/lib/workspace-seed.js');
 const instructions = [
   'You are developing the Thixotrope harness in your own persistent Git checkout at /workspace.',
   'On first use, run sh -c "cd /workspace && thix-selfdev-prepare" to install the locked Linux dependencies and build the worker boot bundles offline.',
   'Run package commands from /workspace/packages/thixotrope-harness. For example, run corepack yarn test test/unit/m5-w58-presets.test.js.',
-  'Reproduce the issue with a focused test, edit the checkout and rerun the test. Return git diff HEAD for review. Use a separate short /tmp state path for nested supervisors.',
+  'Reproduce the issue with a focused test, edit the checkout and rerun the test. Return git diff HEAD for review. For a nested supervisor use a short private state directory under /home/node, where its staged Linux worker can execute.',
 ].join(' ');
 
 /**

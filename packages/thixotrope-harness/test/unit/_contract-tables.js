@@ -196,6 +196,7 @@ export const seamLater = harden({
     'SubagentDescription',
     'CopyOptions',
     'ExecutionState',
+    'WorkspaceSeed',
     'CompactionAsk',
     'CompactionStarted',
     'Compaction',

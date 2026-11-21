@@ -13,18 +13,23 @@ if [ "${1:-}" != --inside ]; then
       --tmpfs /workspace:uid=1000,gid=1000,size=2600m,exec \
       --tmpfs /home/node:uid=1000,gid=1000,exec --env HOME=/home/node \
       --mount "type=bind,src=$here/smoke.sh,dst=/smoke.sh,readonly" \
-      "$image" sh /smoke.sh --inside
+      "$image" env -i HOME=/home/node PATH=/home/node/.cargo/bin:/usr/local/bin:/usr/bin:/bin \
+        CARGO_HOME=/home/node/.cargo RUSTUP_HOME=/home/node/.rustup \
+        CARGO_TARGET_DIR=/home/node/target LANG=C.UTF-8 sh /smoke.sh --inside
   exit
 fi
 
 cd /workspace
 tar -xf -
+test "$(corepack yarn --version)" = 4.13.0
+test "$(yarn --version)" = 4.13.0
 thix-selfdev-prepare
 cd packages/thixotrope-harness
 yarn test test/unit/session-inventory.test.js
 cd ../..
 thix=packages/thixotrope/bin/thix.js
-state=/tmp/selfdev
+# The supervisor copies its executable worker into this private state.
+state=/home/node/selfdev
 node "$thix" serve "$state" > /tmp/selfdev-serve.log 2>&1 &
 pid=$!
 for i in $(seq 1 60); do

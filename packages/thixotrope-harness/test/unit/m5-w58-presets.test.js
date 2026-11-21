@@ -41,6 +41,21 @@ test('editing a development preset preserves its pinned project revision', t => 
   t.false('workspaceSeed' in recordOf({ ...form, template: 'chat-only' }));
 });
 
+test('the compatibility project source stays separate from editable default objects', t => {
+  const marker = {
+    label: 'thixotrope-project-source',
+    value: Far('Source', {}),
+  };
+  const form = formOf({
+    label: 'project',
+    template: 'development',
+    endowments: [marker],
+  });
+  t.deepEqual(form.endowments, []);
+  t.deepEqual(recordOf(form).endowments, [marker]);
+  t.deepEqual(recordOf({ ...form, template: 'general' }).endowments, []);
+});
+
 /**
  * An in-memory `PresetCatalog` with the contract's methods and CAS rule,
  * and an `Inventory` (pages of 50), shared by the pages of a test.
