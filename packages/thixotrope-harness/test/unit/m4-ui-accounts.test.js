@@ -146,7 +146,29 @@ test.serial('labels: chip text, rows, provenance, blocked', t => {
     limitReached: true,
     at: iso(nowMs - 120_000),
   });
-  t.is(chipText(observed, nowMs), 'a: wk used up, back in 3h · 5h 99%');
+  t.is(
+    chipText(observed, nowMs),
+    'a: 7d quota used up, back in 3h · 5h quota 99% used',
+  );
+  const unknownDuration = memberAccount({
+    label: 'a',
+    windows: [{ name: 'secondary', usedPercent: 0 }],
+  });
+  t.is(chipText(unknownDuration, nowMs), 'a: secondary quota 0% used');
+  t.deepEqual(accountRows(unknownDuration, nowMs)[0], [
+    'secondary quota',
+    '0% used, 100% left',
+  ]);
+  t.is(
+    chipText(
+      {
+        ...unknownDuration,
+        windows: [{ name: 'secondary', windowMinutes: 90, usedPercent: 12 }],
+      },
+      nowMs,
+    ),
+    'a: 90m quota 12% used',
+  );
   t.true(accountBlocked(observed, nowMs));
   t.true(
     accountBlocked(observed, nowMs + 4 * HOUR),
@@ -211,7 +233,7 @@ test.serial('labels: chip text, rows, provenance, blocked', t => {
   );
   t.deepEqual(rows, [
     ['Plan', 'max'],
-    ['5h', `25% used, 75% left · resets in 1h (${iso(nowMs + HOUR)})`],
+    ['5h quota', `25% used, 75% left · resets in 1h (${iso(nowMs + HOUR)})`],
     ['Status', `marked · EXHAUSTED · until ${iso(nowMs + HOUR)}`],
     ['Credits', '5'],
     ['Banked reset', `weekly reset · expires ${iso(nowMs + 48 * HOUR)}`],
@@ -309,9 +331,10 @@ test.serial(
     await flush();
     const chips = () => s.$$('.m4-chip').map(chip => chip.textContent);
     t.deepEqual(chips(), [
-      'first: 5h 40%',
+      'first: 5h quota 40% used',
       `second: pro · ${subscriptionTexts.provenanceDeclared}`,
     ]);
+    t.true(s.$('.m4-chip')?.title.includes('subscription allowance used'));
     t.is(s.$('.m4-chips')?.classList.contains('all-blocked'), false);
     t.is(
       s.accounts.callsOf('Accounts.forSession')[0][2],

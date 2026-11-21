@@ -65,12 +65,16 @@ export const windowNow = (window, nowMs) => {
  * @param {{ name: string, windowMinutes?: number }} window
  */
 export const windowName = window => {
-  if (window.windowMinutes === 300) return '5h';
-  if (window.windowMinutes === 1440) return 'day';
-  if (window.windowMinutes === 10_080) return 'wk';
-  if (window.name === 'primary') return 'short';
-  if (window.name === 'secondary') return 'long';
-  return 'other';
+  const minutes = window.windowMinutes;
+  if (minutes !== undefined && minutes > 0) {
+    // Keep the entire period, including odd durations such as 90 minutes.
+    if (minutes % 1440 === 0) return `${minutes / 1440}d quota`;
+    if (minutes % 60 === 0) return `${minutes / 60}h quota`;
+    return `${minutes}m quota`;
+  }
+  if (window.name === 'primary') return 'primary quota';
+  if (window.name === 'secondary') return 'secondary quota';
+  return 'other quota';
 };
 
 /** How long a "limit reached" with no window to say when it lifts is believed. */
@@ -127,7 +131,7 @@ export const provenanceText = (account, nowMs) => {
 
 /**
  * The status-bar chip of one member account (R6-52): its label, then each
- * window, the long one first ("wk 40%", "5h used up, back in 2h 10m"),
+ * window, the long one first ("7d quota 40% used", "5h quota used up, back in 2h 10m"),
  * else its credits, else its plan; "limit reached" when the provider said
  * so; the provenance when nothing was observed.
  *
@@ -144,7 +148,7 @@ export const chipText = (account, nowMs) => {
     const name = windowName(window);
     if (!exhausted) {
       // Never "100%" for a window that still has room.
-      parts.push(`${name} ${Math.min(99, Math.round(usedPercent))}%`);
+      parts.push(`${name} ${Math.min(99, Math.round(usedPercent))}% used`);
     } else if (resetsInMs !== undefined) {
       parts.push(`${name} used up, back in ${formatSpan(resetsInMs)}`);
     } else {

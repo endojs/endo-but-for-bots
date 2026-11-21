@@ -19,10 +19,9 @@ import { makeController } from './controller/index.js';
 import { features } from './features.js';
 import { viewModules } from './feature-list.js';
 import { makeConnection } from './net/connection.js';
-import { parseLocation, socketUrl } from './net/fragment.js';
+import { signInOf, socketUrl } from './net/fragment.js';
 import { mount } from './shell/mount.js';
 
-const SIGN_IN_KEY = 'familiar.signIn';
 const RELOAD_KEY = 'familiar.protocolReload';
 
 /** @param {'localStorage' | 'sessionStorage'} name */
@@ -35,37 +34,6 @@ const storageOf = name => {
   } catch {
     return undefined;
   }
-};
-
-/**
- * The fragment's sign-in, else the one this tab kept.
- *
- * @param {any} session `sessionStorage` or undefined
- */
-const signInOf = session => {
-  const parsed = parseLocation(globalThis.location);
-  if (!('error' in parsed)) {
-    try {
-      session?.setItem(SIGN_IN_KEY, JSON.stringify(parsed));
-    } catch {
-      // blocked storage: the fragment still works
-    }
-    return parsed;
-  }
-  if (parsed.error !== 'unconfigured') return parsed;
-  try {
-    const kept = JSON.parse(session?.getItem(SIGN_IN_KEY) ?? 'null');
-    if (
-      kept &&
-      typeof kept.gateway === 'string' &&
-      typeof kept.agent === 'string'
-    ) {
-      return { gateway: kept.gateway, agent: kept.agent };
-    }
-  } catch {
-    // unreadable: unconfigured
-  }
-  return parsed;
 };
 
 const start = () => {
@@ -93,7 +61,7 @@ const start = () => {
     views: viewModules,
     window: globalThis,
   });
-  const signIn = signInOf(session);
+  const signIn = signInOf(globalThis.location, session);
   if ('error' in signIn) {
     controller.setConnection(
       'unconfigured',

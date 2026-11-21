@@ -15,8 +15,8 @@
  * Settings (6.4): `{ settings, revision, readAt }`, read through the
  * gateway context's `operator()` (`E(E(operator).getVoice()).speechSettings()`,
  * the `Voice` presence kept for the incarnation) at the first `openAudio`,
- * `configuration` or `status`, and again at an `openAudio` when older than
- * `settingsMaxAgeMs`. A failed read makes both directions `failed` with the
+ * `configuration` or `status`. Both `openAudio` and `configuration` refresh
+ * settings older than `settingsMaxAgeMs`. A failed read makes both directions `failed` with the
  * reason in `status().error` and forgets the `Voice` presence; the next
  * `openAudio` retries. A new `revision` drops idle engines at once and busy
  * ones when their last stream ends; the next use makes the new one. When
@@ -248,25 +248,19 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
     return reading;
   };
 
-  /** The settings now: read when none were read or the last read failed. */
-  const settingsNow = async () => {
-    await null;
-    if (reading !== undefined) await reading;
-    if (cached === undefined || settingsError !== undefined) {
-      await readSettings();
-    }
-  };
-
-  /** At `openAudio`: a read when none, failed, or older than `maxAgeMs`. */
-  const refreshIfStale = () => {
+  /**
+   * Read once per cache interval and share an in-flight read across callers.
+   * @param {number} [maxAge] maximum age in milliseconds for this call
+   */
+  const settingsNow = (maxAge = Infinity) => {
     if (
-      reading === undefined &&
-      (cached === undefined ||
-        settingsError !== undefined ||
-        Date.now() - cached.readAt > maxAgeMs)
+      cached === undefined ||
+      settingsError !== undefined ||
+      Date.now() - cached.readAt > maxAge
     ) {
-      void readSettings();
+      return readSettings();
     }
+    return reading ?? Promise.resolve();
   };
 
   /** @returns {EngineContext} */
@@ -782,7 +776,7 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
     openAudio: () => {
       if (stopped) throw Error(speechTexts.serviceStopped);
       if (ports.size >= limits.ports) throw Error(speechTexts.tooManyPorts);
-      refreshIfStale();
+      void settingsNow(maxAgeMs);
       const state = makePort();
       const token = randomBytes(limits.tokenBytes);
       state.digest = digestOf(token).toString('hex');
@@ -802,7 +796,7 @@ export const makeSpeechHost = ({ context, kinds, pipeline, options = {} }) => {
       return harden({ port: state.exo, token: token.toString('hex') });
     },
     configuration: async () => {
-      await settingsNow();
+      await settingsNow(maxAgeMs);
       const language =
         slots?.speechIn.settings.language === undefined
           ? {}

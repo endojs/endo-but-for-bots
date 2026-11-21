@@ -200,7 +200,7 @@ export const Sidebar = ({ state, controller, open }) => {
       'div',
       { class: 'floot-session-list' },
       rows.length > 0
-        ? rows.map(item)
+        ? rows.slice().reverse().map(item)
         : h('div', { class: 'floot-session-empty' }, uiTexts.noSessions),
     ),
   );

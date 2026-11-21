@@ -54,6 +54,7 @@ export const VoicePanel = ({ context }) => {
         'select',
         {
           class: 'thix-voice-autospeak',
+          disabled: !view.speechOut,
           value: view.autoSpeak ? 'on' : 'off',
           onChange: (/** @type {any} */ event) =>
             voice.setAutoSpeak(event.currentTarget.value === 'on'),

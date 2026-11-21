@@ -118,13 +118,23 @@ test.serial(
     await controller.send('hello');
     await flush();
     t.is($('.thix-turn .floot-msg-row.user')?.textContent, 'hello');
-    t.is($('.thix-phase')?.textContent, uiTexts.thinking);
+    t.is($('.thix-thinking-row')?.textContent, '');
+    t.is(
+      $('.floot-thinking[role="img"]')?.getAttribute('aria-label'),
+      uiTexts.thinking,
+    );
+    t.is($$('.floot-thinking span').length, 3);
     const turnId = runningTurnId(fake.control, 'a');
+    fake.control.publish('a', [{ type: 'phase', turnId, phase: 'thinking' }]);
+    await flush();
+    t.is($('.thix-thinking-row')?.textContent, '');
+    t.is($('.floot-thinking')?.getAttribute('aria-label'), uiTexts.thinking);
     fake.control.publish('a', [
       { type: 'phase', turnId, phase: 'using tools' },
     ]);
     await flush();
     t.is($('.thix-phase')?.textContent, 'using tools');
+    t.is($('.floot-thinking')?.getAttribute('aria-hidden'), 'true');
     fake.control.delta('a', 'Hel');
     await flush();
     t.is($('.streaming')?.textContent, 'Hel');

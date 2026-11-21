@@ -30,23 +30,26 @@ import {
 /** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
 /** @param {{ phase: string }} props */
-export const ThinkingRow = ({ phase }) =>
-  h(
+export const ThinkingRow = ({ phase }) => {
+  const thinking = phase === '' || phase === 'thinking';
+  return h(
     'div',
     { class: 'floot-msg-row assistant thix-thinking-row' },
     h(
       'div',
-      { class: 'floot-thinking' },
+      {
+        class: 'floot-thinking',
+        ...(thinking
+          ? { role: 'img', 'aria-label': uiTexts.thinking }
+          : { 'aria-hidden': true }),
+      },
       h('span', null),
       h('span', null),
       h('span', null),
     ),
-    h(
-      'span',
-      { class: 'thix-phase' },
-      phase === '' || phase === 'thinking' ? uiTexts.thinking : phase,
-    ),
+    thinking ? null : h('span', { class: 'thix-phase' }, phase),
   );
+};
 
 /**
  * The `turn` prop of a `message.renderer` (`MessageRendererProps.turn`):

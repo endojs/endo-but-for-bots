@@ -101,7 +101,15 @@ export const AccountChip = ({ context, now = Date.now }) => {
         {
           key: index,
           class: `m4-chip chip${blocked[index] ? ' blocked' : ''}`,
-          title: `${pool.label} · ${account.provider}`,
+          title: [
+            pool.label,
+            account.provider,
+            ...(account.windows.length
+              ? [
+                  "Percent of this account's subscription allowance used in each provider window.",
+                ]
+              : []),
+          ].join(' · '),
         },
         chipText(account, nowMs),
       ),

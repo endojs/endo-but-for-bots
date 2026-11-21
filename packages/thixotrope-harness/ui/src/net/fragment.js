@@ -84,3 +84,37 @@ export const isLoopbackGateway = gateway => {
  */
 export const socketUrl = (gateway, wsPath) =>
   `${isLoopbackGateway(gateway) ? 'ws' : 'wss'}://${gateway}${wsPath}`;
+
+const SIGN_IN_KEY = 'familiar.signIn';
+
+/**
+ * The fragment's sign-in, else the one this tab kept.
+ *
+ * @param {{ hash?: string, search?: string }} location
+ * @param {any} session `sessionStorage` or undefined
+ */
+export const signInOf = (location, session) => {
+  const parsed = parseLocation(location);
+  if (!('error' in parsed)) {
+    try {
+      session?.setItem(SIGN_IN_KEY, JSON.stringify(parsed));
+    } catch {
+      // blocked storage: the fragment still works
+    }
+    return parsed;
+  }
+  if (parsed.error !== 'unconfigured') return parsed;
+  try {
+    const kept = JSON.parse(session?.getItem(SIGN_IN_KEY) ?? 'null');
+    if (
+      kept &&
+      typeof kept.gateway === 'string' &&
+      typeof kept.agent === 'string'
+    ) {
+      return { gateway: kept.gateway, agent: kept.agent };
+    }
+  } catch {
+    // unreadable: unconfigured
+  }
+  return parsed;
+};

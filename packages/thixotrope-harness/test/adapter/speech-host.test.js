@@ -2,7 +2,7 @@
 // The speech host (`AH/speech/host.js`; designs/m11-interfaces.md 3.2,
 // 6.1, 6.4, D-M11-2, D-M11-19, D-M11-23, acceptance 2, 5, 19): settings
 // read through the gateway's `Operator` from a `Voice` exo with the real
-// guard, at the first use only, and again at an `openAudio` once stale; a
+// guard, at first use and again at `configuration` or `openAudio` once stale; a
 // failed read makes both directions `failed` and the next `openAudio`
 // retries; a new revision drops the idle engine at once and a busy one when
 // its last stream ends; `warm: true` warms speech in at the read; a
@@ -126,6 +126,26 @@ test('settings: read at first use through Operator.getVoice, kept, and read agai
   await settle();
   t.is(stub.reads(), 2, 'stale: read again at openAudio');
   t.is(made.operatorReads(), 1, 'the Voice presence is kept');
+});
+
+test('the configuration read sees newly enabled directions with no audio port open', async t => {
+  const { host, stub } = await world(t, {
+    settings: {
+      speechIn: { kind: 'off' },
+      speechOut: { kind: 'off' },
+      revision: 0,
+    },
+    settingsMaxAgeMs: 5,
+  });
+  const off = await E(host.speech).configuration();
+  t.false(off.speechIn);
+  t.false(off.speechOut);
+  stub.set(processSettings(1));
+  await delay(10);
+  const on = await E(host.speech).configuration();
+  t.true(on.speechIn);
+  t.true(on.speechOut);
+  t.is(stub.reads(), 2);
 });
 
 test('a failed read makes both directions failed; the next openAudio retries', async t => {

@@ -115,8 +115,9 @@ const configuration = harden({
  * `Speech` and `AudioPort` on the real guards (speech-guards.js).
  *
  * @param {{ calls: any[][] }} log
+ * @param {boolean} [enabled]
  */
-const makeFakeSpeech = log => {
+const makeFakeSpeech = (log, enabled = true) => {
   let utterances = 0;
   let playbacks = 0;
   const port = makeExo('AudioPort', speechInterfaces.AudioPort, {
@@ -145,7 +146,11 @@ const makeFakeSpeech = log => {
       return harden({ port, token: TOKEN });
     },
     async configuration() {
-      return configuration;
+      return harden({
+        ...configuration,
+        speechIn: enabled,
+        speechOut: enabled,
+      });
     },
     status() {
       return harden({
@@ -240,6 +245,8 @@ const makeFakeIo = ({ hash = '', failCapture = false } = {}) => {
   /** @type {boolean[]} */
   const wake = [];
   const player = {
+    unlocks: 0,
+    gesture: () => {},
     stops: 0,
     audible: false,
     playing: false,
@@ -360,11 +367,16 @@ const makeFakeIo = ({ hash = '', failCapture = false } = {}) => {
       captures.push(capture);
       return capture;
     },
+    watchActivation: (/** @type {() => void} */ gesture) => {
+      player.gesture = gesture;
+    },
     /** @param {(playing: boolean) => void} onChange */
     makePlayer: onChange => {
       player.onChange = onChange;
       return {
-        unlock: () => Promise.resolve(),
+        unlock: async () => {
+          player.unlocks += 1;
+        },
         begin: () => ({ pcm: () => {}, current: () => true }),
         stop: () => {
           player.stops += 1;
@@ -422,6 +434,7 @@ const makeFakeIo = ({ hash = '', failCapture = false } = {}) => {
  * @param {any[]} [options.sessions]
  * @param {any[]} [options.script]
  * @param {string} [options.warning]
+ * @param {boolean} [options.enabled]
  * @param {boolean} [options.withSpeech]
  */
 const setup = async ({
@@ -431,10 +444,11 @@ const setup = async ({
   sessions = [{ key: 's1' }],
   script,
   warning,
+  enabled = true,
   withSpeech = true,
 } = {}) => {
   const log = { calls: /** @type {any[][]} */ ([]) };
-  const { speech, port } = makeFakeSpeech(log);
+  const { speech, port } = makeFakeSpeech(log, enabled);
   const presets = [
     Far('Preset', {
       describe: async () => ({
@@ -551,6 +565,11 @@ test('launch id, audio URL and replay pieces', async t => {
     'ws://127.0.0.1:8920/audio',
   );
   t.is(audioUrlOf({ hash: '', search: '' }), undefined);
+  const tab = makeStorage();
+  const linked = { hash: '#gateway=localhost:8920&agent=fake' };
+  t.is(audioUrlOf(linked, tab), 'ws://localhost:8920/audio');
+  t.is(audioUrlOf({ hash: '' }, tab), 'ws://localhost:8920/audio');
+  t.is(audioUrlOf({ search: '?agent=fake' }, tab), undefined);
 
   const words = 'word '.repeat(4000);
   const cut = textPieces(words);
@@ -665,6 +684,17 @@ test("auto-speak: a started send of this page is spoken with the settings; anoth
   state.toggleSpeaker();
   t.false(state.view().autoSpeak);
   t.true(sockets[0].playbacks[0].stopped);
+});
+
+test('a typed interaction unlocks autoplay and the settings toggle unlocks it after mute', async t => {
+  const { state, player } = await setup();
+  player.gesture();
+  t.is(player.unlocks, 1);
+  state.setAutoSpeak(false);
+  player.gesture();
+  t.is(player.unlocks, 1);
+  state.setAutoSpeak(true);
+  t.is(player.unlocks, 2);
 });
 
 test('auto-speak: a queued send is spoken when its turn starts, after one receipt read', async t => {
@@ -817,7 +847,7 @@ test('mic off discards the unsent dictation and its box; a failed capture says s
   failing.state.toggleMic();
   await flush();
   t.false(failing.state.view().micOn);
-  t.is(failing.state.view().note, voiceUiTexts.micUnavailable);
+  t.is(failing.state.view().note, voiceUiTexts.captureFailure.denied);
 });
 
 test('barge-in during a busy turn stops playback and shows continuing in background (R5-46)', async t => {
@@ -1021,6 +1051,25 @@ test('the controls and the panel render the state', async t => {
       ['tools', true],
       ['mine', false],
     ]);
+    render(null, dom.root);
+  } finally {
+    await dom.close();
+  }
+});
+
+test('unconfigured speech explains the disabled microphone and speaker in the composer', async t => {
+  runEffectsPromptly();
+  const dom = makeTestDom();
+  try {
+    const { controller } = await setup({ enabled: false });
+    const context = controller.featureContext();
+    render(h(VoiceControls, { context }), dom.root);
+    t.true(dom.document.querySelector('.thix-voice-mic').disabled);
+    t.true(dom.document.querySelector('.thix-voice-speaker').disabled);
+    t.true(dom.root.textContent.includes(voiceUiTexts.speechInOff));
+    t.true(dom.root.textContent.includes(voiceUiTexts.speechOutOff));
+    render(h(VoicePanel, { context }), dom.root);
+    t.true(dom.document.querySelector('.thix-voice-autospeak').disabled);
     render(null, dom.root);
   } finally {
     await dom.close();

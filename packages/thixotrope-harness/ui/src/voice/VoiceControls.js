@@ -7,7 +7,7 @@
  * warning.
  */
 import { h } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
+import { useLayoutEffect, useState } from 'preact/hooks';
 
 import { meterFraction } from './endpointing.js';
 import { voiceStateOf } from './state.js';
@@ -24,7 +24,13 @@ import { voiceUiTexts } from './texts.js';
 export const useVoiceState = context => {
   const voice = voiceStateOf(context);
   const [, setTick] = useState(0);
-  useEffect(() => voice.subscribe(() => setTick(n => n + 1)), [voice]);
+  useLayoutEffect(() => {
+    const update = () => setTick(n => n + 1);
+    const unsubscribe = voice.subscribe(update);
+    // Configuration may have arrived between render and subscription.
+    update();
+    return unsubscribe;
+  }, [voice]);
   return voice;
 };
 
@@ -106,6 +112,18 @@ export const VoiceControls = ({ context }) => {
         voiceUiTexts.talk,
       ),
     ),
+    view.configured && (!view.speechIn || !view.speechOut)
+      ? h(
+          'div',
+          { class: 'thix-voice-note' },
+          [
+            !view.speechIn && voiceUiTexts.speechInOff,
+            !view.speechOut && voiceUiTexts.speechOutOff,
+          ]
+            .filter(Boolean)
+            .join('. '),
+        )
+      : null,
     view.bargeIn || view.note
       ? h(
           'div',

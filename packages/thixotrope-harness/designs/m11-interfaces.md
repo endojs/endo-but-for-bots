@@ -596,9 +596,10 @@ ones when their last stream ends; the next use starts the new one.
 
 `host.js` keeps `{ settings, revision, readAt }`. It reads `E(voice).speechSettings()` (the
 `Voice` presence from `E(context.operator()).getVoice()`, kept for the incarnation) on the first
-`openAudio`, `configuration` or `status`, and again at an `openAudio` when older than
-`settingsMaxAgeMs`. A failed read (retired break: factory lost; no gateway registration yet) makes
-both directions `failed` with the reason in `status().error`; the next `openAudio` retries.
+`openAudio`, `configuration` or `status`.
+Both `openAudio` and `configuration` refresh settings older than `settingsMaxAgeMs`.
+This lets a reconnected page discover newly enabled speech while both controls are disabled.
+After a failed read, `status().error` holds the reason and either call retries.
 
 ---
 

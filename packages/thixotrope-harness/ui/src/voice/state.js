@@ -37,7 +37,7 @@ import {
 } from '../../../guest/lib/voice-preferences.js';
 /* eslint-enable import/no-relative-packages */
 import { isLive, turnContent } from '../conversation/transcript.js';
-import { parseLocation, socketUrl } from '../net/fragment.js';
+import { signInOf, socketUrl } from '../net/fragment.js';
 import { audioReconnectDelay, openAudioSocket } from './audio-socket.js';
 import { openCapture as openBrowserCapture } from './capture.js';
 import { endpointingDefaults } from './endpointing-defaults.js';
@@ -147,10 +147,11 @@ harden(launchIdOf);
  * usable sign-in fragment.
  *
  * @param {{ hash?: string, search?: string } | undefined} location
+ * @param {any} [session] this tab’s sign-in storage
  */
-export const audioUrlOf = location => {
+export const audioUrlOf = (location, session = undefined) => {
   if (!location) return undefined;
-  const signIn = parseLocation(location);
+  const signIn = signInOf(location, session);
   return 'gateway' in signIn
     ? socketUrl(signIn.gateway, AUDIO_PATH)
     : undefined;
@@ -230,11 +231,13 @@ harden(replayPiecesOf);
  * @property {(fn: () => void, ms: number) => any} [setTimer]
  * @property {(timer: any) => void} [clearTimer]
  * @property {() => any} [storage] answers `localStorage` or undefined
+ * @property {() => any} [sessionStorage]
  * @property {() => any} [location] answers `globalThis.location`
  * @property {(options: { url: string, token: string, onClose: (code: number, reason: string) => void }) => AudioSocket} openSocket
  * @property {(options: { onBlock: (pcm: Uint8Array, rms: number) => void }) => Capture} openCapture
  * @property {(onChange: (playing: boolean) => void) => Player} makePlayer
  * @property {{ set: (wanted: boolean) => void, refresh: () => void }} wakeLock
+ * @property {(onGesture: () => void) => void} [watchActivation]
  * @property {(onChange: (hidden: boolean) => void) => void} [watchVisibility]
  */
 
@@ -251,6 +254,7 @@ harden(replayPiecesOf);
  *
  * @typedef {object} VoiceView
  * @property {boolean} available a speech service is on this connection
+ * @property {boolean} configured whether the service has answered its configuration query
  * @property {boolean} speechIn
  * @property {boolean} speechOut
  * @property {boolean} micOn
@@ -278,10 +282,12 @@ export const makeVoiceState = ({
   clearTimer = timer => globalThis.clearTimeout(timer),
   storage = () => undefined,
   location = () => undefined,
+  sessionStorage = () => undefined,
   openSocket,
   openCapture,
   makePlayer,
   wakeLock,
+  watchActivation = () => {},
   watchVisibility = () => {},
 }) => {
   /** @type {Set<() => void>} */
@@ -484,7 +490,7 @@ export const makeVoiceState = ({
    * @returns {Promise<Connection | undefined>}
    */
   const openPort = async c => {
-    const url = audioUrlOf(location());
+    const url = audioUrlOf(location(), sessionStorage());
     if (!url) throw Error(speechTexts.portClosed);
     const grant = await E(c.speech).openAudio();
     if (conn !== c) {
@@ -806,10 +812,15 @@ export const makeVoiceState = ({
       draftKey: undefined,
     };
     mic = m;
-    m.capture.started.catch(() => {
+    m.capture.started.catch(error => {
       if (mic !== m) return;
       micOff();
-      note = voiceUiTexts.micUnavailable;
+      note =
+        voiceUiTexts.captureFailure[
+          /** @type {keyof typeof voiceUiTexts.captureFailure} */ (
+            error?.reason
+          )
+        ] ?? voiceUiTexts.micUnavailable;
       notify();
     });
     ensurePort().catch(report);
@@ -948,6 +959,11 @@ export const makeVoiceState = ({
   };
   controller.subscribe(onControllerChange);
 
+  // A typed send gets its receipt after the user gesture has ended.
+  watchActivation(() => {
+    if (speaks()) player.unlock();
+  });
+
   watchVisibility(hidden => {
     if (mic) {
       if (hidden) {
@@ -1063,6 +1079,7 @@ export const makeVoiceState = ({
       const configuration = conn && conn.configuration;
       cachedView = harden({
         available: Boolean(conn && conn.speech),
+        configured: Boolean(configuration),
         speechIn: Boolean(configuration && configuration.speechIn),
         speechOut: Boolean(configuration && configuration.speechOut),
         micOn: mic !== undefined,
@@ -1107,6 +1124,7 @@ export const makeVoiceState = ({
 
     /** @param {boolean} on "Spoken replies" (R5-56) */
     setAutoSpeak(on) {
+      if (on) player.unlock();
       autoSpeakChoice = Boolean(on);
       if (!on) stopPlayback();
       notify();
@@ -1245,6 +1263,13 @@ export const browserVoiceIo = () => {
       }
     },
     location: () => g.location,
+    sessionStorage: () => {
+      try {
+        return g.sessionStorage;
+      } catch {
+        return undefined;
+      }
+    },
     openSocket: ({ url, token, onClose }) =>
       openAudioSocket({ url, token, WebSocket: g.WebSocket, onClose }),
     openCapture: ({ onBlock }) => openBrowserCapture({ onBlock }),
@@ -1253,6 +1278,13 @@ export const browserVoiceIo = () => {
       getApi: () => g.navigator?.wakeLock,
       isVisible: () => g.document?.visibilityState !== 'hidden',
     }),
+    watchActivation: onGesture => {
+      const activate = (/** @type {Event} */ event) => {
+        if (event.isTrusted) onGesture();
+      };
+      g.document?.addEventListener?.('click', activate, true);
+      g.document?.addEventListener?.('keydown', activate, true);
+    },
     watchVisibility: onChange => {
       g.document?.addEventListener?.('visibilitychange', () =>
         onChange(g.document.visibilityState === 'hidden'),

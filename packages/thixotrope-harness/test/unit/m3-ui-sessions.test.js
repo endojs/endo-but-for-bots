@@ -136,7 +136,10 @@ test.serial(
       ],
     });
     const { dom, row, rows, close } = await setup(fake);
-    t.is(rows().length, 4);
+    t.deepEqual(
+      rows().map(el => el.getAttribute('data-key')),
+      ['s4', 's3', 's2', 's1'],
+    );
     t.is(dom.document.querySelector('.floot-session-empty'), null);
     const first = row('s1');
     t.is(first.querySelector('.floot-session-name').textContent, 'first');
@@ -171,11 +174,15 @@ test.serial(
 
 test.serial('the list follows the feed: insert, rename, remove', async t => {
   const fake = makeFakePowers({ sessions: [{ title: 'one' }] });
-  const { dom, control, row, rows, close } = await setup(fake);
+  const { dom, controller, control, row, rows, close } = await setup(fake);
   t.is(rows().length, 1);
   control.addSession({ title: 'two' });
   await flush();
-  t.is(rows().length, 2);
+  const keys = () => rows().map(el => el.getAttribute('data-key'));
+  t.deepEqual(keys(), ['s2', 's1']);
+  control.patchRow('s1', { activity: 'working' });
+  await flush();
+  t.deepEqual(keys(), ['s2', 's1']);
   t.is(row('s2').querySelector('.floot-session-name').textContent, 'two');
   control.patchRow('s2', { title: 'renamed', activity: 'working' });
   await flush();
@@ -184,6 +191,9 @@ test.serial('the list follows the feed: insert, rename, remove', async t => {
     row('s2').querySelector('.floot-status-dot').getAttribute('aria-label'),
     statusLabels.working,
   );
+  await controller.attach(fake.powers);
+  await flush();
+  t.deepEqual(keys(), ['s2', 's1']);
   control.removeSession('s1');
   await flush();
   t.is(rows().length, 1);
