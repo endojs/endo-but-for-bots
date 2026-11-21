@@ -1,7 +1,7 @@
 // @ts-check
 /**
  * Slot rendering for the conversation views (`composer.addon`,
- * `message.renderer`; m3-interfaces.md 6.2; W3.6): the shell's `Slot` and
+ * `message.renderer`, `message.action`; m3-interfaces.md 6.2; W3.6): the shell's `Slot` and
  * `visibleFeatures`. They were local copies while `selectSlot` lived in
  * `features.js` (a Node module-graph deadlock); it now lives in
  * `slot-order.js` (M3-FIX).

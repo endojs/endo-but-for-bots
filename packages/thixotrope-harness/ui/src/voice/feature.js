@@ -3,7 +3,7 @@
  * The voice features (`designs/m11-interfaces.md` section 9; P-33..P-35,
  * P-49, P-66, R6-60): the compose-bar controls (`voice.controls`, mic,
  * speaker, level meter, Talk), the Voice panel (`voice.panel`) and the
- * per-turn Replay (`voice.replay`). Each is shown only on a connection
+ * per-message Play button (`voice.replay`). Each is shown only on a connection
  * whose gateway serves the `speech` extras service.
  *
  * State: one `VoiceState` per page, reached from the `FeatureContext`
@@ -58,7 +58,7 @@ export const feature = harden([
   },
   {
     id: 'voice.replay',
-    slot: 'message.renderer',
+    slot: 'message.action',
     when: speechServed,
     component: ReplayButton,
   },

@@ -1,35 +1,30 @@
 // @ts-check
-/**
- * Replay of one turn's assistant text (`voice.replay` in
- * `message.renderer`; R5-45, decision D-M11-17, owner question O-3): one
- * `Speech.replay` of the turn's texts as the controller holds them, shown
- * once the turn has settled and when speech out is configured, whether
- * auto-speak is on or off.
- */
 import { h } from 'preact';
 
-import { isLive } from '../conversation/transcript.js';
+import { isStagedText } from '../conversation/text.js';
 import { useVoiceState } from './VoiceControls.js';
 import { voiceUiTexts } from './texts.js';
 
-/** @import { MessageRendererProps } from '../../../resources/agent-host/impl/gateway/protocol.js' */
+/** @import { FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
+/** @import { ShownMessage } from '../conversation/ToolGroup.js' */
 
-/**
- * @param {MessageRendererProps} props
- */
-export const ReplayButton = ({ context, turn }) => {
+/** @param {{ context: FeatureContext, message: ShownMessage }} props */
+export const ReplayButton = ({ context, message }) => {
   const voice = useVoiceState(context);
-  const view = voice.view();
-  const state = turn.status && turn.status.state;
-  if (!view.speechOut || state === undefined || isLive(state)) return null;
-  return h(
-    'button',
-    {
-      type: 'button',
-      class: 'thix-voice-replay',
-      'data-turn': turn.turnId,
-      onClick: () => voice.replay(turn.turnId),
-    },
-    voiceUiTexts.replay,
-  );
+  const text = message.text;
+  if (
+    !voice.view().speechOut ||
+    message.role !== 'assistant' ||
+    !(typeof text === 'string'
+      ? text.trim()
+      : isStagedText(text) && text.bytes > 0)
+  )
+    return null;
+  return h('button', {
+    type: 'button',
+    class: 'floot-replay thix-voice-replay',
+    'aria-label': voiceUiTexts.playMessage,
+    title: voiceUiTexts.playMessage,
+    onClick: () => voice.replay(message),
+  });
 };

@@ -175,6 +175,8 @@ export const uiSlots = Object.freeze([
    * widgets, mail captions); props `MessageRendererProps`.
    */
   'message.renderer',
+  /** Actions inside an individual committed assistant message bubble. */
+  'message.action',
 ]);
 
 /** Browser-visible texts of M3's UI (m3-interfaces.md 14; spec R6-*). */
@@ -375,6 +377,7 @@ export const uiTextOf = Object.freeze({
  * Props by slot (`component`):
  * - `composer.addon`: `ComposerAddonProps`;
  * - `message.renderer`: `MessageRendererProps`;
+ * - `message.action`: `{ context, message }`, the displayed assistant message;
  * - every other slot: `{ context }`.
  *
  * @typedef {object} UiFeature

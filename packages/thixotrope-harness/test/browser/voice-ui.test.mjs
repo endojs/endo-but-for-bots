@@ -59,8 +59,20 @@ const usage = {
 };
 /** The reply's sentences, streamed over about 4.5 s. */
 const REPLY = Array.from({ length: 30 }, (_, i) => `Reply sentence ${i}.`);
+const replayPrompt = 'Check message playback';
+const replayParts = ['Opening playback check.', 'Closing playback check.'];
 const replyScript = harden({
   turns: [
+    {
+      input: replayPrompt,
+      rounds: [
+        {
+          chunks: [{ text: replayParts[0] }],
+          toolCalls: [{ name: 'echo', args: JSON.stringify({ text: 'ack' }) }],
+        },
+        { chunks: [{ text: replayParts[1] }] },
+      ],
+    },
     {
       rounds: [
         {
@@ -306,6 +318,45 @@ const voiceStubs = () => {
       atBargeIn.length > 0 && sentenceLines().length > atBargeIn.length,
       'the second reply was spoken too',
     );
+    // Two assistant messages in one turn must replay independently. Submit
+    // via the fixture operator so neither watching page auto-speaks this turn.
+    const { turn } = await slice.submit(session, replayPrompt);
+    t.is((await E(turn).whenFinished()).state, 'completed');
+    const replayTurn = pageB.locator('.thix-turn').filter({
+      has: pageB.locator('.floot-msg-row.user', { hasText: replayPrompt }),
+    });
+    const play = { name: 'Play message', exact: true };
+    const buttons = replayTurn.getByRole('button', play);
+    await buttons.nth(1).waitFor();
+    t.is(await buttons.count(), 2);
+    t.is(
+      await replayTurn
+        .locator('.floot-msg-row.user')
+        .getByRole('button', play)
+        .count(),
+      0,
+    );
+    const replayLog = () =>
+      sentenceLines()
+        .map(line => line.text)
+        .filter(text => replayParts.includes(text));
+    t.deepEqual(replayLog(), []);
+    const expected = [];
+    for (const text of [...replayParts].reverse()) {
+      const bubble = replayTurn.locator('.floot-msg-row.assistant .floot-msg', {
+        hasText: text,
+      });
+      // eslint-disable-next-line no-await-in-loop -- replay one message at a time
+      await bubble.getByRole('button', play).click();
+      expected.push(text);
+      // eslint-disable-next-line no-await-in-loop -- one engine response per click
+      await waitFor(
+        () => replayLog().length >= expected.length,
+        15_000,
+        'the selected assistant message was spoken',
+      );
+      t.deepEqual(replayLog(), expected);
+    }
     const pageBWake = await pageB.evaluate(() => globalThis.thixVoiceTest.wake);
     t.deepEqual(pageLog, [], 'no page error');
     t.log({ wake: wake.map(([, what]) => what), pageBWake: pageBWake.length });

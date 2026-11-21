@@ -125,6 +125,15 @@ export const TurnView = ({ entry, view, controller, features, context }) => {
               'div',
               { class: 'floot-msg' },
               h(LongText, { value: row.msg.text, controller }),
+              row.msg.role === 'assistant'
+                ? h(ConversationSlot, {
+                    slot: 'message.action',
+                    features,
+                    context,
+                    class: 'thix-message-actions',
+                    props: { message: row.msg },
+                  })
+                : null,
             ),
           ),
     ),

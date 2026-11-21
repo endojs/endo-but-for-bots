@@ -82,7 +82,7 @@ X-02); no M11 unit edits `guards/factory.js`.
 | P-32 speech view | `AudioPort.speak(session, turnId)`: the turn's assistant text from the session's live channel in the adapter (snapshot, then deltas), code fences and markdown removed, sentence split; a finished last turn replays to the end | - |
 | P-33 endpointing | client calibration, threshold, drift, trailing silence, grace, minimum speech, pre-roll, junk filter, editable compose box, auto-send | - |
 | P-34 playback | gapless scheduling, soft barge-in that stops playback and synthesis but not the turn; mute stops the current reply; Stop cancels the turn | - |
-| P-35 preferences | shared voice preferences in the factory vat (device A writes, device B uses), device cache, voice catalogue, mic and speaker toggles, level meter, replay, spoken prompt only for voice-started sessions | per-message replay buttons (owner question O-3; per-turn replay built) |
+| P-35 preferences | shared voice preferences in the factory vat (device A writes, device B uses), device cache, voice catalogue, mic and speaker toggles, level meter, per-message Play button, spoken prompt only for voice-started sessions | - |
 | P-49 voice shortcut | the shortcut's preset chosen by object with the catalogue revision (R5-53); "Talk" starts a spoken session from it | - |
 | P-61 voice preset | the built-in `voice` preset's backend and model pinned by provisioning (R4-89); G-11 fallback to the factory default with a warning | the preset's workspace and shell objects (M6: until M6 merges, `voice` is listed `available: false`) |
 | P-66 wake lock | screen wake lock while the mic is on, speech plays or the active turn runs | - |
@@ -93,7 +93,7 @@ X-02); no M11 unit edits `guards/factory.js`.
 
 Android (P-60) and its invocation sources; a wake word or background listening (R5-71); a server
 voice-activity detector (R5-1: the client endpoints); downloading Piper voices or Moonshine weights
-by the harness (O-4: the engines and the operator do it); per-message replay buttons (O-3); speech
+by the harness (O-4: the engines and the operator do it); speech
 across daemons. Out of parity scope by the owner's rules: the reverse proxy, the browser peer relay.
 
 ### 1.3 The design in one page
@@ -263,9 +263,10 @@ left (K11-1).
 **D-M11-16. Only voice-started sessions are spoken (R5-70 fixed; spec-digest "every chat-UI session gets the spoken-reply prompt").** `startVoiceSession` creates with `spoken: true`; the new-session dialog and typed
 sends create plain sessions. Departs from R5-52's "the UI creates every session spoken" (O-2).
 
-**D-M11-17. Replay per turn, in the `message.renderer` slot.** The slot renders once per turn under
-its user message; a "Replay" control there plays the turn's assistant text through
-`Speech.replay`. Per-message buttons would need a new UI slot, a contract change of M3 (O-3).
+**D-M11-17. Play an individual assistant message.** The `message.action` slot
+places a Play button at the lower right of each assistant message that has text to speak.
+Activating the button sends that message's content to `Speech.replay`.
+If automatic playback misses the live turn, the user can play the saved message from its button.
 
 **D-M11-18. Unknown preference keys are refused, not dropped.** R5-54 drops other keys; the
 gateway's key guard refuses a call with a key outside the vocabulary before decoding (M3 4.4 rule
@@ -694,8 +695,8 @@ merges with the next; a run of `sentenceUnits` with no boundary is cut at its la
 - **Slots** (M3 6.2): `voice.controls` in `composer.addon` (mic, speaker, level meter with floor
   and threshold markers, Talk), `voice.panel` in `app.panel` (label "Voice": spoken replies, voice,
   Speed, Expression, Phoneme variation, Sentence pause, Voice shortcut preset), `voice.replay` in
-  `message.renderer` (Replay of the turn's assistant text: inline texts and Blobs of staged ones,
-  as the controller holds them, in one `Speech.replay`). Talk calls `startVoiceSession`, selects
+  `message.action` (Play the selected assistant message, including staged text).
+  Talk calls `startVoiceSession`, selects
   the answered `key`, shows `warning`, and opens the mic.
 - **Launch link** (R6-60 without Android): a fragment parameter `voice=<invocation id>` (beside
   `gateway` and `agent`, never a query; M3's parser ignores it, the feature reads
@@ -976,8 +977,8 @@ channel stays open" (CC-120), with that test as the motivation.
    settings]
 2. **O-2** Only voice-started sessions are spoken (departs from R5-52's "every UI session spoken",
    fixes the spec-digest gap). [voice-started only]
-3. **O-3** Replay per turn in `message.renderer`, not per message (per message needs a new M3 UI
-   slot). [per turn]
+3. **O-3** The operator selected per-message playback during UAT.
+   The `message.action` slot supplies the selected reply to the voice feature (J-12594).
 4. **O-4** No download of Piper voices or Moonshine weights by the harness at start (R8-43): the
    operator installs voices; `uv` fetches Moonshine on first use, as Endo. [no harness download]
 5. **O-5** Audio on its own binary `/audio` route instead of CapTP messages (R5-2; D-M11-3). [binary
@@ -1249,7 +1250,7 @@ records a difference; "not M11" names the owner. Spec items not listed are not v
 | R5-52 | spoken introduction for `spoken: true` | M11 9; departure D-M11-16, O-2 (voice-started sessions only) |
 | R5-53 | the shortcut's preset, changeable, per controller | M11 8, 22 |
 | R5-54 | shared preferences record, serialised merges, re-check at synthesis | M11 8, 5; departure D-M11-18 (unknown keys refused) |
-| R5-55, R5-56 | device cache and load order; UI controls | M11 8, 11; section 9; departure D-M11-17, O-3 (replay per turn) |
+| R5-55, R5-56 | device cache and load order; UI controls | M11 8, 11; section 9; D-M11-17, O-3 (per-message playback) |
 | R5-57 | configurable switches, voice, speed, language, model location | `SpeechSettings` (appendix A), `70-voice.js`; M11 19 |
 | R5-58 | both services after every start; speech-in failure not fatal; unbounded wait | M11 2, 21; departures D-M11-10 (`engineLoadMs`), D-M11-23 |
 | R5-59 | services hold no capabilities, ambient OS authority | section 10 (engines reach only their pipes or HTTP; settings written on the provisioning path, D-M11-21) |

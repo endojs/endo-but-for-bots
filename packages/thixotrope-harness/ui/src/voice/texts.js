@@ -24,8 +24,8 @@ export const voiceUiTexts = Object.freeze({
   phonemeVariation: 'Phoneme variation',
   sentencePause: 'Sentence pause',
   voiceShortcut: 'Voice shortcut',
-  /** The per-turn replay control (decision D-M11-17). */
-  replay: 'Replay',
+  playMessage: 'Play message',
+  playbackUnavailable: 'This message could not be played.',
   /** The voice shortcut button (a spoken session from the shortcut preset). */
   talk: 'Talk',
   /** Shown when the page has no microphone permission or no secure context. */

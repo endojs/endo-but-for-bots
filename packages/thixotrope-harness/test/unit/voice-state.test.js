@@ -22,6 +22,7 @@ import { speechInterfaces } from '../../guest/lib/speech-guards.js';
 import { ttsDefaults, voiceLimits } from '../../guest/lib/voice-preferences.js';
 /* eslint-enable import/no-relative-packages */
 import { speechTexts } from '../../resources/agent-host/impl/speech/audio-protocol.js';
+import { TurnView } from '../../ui/src/conversation/MessageList.js';
 import { makeController } from '../../ui/src/controller/index.js';
 import { endpointingDefaults } from '../../ui/src/voice/endpointing-defaults.js';
 import { feature } from '../../ui/src/voice/feature.js';
@@ -630,7 +631,7 @@ test('the features show only on a connection that serves speech', async t => {
     [
       ['voice.controls', 'composer.addon'],
       ['voice.panel', 'app.panel'],
-      ['voice.replay', 'message.renderer'],
+      ['voice.replay', 'message.action'],
     ],
   );
   const without = await setup({ withSpeech: false });
@@ -929,21 +930,105 @@ test('a launch link starts its session once, records in invocation mode, and not
   t.is(callsNamed(log.calls, 'startVoiceSession').length, 1);
 });
 
-test("Replay plays a settled turn's assistant text through Speech.replay", async t => {
-  const { controller, state, log, port } = await setup({
-    sessions: [{ key: 's1', turns: 2 }],
-  });
+test.serial(
+  'each assistant bubble plays only its own text, including a staged message',
+  async t => {
+    runEffectsPromptly();
+    const dom = makeTestDom();
+    try {
+      const { controller, log } = await setup();
+      const blob = Far('Blob', {});
+      const context = controller.featureContext();
+      const entry = {
+        turnId: 't1',
+        state: 'running',
+        record: { input: 'user input' },
+        fold: {
+          messages: [
+            { role: 'assistant', text: 'a' },
+            { role: 'tool', name: 'example', args: '{}' },
+            {
+              role: 'assistant',
+              text: { preview: 'preview', bytes: 9000, blob },
+            },
+            { role: 'assistant', text: '   ' },
+          ],
+          streamingText: 'still streaming',
+        },
+      };
+      render(
+        h(TurnView, {
+          entry,
+          view: {},
+          features: feature,
+          controller,
+          context,
+        }),
+        dom.root,
+      );
+      const buttons = [
+        ...dom.document.querySelectorAll('button[aria-label="Play message"]'),
+      ];
+      t.is(buttons.length, 2);
+      t.is(buttons[0].closest('.floot-msg').textContent, 'a');
+      t.true(
+        buttons.every(button =>
+          button.closest('.floot-msg-row.assistant .floot-msg'),
+        ),
+      );
+      t.false(
+        Boolean(
+          dom.document.querySelector(
+            '.streaming button, .user button.thix-voice-replay',
+          ),
+        ),
+      );
+      buttons[1].click();
+      await flush();
+      buttons[0].click();
+      await flush();
+      const replays = callsNamed(log.calls, 'replay');
+      t.deepEqual(
+        replays.map(call => call[2]),
+        [[blob], ['a\n']],
+      );
+      render(null, dom.root);
+    } finally {
+      await dom.close();
+    }
+  },
+);
+
+test('only automatic speech suppresses a reply that settled before live playback opened', async t => {
+  const { controller, state, sockets } = await setup();
   await controller.selectSession('s1');
+  await controller.send('hello');
   await flush();
-  const entry = controller.getState().view?.messages[1];
-  t.truthy(entry);
-  await state.replay(/** @type {any} */ (entry).turnId);
+  const abort = { type: 'abort', reason: speechTexts.turnNotLive };
+  sockets[0].playbacks[0].handlers.onEvent(abort);
+  t.is(state.view().note, '');
+  await state.replay({ role: 'assistant', text: 'finished' });
+  sockets[0].playbacks[1].handlers.onEvent(abort);
+  t.is(state.view().note, voiceUiTexts.playbackUnavailable);
+  sockets[0].playbacks[1].handlers.onEvent({
+    type: 'abort',
+    reason: 'Audio unavailable',
+  });
+  t.is(state.view().note, 'Audio unavailable');
+});
+
+test('a rejected playback open suppresses the automatic race and reports a manual failure', async t => {
+  const { controller, state, sockets } = await setup();
+  await controller.selectSession('s1');
+  await state.replay({ role: 'assistant', text: 'ready' });
+  sockets[0].playback = () => {
+    throw Error(speechTexts.turnNotLive);
+  };
+  await controller.send('hello');
   await flush();
-  const [replay] = callsNamed(log.calls, 'replay');
-  t.truthy(replay);
-  t.is(replay[1], port);
-  t.deepEqual(replay[2], ['reply 2\n']);
-  t.is(replay[3].voice, 'en_US-test-medium');
+  t.is(state.view().note, '');
+  await state.replay({ role: 'assistant', text: 'a' });
+  t.is(state.view().note, voiceUiTexts.playbackUnavailable);
 });
 
 test('the shortcut preset is chosen by object with the catalogue revision; a stale one is refused and re-read', async t => {
@@ -1009,7 +1094,7 @@ test('a new connection drops the old port and listener; the page state stays', a
   t.is(callsNamed(log.calls, 'openAudio').length, 2);
 });
 
-test('the controls and the panel render the state', async t => {
+test.serial('the controls and the panel render the state', async t => {
   runEffectsPromptly();
   const dom = makeTestDom();
   try {
@@ -1057,21 +1142,24 @@ test('the controls and the panel render the state', async t => {
   }
 });
 
-test('unconfigured speech explains the disabled microphone and speaker in the composer', async t => {
-  runEffectsPromptly();
-  const dom = makeTestDom();
-  try {
-    const { controller } = await setup({ enabled: false });
-    const context = controller.featureContext();
-    render(h(VoiceControls, { context }), dom.root);
-    t.true(dom.document.querySelector('.thix-voice-mic').disabled);
-    t.true(dom.document.querySelector('.thix-voice-speaker').disabled);
-    t.true(dom.root.textContent.includes(voiceUiTexts.speechInOff));
-    t.true(dom.root.textContent.includes(voiceUiTexts.speechOutOff));
-    render(h(VoicePanel, { context }), dom.root);
-    t.true(dom.document.querySelector('.thix-voice-autospeak').disabled);
-    render(null, dom.root);
-  } finally {
-    await dom.close();
-  }
-});
+test.serial(
+  'unconfigured speech explains the disabled microphone and speaker in the composer',
+  async t => {
+    runEffectsPromptly();
+    const dom = makeTestDom();
+    try {
+      const { controller } = await setup({ enabled: false });
+      const context = controller.featureContext();
+      render(h(VoiceControls, { context }), dom.root);
+      t.true(dom.document.querySelector('.thix-voice-mic').disabled);
+      t.true(dom.document.querySelector('.thix-voice-speaker').disabled);
+      t.true(dom.root.textContent.includes(voiceUiTexts.speechInOff));
+      t.true(dom.root.textContent.includes(voiceUiTexts.speechOutOff));
+      render(h(VoicePanel, { context }), dom.root);
+      t.true(dom.document.querySelector('.thix-voice-autospeak').disabled);
+      render(null, dom.root);
+    } finally {
+      await dom.close();
+    }
+  },
+);

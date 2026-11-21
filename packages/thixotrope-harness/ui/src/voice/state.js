@@ -36,7 +36,7 @@ import {
   voicePreferenceFields,
 } from '../../../guest/lib/voice-preferences.js';
 /* eslint-enable import/no-relative-packages */
-import { isLive, turnContent } from '../conversation/transcript.js';
+import { isLive } from '../conversation/transcript.js';
 import { signInOf, socketUrl } from '../net/fragment.js';
 import { audioReconnectDelay, openAudioSocket } from './audio-socket.js';
 import { openCapture as openBrowserCapture } from './capture.js';
@@ -403,6 +403,11 @@ export const makeVoiceState = ({
     notify();
   };
 
+  /** @param {unknown} error */
+  const reportAutoSpeech = error => {
+    if (!messageOf(error).includes(speechTexts.turnNotLive)) report(error);
+  };
+
   /** @param {Connection} c */
   const voiceOf = c => {
     c.voice ??= E(c.context.powers.operator).getVoice();
@@ -563,7 +568,11 @@ export const makeVoiceState = ({
             if (
               event.type === 'abort' &&
               event.reason !== speechTexts.stopped &&
-              event.reason !== speechTexts.replaced
+              event.reason !== speechTexts.replaced &&
+              !(
+                about.turnId !== undefined &&
+                String(event.reason ?? '').includes(speechTexts.turnNotLive)
+              )
             ) {
               note = String(event.reason ?? '');
             }
@@ -588,7 +597,7 @@ export const makeVoiceState = ({
     startPlayback(c => E(c.port).speak(session, turnId, ttsOptions()), {
       turnId,
       restart: () => {
-        speakTurn(session, turnId).catch(report);
+        speakTurn(session, turnId).catch(reportAutoSpeech);
       },
     });
 
@@ -600,7 +609,7 @@ export const makeVoiceState = ({
   const speakFresh = (sessionKey, session, turnId) => {
     if (turnId === undefined || !speaks()) return;
     if (viewState().activeKey !== sessionKey) return;
-    speakTurn(session, turnId).catch(report);
+    speakTurn(session, turnId).catch(reportAutoSpeech);
   };
 
   /** @param {Record<string, any>} receipt */
@@ -1088,7 +1097,9 @@ export const makeVoiceState = ({
         playing: player.playing(),
         talking,
         bargeIn,
-        note,
+        note: note.includes(speechTexts.turnNotLive)
+          ? voiceUiTexts.playbackUnavailable
+          : note,
         settings,
         voices: configuration ? configuration.voices : [],
         ranges: configuration ? configuration.ranges : ttsRanges,
@@ -1173,27 +1184,19 @@ export const makeVoiceState = ({
     },
 
     /**
-     * Replay a turn's assistant text (D-M11-17), whether auto-speak is on
-     * or off (R5-45).
-     *
-     * @param {string} turnId
+     * Replay the selected assistant message, independently of auto-speak.
+     * @param {import('../conversation/ToolGroup.js').ShownMessage} message
      */
-    replay(turnId) {
+    replay(message) {
       player.unlock();
-      const view = viewState().view;
-      const entry =
-        view &&
-        view.messages.find(
-          /** @param {any} candidate */ candidate =>
-            candidate.turnId === turnId,
-        );
-      if (!entry) return Promise.resolve();
       const run = async () => {
-        const pieces = await replayPiecesOf(
-          turnContent(entry).messages,
-          staged => controller.readContent(staged),
+        // A later selection or Stop can supersede an archived text read.
+        playGeneration += 1;
+        const selected = playGeneration;
+        const pieces = await replayPiecesOf([message], staged =>
+          controller.readContent(staged),
         );
-        if (pieces.length === 0) return;
+        if (selected !== playGeneration || pieces.length === 0) return;
         await startPlayback(
           c => E(c.speech).replay(c.port, pieces, ttsOptions()),
           {

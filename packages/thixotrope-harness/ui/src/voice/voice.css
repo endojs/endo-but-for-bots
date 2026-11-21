@@ -13,8 +13,7 @@
 }
 .thix-voice-mic,
 .thix-voice-speaker,
-.thix-voice-talk,
-.thix-voice-replay {
+.thix-voice-talk {
   border: 1px solid var(--fl-border);
   border-radius: 999px;
   background: var(--fl-surface2);
@@ -77,4 +76,21 @@
   grid-template-columns: 10rem 1fr auto;
   align-items: center;
   gap: 0.5rem;
+}
+
+.thix-message-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.thix-voice-replay {
+  color: var(--fl-text);
+  min-width: 28px;
+  min-height: 28px;
+  justify-content: center;
+}
+.thix-voice-replay::before {
+  content: '';
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 9px solid currentColor;
 }

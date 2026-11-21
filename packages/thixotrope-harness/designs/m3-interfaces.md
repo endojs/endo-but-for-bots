@@ -499,6 +499,7 @@ the build. Slots (`uiSlots`) and the props each slot's `component` receives:
 | `newSession.field` | M7 internet toggle | `{ context }` |
 | `session.settings` | M6 emergency stop | `{ context }` |
 | `message.renderer` | M5 attachment chips, M9 captions, M12 widgets | `{ context, turn, record }` (`MessageRendererProps`): once per turn, under the turn's user message; `record` is the turn's `TurnStarted` (or live `turn-start`) record with unknown optional fields kept |
+| `message.action` | M11 Play message | `{ context, message }` inside each committed assistant message bubble. The component receives the same message the transcript renders, including its staged text reference when present. |
 
 A feature receives a `FeatureContext`: the connection's `powers` (presences), `extra(label)`, the
 controller (read-only state, `subscribe`, the actions of 9.1) and `call(fn)`. The shell renders
