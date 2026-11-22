@@ -8,6 +8,21 @@
 
 kani_version = "0.68.0"
 
+# Every attribute that compiles engine code differently under cfg(kani),
+# other than `#[cfg(kani)]` on a proof module and the kani::Arbitrary derives.
+# `verify.py check` counts them per file and fails on any site not listed
+# here; VERIFICATION.md lists each under "Production code that differs under
+# cfg(kani)".
+[[cfg_kani]]
+file = "ironhorse-snapshot/src/atom.rs"
+count = 4
+reason = "first_duplicate compiles only its pairwise shape under Kani (the BTreeSet shape for containers of more than 64 atoms did not finish symbolic execution in 300 s); every container the SNAP-1 harnesses admit (at most 48 bytes, so at most five atoms) takes the pairwise shape in a shipped build too."
+
+[[cfg_kani]]
+file = "ironhorse-regexp/src/encoding.rs"
+count = 1
+reason = "cesu8_unit is a test-and-proof-only reference encoder (cfg(any(test, kani))); no shipped code calls it."
+
 [[guarantee]]
 id = "MTR-1"
 title = "No panic from any restored meter state"
@@ -285,8 +300,9 @@ unwind = 0
 flags = []
 time_budget_s = 5
 memory_budget_gb = 1
-unreachable = 3
-unreachable_reason = "the op selector is assumed to the tick ops, so the paired-refund debug_assert!, the computrons shift and the test host's call counter are never reached"
+unreachable = 2
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): meter::Meter::computrons (1), meter::Meter::untick_raw (1). No operation this harness drives consults the host, so the test host's call counter in meter::proofs::Host::consult is unreachable; the manifest allows exactly that function (unreachable_allow)."
+unreachable_allow = ["meter::proofs::Host::consult"]
 mutants = ["MTR-1-a", "MTR-1-b"]
 expect = "pass"
 canary = false
@@ -334,8 +350,9 @@ unwind = 0
 flags = []
 time_budget_s = 5
 memory_budget_gb = 1
-unreachable = 2
-unreachable_reason = "from the exhausted state the paired refund returns before its debug_assert!, and no op consults the test host (its call-counter add)"
+unreachable = 1
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): meter::Meter::untick_raw (1). No operation this harness drives consults the host, so the test host's call counter in meter::proofs::Host::consult is unreachable; the manifest allows exactly that function (unreachable_allow)."
+unreachable_allow = ["meter::proofs::Host::consult"]
 mutants = ["MTR-2-a", "MTR-2-b"]
 expect = "pass"
 canary = false
@@ -367,8 +384,9 @@ unwind = 0
 flags = []
 time_budget_s = 5
 memory_budget_gb = 1
-unreachable = 5
-unreachable_reason = "the op selector is assumed to the check/charge ops on an un-armed meter: the excluded tick_chunk_new path (2 in chunk_cost), the refund debug_assert!, the computrons shift and the never-called test host's counter"
+unreachable = 4
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): ironhorse_meter::chunk_cost (2), meter::Meter::computrons (1), meter::Meter::untick_raw (1). No operation this harness drives consults the host, so the test host's call counter in meter::proofs::Host::consult is unreachable; the manifest allows exactly that function (unreachable_allow)."
+unreachable_allow = ["meter::proofs::Host::consult"]
 mutants = ["MTR-3-a"]
 expect = "pass"
 canary = false

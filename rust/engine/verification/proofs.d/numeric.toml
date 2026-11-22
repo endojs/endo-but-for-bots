@@ -181,10 +181,10 @@ flags = []
 time_budget_s = 5
 memory_budget_gb = 1
 unreachable = 2
+unreachable_reason = "the model's exact-shift branch (exponent >= k) in ironhorse_spec::binary64_to_binary16 (its subtract and shift checks): every finite binary64 has k > exponent, so the branch is dead for this input type"
 mutants = ["NUM-7-a"]
 expect = "pass"
 canary = false
-unreachable_reason = "the model's exact-shift branch (exponent >= k) in ironhorse_spec::binary64_to_binary16 (its subtract and shift checks): every finite binary64 has k > exponent, so the branch is dead for this input type"
 
 [[harness]]
 guarantee = "NUM-7"
@@ -237,10 +237,10 @@ flags = []
 time_budget_s = 10
 memory_budget_gb = 1
 unreachable = 70
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::decode_element_le (27), interp::f64_to_f16_bits (14), numeric_kernel::to_uint8_clamp (13), interp::f16_bits_to_f64 (7), interp::encode_element_le (4), core::num::<impl usize>::abs_diff (2), interp::f64_to_f16_bits::{closure#0} (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1)."
 mutants = []
 expect = "pass"
 canary = false
-unreachable_reason = "checks in the arms of encode_element_le / decode_element_le for the other element kinds (the b[i] bounds checks, the binary16 and ToUint8Clamp arithmetic) and in the Vec/slice helpers at a fixed element length; measured per kind"
 
 [[harness]]
 guarantee = "NUM-8"
@@ -254,10 +254,10 @@ flags = []
 time_budget_s = 10
 memory_budget_gb = 1
 unreachable = 69
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::decode_element_le (26), interp::f64_to_f16_bits (14), numeric_kernel::to_uint8_clamp (13), interp::f16_bits_to_f64 (7), interp::encode_element_le (4), core::num::<impl usize>::abs_diff (2), interp::f64_to_f16_bits::{closure#0} (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1)."
 mutants = ["NUM-8-d"]
 expect = "pass"
 canary = false
-unreachable_reason = "checks in the arms of encode_element_le / decode_element_le for the other element kinds (the b[i] bounds checks, the binary16 and ToUint8Clamp arithmetic) and in the Vec/slice helpers at a fixed element length; measured per kind"
 
 [[harness]]
 guarantee = "NUM-8"
@@ -271,10 +271,10 @@ flags = []
 time_budget_s = 12
 memory_budget_gb = 1
 unreachable = 67
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::decode_element_le (24), interp::f64_to_f16_bits (14), numeric_kernel::to_uint8_clamp (13), interp::f16_bits_to_f64 (7), interp::encode_element_le (4), core::num::<impl usize>::abs_diff (2), interp::f64_to_f16_bits::{closure#0} (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1)."
 mutants = []
 expect = "pass"
 canary = false
-unreachable_reason = "checks in the arms of encode_element_le / decode_element_le for the other element kinds (the b[i] bounds checks, the binary16 and ToUint8Clamp arithmetic) and in the Vec/slice helpers at a fixed element length; measured per kind"
 
 [[harness]]
 guarantee = "NUM-8"
@@ -288,10 +288,10 @@ flags = []
 time_budget_s = 9
 memory_budget_gb = 1
 unreachable = 69
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::decode_element_le (27), interp::f64_to_f16_bits (14), numeric_kernel::to_uint8_clamp (13), interp::f16_bits_to_f64 (7), core::num::<impl usize>::abs_diff (2), interp::encode_element_le (2), interp::f64_to_f16_bits::{closure#0} (1), std::alloc::Layout::max_size_for_alignment (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1)."
 mutants = []
 expect = "pass"
 canary = false
-unreachable_reason = "checks in the arms of encode_element_le / decode_element_le for the other element kinds (the b[i] bounds checks, the binary16 and ToUint8Clamp arithmetic) and in the Vec/slice helpers at a fixed element length; measured per kind"
 
 [[harness]]
 guarantee = "NUM-8"
@@ -305,10 +305,10 @@ flags = []
 time_budget_s = 9
 memory_budget_gb = 1
 unreachable = 69
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::decode_element_le (26), interp::f64_to_f16_bits (14), numeric_kernel::to_uint8_clamp (13), interp::f16_bits_to_f64 (7), interp::encode_element_le (4), core::num::<impl usize>::abs_diff (2), interp::f64_to_f16_bits::{closure#0} (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1)."
 mutants = []
 expect = "pass"
 canary = false
-unreachable_reason = "checks in the arms of encode_element_le / decode_element_le for the other element kinds (the b[i] bounds checks, the binary16 and ToUint8Clamp arithmetic) and in the Vec/slice helpers at a fixed element length; measured per kind"
 
 [[harness]]
 guarantee = "NUM-8"
@@ -322,10 +322,10 @@ flags = []
 time_budget_s = 14
 memory_budget_gb = 1
 unreachable = 67
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::decode_element_le (24), interp::f64_to_f16_bits (14), numeric_kernel::to_uint8_clamp (13), interp::f16_bits_to_f64 (7), interp::encode_element_le (4), core::num::<impl usize>::abs_diff (2), interp::f64_to_f16_bits::{closure#0} (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1)."
 mutants = ["NUM-8-b"]
 expect = "pass"
 canary = false
-unreachable_reason = "checks in the arms of encode_element_le / decode_element_le for the other element kinds (the b[i] bounds checks, the binary16 and ToUint8Clamp arithmetic) and in the Vec/slice helpers at a fixed element length; measured per kind"
 
 [[harness]]
 guarantee = "NUM-8"
@@ -339,10 +339,10 @@ flags = []
 time_budget_s = 7
 memory_budget_gb = 1
 unreachable = 65
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::decode_element_le (27), interp::f64_to_f16_bits (14), numeric_kernel::number_to_u64_wrapping (9), interp::f16_bits_to_f64 (7), core::num::<impl usize>::abs_diff (2), interp::encode_element_le (2), interp::f64_to_f16_bits::{closure#0} (1), std::alloc::Layout::max_size_for_alignment (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1)."
 mutants = ["NUM-8-a"]
 expect = "pass"
 canary = false
-unreachable_reason = "checks in the arms of encode_element_le / decode_element_le for the other element kinds (the b[i] bounds checks, the binary16 and ToUint8Clamp arithmetic) and in the Vec/slice helpers at a fixed element length; measured per kind"
 
 [[harness]]
 guarantee = "NUM-8"
@@ -356,10 +356,10 @@ flags = []
 time_budget_s = 5
 memory_budget_gb = 1
 unreachable = 72
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::decode_element_le (20), interp::f64_to_f16_bits (14), numeric_kernel::to_uint8_clamp (13), numeric_kernel::number_to_u64_wrapping (9), interp::f16_bits_to_f64 (7), interp::encode_element_le (4), core::num::<impl usize>::abs_diff (2), interp::f64_to_f16_bits::{closure#0} (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1)."
 mutants = ["NUM-8-c"]
 expect = "pass"
 canary = false
-unreachable_reason = "checks in the arms of encode_element_le / decode_element_le for the other element kinds (the b[i] bounds checks, the binary16 and ToUint8Clamp arithmetic) and in the Vec/slice helpers at a fixed element length; measured per kind"
 
 [[harness]]
 guarantee = "NUM-8"
@@ -373,10 +373,10 @@ flags = []
 time_budget_s = 9
 memory_budget_gb = 1
 unreachable = 58
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::decode_element_le (26), numeric_kernel::to_uint8_clamp (13), numeric_kernel::number_to_u64_wrapping (9), interp::encode_element_le (4), core::num::<impl usize>::abs_diff (2), ironhorse_spec::binary64_to_binary16 (2), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1)."
 mutants = ["NUM-7-a"]
 expect = "pass"
 canary = false
-unreachable_reason = "checks in the arms of encode_element_le / decode_element_le for the other element kinds (the b[i] bounds checks, the binary16 and ToUint8Clamp arithmetic) and in the Vec/slice helpers at a fixed element length; measured per kind"
 
 [[guarantee]]
 id = "NUM-2"
@@ -397,10 +397,10 @@ flags = []
 time_budget_s = 64
 memory_budget_gb = 1
 unreachable = 22
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): ironhorse_spec::arith::number_value_of_integer (9), ironhorse_spec::int32::bitwise (7), interp::numeric::int32_bitop (4), ironhorse_spec::arith::exact_int32 (1), std::fmt::Arguments::<'_>::from_str (1)."
 mutants = []
 expect = "pass"
 canary = false
-unreachable_reason = "checks the harness's int32-valued operands cannot reach: the rounding branch (bit length above 53) of ironhorse_spec::arith::number_value_of_integer and, where present, the other operators' arms of the kernel and the other cases of the shared assert helpers (measured)"
 
 [[harness]]
 guarantee = "NUM-2"
@@ -414,10 +414,10 @@ flags = []
 time_budget_s = 24
 memory_budget_gb = 1
 unreachable = 19
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): ironhorse_spec::arith::number_value_of_integer (9), interp::numeric::int32_bitop (4), ironhorse_spec::int32::bitwise (4), ironhorse_spec::arith::exact_int32 (1), std::fmt::Arguments::<'_>::from_str (1)."
 mutants = []
 expect = "pass"
 canary = false
-unreachable_reason = "checks the harness's int32-valued operands cannot reach: the rounding branch (bit length above 53) of ironhorse_spec::arith::number_value_of_integer and, where present, the other operators' arms of the kernel and the other cases of the shared assert helpers (measured)"
 
 [[harness]]
 guarantee = "NUM-2"
@@ -431,10 +431,10 @@ flags = []
 time_budget_s = 21
 memory_budget_gb = 1
 unreachable = 20
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): ironhorse_spec::arith::number_value_of_integer (9), ironhorse_spec::int32::bitwise (5), interp::numeric::int32_bitop (4), ironhorse_spec::arith::exact_int32 (1), std::fmt::Arguments::<'_>::from_str (1)."
 mutants = []
 expect = "pass"
 canary = false
-unreachable_reason = "checks the harness's int32-valued operands cannot reach: the rounding branch (bit length above 53) of ironhorse_spec::arith::number_value_of_integer and, where present, the other operators' arms of the kernel and the other cases of the shared assert helpers (measured)"
 
 [[harness]]
 guarantee = "NUM-2"
@@ -448,10 +448,10 @@ flags = []
 time_budget_s = 19
 memory_budget_gb = 1
 unreachable = 13
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): ironhorse_spec::arith::number_value_of_integer (9), interp::numeric::int32_bitop (3), ironhorse_spec::arith::exact_int32 (1)."
 mutants = ["NUM-2-a"]
 expect = "pass"
 canary = false
-unreachable_reason = "checks the harness's int32-valued operands cannot reach: the rounding branch (bit length above 53) of ironhorse_spec::arith::number_value_of_integer and, where present, the other operators' arms of the kernel and the other cases of the shared assert helpers (measured)"
 
 [[harness]]
 guarantee = "NUM-2"
@@ -465,10 +465,10 @@ flags = []
 time_budget_s = 39
 memory_budget_gb = 1
 unreachable = 14
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): ironhorse_spec::arith::number_value_of_integer (9), interp::numeric::int32_bitop (3), core::num::<impl i64>::div_euclid (1), ironhorse_spec::arith::exact_int32 (1)."
 mutants = []
 expect = "pass"
 canary = false
-unreachable_reason = "checks the harness's int32-valued operands cannot reach: the rounding branch (bit length above 53) of ironhorse_spec::arith::number_value_of_integer and, where present, the other operators' arms of the kernel and the other cases of the shared assert helpers (measured)"
 
 [[harness]]
 guarantee = "NUM-2"
@@ -482,10 +482,10 @@ flags = []
 time_budget_s = 13
 memory_budget_gb = 1
 unreachable = 13
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): ironhorse_spec::arith::number_value_of_integer (9), interp::numeric::int32_bitop (2), ironhorse_spec::arith::exact_int32 (2)."
 mutants = ["NUM-2-b"]
 expect = "pass"
 canary = false
-unreachable_reason = "checks the harness's int32-valued operands cannot reach: the rounding branch (bit length above 53) of ironhorse_spec::arith::number_value_of_integer and, where present, the other operators' arms of the kernel and the other cases of the shared assert helpers (measured)"
 
 [[harness]]
 guarantee = "NUM-2"
@@ -506,7 +506,7 @@ canary = false
 [[guarantee]]
 id = "NUM-3"
 title = "The integer fast path agrees with the Number path"
-claim = "For every x, y: i32, apply_arith(op, Integer x, Integer y) holds exactly (to_bits, so -0 counts) the ironhorse-spec model's Number for Add and Sub (𝔽 of the exact sum or difference) and Mul (𝔽 of the exact product, rounded ties-to-even above 2^53; -0 for +0 times a negative, nightly), and is Integer exactly when that Number is an int32 other than -0; unary_minus(Integer x) is Number::unaryMinus (0 -> -0, i32::MIN -> 2^31). Add and Sub (nightly, --no-overflow-checks): the Integer path and the Number path (apply_arith on Number(x), Number(y)) are bit-identical. Div: both paths call number_divide, equal by construction (reviewed, not proved). Not proved (tested against the same models): the Mod fast path (a proof against Number::remainder timed out at 900 s, both directly and in a division-free form) and the Number paths of Mul and Mod (float * and % are out of reach; R1)."
+claim = "For every x, y: i32, apply_arith(op, Integer x, Integer y) holds exactly (to_bits, so -0 counts) the ironhorse-spec model's Number for Add and Sub (𝔽 of the exact sum or difference) and Mul (𝔽 of the exact product, rounded ties-to-even above 2^53; -0 for +0 times a negative, nightly), and is Integer exactly when that Number is an int32 other than -0; unary_minus(Integer x) is Number::unaryMinus (0 -> -0, i32::MIN -> 2^31). Add and Sub (nightly, default checks): the Integer path and the Number path (apply_arith on Number(x), Number(y)) are bit-identical. Div: both paths call number_divide, equal by construction (reviewed, not proved). Not proved (tested against the same models): the Mod fast path (a proof against Number::remainder timed out at 900 s, both directly and in a division-free form) and the Number paths of Mul and Mod (float * and % are out of reach; R1)."
 spec = "ECMA-262 §6.1.6.1.1 Number::unaryMinus, §6.1.6.1.4 Number::multiply, §6.1.6.1.6 Number::remainder, §6.1.6.1.7 Number::add, §6.1.6.1.8 Number::subtract, and 'the Number value for x' (§6.1.6.1), quoted in ironhorse-spec/src/arith.rs"
 trusted = ["Kani 0.68 / CBMC 6.11", "the ironhorse-spec models", "the harnesses"]
 
@@ -522,10 +522,10 @@ flags = []
 time_budget_s = 7
 memory_budget_gb = 1
 unreachable = 14
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): ironhorse_spec::arith::number_value_of_integer (9), core::num::<impl i32>::overflowing_rem (2), interp::numeric::apply_arith (2), ironhorse_spec::arith::exact_int32 (1)."
 mutants = ["NUM-3-d"]
 expect = "pass"
 canary = false
-unreachable_reason = "checks the harness's int32-valued operands cannot reach: the rounding branch (bit length above 53) of ironhorse_spec::arith::number_value_of_integer and, where present, the other operators' arms of the kernel and the other cases of the shared assert helpers (measured)"
 
 [[harness]]
 guarantee = "NUM-3"
@@ -539,10 +539,10 @@ flags = []
 time_budget_s = 9
 memory_budget_gb = 1
 unreachable = 14
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): ironhorse_spec::arith::number_value_of_integer (9), core::num::<impl i32>::overflowing_rem (2), interp::numeric::apply_arith (2), ironhorse_spec::arith::exact_int32 (1)."
 mutants = []
 expect = "pass"
 canary = false
-unreachable_reason = "checks the harness's int32-valued operands cannot reach: the rounding branch (bit length above 53) of ironhorse_spec::arith::number_value_of_integer and, where present, the other operators' arms of the kernel and the other cases of the shared assert helpers (measured)"
 
 [[harness]]
 guarantee = "NUM-3"
@@ -556,10 +556,10 @@ flags = []
 time_budget_s = 143
 memory_budget_gb = 1
 unreachable = 4
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl i32>::overflowing_rem (2), interp::numeric::apply_arith (2)."
 mutants = ["NUM-3-b"]
 expect = "pass"
 canary = false
-unreachable_reason = "checks the harness's int32-valued operands cannot reach: the rounding branch (bit length above 53) of ironhorse_spec::arith::number_value_of_integer and, where present, the other operators' arms of the kernel and the other cases of the shared assert helpers (measured)"
 
 [[harness]]
 guarantee = "NUM-3"
@@ -573,10 +573,10 @@ flags = []
 time_budget_s = 7
 memory_budget_gb = 1
 unreachable = 10
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): ironhorse_spec::arith::number_value_of_integer (9), ironhorse_spec::arith::exact_int32 (1)."
 mutants = ["NUM-3-c"]
 expect = "pass"
 canary = false
-unreachable_reason = "checks the harness's int32-valued operands cannot reach: the rounding branch (bit length above 53) of ironhorse_spec::arith::number_value_of_integer and, where present, the other operators' arms of the kernel and the other cases of the shared assert helpers (measured)"
 
 [[harness]]
 guarantee = "NUM-3"
@@ -586,15 +586,14 @@ tier = "nightly"
 statement = "apply_arith(Add, Integer x, Integer y) and apply_arith(Add, Number(x), Number(y)) have the same bits."
 domain = "every x: i32 and y: i32"
 unwind = 0
-flags = ["--no-overflow-checks"]
+flags = []
 time_budget_s = 540
 memory_budget_gb = 4
 unreachable = 4
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl i32>::overflowing_rem (2), interp::numeric::apply_arith (2)."
 mutants = []
 expect = "pass"
 canary = false
-flags_reason = "the Number path performs f64 addition, which CBMC's NaN check flags although NaN is a legitimate JavaScript result (R2)"
-unreachable_reason = "checks the harness's int32-valued operands cannot reach: the rounding branch (bit length above 53) of ironhorse_spec::arith::number_value_of_integer and, where present, the other operators' arms of the kernel and the other cases of the shared assert helpers (measured)"
 
 [[harness]]
 guarantee = "NUM-3"
@@ -604,15 +603,14 @@ tier = "nightly"
 statement = "apply_arith(Sub, Integer x, Integer y) and apply_arith(Sub, Number(x), Number(y)) have the same bits."
 domain = "every x: i32 and y: i32"
 unwind = 0
-flags = ["--no-overflow-checks"]
+flags = []
 time_budget_s = 550
 memory_budget_gb = 4
 unreachable = 4
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl i32>::overflowing_rem (2), interp::numeric::apply_arith (2)."
 mutants = []
 expect = "pass"
 canary = false
-flags_reason = "the Number path performs f64 addition, which CBMC's NaN check flags although NaN is a legitimate JavaScript result (R2)"
-unreachable_reason = "checks the harness's int32-valued operands cannot reach: the rounding branch (bit length above 53) of ironhorse_spec::arith::number_value_of_integer and, where present, the other operators' arms of the kernel and the other cases of the shared assert helpers (measured)"
 
 [[guarantee]]
 id = "NUM-4"
@@ -672,10 +670,10 @@ flags = []
 time_budget_s = 10
 memory_budget_gb = 1
 unreachable = 9
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): ironhorse_spec::arith::number_value_of_integer (9)."
 mutants = ["NUM-5-a"]
 expect = "pass"
 canary = false
-unreachable_reason = "checks the harness's int32-valued operands cannot reach: the rounding branch (bit length above 53) of ironhorse_spec::arith::number_value_of_integer and, where present, the other operators' arms of the kernel and the other cases of the shared assert helpers (measured)"
 
 [[harness]]
 guarantee = "NUM-5"
@@ -689,10 +687,10 @@ flags = []
 time_budget_s = 10
 memory_budget_gb = 1
 unreachable = 9
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): ironhorse_spec::arith::number_value_of_integer (9)."
 mutants = ["NUM-5-c"]
 expect = "pass"
 canary = false
-unreachable_reason = "checks the harness's int32-valued operands cannot reach: the rounding branch (bit length above 53) of ironhorse_spec::arith::number_value_of_integer and, where present, the other operators' arms of the kernel and the other cases of the shared assert helpers (measured)"
 
 [[harness]]
 guarantee = "NUM-5"
@@ -706,15 +704,15 @@ flags = []
 time_budget_s = 9
 memory_budget_gb = 1
 unreachable = 9
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): ironhorse_spec::arith::number_value_of_integer (9)."
 mutants = ["NUM-5-b"]
 expect = "pass"
 canary = false
-unreachable_reason = "checks the harness's int32-valued operands cannot reach: the rounding branch (bit length above 53) of ironhorse_spec::arith::number_value_of_integer and, where present, the other operators' arms of the kernel and the other cases of the shared assert helpers (measured)"
 
 [[guarantee]]
 id = "NUM-9"
 title = "Date day and civil arithmetic"
-claim = "For every day number in [-10^8, 10^8] (the TimeClip range), interp::temporal::civil_from_days is a left inverse of days_from_civil: days_from_civil(civil_from_days(day)) == Some(day). days_from_civil itself is tested against the ironhorse-spec day model (DayFromYear plus the MonthFromTime offsets) over years -2000..3000, every 997th year to ±300000 and the i64 extremes, not proved: the proof timed out at 600 s even over the TimeClip years. civil_fields now calls civil_from_days, so the Date and Temporal civil algorithms are one (by construction). Not proved: civil_fields' f64 floor division of a time value into days and milliseconds, time_clip and date_from_components_exact (tested only)."
+claim = "For every day number in [-10^8, 10^8] (the TimeClip range), interp::temporal::civil_from_days is a left inverse of days_from_civil: days_from_civil(civil_from_days(day)) == Some(day) (a self-consistency proof: it does not consult the spec model). days_from_civil(y, m, d) equals the ironhorse-spec day model (DayFromYear plus the MonthFromTime/DateFromTime offsets), None for a nonexistent month or day included, for every m, d: u32 and every year y in -10000..=10000 (nightly), 1900..=2100 and the concrete years 1968..1972, -401, -400, -1, 0, 1, 1600, 1601, 1900, 1901, 2000, 2100, -271822, -271821, 275759 and 275760 (pr). Over the whole TimeClip year range it is tested, not proved (the symbolic-year proof did not finish in 600 s): years -2000..3000, every 997th year to ±300000 and the i64 extremes. civil_fields now calls civil_from_days, so the Date and Temporal civil algorithms are one (by construction). Not proved: civil_fields' f64 floor division of a time value into days and milliseconds, time_clip and date_from_components_exact (tested only)."
 spec = "ECMA-262 §21.4.1 DaysInYear, DayFromYear, DayWithinYear, MonthFromTime, DateFromTime (quoted in ironhorse-spec/src/date.rs)"
 trusted = ["Kani 0.68 / CBMC 6.11", "the ironhorse-spec models", "the harnesses"]
 
@@ -733,3 +731,89 @@ unreachable = 0
 mutants = ["NUM-9-c", "NUM-9-a", "NUM-9-b"]
 expect = "pass"
 canary = false
+
+[[harness]]
+guarantee = "NUM-9"
+crate = "ironhorse-vm"
+name = "interp::temporal::proofs::num9_days_from_civil_matches_spec_epoch_years"
+tier = "pr"
+statement = "days_from_civil(y, m, d) == ironhorse_spec::date::day_from_civil(y, m, d), Some and None alike."
+domain = "y in {1968, 1969, 1970, 1971, 1972}; every m: u32 and d: u32"
+unwind = 6
+flags = []
+time_budget_s = 20
+memory_budget_gb = 1
+unreachable = 3
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl i128>::div_euclid (1), interp::temporal::days_from_civil (1), std::fmt::Arguments::<'_>::from_str (1)."
+mutants = ["NUM-9-d", "NUM-9-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-9"
+crate = "ironhorse-vm"
+name = "interp::temporal::proofs::num9_days_from_civil_matches_spec_boundary_years"
+tier = "nightly"
+statement = "days_from_civil(y, m, d) == ironhorse_spec::date::day_from_civil(y, m, d), Some and None alike."
+domain = "y in {-401, -400, -1, 0, 1, 1600, 1601, 1900, 1901, 2000, 2100}; every m: u32 and d: u32"
+unwind = 12
+flags = []
+time_budget_s = 45
+memory_budget_gb = 1
+unreachable = 2
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl i128>::div_euclid (1), std::fmt::Arguments::<'_>::from_str (1)."
+mutants = ["NUM-9-d", "NUM-9-a", "NUM-9-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-9"
+crate = "ironhorse-vm"
+name = "interp::temporal::proofs::num9_days_from_civil_matches_spec_time_clip_ends"
+tier = "pr"
+statement = "days_from_civil(y, m, d) == ironhorse_spec::date::day_from_civil(y, m, d), Some and None alike."
+domain = "y in {-271822, -271821, 275759, 275760} (the TimeClip year ends); every m: u32 and d: u32"
+unwind = 5
+flags = []
+time_budget_s = 20
+memory_budget_gb = 1
+unreachable = 2
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl i128>::div_euclid (1), std::fmt::Arguments::<'_>::from_str (1)."
+mutants = ["NUM-9-d", "NUM-9-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-9"
+crate = "ironhorse-vm"
+name = "interp::temporal::proofs::num9_days_from_civil_matches_spec_1900_to_2100"
+tier = "pr"
+statement = "days_from_civil(y, m, d) == ironhorse_spec::date::day_from_civil(y, m, d), Some and None alike."
+domain = "every y: i64 in 1900..=2100 (assume); every m: u32 and d: u32"
+unwind = 0
+flags = []
+time_budget_s = 30
+memory_budget_gb = 1
+unreachable = 2
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl i128>::div_euclid (1), interp::temporal::days_from_civil (1)."
+mutants = ["NUM-9-d", "NUM-9-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-9"
+crate = "ironhorse-vm"
+name = "interp::temporal::proofs::num9_days_from_civil_matches_spec_10000_years"
+tier = "nightly"
+statement = "days_from_civil(y, m, d) == ironhorse_spec::date::day_from_civil(y, m, d), Some and None alike."
+domain = "every y: i64 in -10000..=10000 (assume); every m: u32 and d: u32"
+unwind = 0
+flags = []
+time_budget_s = 900
+memory_budget_gb = 2
+unreachable = 1
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl i128>::div_euclid (1)."
+mutants = ["NUM-9-d", "NUM-9-a", "NUM-9-b"]
+expect = "pass"
+canary = false
+
