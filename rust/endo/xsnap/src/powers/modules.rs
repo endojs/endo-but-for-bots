@@ -28,8 +28,8 @@ unsafe fn get_powers(the: *mut XsMachine) -> &'static HostPowers {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_load_module_source(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads argument 0 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads argument 0 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -56,8 +56,8 @@ pub unsafe extern "C" fn host_load_module_source(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_resolve_module(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {

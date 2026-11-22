@@ -21,7 +21,10 @@
 
 use crate::ffi::*;
 use crate::powers::HostPowers;
-use crate::worker_io::{abort_if_ffi_panicked, arg_str, read_typed_array_bytes, set_result_string};
+use crate::worker_io::{
+    abort_if_ffi_panicked, arg_integer, arg_slot, arg_str, read_typed_array_bytes,
+    set_result_string,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{BufReader, BufWriter, Read, Write};
@@ -63,14 +66,15 @@ unsafe fn get_powers(the: *mut XsMachine) -> &'static HostPowers {
 /// `the` must be valid, index must be in range, and the slot must be
 /// coercible to a string.
 unsafe fn arg_bytes(the: *mut XsMachine, index: usize) -> Vec<u8> {
-    // SAFETY: argument `index` is read without checking argc (UNVERIFIED, as
-    // in `arg_str`). Otherwise: `fxToString` returns a NUL-terminated string
+    // SAFETY: host-callback contract; `arg_slot` yields argument `index` or
+    // the local `absent` slot (`undefined`). `fxToString` returns a NUL-terminated string
     // valid until the next XS call that can allocate (host-callback contract
     // 4); `abort_if_ffi_panicked` calls no XS, and `CStr::from_ptr` scans to
     // that NUL and `to_vec` copies the bytes before anything else touches the
     // machine, so nothing borrowed from the XS heap escapes this block.
     unsafe {
-        let slot = (*the).frame.sub(1 + index);
+        let mut absent = XsSlot::default();
+        let slot = arg_slot(the, index, &mut absent);
         let ptr = fxToString(the, slot);
         abort_if_ffi_panicked();
         if ptr.is_null() {
@@ -178,11 +182,12 @@ thread_local! {
 /// directory that has no associated string token). Used by ambient
 /// root-token fallbacks that operate via `std::fs` on absolute paths.
 unsafe fn arg_dir_token(the: *mut XsMachine, slot_index: usize) -> Option<String> {
-    // SAFETY: host-callback contract, with argument `slot_index` read
-    // unchecked against argc (UNVERIFIED, as in `arg_str`); `fxTypeOf` only
-    // reads the slot.
+    // SAFETY: host-callback contract; `arg_slot` yields argument
+    // `slot_index` or the local `absent` slot (`undefined`), which outlives
+    // its use; `fxTypeOf` only reads the slot.
     unsafe {
-        let slot = (*the).frame.sub(1 + slot_index);
+        let mut absent = XsSlot::default();
+        let slot = arg_slot(the, slot_index, &mut absent);
         let ty = fxTypeOf(the, slot);
         if ty == XS_INTEGER_TYPE || ty == XS_NUMBER_TYPE {
             None
@@ -210,13 +215,14 @@ fn root_to_abs(path: &str) -> std::path::PathBuf {
 /// # Safety
 /// `the` must be valid, `slot_index` must be in range.
 unsafe fn resolve_dir(the: *mut XsMachine, slot_index: usize) -> Result<cap_std::fs::Dir, String> {
-    // SAFETY: host-callback contract, argument `slot_index` unchecked against
-    // argc (UNVERIFIED, as in `arg_str`). The `DIR_MAP` borrow is taken only
+    // SAFETY: host-callback contract; `arg_slot` yields argument
+    // `slot_index` or the local `absent` slot (`undefined`). The `DIR_MAP` borrow is taken only
     // after the slot has been coerced, so a re-entrant callback in that
     // coercion cannot observe it; `get_powers` carries its own UNVERIFIED
     // note. The returned `Dir` is an owned clone.
     DIR_MAP.with(|dir_map| unsafe {
-        let slot = (*the).frame.sub(1 + slot_index);
+        let mut absent = XsSlot::default();
+        let slot = arg_slot(the, slot_index, &mut absent);
         let ty = fxTypeOf(the, slot);
         if ty == XS_INTEGER_TYPE || ty == XS_NUMBER_TYPE {
             let handle = fxToInteger(the, slot) as u32;
@@ -246,8 +252,8 @@ unsafe fn resolve_dir(the: *mut XsMachine, slot_index: usize) -> Result<cap_std:
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_open_reader(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -282,18 +288,14 @@ pub unsafe extern "C" fn host_open_reader(the: *mut XsMachine) {
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_read_chunk(the: *mut XsMachine) {
     // SAFETY: host-callback contract (`worker_io`). Arguments 0 and 1 are read
-    // with `fxToInteger` (argc unchecked, as in `arg_str`). `buf` holds
+    // with `fxToInteger` (a missing one reads as `undefined`). `buf` holds
     // `max_bytes` bytes and `fxArrayBuffer` copies only the `n` bytes `read`
     // filled. (A negative `max_bytes` becomes a huge `usize` and aborts on
     // allocation; that is a crash, not memory unsafety.)
     crate::worker_io::guard_ffi(|| unsafe {
         FILE_MAP.with(|file_map| {
-            let handle_slot = (*the).frame.sub(1);
-            let handle = fxToInteger(the, handle_slot) as u32;
-            abort_if_ffi_panicked();
-            let max_slot = (*the).frame.sub(2);
-            let max_bytes = fxToInteger(the, max_slot) as usize;
-            abort_if_ffi_panicked();
+            let handle = arg_integer(the, 0) as u32;
+            let max_bytes = arg_integer(the, 1) as usize;
 
             let mut map = file_map.borrow_mut();
             match map.get_mut(&handle) {
@@ -332,15 +334,13 @@ pub unsafe extern "C" fn host_read_chunk(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_close_reader(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads argument 0 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads argument 0 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         FILE_MAP.with(|file_map| {
-            let handle_slot = (*the).frame.sub(1);
-            let handle = fxToInteger(the, handle_slot) as u32;
-            abort_if_ffi_panicked();
+            let handle = arg_integer(the, 0) as u32;
             let mut map = file_map.borrow_mut();
             map.remove(&handle);
         });
@@ -356,8 +356,8 @@ pub unsafe extern "C" fn host_close_reader(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_open_writer(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -392,14 +392,13 @@ pub unsafe extern "C" fn host_open_writer(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_write_chunk(the: *mut XsMachine) {
     // SAFETY: host-callback contract (`worker_io`). Argument 0 via
     // `fxToInteger` and argument 1 via `read_typed_array_bytes`, which copies
-    // the bytes out (argc unchecked, UNVERIFIED there); the `FILE_MAP` borrow
+    // the bytes out (a missing one reads as `undefined`); the `FILE_MAP` borrow
     // is taken after both reads.
     crate::worker_io::guard_ffi(|| unsafe {
         FILE_MAP.with(|file_map| {
-            let handle_slot = (*the).frame.sub(1);
-            let handle = fxToInteger(the, handle_slot) as u32;
-            abort_if_ffi_panicked();
-            let data_slot = (*the).frame.sub(2);
+            let handle = arg_integer(the, 0) as u32;
+            let mut data_slot_absent = XsSlot::default();
+            let data_slot = arg_slot(the, 1, &mut data_slot_absent);
 
             let buf = match read_typed_array_bytes(the, data_slot) {
                 Some(b) => b,
@@ -427,15 +426,13 @@ pub unsafe extern "C" fn host_write_chunk(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_close_writer(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads argument 0 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads argument 0 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         FILE_MAP.with(|file_map| {
-            let handle_slot = (*the).frame.sub(1);
-            let handle = fxToInteger(the, handle_slot) as u32;
-            abort_if_ffi_panicked();
+            let handle = arg_integer(the, 0) as u32;
 
             let mut map = file_map.borrow_mut();
             if let Some(FileResource::Writer(mut writer)) = map.remove(&handle) {
@@ -458,8 +455,8 @@ pub unsafe extern "C" fn host_close_writer(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_read_file_text(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -504,8 +501,8 @@ pub unsafe extern "C" fn host_read_file_text(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_read_file_bytes(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -545,8 +542,8 @@ pub unsafe extern "C" fn host_read_file_bytes(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_maybe_read_file_bytes(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -607,7 +604,7 @@ pub unsafe extern "C" fn host_maybe_read_file_bytes(the: *mut XsMachine) {
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_write_file_text(the: *mut XsMachine) {
     // SAFETY: host-callback contract (`worker_io`). Arguments 0-2 are read
-    // without an argc check (UNVERIFIED, as in `arg_str`). `data` is an owned
+    // through `arg_slot` (`undefined` if missing). `data` is an owned
     // copy of argument 2 (`arg_bytes`), so coercing argument 0 afterwards,
     // which can run a script `toString` that allocates and lets the GC move
     // the original string, cannot change what is written.
@@ -645,7 +642,7 @@ pub unsafe extern "C" fn host_write_file_text(the: *mut XsMachine) {
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_append_file(the: *mut XsMachine) {
     // SAFETY: host-callback contract (`worker_io`). Arguments 0-2 are read
-    // without an argc check (UNVERIFIED, as in `arg_str`). `data` is an owned
+    // through `arg_slot` (`undefined` if missing). `data` is an owned
     // copy of argument 2 (`arg_bytes`), so coercing argument 0 afterwards,
     // which can run a script `toString` that allocates and lets the GC move
     // the original string, cannot change what is written.
@@ -698,8 +695,8 @@ pub unsafe extern "C" fn host_append_file(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_stat(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -786,8 +783,8 @@ pub unsafe extern "C" fn host_stat(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_read_dir(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -856,8 +853,8 @@ pub unsafe extern "C" fn host_read_dir(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_mkdir(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -890,8 +887,8 @@ pub unsafe extern "C" fn host_mkdir(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_remove(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -930,7 +927,7 @@ pub unsafe extern "C" fn host_remove(the: *mut XsMachine) {
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_rename(the: *mut XsMachine) {
     // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1, 2
-    // (argc unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust
+    // (missing ones read as `undefined`, `arg_slot`); strings are copied into Rust
     // before the next XS call, and results reach `xsResult` through helpers
     // that copy into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -961,8 +958,8 @@ pub unsafe extern "C" fn host_rename(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_exists(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -988,8 +985,8 @@ pub unsafe extern "C" fn host_exists(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_is_dir(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -1022,8 +1019,8 @@ pub unsafe extern "C" fn host_is_dir(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_read_link(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -1059,8 +1056,8 @@ pub unsafe extern "C" fn host_read_link(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_open_dir(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -1110,15 +1107,13 @@ pub unsafe extern "C" fn host_open_dir(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_close_dir(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). Reads argument 0 (argc
-    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // SAFETY: host-callback contract (`worker_io`). Reads argument 0 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         DIR_MAP.with(|dir_map| {
-            let handle_slot = (*the).frame.sub(1);
-            let handle = fxToInteger(the, handle_slot) as u32;
-            abort_if_ffi_panicked();
+            let handle = arg_integer(the, 0) as u32;
             let mut map = dir_map.borrow_mut();
             map.remove(&handle);
         });
@@ -1136,7 +1131,7 @@ pub unsafe extern "C" fn host_close_dir(the: *mut XsMachine) {
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_symlink(the: *mut XsMachine) {
     // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1, 2
-    // (argc unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust
+    // (missing ones read as `undefined`, `arg_slot`); strings are copied into Rust
     // before the next XS call, and results reach `xsResult` through helpers
     // that copy into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -1172,7 +1167,7 @@ pub unsafe extern "C" fn host_symlink(the: *mut XsMachine) {
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_link(the: *mut XsMachine) {
     // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1, 2
-    // (argc unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust
+    // (missing ones read as `undefined`, `arg_slot`); strings are copied into Rust
     // before the next XS call, and results reach `xsResult` through helpers
     // that copy into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
@@ -1349,6 +1344,54 @@ mod tests {
             std::fs::read(temp.path().join("appended.txt")).unwrap(),
             expected.as_bytes()
         );
+    }
+
+    /// XS does not pad a host function's arguments, so a call with fewer
+    /// arguments than the host reads must see `undefined` for the rest, not
+    /// the frame's scope slot or the free stack below it.
+    #[test]
+    fn missing_arguments_read_as_undefined() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut powers = HostPowers::new();
+        powers.add_dir(
+            "test",
+            cap_std::fs::Dir::open_ambient_dir(temp.path(), cap_std::ambient_authority()).unwrap(),
+        );
+        let machine = crate::Machine::new(&crate::DEFAULT_CREATION, "argc").unwrap();
+        machine.register_powers(&mut powers);
+        // Leave live-looking slots in the free stack below the next call's
+        // frame, so a read past argc would find something other than the
+        // scope slot.
+        machine
+            .eval(
+                "(function deep(n) { var o = { n: n, s: 'x' + n }; \
+                 return n ? deep(n - 1) : o; })(50); \
+                 writeFileText('test', 'two-args.txt'); \
+                 appendFile('test', 'two-args-append.txt');",
+            )
+            .unwrap();
+        assert_eq!(
+            std::fs::read(temp.path().join("two-args.txt")).unwrap(),
+            b"undefined"
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("two-args-append.txt")).unwrap(),
+            b"undefined"
+        );
+        // A missing handle reads as `undefined`, i.e. handle 0, which is never
+        // issued.
+        match machine.eval("read()").unwrap() {
+            crate::JsValue::String(s) => assert_eq!(s, "Error: invalid file handle"),
+            _ => panic!("read() must report an invalid handle"),
+        }
+        match machine.eval("readFileText('test')").unwrap() {
+            crate::JsValue::String(s) => assert!(s.starts_with("Error: "), "{s}"),
+            _ => panic!("readFileText with no path must report an error"),
+        }
+        match machine.eval("joinPath('a', 'b')").unwrap() {
+            crate::JsValue::String(s) => assert_eq!(s, "a/b"),
+            _ => panic!("joinPath must return a string"),
+        }
     }
 
     #[test]

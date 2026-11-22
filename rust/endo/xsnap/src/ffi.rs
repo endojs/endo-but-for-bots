@@ -109,6 +109,9 @@ extern "C" {
     // Stack overflow check
     pub fn fxOverflow(the: *mut XsMachine, count: c_int, file: *const c_char, line: c_int);
 
+    // Argument count of the current host-callback frame (xs.h's `xsArgc`)
+    pub fn fxArgc(the: *mut XsMachine) -> i32;
+
     // Type inspection
     pub fn fxTypeOf(the: *mut XsMachine, slot: *mut XsSlot) -> i8;
     pub fn fxIsCallable(the: *mut XsMachine, slot: *mut XsSlot) -> i32;

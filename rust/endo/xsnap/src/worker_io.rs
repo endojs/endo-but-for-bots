@@ -615,17 +615,19 @@ pub fn take_ffi_panic() -> Option<FfiPanic> {
 // The callbacks are `pub` so that the snapshot callback table and tests can
 // name them. Calling one other than through XS breaks the contract.
 //
+// What XS does NOT establish, and the helpers below handle:
+//
+// - XS does not pad missing arguments. `frame[-1 - i]` for `i >= argc` is the
+//   frame's scope slot or free stack below it. The C API's `xsArg` checks the
+//   index (`fxCheckArg`). Here every argument read goes through `arg_slot`
+//   (directly, or via `arg_str`, `arg_integer` and `powers::fs`'s helpers),
+//   which compares the index with `fxArgc` and hands back a caller-owned
+//   `undefined` slot for a missing argument, as JS itself would supply.
+//
 // What XS does NOT establish, and the helpers below do not check either. Each
 // is marked `SAFETY: UNVERIFIED` at the helper that embodies it, not at every
 // callback that inherits it:
 //
-// - XS does not pad missing arguments. `frame[-1 - i]` for `i >= argc` is the
-//   frame's scope slot or free stack below it. The C API's `xsArg` checks the
-//   index (`fxCheckArg`; build.rs turns `mxBoundsCheck` on), but `arg_str`,
-//   `arg_bytes` and the direct `frame.sub(1 + i)` reads in `powers/` do not.
-//   A script that calls a host function with fewer arguments than it reads
-//   makes the host read, and `fxToString` coerce in place, a slot that is not
-//   an argument.
 // - XS reserves no stack for the host. The C API brackets every push with
 //   `xsOverflow` (`fxOverflow`); `fx_push` does not, so a push made while the
 //   JS stack is full writes below `stack_bottom`.
@@ -635,24 +637,72 @@ pub fn take_ffi_panic() -> Option<FfiPanic> {
 //   `guard_ffi`'s bookkeeping (see `reset_capturing`). Rust only defines a
 //   `longjmp` over frames with nothing to drop.
 
+/// The slot holding argument `index` of the current host-callback frame, or
+/// `absent` (set to `undefined`) when the script passed fewer arguments.
+///
+/// XS does not pad a host function's arguments up to its declared length,
+/// so `frame[-1 - index]` for `index >= argc` is the frame's scope slot or
+/// free stack, which a coercion would read and overwrite in place. A missing
+/// argument reads as `undefined` instead, as it would in JS.
+///
+/// The returned pointer is valid while `absent` is, and only for the current
+/// callback.
+///
+/// # Safety
+/// Call only from a host callback (the host-callback contract above), with
+/// `the` the machine XS passed it.
+pub unsafe fn arg_slot(the: *mut XsMachine, index: usize, absent: &mut XsSlot) -> *mut XsSlot {
+    // SAFETY: per the caller, `the` is the live machine with `frame` at this
+    // callback's frame (host-callback contract 1-2). `fxArgc` reads the
+    // frame's `ID`. For `index < argc`, `frame.sub(1 + index)` is argument
+    // `index`, inside the frame's argument area; otherwise nothing is read
+    // from the frame, and `fxUndefined` only writes `absent`.
+    unsafe {
+        let argc = usize::try_from(fxArgc(the)).unwrap_or(0);
+        if index < argc {
+            (*the).frame.sub(1 + index)
+        } else {
+            fxUndefined(the, absent);
+            absent
+        }
+    }
+}
+
+/// Read argument `index` as an integer (`fxToInteger`; `0` when absent).
+///
+/// # Safety
+/// As [`arg_slot`].
+pub unsafe fn arg_integer(the: *mut XsMachine, index: usize) -> i32 {
+    // SAFETY: as `arg_slot`, whose slot (an argument, or `absent`, which
+    // outlives the call) `fxToInteger` coerces in place.
+    unsafe {
+        let mut absent = XsSlot::default();
+        let slot = arg_slot(the, index, &mut absent);
+        let value = fxToInteger(the, slot);
+        abort_if_ffi_panicked();
+        value
+    }
+}
+
 /// Read a string argument from the XS stack frame.
 ///
 /// XS stores strings in CESU-8.  This function decodes surrogate
 /// pairs into proper UTF-8 so that Rust string operations work
 /// correctly on supplementary characters (emoji, etc.).
 ///
+/// A missing argument reads as `undefined`, i.e. the string
+/// `"undefined"`.
+///
 /// # Safety
-/// Caller must ensure `the` is a valid XS machine pointer and
-/// `index` is within the argument count.
+/// As [`arg_slot`].
 pub unsafe fn arg_str(the: *mut XsMachine, index: usize) -> String {
-    // SAFETY: UNVERIFIED — argument `index` is read without comparing it to
-    // the frame's argc (see "What XS does NOT establish" above): a script
-    // calling with fewer arguments makes this coerce a non-argument slot.
-    // Otherwise, per the host-callback contract, `frame.sub(1 + index)` is
-    // argument `index`, and the string pointer `fxToString` returns is
-    // copied out by `xs_string_to_utf8` before XS is called again.
+    // SAFETY: `arg_slot` yields argument `index` or the local `absent`
+    // slot, which outlives its use here; the string pointer `fxToString`
+    // returns is copied out by `xs_string_to_utf8` before XS is called again
+    // (host-callback contract 4).
     unsafe {
-        let slot = (*the).frame.sub(1 + index);
+        let mut absent = XsSlot::default();
+        let slot = arg_slot(the, index, &mut absent);
         let ptr = fxToString(the, slot);
         abort_if_ffi_panicked();
         xs_string_to_utf8(ptr)
@@ -729,7 +779,7 @@ pub unsafe extern "C" fn host_recv_frame(the: *mut XsMachine) {
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_send_frame(the: *mut XsMachine) {
     // SAFETY: host-callback contract; reads argument 0 with `arg_str`
-    // (UNVERIFIED there: argc unchecked) and touches the machine no further.
+    // (a missing argument reads as `undefined`) and touches the machine no further.
     guard_ffi(|| unsafe {
         let hex_data = arg_str(the, 0);
         if let Ok(data) = hex::decode(hex_data) {
@@ -759,11 +809,12 @@ pub unsafe extern "C" fn host_get_daemon_handle(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_issue_command(the: *mut XsMachine) {
-    // SAFETY: host-callback contract; argument 0 is `frame.sub(1)` (argc
-    // unchecked, as in `arg_str`) and `read_typed_array_bytes` copies its
+    // SAFETY: host-callback contract; argument 0 is `frame.sub(1)` (a
+    // missing one reads as `undefined`) and `read_typed_array_bytes` copies its
     // bytes into a Rust `Vec` before the transport sees them.
     guard_ffi(|| unsafe {
-        let slot = (*the).frame.sub(1);
+        let mut slot_absent = XsSlot::default();
+        let slot = arg_slot(the, 0, &mut slot_absent);
         if let Some(buf) = read_typed_array_bytes(the, slot) {
             if let Err(e) = with_transport(|t| t.send_frame(&buf)) {
                 eprintln!("endor: issueCommand error: {}", e);
@@ -778,10 +829,11 @@ pub unsafe extern "C" fn host_issue_command(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_send_raw_frame(the: *mut XsMachine) {
-    // SAFETY: as `host_issue_command`: argument 0 (argc unchecked) is copied
+    // SAFETY: as `host_issue_command`: argument 0 (`undefined` if missing) is copied
     // out by `read_typed_array_bytes` before use.
     guard_ffi(|| unsafe {
-        let slot = (*the).frame.sub(1);
+        let mut slot_absent = XsSlot::default();
+        let slot = arg_slot(the, 0, &mut slot_absent);
         if let Some(buf) = read_typed_array_bytes(the, slot) {
             if let Err(e) = with_transport(|t| t.send_raw_frame(&buf)) {
                 eprintln!("endor: sendRawFrame error: {}", e);
@@ -927,14 +979,15 @@ pub unsafe fn write_typed_array_bytes(
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_import_archive(the: *mut XsMachine) {
-    // SAFETY: host-callback contract. Argument 0 (argc unchecked) is copied
+    // SAFETY: host-callback contract. Argument 0 (`undefined` if missing) is copied
     // out by `read_typed_array_bytes`. The `Machine` built over `the` is a
     // borrowed view for `install_archive`: `ManuallyDrop` keeps its `Drop`
     // from deleting a machine this callback does not own, and XS supports
     // the nested `fxBeginHost` entries `install_archive` makes. `xsResult`
     // is written only after the nested evaluation has returned.
     guard_ffi(|| unsafe {
-        let slot = (*the).frame.sub(1);
+        let mut slot_absent = XsSlot::default();
+        let slot = arg_slot(the, 0, &mut slot_absent);
         let buf = match read_typed_array_bytes(the, slot) {
             Some(b) => b,
             None => {
@@ -972,7 +1025,7 @@ pub unsafe extern "C" fn host_import_archive(the: *mut XsMachine) {
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_trace(the: *mut XsMachine) {
     // SAFETY: host-callback contract; reads argument 0 with `arg_str`
-    // (UNVERIFIED there: argc unchecked).
+    // (a missing argument reads as `undefined`).
     guard_ffi(|| unsafe {
         let msg = arg_str(the, 0);
         eprintln!("endor: [trace] {}", msg);
@@ -991,7 +1044,7 @@ pub unsafe extern "C" fn host_trace(the: *mut XsMachine) {
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_stdout_line(the: *mut XsMachine) {
     // SAFETY: host-callback contract; reads argument 0 with `arg_str`
-    // (UNVERIFIED there: argc unchecked).
+    // (a missing argument reads as `undefined`).
     guard_ffi(|| unsafe {
         let msg = arg_str(the, 0);
         println!("{}", msg);
@@ -1040,8 +1093,8 @@ pub unsafe extern "C" fn host_get_pending_envelope(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_base64_decode(the: *mut XsMachine) {
-    // SAFETY: host-callback contract; argument 0 via `arg_str` (UNVERIFIED
-    // there: argc unchecked). `fxArrayBuffer` copies `data.len()` bytes from
+    // SAFETY: host-callback contract; argument 0 via `arg_str` (a
+    // missing argument reads as `undefined`). `fxArrayBuffer` copies `data.len()` bytes from
     // the live `data` buffer (contract 5).
     guard_ffi(|| unsafe {
         let input = arg_str(the, 0);
@@ -1074,11 +1127,12 @@ pub unsafe extern "C" fn host_base64_decode(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_base64_encode(the: *mut XsMachine) {
-    // SAFETY: host-callback contract; argument 0 (argc unchecked) is copied
+    // SAFETY: host-callback contract; argument 0 (`undefined` if missing) is copied
     // out by `read_typed_array_bytes`, and `fxString` copies the
     // NUL-terminated `c_str`, which outlives the call.
     guard_ffi(|| unsafe {
-        let slot = (*the).frame.sub(1);
+        let mut slot_absent = XsSlot::default();
+        let slot = arg_slot(the, 0, &mut slot_absent);
         if let Some(buf) = read_typed_array_bytes(the, slot) {
             use base64::Engine as _;
             let encoded = base64::engine::general_purpose::STANDARD.encode(&buf);
@@ -1100,11 +1154,12 @@ pub unsafe extern "C" fn host_base64_encode(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_decode_utf8(the: *mut XsMachine) {
-    // SAFETY: host-callback contract; argument 0 (argc unchecked) is copied
+    // SAFETY: host-callback contract; argument 0 (`undefined` if missing) is copied
     // out by `read_typed_array_bytes`; the result goes through
     // `set_result_string`.
     guard_ffi(|| unsafe {
-        let slot = (*the).frame.sub(1);
+        let mut slot_absent = XsSlot::default();
+        let slot = arg_slot(the, 0, &mut slot_absent);
         if let Some(buf) = read_typed_array_bytes(the, slot) {
             match std::str::from_utf8(&buf) {
                 Ok(s) => {
@@ -1132,8 +1187,8 @@ pub unsafe extern "C" fn host_decode_utf8(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_encode_utf8(the: *mut XsMachine) {
-    // SAFETY: host-callback contract; argument 0 via `arg_str` (UNVERIFIED
-    // there: argc unchecked). `fxArrayBuffer` copies `len` bytes from `data`,
+    // SAFETY: host-callback contract; argument 0 via `arg_str` (a
+    // missing argument reads as `undefined`). `fxArrayBuffer` copies `len` bytes from `data`,
     // which holds exactly `len` bytes and outlives the call (contract 5).
     guard_ffi(|| unsafe {
         let s = arg_str(the, 0);
@@ -1189,7 +1244,7 @@ fn url_error_json(message: &str) -> String {
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_url_parse(the: *mut XsMachine) {
     // SAFETY: host-callback contract; arguments 0 and 1 via `arg_str`
-    // (UNVERIFIED there: argc unchecked), result via `set_result_string`.
+    // (a missing argument reads as `undefined`), result via `set_result_string`.
     guard_ffi(|| unsafe {
         let href = arg_str(the, 0);
         let base = arg_str(the, 1);
@@ -1218,7 +1273,7 @@ pub unsafe extern "C" fn host_url_parse(the: *mut XsMachine) {
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_url_set(the: *mut XsMachine) {
     // SAFETY: host-callback contract; arguments 0-2 via `arg_str`
-    // (UNVERIFIED there: argc unchecked), result via `set_result_string`.
+    // (a missing argument reads as `undefined`), result via `set_result_string`.
     guard_ffi(|| unsafe {
         let href = arg_str(the, 0);
         let field = arg_str(the, 1);
@@ -1268,8 +1323,8 @@ pub unsafe extern "C" fn host_url_set(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_form_urlencoded_decode(the: *mut XsMachine) {
-    // SAFETY: host-callback contract; argument 0 via `arg_str` (UNVERIFIED
-    // there: argc unchecked), result via `set_result_string`.
+    // SAFETY: host-callback contract; argument 0 via `arg_str` (a
+    // missing argument reads as `undefined`), result via `set_result_string`.
     guard_ffi(|| unsafe {
         let input = arg_str(the, 0);
         let pairs: Vec<(String, String)> = url::form_urlencoded::parse(input.as_bytes())
@@ -1289,8 +1344,8 @@ pub unsafe extern "C" fn host_form_urlencoded_decode(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_form_urlencoded_encode(the: *mut XsMachine) {
-    // SAFETY: host-callback contract; argument 0 via `arg_str` (UNVERIFIED
-    // there: argc unchecked), result via `set_result_string`.
+    // SAFETY: host-callback contract; argument 0 via `arg_str` (a
+    // missing argument reads as `undefined`), result via `set_result_string`.
     guard_ffi(|| unsafe {
         let input = arg_str(the, 0);
         let pairs: Vec<(String, String)> = serde_json::from_str(&input).unwrap_or_default();
