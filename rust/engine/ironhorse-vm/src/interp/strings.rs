@@ -127,7 +127,12 @@ impl Interp {
     /// string/boolean/null/undefined is an interned or identity no-op with
     /// no allocation), and `fxConcatString` allocates the joined chunk
     /// `fxNewChunk(aSize + bSize + 1)`. The result is a new heap String.
+    ///
+    /// Two String operands take [`Self::concat_string_payloads`] instead.
     pub(super) fn concat_add(&mut self, a: Slot, b: Slot) {
+        if self.concat_string_payloads(a, b) {
+            return;
+        }
         let ua = self.to_string_units_metered(a);
         let ub = self.to_string_units_metered(b);
         // fxConcatString: one fxNewChunk over the joined code units. Metered by
@@ -139,6 +144,41 @@ impl Interp {
         joined.extend_from_slice(&ub);
         let off = self.chunks.alloc(&units_to_be16(&joined));
         self.push(Slot::of(Kind::String, Payload::String(off)));
+    }
+
+    /// String `+` of two String operands, joined on their stored UTF-16BE
+    /// payloads; `false`, with nothing done, for any other operand pair.
+    ///
+    /// `ToString` is the identity on a String, and decoding each payload to
+    /// code units and re-encoding the joined units (the general path in
+    /// [`Self::concat_add`]) reproduces the two payloads byte for byte, so the
+    /// chunk, the charge and the result are the same. That includes a lone
+    /// high surrogate ending one operand and a lone low surrogate starting the
+    /// other: UTF-16 storage keeps them as the two adjacent code units the
+    /// general path writes, which is the pair.
+    pub(super) fn concat_string_payloads(&mut self, a: Slot, b: Slot) -> bool {
+        let (Payload::String(x), Payload::String(y)) = (a.value, b.value) else {
+            return false;
+        };
+        let (x_len, y_len) = (self.chunks.len_of(x), self.chunks.len_of(y));
+        // An odd payload has no whole last code unit; the general decode drops
+        // that byte, so leave such a payload to it.
+        if x_len % 2 != 0 || y_len % 2 != 0 {
+            return false;
+        }
+        // Same order as the general path: read both operands, charge the
+        // joined length, then allocate.
+        let len = x_len + y_len;
+        let mut joined = Vec::new();
+        if joined.try_reserve_exact(len).is_err() {
+            crate::value::host_allocation_failed();
+        }
+        joined.extend_from_slice(&self.str_content(x));
+        joined.extend_from_slice(&self.str_content(y));
+        self.meter.tick_string((len / 2) as u64);
+        let off = self.chunks.alloc(&joined);
+        self.push(Slot::of(Kind::String, Payload::String(off)));
+        true
     }
 
     /// `ToString` of a primitive to its content bytes (no NUL), metering
