@@ -975,7 +975,8 @@ fn check_side_storage_seams(bodies: &SideStorageBodies, bulk: &str) {
     // The tables stay private, so every mutation goes through the counted
     // methods above.
     for field in [
-        "items: std::collections::BTreeMap",
+        "items: ArrayItems",
+        "repr: ItemsRepr",
         "entries: Vec<CollEntry>",
     ] {
         assert!(bulk.contains(&format!("    {field}")), "{field} moved");
@@ -1026,7 +1027,8 @@ fn side_storage_seams_cannot_be_removed() {
         );
     }
     for field in [
-        "items: std::collections::BTreeMap",
+        "items: ArrayItems",
+        "repr: ItemsRepr",
         "entries: Vec<CollEntry>",
     ] {
         let exposed = bulk.replacen(

@@ -234,8 +234,8 @@ impl Interp {
             indices.extend(
                 self.arrays[&inst]
                     .items()
-                    .range(new_len..)
-                    .map(|(&index, _)| (index, None)),
+                    .iter_from(new_len)
+                    .map(|(index, _)| (index, None)),
             );
             indices.sort_unstable_by_key(|(index, _)| std::cmp::Reverse(*index));
             for (index, ordinary_id) in indices {
@@ -718,7 +718,7 @@ impl Interp {
     pub(in crate::interp) fn index_prop_indices(&self, inst: crate::value::SlotIndex) -> Vec<u32> {
         self.index_props
             .get(&inst)
-            .map(|props| props.items().keys().copied().collect())
+            .map(|props| props.items().keys().collect())
             .unwrap_or_default()
     }
 

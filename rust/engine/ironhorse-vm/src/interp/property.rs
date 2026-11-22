@@ -2203,7 +2203,7 @@ impl Interp {
             let is_arguments = self.arguments_objects.contains(&inst);
             let count = self.arrays[&inst].items().len();
             let buffer = self.reserve_work_scratch(count)?;
-            let mut idxs = Self::fill_scratch(buffer, self.arrays[&inst].items().keys().copied());
+            let mut idxs = Self::fill_scratch(buffer, self.arrays[&inst].items().keys());
             let ordinary_ids = self.ordered_own_key_ids(inst);
             self.admit_scratch::<u32>(idxs.len() + ordinary_ids.len())?;
             idxs.try_reserve(ordinary_ids.len())

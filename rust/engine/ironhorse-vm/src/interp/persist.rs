@@ -435,7 +435,7 @@ impl Interp {
                 (
                     owner.0,
                     a.length,
-                    a.items().iter().map(|(i, s)| (*i, *s)).collect(),
+                    a.items().iter().map(|(i, s)| (i, *s)).collect(),
                 )
             })
             .collect();
@@ -4315,7 +4315,7 @@ impl Interp {
                     props
                         .items()
                         .iter()
-                        .map(|(index, value)| (*index, *value))
+                        .map(|(index, value)| (index, *value))
                         .collect::<Vec<(u32, Slot)>>(),
                 )
             })
