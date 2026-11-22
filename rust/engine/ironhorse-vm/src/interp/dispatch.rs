@@ -3915,16 +3915,6 @@ impl Interp {
         }
     }
 
-    /// [`Self::exec_increment`] for the fast-path equivalence tests: the
-    /// next program counter, or `None` when the arm exits the loop.
-    #[cfg(test)]
-    pub(in crate::interp) fn exec_increment_next(&mut self, op: Opcode) -> Option<usize> {
-        match self.exec_increment(&[], 0, 0, op, 1) {
-            Flow::Next(pc) => Some(pc),
-            Flow::Exit(_) => None,
-        }
-    }
-
     /// The dispatch loop's `INCREMENT` arm, which also runs `DECREMENT`.
     #[inline(never)]
     fn exec_increment(
@@ -3935,36 +3925,39 @@ impl Interp {
         op: Opcode,
         size: i8,
     ) -> Flow {
-        use Opcode::*;
-        let inc = op == XS_CODE_INCREMENT;
-        let current = dispatch_result_flow!(self.peek_checked(), self, return_depth, code);
+        let inc = op == Opcode::XS_CODE_INCREMENT;
+        dispatch_result_flow!(self.increment_generic(code, inc), self, return_depth, code);
+        pc += size as usize;
+        Flow::Next(pc)
+    }
+
+    /// The generic body of [`Self::exec_increment`]: `ToNumeric` on the
+    /// stack top, then the step, with XS's int-boundary promotion. Split
+    /// out so the inline Integer half can be checked against it.
+    pub(in crate::interp) fn increment_generic(
+        &mut self,
+        code: &[u8],
+        inc: bool,
+    ) -> Result<(), Step> {
+        let current = self.peek_checked()?;
         let numeric = match current.kind {
             Kind::Integer | Kind::Number | Kind::BigInt => current,
-            _ => dispatch_result_flow!(
-                self.to_number_value(code, current),
-                self,
-                return_depth,
-                code
-            ),
+            _ => self.to_number_value(code, current)?,
         };
         if let Payload::BigInt(off) = numeric.value {
             let result = self.bigint_update(off, inc);
             if let Some(top) = self.stack.last_mut() {
                 *top = result;
             }
-            pc += size as usize;
-            return Flow::Next(pc);
+            return Ok(());
         }
         if let Some(top) = self.stack.last_mut() {
             *top = numeric;
         }
-        let top = match self.stack.last_mut() {
-            Some(s) => s,
-            None => {
-                return Flow::Exit(Step::Host(Halt::EngineInvariant(
-                    "increment:stack-underflow",
-                )))
-            }
+        let Some(top) = self.stack.last_mut() else {
+            return Err(Step::Host(Halt::EngineInvariant(
+                "increment:stack-underflow",
+            )));
         };
         match (top.kind, top.value) {
             (Kind::Integer, Payload::Integer(v)) => {
@@ -3983,13 +3976,12 @@ impl Interp {
             // BigInt (handled before); anything else is the
             // engine's own coercion result being malformed.
             _ => {
-                return Flow::Exit(Step::Host(Halt::EngineInvariant(
+                return Err(Step::Host(Halt::EngineInvariant(
                     "increment:non-numeric-result",
                 )))
             }
         }
-        pc += size as usize;
-        Flow::Next(pc)
+        Ok(())
     }
 
     // `exponentiation` (XS_CODE_EXPONENTIATION, xsRun.c:3574):

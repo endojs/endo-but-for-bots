@@ -1,5 +1,5 @@
 //! The inline Integer half of `INCREMENT`/`DECREMENT` must leave the machine
-//! exactly as `exec_increment` does whenever it takes the step, and must hand
+//! exactly as `exec_increment`'s generic body does whenever it takes the step, and must hand
 //! every other operand (the promotion boundaries, Numbers, BigInts, values
 //! that need `ToNumeric`) to it untouched.
 use super::*;
@@ -70,9 +70,8 @@ fn integer_step_matches_exec_increment() {
                 assert!(!integer_inside, "{op:?} {operand:?} should step inline");
                 continue;
             }
-            assert_eq!(
-                generic.exec_increment_next(op),
-                Some(1),
+            assert!(
+                generic.increment_generic(&[], inc).is_ok(),
                 "{op:?} {operand:?}"
             );
             assert_eq!(fast.stack, generic.stack, "{op:?} {operand:?}");
