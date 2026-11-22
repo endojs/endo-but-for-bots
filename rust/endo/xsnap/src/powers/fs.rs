@@ -54,28 +54,29 @@ unsafe fn get_powers(the: *mut XsMachine) -> &'static HostPowers {
 /// arbitrary strings to hash, etc.) we must read the raw bytes and
 /// pass them through unmodified rather than UTF-8-validating them.
 ///
+/// The bytes are copied out of the XS heap. `fxToString` returns a pointer
+/// into a chunk that XS's compacting collector moves (or reclaims) on the
+/// next allocation, and callers go on to coerce further arguments, whose
+/// `toString` can allocate, before they use the data.
+///
 /// # Safety
 /// `the` must be valid, index must be in range, and the slot must be
 /// coercible to a string.
-unsafe fn arg_bytes(the: *mut XsMachine, index: usize) -> &'static [u8] {
-    // SAFETY: UNVERIFIED, twice. Argument `index` is read without checking
-    // argc (as in `arg_str`). And the returned slice borrows the XS chunk
-    // heap with a `'static` lifetime, while host-callback contract item 4
-    // makes it valid only until the next XS call that can allocate: XS's
-    // collector compacts chunks, so a later coercion of another argument
-    // (one with a `toString` that allocates) can move or free these bytes
-    // while the caller still holds the slice. `host_write_file_text` and
-    // `host_append_file` do exactly that. What does hold: `fxToString`
-    // returns a NUL-terminated string, so the scan stays inside it.
+unsafe fn arg_bytes(the: *mut XsMachine, index: usize) -> Vec<u8> {
+    // SAFETY: argument `index` is read without checking argc (UNVERIFIED, as
+    // in `arg_str`). Otherwise: `fxToString` returns a NUL-terminated string
+    // valid until the next XS call that can allocate (host-callback contract
+    // 4); `abort_if_ffi_panicked` calls no XS, and `CStr::from_ptr` scans to
+    // that NUL and `to_vec` copies the bytes before anything else touches the
+    // machine, so nothing borrowed from the XS heap escapes this block.
     unsafe {
         let slot = (*the).frame.sub(1 + index);
-        let ptr = fxToString(the, slot) as *const u8;
+        let ptr = fxToString(the, slot);
         abort_if_ffi_panicked();
-        let mut len = 0usize;
-        while *ptr.add(len) != 0 {
-            len += 1;
+        if ptr.is_null() {
+            return Vec::new();
         }
-        std::slice::from_raw_parts(ptr, len)
+        std::ffi::CStr::from_ptr(ptr).to_bytes().to_vec()
     }
 }
 
@@ -605,12 +606,11 @@ pub unsafe extern "C" fn host_maybe_read_file_bytes(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_write_file_text(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). UNVERIFIED — `data`
-    // borrows argument 2's string in the XS heap (`arg_bytes`), and
-    // `arg_dir_token` / `resolve_dir` then coerce argument 0, which can run a
-    // script `toString` that allocates and lets the GC move or free those
-    // bytes before `data` is written to the file. Arguments 0-2 are also read
-    // without an argc check.
+    // SAFETY: host-callback contract (`worker_io`). Arguments 0-2 are read
+    // without an argc check (UNVERIFIED, as in `arg_str`). `data` is an owned
+    // copy of argument 2 (`arg_bytes`), so coercing argument 0 afterwards,
+    // which can run a script `toString` that allocates and lets the GC move
+    // the original string, cannot change what is written.
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
         // Read the file contents as raw bytes (may be non-UTF-8 CESU-8).
@@ -618,7 +618,7 @@ pub unsafe extern "C" fn host_write_file_text(the: *mut XsMachine) {
 
         if arg_dir_token(the, 0).as_deref() == Some("root") {
             let abs = root_to_abs(&path);
-            if let Err(e) = std::fs::write(&abs, data) {
+            if let Err(e) = std::fs::write(&abs, &data) {
                 set_result_string(the, &format!("Error: {}", e));
             }
             return;
@@ -626,7 +626,7 @@ pub unsafe extern "C" fn host_write_file_text(the: *mut XsMachine) {
 
         match resolve_dir(the, 0) {
             Ok(dir) => {
-                if let Err(e) = dir.write(path, data) {
+                if let Err(e) = dir.write(path, &data) {
                     set_result_string(the, &format!("Error: {}", e));
                 }
             }
@@ -644,12 +644,11 @@ pub unsafe extern "C" fn host_write_file_text(the: *mut XsMachine) {
 /// An XS host callback: only XS may call it, under the host-callback
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_append_file(the: *mut XsMachine) {
-    // SAFETY: host-callback contract (`worker_io`). UNVERIFIED — `data`
-    // borrows argument 2's string in the XS heap (`arg_bytes`), and
-    // `arg_dir_token` / `resolve_dir` then coerce argument 0, which can run a
-    // script `toString` that allocates and lets the GC move or free those
-    // bytes before `data` is written to the file. Arguments 0-2 are also read
-    // without an argc check.
+    // SAFETY: host-callback contract (`worker_io`). Arguments 0-2 are read
+    // without an argc check (UNVERIFIED, as in `arg_str`). `data` is an owned
+    // copy of argument 2 (`arg_bytes`), so coercing argument 0 afterwards,
+    // which can run a script `toString` that allocates and lets the GC move
+    // the original string, cannot change what is written.
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
         // Read the contents as raw bytes (may be non-UTF-8 CESU-8), matching
@@ -662,7 +661,7 @@ pub unsafe extern "C" fn host_append_file(the: *mut XsMachine) {
                 .append(true)
                 .create(true)
                 .open(&abs)
-                .and_then(|mut file| file.write_all(data));
+                .and_then(|mut file| file.write_all(&data));
             if let Err(e) = result {
                 set_result_string(the, &format!("Error: {}", e));
             }
@@ -676,7 +675,7 @@ pub unsafe extern "C" fn host_append_file(the: *mut XsMachine) {
                         path,
                         cap_std::fs::OpenOptions::new().append(true).create(true),
                     )
-                    .and_then(|mut file| file.write_all(data));
+                    .and_then(|mut file| file.write_all(&data));
                 if let Err(e) = result {
                     set_result_string(the, &format!("Error: {}", e));
                 }
@@ -1301,6 +1300,55 @@ mod tests {
                 assert!(crate::powers::crypto::has_open_handles(), "{action}");
             }).join().unwrap();
         }
+    }
+
+    /// `writeFileText` and `appendFile` read their data argument (2) before
+    /// coercing the directory argument (0). A directory argument whose
+    /// `toString` allocates enough to force a compacting collection moves
+    /// the data string's chunk, so a borrowed (rather than copied) data
+    /// slice would write whatever has since been allocated at its old
+    /// address.
+    #[test]
+    fn file_data_survives_a_collection_while_coercing_the_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut powers = HostPowers::new();
+        powers.add_dir(
+            "test",
+            cap_std::fs::Dir::open_ambient_dir(temp.path(), cap_std::ambient_authority()).unwrap(),
+        );
+        let machine = crate::Machine::new(&crate::DEFAULT_CREATION, "gc-move").unwrap();
+        machine.register_powers(&mut powers);
+        // Garbage ahead of `data` in the chunk heap, so compaction slides
+        // `data` down; the churn in `toString` then reuses its old address.
+        machine
+            .eval(
+                "var junk = []; \
+                 for (var i = 0; i < 4000; i++) junk.push('junk' + i + '-------------------------'); \
+                 junk = null; \
+                 var data = ''; \
+                 for (var i = 0; i < 300; i++) data += 'payload' + i + ';'; \
+                 var expected = data; \
+                 var dir = { toString() { \
+                     var a = []; \
+                     for (var k = 0; k < 40000; k++) a.push('zz' + k + 'zzzzzzzzzzzzzzzzzzzzzzzz'); \
+                     return 'test'; \
+                 } }; \
+                 writeFileText(dir, 'written.txt', data); \
+                 appendFile(dir, 'appended.txt', data);",
+            )
+            .unwrap();
+        let expected = match machine.eval("expected").unwrap() {
+            crate::JsValue::String(s) => s,
+            _ => panic!("expected must be a string"),
+        };
+        assert_eq!(
+            std::fs::read(temp.path().join("written.txt")).unwrap(),
+            expected.as_bytes()
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("appended.txt")).unwrap(),
+            expected.as_bytes()
+        );
     }
 
     #[test]
