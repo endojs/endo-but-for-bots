@@ -2815,6 +2815,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironhorse-spec"
+version = "0.0.2"
+
+[[package]]
 name = "ironhorse-store-sqlite"
 version = "0.1.0"
 dependencies = [
@@ -2840,6 +2844,7 @@ dependencies = [
  "icu_segmenter",
  "ironhorse-meter",
  "ironhorse-regexp",
+ "ironhorse-spec",
  "ironhorse-text",
  "libm",
 ]
