@@ -25,6 +25,7 @@ def fingerprint(packages, dependencies):
     if {d.split()[0] for d in pending} != roots.keys():
         raise ValueError("VM manifest and lockfile ICU roots disagree")
     records = {}
+    edges = {}
     while pending:
         dependency = pending.pop()
         parts = dependency.split(" ", 2)
@@ -41,7 +42,21 @@ def fingerprint(packages, dependencies):
             raise ValueError(f"ICU profile requires checksummed registry sources: {key}")
         children = sorted(package.get("dependencies", []))
         records[key] = [*key, package["checksum"], children]
+        edges[key] = children
         pending.extend(children)
+    # Cargo qualifies an edge ("syn 2.0.117") only when the whole lockfile
+    # holds another version of that name, so an unrelated crate elsewhere in
+    # the lockfile would otherwise change the digest. Name an edge by its bare
+    # crate name when the ICU graph holds one version of it, and by name and
+    # version otherwise; the records already pin each version and checksum.
+    versions = {}
+    for name, version, _source in records:
+        versions.setdefault(name, set()).add(version)
+    for key, children in edges.items():
+        records[key][4] = sorted(
+            child.split(" ", 1)[0] if len(versions.get(child.split(" ", 1)[0], ())) == 1
+            else " ".join(child.split(" ", 2)[:2])
+            for child in children)
     canonical = json.dumps([roots, sorted(records.values())], sort_keys=True,
                            separators=(",", ":")).encode()
     return hashlib.sha256(canonical).hexdigest()

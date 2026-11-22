@@ -49,6 +49,19 @@ class ProfileTests(unittest.TestCase):
         packages.append({"name": "unrelated", "version": "1.0.0", "checksum": "0" * 64})
         self.assertEqual(profile.fingerprint(packages, self.dependencies), self.baseline)
 
+    def test_unrelated_second_version_does_not_change_identity(self):
+        # A second version of a crate the ICU graph uses, pulled in elsewhere,
+        # makes Cargo qualify every edge to it ("syn 2.0.117"); the root
+        # lockfile's zip and rusqlite upgrade did exactly that.
+        packages = copy.deepcopy(self.packages)
+        syn = next(p for p in packages if p["name"] == "syn")
+        for package in packages:
+            package["dependencies"] = [f"syn {syn['version']}" if d == "syn" else d
+                                       for d in package.get("dependencies", [])]
+        packages.append({"name": "syn", "version": "999.0.0", "checksum": "0" * 64,
+                         "source": syn.get("source", "")})
+        self.assertEqual(profile.fingerprint(packages, self.dependencies), self.baseline)
+
     def test_missing_data_dependency_is_rejected(self):
         packages = [p for p in self.packages if p["name"] != "icu_normalizer_data"]
         with self.assertRaisesRegex(ValueError, "Missing or ambiguous"):
