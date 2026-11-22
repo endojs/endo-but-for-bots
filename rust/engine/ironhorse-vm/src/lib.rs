@@ -28,6 +28,7 @@ mod intl_profile;
 mod math;
 pub use math::MATH_PROVIDER;
 mod bulk;
+mod exotic_bits;
 mod side_storage;
 mod side_tables;
 mod snapshot_dirty;

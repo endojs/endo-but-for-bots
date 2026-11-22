@@ -13,6 +13,18 @@ impl Interp {
     ) -> Result<Option<usize>, Step> {
         let obj = self.pop_checked()?;
         let v = match obj.value {
+            // Every guarded arm below that takes a `Kind::Reference` needs
+            // `inst` in one of the exotic side tables, so when its superset
+            // word is clear (`crate::exotic_bits`) each would decline and the
+            // read would reach the ordinary arm at the end; go there directly.
+            Payload::Reference(inst)
+                if obj.kind == Kind::Reference && self.outside_exotic_tables(inst) =>
+            {
+                match (self.get_property_in_place(code, inst, id, obj))? {
+                    GetInPlace::Value(value) => value,
+                    GetInPlace::Entered(body_start) => return Ok(Some(body_start)),
+                }
+            }
             Payload::Reference(inst)
                 if (obj.kind == Kind::Reference && self.arrays.contains_key(&inst))
                     && !self.arguments_objects.contains(&inst)

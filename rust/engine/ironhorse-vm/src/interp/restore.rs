@@ -128,6 +128,9 @@ impl RestoreSession {
                 reason: "layout migration exhausted name IDs",
             });
         }
+        // The rows set their exotic bits as they were inserted; drop the stale
+        // ones the boot image's own tables left behind.
+        self.interp.rebuild_exotic_bits();
         Ok(self.interp)
     }
 

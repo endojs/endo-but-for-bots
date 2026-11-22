@@ -1309,8 +1309,9 @@ fn every_serialized_slot_bearing_table_is_walked_or_names_its_reason() {
     // key; the row type after the map's first top-level comma is what a
     // row can point at. A non-map type is its own row type.
     let row_type = |ty: &str| -> String {
-        // `IntMap` is `crate::int_hash`'s `HashMap` with the integer-key hasher.
-        let Some((map, marker)) = ["HashMap<", "IntMap<"]
+        // `IntMap` is `crate::int_hash`'s `HashMap` with the integer-key hasher;
+        // `ExoticTable<K, V>` (`crate::exotic_bits`) wraps one.
+        let Some((map, marker)) = ["HashMap<", "IntMap<", "ExoticTable<"]
             .iter()
             .filter_map(|marker| ty.find(marker).map(|at| (at, marker.len())))
             .min()

@@ -3,6 +3,57 @@
 use super::{gc_tables, is_promise_resolving_guard, Interp, PromiseJob, ReactionKind};
 
 impl Interp {
+    /// Recompute the exotic-membership words (`crate::exotic_bits`) from the
+    /// exotic side tables, clearing the stale bits of removed keys and freed
+    /// slots. Derived, unmetered and unpersisted. Every table built over this
+    /// machine's words must be reasserted here; one left out makes the
+    /// rebuild keep the old words (and fails a debug assertion), never lose
+    /// a bit.
+    pub(crate) fn rebuild_exotic_bits(&mut self) {
+        let bits = self.snapshot_dirt.exotic_bits();
+        let mut rebuild = bits.rebuild();
+        self.arrays.reassert(&mut rebuild);
+        self.index_props.reassert(&mut rebuild);
+        self.wrapper_data.reassert(&mut rebuild);
+        self.temporal_instants.reassert(&mut rebuild);
+        self.temporal_durations.reassert(&mut rebuild);
+        self.temporal_plains.reassert(&mut rebuild);
+        self.temporal_zoneds.reassert(&mut rebuild);
+        self.disposable_stacks.reassert(&mut rebuild);
+        self.array_buffers.reassert(&mut rebuild);
+        self.typed_arrays.reassert(&mut rebuild);
+        self.data_views.reassert(&mut rebuild);
+        self.regexps.reassert(&mut rebuild);
+        self.locales.reassert(&mut rebuild);
+        self.collators.reassert(&mut rebuild);
+        self.functions.reassert(&mut rebuild);
+        self.proxies.reassert(&mut rebuild);
+        rebuild.finish();
+    }
+
+    /// Test hook: whether every key of every exotic side table has its bit
+    /// set in the machine's words (the superset invariant of
+    /// `crate::exotic_bits`).
+    #[doc(hidden)]
+    pub fn exotic_bits_cover_tables(&self) -> bool {
+        self.arrays.bits_cover_keys()
+            && self.index_props.bits_cover_keys()
+            && self.wrapper_data.bits_cover_keys()
+            && self.temporal_instants.bits_cover_keys()
+            && self.temporal_durations.bits_cover_keys()
+            && self.temporal_plains.bits_cover_keys()
+            && self.temporal_zoneds.bits_cover_keys()
+            && self.disposable_stacks.bits_cover_keys()
+            && self.array_buffers.bits_cover_keys()
+            && self.typed_arrays.bits_cover_keys()
+            && self.data_views.bits_cover_keys()
+            && self.regexps.bits_cover_keys()
+            && self.locales.bits_cover_keys()
+            && self.collators.bits_cover_keys()
+            && self.functions.bits_cover_keys()
+            && self.proxies.bits_cover_keys()
+    }
+
     fn admit_collection(&self) -> Result<(), crate::gc::GcAdmissionError> {
         if self.gc_failed {
             return Err(crate::gc::GcAdmissionError::PreviousCollectionFailed);
@@ -126,6 +177,7 @@ impl Interp {
         self.compact_reaction_arenas();
         // Dropped rows and pruned weak entries release their side storage.
         self.rederive_side_reserved();
+        self.rebuild_exotic_bits();
 
         self.gc_failed = false;
         Ok(stats)
@@ -351,6 +403,7 @@ impl Interp {
         self.compact_code_segments();
         self.compact_reaction_arenas();
         self.rederive_side_reserved();
+        self.rebuild_exotic_bits();
         self.gc_failed = false;
         Ok(freed.len() as u32)
     }

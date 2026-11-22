@@ -3,6 +3,9 @@
 //! `tests/teardown_allocation.rs` checks. This explicit list does not expose
 //! interpreter implementation modules.
 pub use crate::bulk::{array_item_conversion_work, force_sparse_array_items};
+/// Debug builds: switch the exotic-membership fast paths off on this thread.
+#[cfg(debug_assertions)]
+pub use crate::exotic_bits::set_disabled_for_tests as set_exotic_bits_disabled;
 pub use crate::interp::boundary::QUIESCENCE_SOURCE;
 pub use crate::interp::gc_tables::{
     BULK_EDGE_SOURCE, CHUNK_WALK_SOURCE, EPHEMERON_SOURCE, FULL_EDGE_SOURCE, FULL_SWEEP_SOURCE,

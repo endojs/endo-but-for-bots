@@ -3,6 +3,19 @@ use super::{fast_path_on, FAST_OWN_OVERWRITE, FAST_SET_ABSENT};
 use crate::interp::*;
 
 impl Interp {
+    /// Whether no exotic side table holds `inst`, by its superset word
+    /// (`crate::exotic_bits`): `true` proves that `arrays`, `index_props`,
+    /// `wrapper_data`, the four Temporal tables, `disposable_stacks`,
+    /// `array_buffers`, `typed_arrays`, `data_views`, `regexps`, `locales`,
+    /// `collators`, `functions` and `proxies` would each answer "absent", so a
+    /// caller may skip those probes; `false` proves nothing and the caller
+    /// probes as it always did. Every probe skipped is a pure read that would
+    /// have missed, so skipping is unobservable.
+    #[inline]
+    pub(in crate::interp) fn outside_exotic_tables(&self, inst: crate::value::SlotIndex) -> bool {
+        crate::exotic_bits::enabled() && self.snapshot_dirt.exotic().word(inst) == 0
+    }
+
     pub(in crate::interp) fn new_object(&mut self) -> crate::value::SlotIndex {
         self.meter.tick_builtin();
         self.meter.tick_slot_alloc();
@@ -151,7 +164,9 @@ impl Interp {
             // store instead of the named chain, and most callers arrive here
             // having interned its name (`getOwnPropertyDescriptor(o, '0')`),
             // so the two storages are bridged here rather than at every
-            // caller.
+            // caller. Both are side tables, so an instance outside every
+            // exotic table has neither.
+            None if self.outside_exotic_tables(inst) => return None,
             None => {
                 return self
                     .index_prop_descriptor_by_id(inst, id)
@@ -674,7 +689,9 @@ impl Interp {
         receiver: Slot,
     ) -> Result<GetInPlace, Step> {
         // A read `mop_get` meters or forwards apart takes `mop_get`.
-        if self.array_iterator_proxy_get_context.is_some() || self.proxies.contains_key(&inst) {
+        if self.array_iterator_proxy_get_context.is_some()
+            || (!self.outside_exotic_tables(inst) && self.proxies.contains_key(&inst))
+        {
             return self
                 .mop_get(code, inst, id, receiver)
                 .map(GetInPlace::Value);
@@ -700,9 +717,14 @@ impl Interp {
         // and `ordinary_get_own_descriptor` start from (property lookups are
         // pure reads, so asking once is the same answer).
         let mut found = self.find_property(inst, id);
+        // Whether `current` is outside every exotic side table, so that its
+        // exotic own surface, index store and synthesized function properties
+        // are all absent and their probes can be skipped. Only read while
+        // `found` is `None` (an own slot ends the walk at once).
+        let mut plain = found.is_none() && self.outside_exotic_tables(inst);
         // `mop_get_with_proxy_metering_inner`'s exotic own surface, which it
         // reads with no metering flags for an id key.
-        if found.is_none() {
+        if found.is_none() && !plain {
             if let Some(&typed_array) = self.typed_arrays.get(&inst) {
                 if let Some(index) = self.ta_numeric_index_at(id, 0) {
                     return Ok(GetInPlace::Value(
@@ -742,9 +764,12 @@ impl Interp {
             }
             // No ordinary slot: the descriptor's remaining sources, the index
             // store and a function's synthesized `length`/`name`.
-            if let Some(descriptor) = self
-                .index_prop_descriptor_by_id(current, id)
-                .or_else(|| self.function_meta_own_descriptor(current, id))
+            if let Some(descriptor) = (!plain)
+                .then(|| {
+                    self.index_prop_descriptor_by_id(current, id)
+                        .or_else(|| self.function_meta_own_descriptor(current, id))
+                })
+                .flatten()
             {
                 if descriptor.is_accessor() {
                     let getter = descriptor.get.unwrap_or_else(Slot::undefined);
@@ -761,13 +786,14 @@ impl Interp {
             if parent.is_null() {
                 return Ok(GetInPlace::Value(Slot::undefined()));
             }
-            if self.proxies.contains_key(&parent) {
+            plain = self.outside_exotic_tables(parent);
+            if !plain && self.proxies.contains_key(&parent) {
                 return self
                     .mop_get(code, parent, id, receiver)
                     .map(GetInPlace::Value);
             }
             found = self.find_property(parent, id);
-            if found.is_none() {
+            if found.is_none() && !plain {
                 if let Some(&typed_array) = self.typed_arrays.get(&parent) {
                     if let Some(index) = self.ta_numeric_index_at(id, 0) {
                         return Ok(GetInPlace::Value(
@@ -844,9 +870,13 @@ impl Interp {
         let mut current = inst;
         let mut absent_on = None;
         loop {
-            let own = self
-                .ordinary_get_own_descriptor(current, id)
-                .or_else(|| self.exotic_own_descriptor(current, id));
+            let own = self.ordinary_get_own_descriptor(current, id).or_else(|| {
+                if self.outside_exotic_tables(current) {
+                    None
+                } else {
+                    self.exotic_own_descriptor(current, id)
+                }
+            });
             if own.is_none() && current == inst {
                 absent_on = Some(inst);
             }
@@ -880,16 +910,18 @@ impl Interp {
             if parent.is_null() {
                 break;
             }
-            let typed_array_element = self.typed_arrays.contains_key(&parent)
-                && !self.is_symbol_key_id(id)
-                && self
-                    .scalar_key_text(id)
-                    .and_then(|name| canonical_numeric_index_string(&name))
-                    .is_some();
-            if self.proxies.contains_key(&parent) || typed_array_element {
-                return self
-                    .mop_set(code, parent, id, value, receiver)
-                    .map(SetInPlace::Done);
+            if !self.outside_exotic_tables(parent) {
+                let typed_array_element = self.typed_arrays.contains_key(&parent)
+                    && !self.is_symbol_key_id(id)
+                    && self
+                        .scalar_key_text(id)
+                        .and_then(|name| canonical_numeric_index_string(&name))
+                        .is_some();
+                if self.proxies.contains_key(&parent) || typed_array_element {
+                    return self
+                        .mop_set(code, parent, id, value, receiver)
+                        .map(SetInPlace::Done);
+                }
             }
             current = parent;
         }
@@ -931,9 +963,10 @@ impl Interp {
         };
         if self.slots.get(property).flag & (XS_GETTER_FLAG | XS_SETTER_FLAG | XS_DONT_SET_FLAG) != 0
             || self.native_depth + LIGHT_FRAME_COST > NATIVE_DEPTH_LIMIT
-            || self.proxies.contains_key(&inst)
-            || self.arrays.contains_key(&inst)
-            || self.typed_arrays.contains_key(&inst)
+            || (!self.outside_exotic_tables(inst)
+                && (self.proxies.contains_key(&inst)
+                    || self.arrays.contains_key(&inst)
+                    || self.typed_arrays.contains_key(&inst)))
         {
             return false;
         }

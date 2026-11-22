@@ -579,7 +579,7 @@ pub struct Interp {
     /// always the realm global). A direct eval retains the caller's published
     /// environment chain and `this`.
     eval_direct: bool,
-    #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::Functions.mask() | SnapshotSection::IntlBoundFunctions.mask() | SnapshotSection::Promises.mask()))]
+    #[boot_new(crate::exotic_bits::ExoticTable::new(snapshot_dirt.clone(), SnapshotSection::Functions.mask() | SnapshotSection::IntlBoundFunctions.mask() | SnapshotSection::Promises.mask(), crate::exotic_bits::ExoticKind::Functions))]
     #[gc_root(lazy_getters)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -592,7 +592,7 @@ pub struct Interp {
     /// Side table of user-function metadata (body range + captured
     /// closures), keyed by the function instance's slot index. See
     /// [`FuncInfo`].
-    functions: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, FuncInfo>>,
+    functions: crate::exotic_bits::ExoticTable<crate::value::SlotIndex, FuncInfo>,
     #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::Functions.mask()))]
     #[gc_root(none)]
     #[quiescent(retained)]
@@ -609,7 +609,7 @@ pub struct Interp {
     /// the `run` dispatch trampolines into the target (XS's
     /// `fx_Function_prototype_bound`).
     bound_functions: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, BoundData>>,
-    #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::Proxies.mask()))]
+    #[boot_new(crate::exotic_bits::ExoticTable::new(snapshot_dirt.clone(), SnapshotSection::Proxies.mask(), crate::exotic_bits::ExoticKind::Proxies))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(proxies)]
@@ -623,7 +623,7 @@ pub struct Interp {
     /// keyed by the proxy instance slot (see [`ProxyData`]). Membership here is
     /// what makes an instance a proxy: [`Interp::is_ordinary_object`] excludes
     /// it and every internal-method dispatch site routes it to the trap logic.
-    proxies: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, ProxyData>>,
+    proxies: crate::exotic_bits::ExoticTable<crate::value::SlotIndex, ProxyData>,
     #[boot_new(None)]
     #[gc_root(none)]
     #[quiescent(none)]
@@ -989,7 +989,7 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     number_format_proto: crate::value::SlotIndex,
-    #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::Intl.mask()))]
+    #[boot_new(crate::exotic_bits::ExoticTable::new(snapshot_dirt.clone(), SnapshotSection::Intl.mask(), crate::exotic_bits::ExoticKind::Locales))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -999,8 +999,8 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(IntlRecords, 30, 31, Serialized, "locales/collators/…/date_time_formats")]
-    locales: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, LocaleData>>,
-    #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::Intl.mask()))]
+    locales: crate::exotic_bits::ExoticTable<crate::value::SlotIndex, LocaleData>,
+    #[boot_new(crate::exotic_bits::ExoticTable::new(snapshot_dirt.clone(), SnapshotSection::Intl.mask(), crate::exotic_bits::ExoticKind::Collators))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1010,7 +1010,7 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(none)]
-    collators: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, CollatorData>>,
+    collators: crate::exotic_bits::ExoticTable<crate::value::SlotIndex, CollatorData>,
     #[boot_new(Tracked::new(
         Default::default(),
         snapshot_dirt.clone(),
@@ -1185,7 +1185,7 @@ pub struct Interp {
     #[snapshot_table(none)]
     /// The `Temporal.Now` namespace object (a boot object, not a constructor).
     temporal_now_object: crate::value::SlotIndex,
-    #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::Temporal.mask()))]
+    #[boot_new(crate::exotic_bits::ExoticTable::new(snapshot_dirt.clone(), SnapshotSection::Temporal.mask(), crate::exotic_bits::ExoticKind::TemporalInstants))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1195,8 +1195,8 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(TemporalRecords, 26, 26, Serialized, "temporal_instants/temporal_durations/temporal_plains/temporal_zoneds")]
-    temporal_instants: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, TemporalInstantRecord>>,
-    #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::Temporal.mask()))]
+    temporal_instants: crate::exotic_bits::ExoticTable<crate::value::SlotIndex, TemporalInstantRecord>,
+    #[boot_new(crate::exotic_bits::ExoticTable::new(snapshot_dirt.clone(), SnapshotSection::Temporal.mask(), crate::exotic_bits::ExoticKind::TemporalDurations))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1206,8 +1206,8 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(none)]
-    temporal_durations: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, TemporalDurationRecord>>,
-    #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::Temporal.mask()))]
+    temporal_durations: crate::exotic_bits::ExoticTable<crate::value::SlotIndex, TemporalDurationRecord>,
+    #[boot_new(crate::exotic_bits::ExoticTable::new(snapshot_dirt.clone(), SnapshotSection::Temporal.mask(), crate::exotic_bits::ExoticKind::TemporalPlains))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1217,8 +1217,8 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(none)]
-    temporal_plains: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, TemporalPlainRecord>>,
-    #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::Temporal.mask()))]
+    temporal_plains: crate::exotic_bits::ExoticTable<crate::value::SlotIndex, TemporalPlainRecord>,
+    #[boot_new(crate::exotic_bits::ExoticTable::new(snapshot_dirt.clone(), SnapshotSection::Temporal.mask(), crate::exotic_bits::ExoticKind::TemporalZoneds))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1228,7 +1228,7 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(none)]
-    temporal_zoneds: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, TemporalZonedRecord>>,
+    temporal_zoneds: crate::exotic_bits::ExoticTable<crate::value::SlotIndex, TemporalZonedRecord>,
     #[boot_new(Tracked::new(
         Default::default(),
         snapshot_dirt.clone(),
@@ -1683,7 +1683,7 @@ pub struct Interp {
     /// Name/message remain serialized for format compatibility. Host rendering
     /// and guest Error.prototype.toString both read live properties instead.
     error_data: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, ErrorInfo>>,
-    #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::Wrappers.mask()))]
+    #[boot_new(crate::exotic_bits::ExoticTable::new(snapshot_dirt.clone(), SnapshotSection::Wrappers.mask(), crate::exotic_bits::ExoticKind::WrapperData))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(values)]
@@ -1698,7 +1698,7 @@ pub struct Interp {
     /// (XS's `[[BooleanData]]`/`[[NumberData]]`/`[[StringData]]`). A wrapper's
     /// completion/`String()` stringifies as its wrapped primitive, so
     /// [`Self::render`] reads it here.
-    wrapper_data: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, Slot>>,
+    wrapper_data: crate::exotic_bits::ExoticTable<crate::value::SlotIndex, Slot>,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[gc_root(index)]
     #[quiescent(retained)]
@@ -1713,7 +1713,7 @@ pub struct Interp {
     /// and `new Array` instance chains to it, so `arr.push`/`arr.join`/… (the
     /// native methods bound on it) resolve up the prototype chain.
     array_proto: crate::value::SlotIndex,
-    #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::Arrays.mask()))]
+    #[boot_new(crate::exotic_bits::ExoticTable::new(snapshot_dirt.clone(), SnapshotSection::Arrays.mask(), crate::exotic_bits::ExoticKind::Arrays))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(indexed)]
@@ -1731,12 +1731,8 @@ pub struct Interp {
     /// [`Self::error_data`]/[`Self::wrapper_data`]. Full GC traces item values
     /// from a live owner. Counted page edges retain them during partial GC;
     /// both sweep paths release those counts when their owner dies.
-    arrays: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, ArrayData>>,
-    #[boot_new(Tracked::new(
-        Default::default(),
-        snapshot_dirt.clone(),
-        SnapshotSection::IndexProperties.mask(),
-    ))]
+    arrays: crate::exotic_bits::ExoticTable<crate::value::SlotIndex, ArrayData>,
+    #[boot_new(crate::exotic_bits::ExoticTable::new(snapshot_dirt.clone(), SnapshotSection::IndexProperties.mask(), crate::exotic_bits::ExoticKind::IndexProps))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(indexed)]
@@ -1768,7 +1764,7 @@ pub struct Interp {
     /// side-referenced (and therefore GC-live) exactly as an array's are; the
     /// `length` field is unused here and stays 0, because an ordinary object
     /// has no array `length` semantics.
-    index_props: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, ArrayData>>,
+    index_props: crate::exotic_bits::ExoticTable<crate::value::SlotIndex, ArrayData>,
     #[boot_new(Tracked::new(
         Default::default(),
         snapshot_dirt.clone(),
@@ -1793,7 +1789,7 @@ pub struct Interp {
     /// two without changing the element storage (the `.length`/indexed reads
     /// stay the array side table).
     arguments_objects: Tracked<crate::int_hash::IntSet<crate::value::SlotIndex>>,
-    #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::DisposableStacks.mask()))]
+    #[boot_new(crate::exotic_bits::ExoticTable::new(snapshot_dirt.clone(), SnapshotSection::DisposableStacks.mask(), crate::exotic_bits::ExoticKind::DisposableStacks))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(disposable)]
@@ -1806,7 +1802,7 @@ pub struct Interp {
     /// Explicit-resource-management internal slots. Records are registered in
     /// source order and consumed from the tail, implementing the proposal's
     /// mandatory LIFO cleanup order.
-    disposable_stacks: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, DisposableStackData>>,
+    disposable_stacks: crate::exotic_bits::ExoticTable<crate::value::SlotIndex, DisposableStackData>,
     #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::Collections.mask() | SnapshotSection::Iterators.mask()))]
     #[gc_root(none)]
     #[quiescent(retained)]
@@ -1990,7 +1986,7 @@ pub struct Interp {
     /// format 25): the callback, the CHANGED flag and every cell.
     finalization_registries:
         Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, FinalizationRegistryData>>,
-    #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::Buffers.mask()))]
+    #[boot_new(crate::exotic_bits::ExoticTable::new(snapshot_dirt.clone(), SnapshotSection::Buffers.mask(), crate::exotic_bits::ExoticKind::ArrayBuffers))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2003,7 +1999,7 @@ pub struct Interp {
     /// Per-instance `ArrayBuffer` backing store (XS's `XS_ARRAY_BUFFER_KIND`
     /// internal slot). Keyed by the buffer instance's slot, like
     /// [`Self::collections`]. See [`ArrayBufferData`].
-    array_buffers: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, ArrayBufferData>>,
+    array_buffers: crate::exotic_bits::ExoticTable<crate::value::SlotIndex, ArrayBufferData>,
     #[boot_new(Tracked::new(
         Default::default(),
         snapshot_dirt.clone(),
@@ -2071,7 +2067,7 @@ pub struct Interp {
     /// `buffer.byteLength` get routes to the buffer byte-length accessor.
     /// `None` when the program never references `byteLength`.
     byte_length_id: Option<u16>,
-    #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::TypedArrays.mask()))]
+    #[boot_new(crate::exotic_bits::ExoticTable::new(snapshot_dirt.clone(), SnapshotSection::TypedArrays.mask(), crate::exotic_bits::ExoticKind::TypedArrays))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2085,7 +2081,7 @@ pub struct Interp {
     /// `XS_DATA_VIEW_KIND` internal slots + buffer reference). Keyed by the
     /// view instance's slot, like [`Self::array_buffers`]. See
     /// [`TypedArrayData`].
-    typed_arrays: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, TypedArrayData>>,
+    typed_arrays: crate::exotic_bits::ExoticTable<crate::value::SlotIndex, TypedArrayData>,
     #[boot_new(None)]
     #[gc_root(none)]
     #[quiescent(retained)]
@@ -2112,7 +2108,7 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     buffer_id: Option<u16>,
-    #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::DataViews.mask()))]
+    #[boot_new(crate::exotic_bits::ExoticTable::new(snapshot_dirt.clone(), SnapshotSection::DataViews.mask(), crate::exotic_bits::ExoticKind::DataViews))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2125,7 +2121,7 @@ pub struct Interp {
     /// Per-instance `DataView` view state (XS's `XS_DATA_VIEW_KIND` internal
     /// slot + buffer reference). Keyed by the view instance's slot. See
     /// [`DataViewData`].
-    data_views: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, DataViewData>>,
+    data_views: crate::exotic_bits::ExoticTable<crate::value::SlotIndex, DataViewData>,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[gc_root(index)]
     #[quiescent(retained)]
@@ -3073,7 +3069,7 @@ pub struct Interp {
     /// (unobservable otherwise), exactly like [`Self::constructor_id`] gates
     /// the `prototype.constructor` back-reference.
     prototype_key_id: Option<u16>,
-    #[boot_new(Tracked::new(Default::default(), snapshot_dirt.clone(), SnapshotSection::Regexps.mask()))]
+    #[boot_new(crate::exotic_bits::ExoticTable::new(snapshot_dirt.clone(), SnapshotSection::Regexps.mask(), crate::exotic_bits::ExoticKind::Regexps))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -3088,7 +3084,7 @@ pub struct Interp {
     /// instance's slot, like [`Self::promises`]. `lastIndex` is an ordinary
     /// own data property of the instance; [`RegExpData::last_index`] exists
     /// only as the legacy schema-11 snapshot fallback.
-    regexps: Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, RegExpData>>,
+    regexps: crate::exotic_bits::ExoticTable<crate::value::SlotIndex, RegExpData>,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[gc_root(index)]
     #[quiescent(retained)]

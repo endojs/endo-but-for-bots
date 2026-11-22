@@ -25,7 +25,10 @@ impl Interp {
                 return Err(self.failed_primitive_set_error(obj, proto, id));
             }
         } else if let Payload::Reference(inst) = obj.value {
-            if self.proxies.contains_key(&inst) {
+            // A clear superset word (`crate::exotic_bits`) proves `inst` is no
+            // Proxy, array or typed array, so the probes below would all miss.
+            let plain = self.outside_exotic_tables(inst);
+            if !plain && self.proxies.contains_key(&inst) {
                 // `p.k = v` routes through the `set` trap (ECMA-262
                 // 10.5.9); a `false` result throws in strict mode.
                 let accepted = (self.proxy_set(code, inst, id, value, obj))?;
@@ -36,7 +39,8 @@ impl Interp {
                         self.internal_error("TypeError", "set: proxy trap returned false".into());
                     return Err(self.raise_js(error));
                 }
-            } else if self.arrays.contains_key(&inst)
+            } else if !plain
+                && self.arrays.contains_key(&inst)
                 && !self.arguments_objects.contains(&inst)
                 && self.scalar_key_text(id).as_deref() == Some("length")
             {
@@ -73,7 +77,7 @@ impl Interp {
                     return Err(self.raise_js(error));
                 }
             } else {
-                let accepted = if self.typed_arrays.contains_key(&inst) {
+                let accepted = if !plain && self.typed_arrays.contains_key(&inst) {
                     // A typed array's own `[[Set]]`, whose element store
                     // coerces the value and so can re-enter, keeps the
                     // frames it had.

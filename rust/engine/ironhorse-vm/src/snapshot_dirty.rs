@@ -44,11 +44,15 @@ impl SnapshotDirty {
     }
 }
 
+/// One machine's shared tracker handle. It also carries the machine's
+/// [`crate::exotic_bits::ExoticBits`]: both are derived host bookkeeping that
+/// every side table of one machine shares, and both are built once, by
+/// `Interp::new`, before any table.
 #[derive(Clone)]
-pub(crate) struct SnapshotDirt(Rc<Cell<u64>>);
+pub(crate) struct SnapshotDirt(Rc<Cell<u64>>, Rc<crate::exotic_bits::ExoticBits>);
 impl Default for SnapshotDirt {
     fn default() -> Self {
-        Self(Rc::new(Cell::new(u64::MAX)))
+        Self(Rc::new(Cell::new(u64::MAX)), Rc::default())
     }
 }
 impl SnapshotDirt {
@@ -63,6 +67,14 @@ impl SnapshotDirt {
     }
     pub(crate) fn snapshot(&self) -> SnapshotDirty {
         SnapshotDirty(self.0.get())
+    }
+    /// This machine's exotic-membership words.
+    #[inline]
+    pub(crate) fn exotic(&self) -> &crate::exotic_bits::ExoticBits {
+        &self.1
+    }
+    pub(crate) fn exotic_bits(&self) -> Rc<crate::exotic_bits::ExoticBits> {
+        self.1.clone()
     }
 }
 
