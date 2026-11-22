@@ -1225,6 +1225,33 @@ mod tests {
     /// bytecode relinkable — while the dispatch loop fails closed on
     /// the same bytes. The two walkers must agree: truncation is a
     /// refusal in both.
+    /// The dispatch loop takes a fixed-size opcode's length from its size
+    /// instead of calling [`encoded_instruction_len`]; the two must agree for
+    /// every opcode byte, whatever follows it in the stream (including
+    /// nothing), so the loop's decode refusals land on the same pc.
+    #[test]
+    fn a_fixed_size_opcode_resolves_to_its_size() {
+        let mut fixed = 0;
+        for byte in 0..=u8::MAX {
+            let Some(op) = Opcode::from_u8(byte) else {
+                continue;
+            };
+            if op.size() <= 0 {
+                continue;
+            }
+            fixed += 1;
+            for tail in [&[][..], &[0][..], &[0xff, 0xff, 0xff, 0xff][..]] {
+                let stream: Vec<u8> = std::iter::once(byte).chain(tail.iter().copied()).collect();
+                assert_eq!(
+                    encoded_instruction_len(&stream, 0),
+                    Some(op.size() as usize),
+                    "{op:?}"
+                );
+            }
+        }
+        assert!(fixed > 100);
+    }
+
     #[test]
     fn a_truncated_trailing_payload_refuses_to_walk() {
         // STRING_1 (`-1` sentinel: u8 length prefix, then bytes)

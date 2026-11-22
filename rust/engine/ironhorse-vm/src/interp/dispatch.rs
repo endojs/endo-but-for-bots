@@ -314,7 +314,17 @@ impl Interp {
             // opcodes). ID-operand opcodes have `size == 0`, so they
             // must advance by `ilen`, never by `size` (a zero-advance
             // infinite loop).
-            let ilen = match crate::opcode::encoded_instruction_len(code, pc) {
+            //
+            // A fixed-size opcode's length is its size, which
+            // `encoded_instruction_len` would re-derive from the same byte
+            // (re-reading and re-decoding it); only the ID-operand and
+            // length-prefixed classes need the stream.
+            let resolved = if size > 0 {
+                Some(size as usize)
+            } else {
+                crate::opcode::encoded_instruction_len(code, pc)
+            };
+            let ilen = match resolved {
                 Some(l) if l > 0 => l,
                 _ => {
                     return Step::Host(Halt::Decode(DecodeError::UnresolvableInstructionLength {
