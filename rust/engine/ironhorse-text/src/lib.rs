@@ -157,6 +157,27 @@ impl From<&Vec<u16>> for SymbolName {
     }
 }
 
+/// A name hashes, compares and orders exactly as its CESU-8 bytes: the
+/// derives delegate to the `Vec<u8>` field, which delegates to the slice. So a
+/// table keyed by names can be probed with borrowed bytes, with no name built.
+impl std::borrow::Borrow<[u8]> for SymbolName {
+    fn borrow(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl SymbolName {
+    /// The CESU-8 spelling of `s`, borrowed from `s` itself when the two
+    /// encodings agree, which is everywhere except NUL (CESU-8 `C0 80`) and
+    /// supplementary characters (one 4-byte UTF-8 sequence, which CESU-8 spells
+    /// as two 3-byte surrogates). A `str` holds no lone surrogate, and every
+    /// other scalar value has the same 1-3 byte form in both. `None` sends the
+    /// caller to [`SymbolName::from`].
+    pub fn cesu8_of_str(s: &str) -> Option<&[u8]> {
+        (!s.bytes().any(|b| b == 0 || b >= 0xf0)).then_some(s.as_bytes())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,6 +192,40 @@ mod tests {
             assert_eq!(SymbolName::from_cesu8(name.as_bytes()), Some(name.clone()));
             assert!(seen.insert(name));
         }
+    }
+
+    #[test]
+    fn borrowed_str_spelling_is_the_built_name() {
+        use std::hash::BuildHasher;
+        let state = std::collections::hash_map::RandomState::new();
+        let mut texts: Vec<String> = ["", "ascii", "é", "ß€", "\u{7ff}\u{800}\u{ffff}", "😀", "\0"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // Every BMP scalar value alone and after an ASCII prefix, then a
+        // sample of supplementary ones.
+        texts.extend(
+            (0..=0xffffu32)
+                .chain((0x10000..=0x10ffff).step_by(0x3ff))
+                .filter_map(char::from_u32)
+                .flat_map(|c| [c.to_string(), format!("k{c}")]),
+        );
+        for text in &texts {
+            let built = SymbolName::from(text.as_str());
+            let clean = !text.contains('\0') && text.chars().all(|c| (c as u32) < 0x10000);
+            match SymbolName::cesu8_of_str(text) {
+                Some(bytes) => {
+                    assert!(clean, "{text:?}");
+                    assert_eq!(bytes, built.as_bytes(), "{text:?}");
+                    let borrowed: &[u8] = std::borrow::Borrow::borrow(&built);
+                    assert_eq!(state.hash_one(borrowed), state.hash_one(&built));
+                }
+                None => assert!(!clean, "{text:?}"),
+            }
+        }
+        let mut table = std::collections::HashMap::new();
+        table.insert(SymbolName::from("length"), 7u16);
+        assert_eq!(table.get(&b"length"[..]), Some(&7));
     }
 
     #[test]

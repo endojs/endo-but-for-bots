@@ -39,11 +39,75 @@ impl Default for SymbolIds {
     }
 }
 
-impl SymbolIds {
-    pub fn get(&self, name: impl Into<SymbolName>) -> Option<&u16> {
-        self.0.get(&name.into())
+/// A name to look up in [`SymbolIds`], probed by its CESU-8 bytes: a
+/// [`SymbolName`] lends its own, and most text lends its UTF-8, which is the
+/// same bytes (see [`SymbolName::cesu8_of_str`]). Building the key name for
+/// every probe, as an `Into<SymbolName>` argument does, costs one to three
+/// heap allocations per lookup on the property paths that resolve names.
+pub(crate) trait SymbolLookup {
+    fn with_cesu8<R>(self, probe: impl FnOnce(&[u8]) -> R) -> R;
+}
+
+impl SymbolLookup for &SymbolName {
+    #[inline]
+    fn with_cesu8<R>(self, probe: impl FnOnce(&[u8]) -> R) -> R {
+        probe(self.as_bytes())
     }
-    pub fn contains_key(&self, name: impl Into<SymbolName>) -> bool {
+}
+
+impl SymbolLookup for SymbolName {
+    #[inline]
+    fn with_cesu8<R>(self, probe: impl FnOnce(&[u8]) -> R) -> R {
+        probe(self.as_bytes())
+    }
+}
+
+impl SymbolLookup for &str {
+    #[inline]
+    fn with_cesu8<R>(self, probe: impl FnOnce(&[u8]) -> R) -> R {
+        match SymbolName::cesu8_of_str(self) {
+            Some(bytes) => probe(bytes),
+            None => probe(SymbolName::from(self).as_bytes()),
+        }
+    }
+}
+
+impl SymbolLookup for &String {
+    #[inline]
+    fn with_cesu8<R>(self, probe: impl FnOnce(&[u8]) -> R) -> R {
+        self.as_str().with_cesu8(probe)
+    }
+}
+
+impl SymbolLookup for String {
+    #[inline]
+    fn with_cesu8<R>(self, probe: impl FnOnce(&[u8]) -> R) -> R {
+        self.as_str().with_cesu8(probe)
+    }
+}
+
+impl SymbolLookup for &Vec<u16> {
+    #[inline]
+    fn with_cesu8<R>(self, probe: impl FnOnce(&[u8]) -> R) -> R {
+        probe(SymbolName::from_units(self).as_bytes())
+    }
+}
+
+impl SymbolLookup for Vec<u16> {
+    #[inline]
+    fn with_cesu8<R>(self, probe: impl FnOnce(&[u8]) -> R) -> R {
+        probe(SymbolName::from_units(&self).as_bytes())
+    }
+}
+
+impl SymbolIds {
+    /// The id of `name`. The map is probed with the name's bytes, which
+    /// `SymbolName` hashes and compares as (its `Borrow<[u8]>`), so the answer
+    /// is the one a probe with a built `SymbolName` gives.
+    pub fn get(&self, name: impl SymbolLookup) -> Option<&u16> {
+        name.with_cesu8(|bytes| self.0.get(bytes))
+    }
+    pub fn contains_key(&self, name: impl SymbolLookup) -> bool {
         self.get(name).is_some()
     }
     pub fn insert(&mut self, name: impl Into<SymbolName>, id: u16) -> Option<u16> {
