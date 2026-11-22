@@ -956,7 +956,11 @@ impl Interp {
             return Ok(true);
         }
         let mut current = inst;
-        let mut absent_on = None;
+        // A flag rather than the other walks' `Option<SlotIndex>`: this frame
+        // recurs once per level of a setter that assigns through `[[Set]]`
+        // again (the stack-height gate's `iter-setter`), and the wider live
+        // value grew it by 16 B.
+        let mut inst_absent = false;
         loop {
             // Functions keep their `length`, `name`, and (when constructable)
             // `prototype` own properties in side tables.  They participate in
@@ -966,7 +970,7 @@ impl Interp {
                 .ordinary_get_own_descriptor(current, id)
                 .or_else(|| self.exotic_own_descriptor(current, id));
             if own.is_none() && current == inst {
-                absent_on = Some(inst);
+                inst_absent = true;
             }
             if let Some(descriptor) = own {
                 if descriptor.is_accessor() {
@@ -1007,7 +1011,7 @@ impl Interp {
             // does.
             current = parent;
         }
-        self.ordinary_set_on_receiver(code, id, value, receiver, absent_on)
+        self.ordinary_set_on_receiver(code, id, value, receiver, inst_absent.then_some(inst))
     }
 
     /// [`Self::ordinary_set`] as one leg of [`Interp::set_legs`]
