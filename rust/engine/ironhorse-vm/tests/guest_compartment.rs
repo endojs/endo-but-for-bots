@@ -481,6 +481,9 @@ fn the_modules_option_and_its_entries_are_type_checked() {
     );
     let r = result(&source);
     let parts: Vec<&str> = r.split('|').collect();
+    // One part per attempt above, so the bounded loop below cannot pass by
+    // running short.
+    assert_eq!(parts.len(), 12, "{r}");
     assert_eq!(parts[0], "[object Compartment]", "empty module map");
     // The REASON, not just the class: a `TypeError` raised by some unrelated
     // mistake in the fixture would satisfy a bare `starts_with("TypeError:")`.
