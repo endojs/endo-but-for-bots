@@ -3,6 +3,7 @@
 mod gc_chunk_roster;
 mod gc_consumer_schedules;
 mod numeric_fast_paths;
+mod property_read_order;
 
 use super::*;
 use crate::gc::GcAdmissionError::{NotQuiescent, PreviousCollectionFailed};
