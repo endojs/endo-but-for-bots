@@ -12,6 +12,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import tempfile
 import tomllib
 import unittest
 
@@ -141,11 +142,84 @@ class JudgeTests(unittest.TestCase):
         v = self.judge("meter-mtr1", name, crate="ironhorse-vm", unreachable=4)
         self.assertIn("library unreachable count 3, manifest pins 4", v.violations)
 
-    def test_harness_helpers_count_as_library(self):
-        self.assertTrue(verify.is_harness_code("m::proofs::h", "m::proofs::h"))
-        self.assertTrue(verify.is_harness_code("m::proofs::h::{closure#0}", "m::proofs::h"))
-        self.assertFalse(verify.is_harness_code("m::proofs::Host::consult", "m::proofs::h"))
-        self.assertFalse(verify.is_harness_code("m::proofs::h2", "m::proofs::h"))
+    def test_proof_module_helpers_are_harness_code(self):
+        h = "m::proofs::h"
+        self.assertTrue(verify.is_harness_code("m::proofs::h", h))
+        self.assertTrue(verify.is_harness_code("m::proofs::h::{closure#0}", h))
+        # A shared helper in any proof module is harness code, not library:
+        # its unreachable assertion must not vanish into the pinned count.
+        self.assertTrue(verify.is_harness_code("m::proofs::Host::consult", h))
+        self.assertTrue(verify.is_harness_code("m::proofs::h2", h))
+        self.assertTrue(verify.is_harness_code("a::charset_proofs::merge_semantics", h))
+        self.assertTrue(verify.is_harness_code("kani_canaries::pins", h))
+        self.assertTrue(verify.is_harness_code("<m::proofs::Host as std::clone::Clone>::clone", h))
+        # Library code, including generic library code instantiated with a
+        # proof-module type, is not.
+        self.assertFalse(verify.is_harness_code("m::Meter::untick_raw", h))
+        self.assertFalse(verify.is_harness_code("ironhorse_meter::chunk_cost", h))
+        self.assertFalse(verify.is_harness_code("std::ptr::drop_in_place::<m::proofs::Host>", h))
+        self.assertFalse(verify.is_harness_code("core::num::<impl usize>::abs_diff", h))
+        self.assertFalse(verify.is_harness_code("m::proofsx::f", h))
+
+    def test_unreachable_helper_check_fails_unless_allowed(self):
+        name = "meter::proofs::mtr1_checks_and_charges"
+        export, regular = fixture("meter-mtr1")
+        for r in export["verification_results"]["results"]:
+            if r["harness_id"] == name:
+                r["checks"].append({"category": "assertion", "status": "Unreachable",
+                                    "description": "host never consulted",
+                                    "function": "meter::proofs::Host::consult"})
+        entry = harness(name, crate="ironhorse-vm", unreachable=3)
+        v = verify.judge(entry, export, regular)
+        self.assertEqual(v.library_unreachable, 3)
+        self.assertTrue(any("harness check unreachable in meter::proofs::Host::consult"
+                            in m for m in v.violations), v.violations)
+        entry["unreachable_allow"] = ["meter::proofs::Host::consult"]
+        self.assertEqual(verify.judge(entry, export, regular).violations, [])
+        entry["unreachable_allow"] = ["meter::proofs::Host::other"]
+        self.assertTrue(verify.judge(entry, export, regular).violations)
+
+    def test_allowance_can_name_one_instantiation(self):
+        f = "value::structure_proofs::free_marks_iff_coherent::<0>"
+        self.assertTrue(verify.allowed_unreachable(f, [f]))
+        self.assertTrue(verify.allowed_unreachable(f + "::{closure#0}", [f]))
+        self.assertFalse(verify.allowed_unreachable(
+            "value::structure_proofs::free_marks_iff_coherent::<1>", [f]))
+        self.assertTrue(verify.allowed_unreachable(
+            f, ["value::structure_proofs::free_marks_iff_coherent"]))
+
+    def test_cfg_kani_sites_outside_proof_modules_are_counted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Cargo.toml").write_text('[workspace]\nmembers = ["c"]\n')
+            (root / "c" / "src").mkdir(parents=True)
+            (root / "c" / "src" / "lib.rs").write_text("\n".join([
+                "#[cfg_attr(kani, derive(kani::Arbitrary))]",
+                "struct S;",
+                "#[cfg(kani)]",
+                "mod proofs {}",
+                "#[cfg(kani)]",
+                "#[allow(dead_code)]",
+                "mod wtf8_proofs;",
+                "// #[cfg(kani)] in a comment",
+                "fn f() {",
+                "    #[cfg(kani)]",
+                "    { g() }",
+                "    #[cfg(not(kani))]",
+                "    { h() }",
+                "}",
+                "#[cfg(any(test, kani))]",
+                "fn reference() {}",
+            ]))
+            self.assertEqual(verify.cfg_kani_sites(root), {"c/src/lib.rs": 3})
+            data = {"cfg_kani": [{"file": "c/src/lib.rs", "count": 3, "reason": "r"}]}
+            self.assertEqual(verify.cfg_kani_errors(data, root), [])
+            data["cfg_kani"][0]["count"] = 2
+            self.assertEqual(len(verify.cfg_kani_errors(data, root)), 1)
+            self.assertEqual(len(verify.cfg_kani_errors({}, root)), 1)
+
+    def test_checked_in_cfg_kani_sites_are_listed(self):
+        self.assertEqual(verify.cfg_kani_errors(verify.load_manifest()), [])
 
     def test_time_budget(self):
         v = self.judge("meter-mtr1", "meter::proofs::mtr1_sequence_of_four",

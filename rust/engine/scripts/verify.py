@@ -60,7 +60,9 @@ HARNESS_KEYS = {
     "memory_budget_gb": (int, float), "unreachable": int, "mutants": list,
     "expect": str, "canary": bool,
 }
-HARNESS_OPTIONAL = {"spec": str, "flags_reason": str, "unreachable_reason": str}
+HARNESS_OPTIONAL = {"spec": str, "flags_reason": str, "unreachable_reason": str,
+                    "unreachable_allow": list}
+CFG_KANI_KEYS = {"file": str, "count": int, "reason": str}
 GUARANTEE_KEYS = {"id": str, "title": str, "claim": str, "spec": str, "trusted": list}
 CHECK_STATUSES = {"Success", "Failure", "Satisfied", "Unsatisfiable", "Unreachable",
                   "Undetermined"}
@@ -137,6 +139,8 @@ def validate_manifest(data: dict, mutant_names: set[str] | None = None) -> list[
             errors.append(f"{label}: unknown guarantee {h.get('guarantee')!r}")
         if h.get("flags") and not h.get("flags_reason"):
             errors.append(f"{label}: non-empty flags need flags_reason (R2)")
+        if not all(isinstance(a, str) for a in h.get("unreachable_allow", [])):
+            errors.append(f"{label}: unreachable_allow must list function paths")
         if h.get("unreachable", 0) and not h.get("unreachable_reason"):
             errors.append(f"{label}: a pinned unreachable count needs unreachable_reason (R3)")
         if h.get("expect") == "fail" and not h.get("canary"):
@@ -159,6 +163,13 @@ def validate_manifest(data: dict, mutant_names: set[str] | None = None) -> list[
         if not all(h.get("canary") for h in harnesses):
             if not any(h.get("mutants") for h in harnesses):
                 errors.append(f"guarantee {gid}: no mutant (R4)")
+    for entry in data.get("cfg_kani", []):
+        for key, kind in CFG_KANI_KEYS.items():
+            if not isinstance(entry.get(key), kind) or isinstance(entry.get(key), bool):
+                errors.append(f"cfg_kani {entry.get('file')!r}: {key} must be {kind}")
+        extra = set(entry) - set(CFG_KANI_KEYS)
+        if extra:
+            errors.append(f"cfg_kani {entry.get('file')!r}: unknown keys {sorted(extra)}")
     if mutant_names is not None:
         for m in sorted(mutant_names - referenced):
             errors.append(f"mutant {m}.patch is referenced by no harness")
@@ -182,11 +193,64 @@ class Verdict:
     note: str = ""
 
 
+PROOF_MODULE = re.compile(r"^(proofs|[a-z0-9_]+_proofs|kani_canaries)$")
+
+
+def strip_generics(path: str) -> str:
+    """`a::b::<T<U>>::c` -> `a::b::::c`: drop every `<...>` group."""
+    out, depth = [], 0
+    for ch in path:
+        if ch == "<":
+            depth += 1
+        elif ch == ">" and depth:
+            depth -= 1
+        elif not depth:
+            out.append(ch)
+    return "".join(out)
+
+
+def owning_path(function: str) -> str:
+    """The module path a check's function is defined in, generic arguments
+    removed. For a qualified path `<T as Trait>::f` that is T's path, since
+    the impl lives beside the type."""
+    function = function.strip()
+    if function.startswith("<"):
+        depth = 0
+        for i, ch in enumerate(function):
+            depth += ch == "<"
+            depth -= ch == ">"
+            if depth == 0:
+                inner = function[1:i]
+                inner = inner.split(" as ", 1)[0]
+                return strip_generics(inner)
+    return strip_generics(function)
+
+
+def in_proof_module(function: str) -> bool:
+    """Whether a check's function is defined inside a proof module
+    (`proofs`, `*_proofs` or `kani_canaries`)."""
+    return any(PROOF_MODULE.match(seg) for seg in owning_path(function).split("::"))
+
+
 def is_harness_code(function: str, harness: str) -> bool:
-    """A check is written in the harness itself if it lives in the harness
-    function or one of its closures. Checks in shared proof helpers and in
-    library code count toward the pinned `unreachable` number instead."""
-    return function == harness or function.startswith(harness + "::")
+    """A check is harness code if it lives in the harness function, one of
+    its closures, or any other function of a proof module (the shared
+    helpers that harnesses call). Harness code must have no unreachable
+    check, except in functions the manifest names in `unreachable_allow`.
+    Only checks in library code count toward the pinned `unreachable`."""
+    return (function == harness or function.startswith(harness + "::")
+            or in_proof_module(function))
+
+
+def allowed_unreachable(function: str, allow: list[str]) -> bool:
+    """An `unreachable_allow` entry names a proof-module function as Kani
+    reports it; its closures are included. An entry with generic arguments
+    (`f::<0>`) names that one instantiation, an entry without them every
+    instantiation."""
+    path = owning_path(function)
+    return any(function == a or function.startswith(a + "::")
+               if "<" in a else path == a or path.startswith(a + "::")
+               for a in allow)
 
 
 def parse_regular(text: str) -> dict[str, str]:
@@ -250,9 +314,11 @@ def judge(harness: dict, export: dict | None, regular: dict[str, str]) -> Verdic
     for c in covers:
         if c["status"] != "Satisfied":
             v.violations.append(f"cover not satisfied ({c['status']}): {c.get('description')}")
+    allow = harness.get("unreachable_allow", [])
     for c in own_unreachable:
-        if c not in covers:
-            v.violations.append(f"harness check unreachable: {c.get('description')}")
+        if c not in covers and not allowed_unreachable(c.get("function", ""), allow):
+            v.violations.append(f"harness check unreachable in {c.get('function')}: "
+                                f"{c.get('description')}")
     pinned = harness.get("unreachable", 0)
     if v.library_unreachable != pinned:
         v.violations.append(
@@ -517,6 +583,56 @@ def unwind_attribute(crate: str, name: str, root: Path = ENGINE) -> int | None:
     return None
 
 
+CFG_KANI = re.compile(r"#!?\[cfg(_attr)?\((?=[^\]]*\bkani\b)")
+DERIVE_ARBITRARY = re.compile(r"^#\[cfg_attr\(kani, derive\(kani::Arbitrary\)\)\]$")
+PROOF_MOD = re.compile(r"^(pub(\([a-z]+\))? )?mod (proofs|[a-z0-9_]+_proofs|kani_canaries)\b")
+
+
+def cfg_kani_sites(root: Path = ENGINE) -> dict[str, int]:
+    """Count, per engine source file, the attributes that compile code
+    differently under `cfg(kani)` other than the two shapes every proof
+    uses: `#[cfg(kani)]` on a proof module and
+    `#[cfg_attr(kani, derive(kani::Arbitrary))]`. Each such site makes the
+    code Kani checks differ from the code that ships."""
+    members = tomllib.loads((root / "Cargo.toml").read_text())["workspace"]["members"]
+    counts: dict[str, int] = {}
+    for m in members:
+        for path in sorted((root / m).rglob("*.rs")):
+            if "target" in path.relative_to(root).parts:
+                continue
+            lines = [line.strip() for line in path.read_text().splitlines()]
+            n = 0
+            for i, line in enumerate(lines):
+                if line.startswith("//") or not CFG_KANI.search(line):
+                    continue
+                if DERIVE_ARBITRARY.match(line):
+                    continue
+                if line == "#[cfg(kani)]":
+                    j = i + 1
+                    while j < len(lines) and (not lines[j] or lines[j].startswith(("#[", "//"))):
+                        j += 1
+                    if j < len(lines) and PROOF_MOD.match(lines[j]):
+                        continue
+                n += 1
+            if n:
+                counts[str(path.relative_to(root))] = n
+    return counts
+
+
+def cfg_kani_errors(data: dict, root: Path = ENGINE) -> list[str]:
+    allowed = {e.get("file"): e.get("count") for e in data.get("cfg_kani", [])}
+    found = cfg_kani_sites(root)
+    errors = []
+    for path in sorted(set(found) | set(allowed)):
+        if found.get(path, 0) != allowed.get(path, 0):
+            errors.append(
+                f"{path}: {found.get(path, 0)} cfg(kani) site(s) outside proof modules and "
+                f"Arbitrary derives, manifest [[cfg_kani]] allows {allowed.get(path, 0)}; "
+                "code that differs under Kani must be listed with a reason "
+                "(VERIFICATION.md, Production code that differs under cfg(kani))")
+    return errors
+
+
 def patch_applies(patch: Path, root: Path) -> tuple[bool, str]:
     proc = subprocess.run(["patch", "-p1", "--dry-run", "--batch", "--forward", "-s",
                            "-d", str(root), "-i", str(patch)],
@@ -527,6 +643,7 @@ def patch_applies(patch: Path, root: Path) -> tuple[bool, str]:
 def cmd_check(args) -> int:
     data = load_manifest()
     errors = validate_manifest(data, mutant_files())
+    errors += cfg_kani_errors(data)
     in_tree = source_harnesses()
     manifest_crates = {h["crate"] for h in data.get("harness", [])}
     for crate in sorted(set(in_tree) | manifest_crates):
