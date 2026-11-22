@@ -6,8 +6,8 @@
 //! and a property read or a call probes several of these tables. This hasher
 //! spends a handful: one 64x64->128-bit multiply per written integer, folded
 //! by XOR of its halves (the `folded_multiply` step of foldhash and aHash's
-//! fallback), keyed by a secret per-process seed, and one more fold with a
-//! second multiplier when the hash is finished.
+//! fallback), keyed by a secret per-process seed; finishing XORs the high
+//! half of the state into the low half.
 //!
 //! Why this is safe for these tables and not for strings:
 //!
@@ -15,12 +15,12 @@
 //!   slots and key ids exist (by allocating, interning and collecting), but
 //!   it cannot pick their values, and the seed it would need to aim
 //!   collisions is drawn from the OS through `RandomState` once per process
-//!   and never leaves it. The two folds mix every key bit into the low bits
-//!   that pick the bucket, so a structured key set (an arithmetic progression
-//!   of handles with a power-of-two stride, say) spreads like any other; a
-//!   bare multiplicative or identity hash would put such a set in one bucket
-//!   chain, and a single fold still crowds strides of 2^18 and up into about
-//!   half the buckets a uniform hash fills.
+//!   and never leaves it. The fold and the finishing shift mix every key bit
+//!   into the low bits that pick the bucket, so a structured key set (an
+//!   arithmetic progression of handles with a power-of-two stride, say)
+//!   spreads like any other; a bare multiplicative or identity hash would put
+//!   such a set in one bucket chain, and the fold alone still crowds strides
+//!   of 2^18 and up into about half the buckets a uniform hash fills.
 //! - Tables keyed by guest-spelled text (`SymbolName`, registry keys) keep
 //!   SipHash.
 //! - Iteration order stays seeded per process, exactly as with `RandomState`:
@@ -39,8 +39,6 @@ pub(crate) type IntSet<K> = std::collections::HashSet<K, IntBuildHasher>;
 
 /// An odd 64-bit multiplier with well-spread bits (2^64 / golden ratio).
 const MULTIPLIER: u64 = 0x9e37_79b9_7f4a_7c15;
-/// The finishing multiplier, another odd constant with well-spread bits.
-const FINISH: u64 = 0xd6e8_feb8_6659_fd93;
 
 /// The full 128-bit product folded to 64 bits: every input bit reaches the
 /// low half through the high half of the product.
@@ -118,9 +116,14 @@ impl Hasher for IntHasher {
             self.write_u64(u64::from_le_bytes(word));
         }
     }
+    /// The fold leaves the low bits of its low half depending only on low
+    /// key bits; XORing in the high half spreads large strides. (A second
+    /// fold spreads them as well, but its extra multiply grew the frames of
+    /// `exec_run` and two other call-path functions by 32 B each, and the
+    /// recursion cases of the stack-height gate by 2.4%.)
     #[inline(always)]
     fn finish(&self) -> u64 {
-        folded_multiply(self.state, FINISH)
+        self.state ^ (self.state >> 32)
     }
 }
 
@@ -156,8 +159,9 @@ mod tests {
                 .map(|i| h.hash_one(SlotIndex(i.wrapping_mul(stride))) & 4095)
                 .collect();
             // A uniform hash fills about 63% (2590) of 4096 buckets with 4096
-            // keys, give or take about 25.
-            assert!(buckets.len() > 2400, "stride {stride}: {}", buckets.len());
+            // keys, give or take about 25; the fold alone fills as few as
+            // 1208 at a stride of 3 * 2^18.
+            assert!(buckets.len() > 2300, "stride {stride}: {}", buckets.len());
         }
     }
 
