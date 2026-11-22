@@ -1,4 +1,5 @@
 //! Property ordinary operations.
+use super::{fast_path_on, FAST_OWN_OVERWRITE};
 use crate::interp::*;
 
 impl Interp {
@@ -688,9 +689,14 @@ impl Interp {
         id: u16,
         receiver: Slot,
     ) -> Result<GetInPlace, Step> {
+        // Each level's own slot is looked up once: `found` is
+        // `find_property(current, id)`, which both the exotic-surface test
+        // and `ordinary_get_own_descriptor` start from (property lookups are
+        // pure reads, so asking once is the same answer).
+        let mut found = self.find_property(inst, id);
         // `mop_get_with_proxy_metering_inner`'s exotic own surface, which it
         // reads with no metering flags for an id key.
-        if self.find_property(inst, id).is_none() {
+        if found.is_none() {
             if let Some(&typed_array) = self.typed_arrays.get(&inst) {
                 if let Some(index) = self.ta_numeric_index_at(id, 0) {
                     return Ok(GetInPlace::Value(
@@ -709,7 +715,31 @@ impl Interp {
         // set it), so only a Proxy parent leaves the walk for `mop_get`.
         let mut current = inst;
         let getter = loop {
-            if let Some(descriptor) = self.ordinary_get_own_descriptor(current, id) {
+            // `ordinary_get_own_descriptor(current, id)`, read straight from
+            // the slot `found` names when there is one: a data slot's value,
+            // or the getter of an accessor (an absent getter is `undefined`,
+            // as the descriptor's `get` would be).
+            if let Some(property) = found {
+                let slot = self.slots.get(property);
+                if slot.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+                    let getter = self
+                        .accessors
+                        .get(&(current, id))
+                        .and_then(|accessor| accessor.get)
+                        .unwrap_or_else(Slot::undefined);
+                    if getter.kind == Kind::Undefined {
+                        return Ok(GetInPlace::Value(Slot::undefined()));
+                    }
+                    break getter;
+                }
+                return Ok(GetInPlace::Value(Slot::of(slot.kind, slot.value)));
+            }
+            // No ordinary slot: the descriptor's remaining sources, the index
+            // store and a function's synthesized `length`/`name`.
+            if let Some(descriptor) = self
+                .index_prop_descriptor_by_id(current, id)
+                .or_else(|| self.function_meta_own_descriptor(current, id))
+            {
                 if descriptor.is_accessor() {
                     let getter = descriptor.get.unwrap_or_else(Slot::undefined);
                     if getter.kind == Kind::Undefined {
@@ -730,7 +760,8 @@ impl Interp {
                     .mop_get(code, parent, id, receiver)
                     .map(GetInPlace::Value);
             }
-            if self.find_property(parent, id).is_none() {
+            found = self.find_property(parent, id);
+            if found.is_none() {
                 if let Some(&typed_array) = self.typed_arrays.get(&parent) {
                     if let Some(index) = self.ta_numeric_index_at(id, 0) {
                         return Ok(GetInPlace::Value(
@@ -799,6 +830,9 @@ impl Interp {
         value: Slot,
         receiver: Slot,
     ) -> Result<SetInPlace, Step> {
+        if self.overwrite_own_data_property(inst, id, value, receiver) {
+            return Ok(SetInPlace::Done(true));
+        }
         // `ordinary_set`'s walk: `mop_set_inner` differs from it only for a
         // Proxy or a typed array, which `dispatch_set_property` sent apart.
         let mut current = inst;
@@ -853,6 +887,53 @@ impl Interp {
             .map(SetInPlace::Done)
     }
 
+    /// `[[Set]]`'s commonest case done directly: the receiver is `inst`
+    /// itself, an ordinary object (no Proxy, array or typed array, whose
+    /// `[[Set]]`/`[[DefineOwnProperty]]` differ), and its own property `id`
+    /// is a writable data slot. Returns whether it wrote.
+    ///
+    /// The general path would find that slot first in its walk, stop, find it
+    /// again in `ordinary_set_on_receiver` and run
+    /// `mop_define_own_property(inst, id, { value })`, whose
+    /// `ordinary_define_own_property` validates nothing that can fail for a
+    /// writable data property and ends by removing any accessor record for
+    /// the pair and storing the value with the flags it already had. This is
+    /// exactly that end. Nothing on either path meters or allocates; the
+    /// accessor-table removal and the slot's `get_mut` are kept because they
+    /// mark snapshot dirt. The general path's define enters one more light
+    /// native frame, so a depth at which that would refuse takes it instead,
+    /// to refuse in the same place.
+    #[inline]
+    fn overwrite_own_data_property(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> bool {
+        if !fast_path_on(FAST_OWN_OVERWRITE)
+            || !matches!(receiver.value, Payload::Reference(r) if r == inst && receiver.kind == Kind::Reference)
+        {
+            return false;
+        }
+        let Some(property) = self.find_property(inst, id) else {
+            return false;
+        };
+        if self.slots.get(property).flag & (XS_GETTER_FLAG | XS_SETTER_FLAG | XS_DONT_SET_FLAG) != 0
+            || self.native_depth + LIGHT_FRAME_COST > NATIVE_DEPTH_LIMIT
+            || self.proxies.contains_key(&inst)
+            || self.arrays.contains_key(&inst)
+            || self.typed_arrays.contains_key(&inst)
+        {
+            return false;
+        }
+        self.accessors.remove(&(inst, id));
+        let slot = self.slots.get_mut(property);
+        slot.kind = value.kind;
+        slot.value = value.value;
+        true
+    }
+
     pub(in crate::interp::property) fn ordinary_set(
         &mut self,
         code: &[u8],
@@ -861,6 +942,9 @@ impl Interp {
         value: Slot,
         receiver: Slot,
     ) -> Result<bool, Step> {
+        if self.overwrite_own_data_property(inst, id, value, receiver) {
+            return Ok(true);
+        }
         let mut current = inst;
         loop {
             // Functions keep their `length`, `name`, and (when constructable)

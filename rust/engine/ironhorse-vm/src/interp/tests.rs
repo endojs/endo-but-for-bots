@@ -5,6 +5,7 @@ mod gc_consumer_schedules;
 mod global_catch_up_witness;
 mod increment_fast_path;
 mod numeric_fast_paths;
+mod property_fast_paths;
 mod property_read_order;
 mod string_concat_bytes;
 

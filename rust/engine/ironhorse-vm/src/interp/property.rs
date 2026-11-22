@@ -10,6 +10,32 @@ mod ordinary;
 mod proxy;
 mod read_index;
 
+/// [`fast_path_on`]'s bit for `Interp::overwrite_own_data_property`.
+pub(in crate::interp) const FAST_OWN_OVERWRITE: u8 = 1;
+
+/// Test-only: the fast-path bits switched off on this thread, so a
+/// differential test can run a program with and without them.
+#[cfg(test)]
+pub(in crate::interp) mod fast_path_switch {
+    thread_local! {
+        pub(in crate::interp) static OFF: std::cell::Cell<u8> =
+            const { std::cell::Cell::new(0) };
+    }
+}
+
+/// Whether the fast path `bit` is enabled: always, outside unit tests.
+#[cfg(test)]
+pub(in crate::interp) fn fast_path_on(bit: u8) -> bool {
+    fast_path_switch::OFF.with(|off| off.get() & bit == 0)
+}
+
+/// Whether the fast path `bit` is enabled: always, outside unit tests.
+#[cfg(not(test))]
+#[inline(always)]
+pub(in crate::interp) fn fast_path_on(_bit: u8) -> bool {
+    true
+}
+
 /// Where the ordinary levels of a `[[HasProperty]]` walk end: an answer and
 /// its `fxOrdinaryHasProperty` frame count, or a Proxy (and the frames
 /// counted before it), whose own internal method takes over.
