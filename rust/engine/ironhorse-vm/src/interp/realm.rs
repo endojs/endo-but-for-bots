@@ -56,7 +56,7 @@ pub struct CompartmentEnvironment {
     /// catch-up roster. One word, because environments are moved by value
     /// across guest re-entry and their size is on those native frames.
     pub(super) globals_caught_up_at: u64,
-    pub(super) global_props: std::collections::HashMap<u16, crate::value::SlotIndex>,
+    pub(super) global_props: crate::int_hash::IntMap<u16, crate::value::SlotIndex>,
     /// The compartment's `globalLexicals` (`fx_Compartment`,
     /// `xsModule.c:3030`), by interned key id.
     ///
@@ -76,7 +76,7 @@ pub struct CompartmentEnvironment {
     ///
     /// Empty for every environment but a guest compartment's. The host
     /// `Compartment` API has no `globalLexicals` option.
-    pub(super) global_lexicals: std::collections::HashMap<u16, crate::value::SlotIndex>,
+    pub(super) global_lexicals: crate::int_hash::IntMap<u16, crate::value::SlotIndex>,
     pub(super) owner: Option<std::rc::Weak<()>>,
     /// Which intrinsic names may be BOUND as globals in this environment --
     /// the live filter, and the authority: `interp/link.rs` consults exactly

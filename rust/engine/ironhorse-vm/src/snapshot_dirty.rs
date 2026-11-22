@@ -92,7 +92,9 @@ impl<T> Tracked<T> {
 }
 // The former classification maps need only snapshot tracking now. These
 // callback helpers preserve their mutation API without a derived type index.
-impl<V> Tracked<std::collections::HashMap<crate::value::SlotIndex, V>> {
+impl<V, S: std::hash::BuildHasher>
+    Tracked<std::collections::HashMap<crate::value::SlotIndex, V, S>>
+{
     pub(crate) fn update<R>(
         &mut self,
         key: &crate::value::SlotIndex,

@@ -1,7 +1,7 @@
 //! Derived lookup over the authoritative newest-first named-property chains.
 //! Only long chains are indexed. No entry is a GC root or snapshot payload.
+use crate::int_hash::{IntMap as HashMap, IntSet as HashSet};
 use crate::value::{Slot, SlotIndex};
-use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
 struct Owner {
@@ -245,7 +245,7 @@ impl PropertyIndex {
                 .or_insert_with(|| Watched {
                     id: name,
                     next,
-                    owners: HashSet::new(),
+                    owners: HashSet::default(),
                 })
                 .owners
                 .insert(owner);

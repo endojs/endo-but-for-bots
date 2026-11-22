@@ -1559,8 +1559,8 @@ impl Interp {
     /// [`Self::pending_surfaces`].
     pub(super) fn intrinsic_surface_holders(
         &self,
-    ) -> std::collections::HashSet<crate::value::SlotIndex> {
-        let mut holders: std::collections::HashSet<_> = self
+    ) -> crate::int_hash::IntSet<crate::value::SlotIndex> {
+        let mut holders: crate::int_hash::IntSet<_> = self
             .proto_methods
             .iter()
             .map(|(owner, _, _)| *owner)

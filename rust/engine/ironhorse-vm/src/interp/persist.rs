@@ -2448,7 +2448,7 @@ impl Interp {
         frame: &SavedFrame,
         segment_remap: &std::collections::BTreeMap<usize, u32>,
     ) -> SavedFrameRow {
-        let sorted_map = |map: &std::collections::HashMap<u16, usize>| {
+        let sorted_map = |map: &crate::int_hash::IntMap<u16, usize>| {
             let mut rows: Vec<(u16, u64)> =
                 map.iter().map(|(id, index)| (*id, *index as u64)).collect();
             rows.sort_unstable();
@@ -2628,7 +2628,7 @@ impl Interp {
     ) -> Result<SavedFrame, RestoreError> {
         self.validate_restore_frame(&row)?;
         let convert = || {
-            let map = |rows: Vec<(u16, u64)>| -> Option<std::collections::HashMap<u16, usize>> {
+            let map = |rows: Vec<(u16, u64)>| -> Option<crate::int_hash::IntMap<u16, usize>> {
                 rows.into_iter()
                     .map(|(id, index)| Some((id, usize::try_from(index).ok()?)))
                     .collect()
@@ -3871,7 +3871,7 @@ impl Interp {
     /// emitted at all (see [`IntlTables`]).
     pub fn intl_snapshot(&self) -> IntlTables {
         fn sorted<T: Clone>(
-            m: &std::collections::HashMap<crate::value::SlotIndex, T>,
+            m: &crate::int_hash::IntMap<crate::value::SlotIndex, T>,
         ) -> Vec<(u32, T)> {
             let mut v: Vec<(u32, T)> = m.iter().map(|(o, r)| (o.0, r.clone())).collect();
             v.sort_unstable_by_key(|(o, _)| *o);
@@ -3956,7 +3956,7 @@ impl Interp {
             }
         }
         fn install<T>(
-            m: &mut std::collections::HashMap<crate::value::SlotIndex, T>,
+            m: &mut crate::int_hash::IntMap<crate::value::SlotIndex, T>,
             rows: Vec<(u32, T)>,
         ) {
             for (owner, r) in rows {

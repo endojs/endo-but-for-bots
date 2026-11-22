@@ -39,6 +39,7 @@ pub mod default_keys;
 pub mod diagnostics;
 pub mod gc;
 pub mod halt_labels;
+mod int_hash;
 mod interp;
 pub use interp::host::{
     HostCallContext, HostCallError, HostCallable, HostCallableId, HostResult, HostValue,

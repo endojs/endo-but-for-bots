@@ -620,7 +620,7 @@ pub(super) fn format_temporal_plain(r: TemporalPlainRecord) -> String {
 
 pub(super) fn temporal_brand<T: Copy>(
     value: Slot,
-    records: &std::collections::HashMap<crate::value::SlotIndex, T>,
+    records: &crate::int_hash::IntMap<crate::value::SlotIndex, T>,
 ) -> Option<T> {
     match value.value {
         Payload::Reference(r) if value.kind == Kind::Reference => records.get(&r).copied(),

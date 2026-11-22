@@ -757,7 +757,8 @@ fn brace_body_at(src: &str, open: usize) -> &str {
 /// though its key half names a slot; a set or vector of keys has no
 /// value half, and only what follows the key's own `SlotIndex` is asked.
 fn value_half_is_slot_free(ty: &str, is_bearing: &dyn Fn(&str) -> bool) -> bool {
-    let map_args = ["HashMap<", "BTreeMap<"]
+    // `IntMap` is `crate::int_hash`'s `HashMap` with the integer-key hasher.
+    let map_args = ["HashMap<", "BTreeMap<", "IntMap<"]
         .iter()
         .filter_map(|marker| ty.find(marker).map(|at| at + marker.len()))
         .min();
@@ -1308,10 +1309,15 @@ fn every_serialized_slot_bearing_table_is_walked_or_names_its_reason() {
     // key; the row type after the map's first top-level comma is what a
     // row can point at. A non-map type is its own row type.
     let row_type = |ty: &str| -> String {
-        let Some(map) = ty.find("HashMap<") else {
+        // `IntMap` is `crate::int_hash`'s `HashMap` with the integer-key hasher.
+        let Some((map, marker)) = ["HashMap<", "IntMap<"]
+            .iter()
+            .filter_map(|marker| ty.find(marker).map(|at| (at, marker.len())))
+            .min()
+        else {
             return ty.to_string();
         };
-        let generics = &ty[map + "HashMap<".len()..];
+        let generics = &ty[map + marker..];
         let mut depth = 0i64;
         for (i, c) in generics.char_indices() {
             match c {
@@ -2588,6 +2594,12 @@ fn value_slot_free_reads_the_value_half_of_a_map() {
         ("HashMap<Foo, Vec<SlotIndex>>", false),
         ("HashMap<SlotIndex, Option<Box<Slot>>>", false),
         ("HashMap<SlotIndex, HashMap<u16, usize>>", true),
+        (
+            "Tracked<crate::int_hash::IntMap<crate::value::SlotIndex, ErrorData>>",
+            true,
+        ),
+        ("IntMap<SlotIndex, Slot>", false),
+        ("IntSet<SlotIndex>", true),
     ] {
         assert_eq!(value_half_is_slot_free(ty, &is_bearing), expected, "{ty}");
     }
