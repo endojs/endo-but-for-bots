@@ -17,7 +17,11 @@
 //! Environment: `MICRO_ONLY=<name>[,<name>...]` runs only those workloads; `MICRO_SAMPLES=<n>`
 //! sets the timed samples after one warm-up (default 5, and 0 runs only the
 //! warm-up, which suits instruction counting); `MICRO_DISASM=1` prints the
-//! bytecode. Every run asserts the expected result and that the computrons,
+//! bytecode; `MICRO_PLAIN=1` turns dispatch fusion off
+//! ([`Interp::set_dispatch_fusion`]), so one binary measures both. Built
+//! with the `dispatch-census` feature, the roster also prints each
+//! workload's most frequent straight-line opcode n-grams (`CENSUS` lines,
+//! from the warm-up run). Every run asserts the expected result and that the computrons,
 //! dispatch count and raw meter index are identical across samples. The
 //! `MICRO` lines carry those totals so two builds can be diffed for cost
 //! invariance.
@@ -167,6 +171,7 @@ fn porffor_micro() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(5);
     let disasm = std::env::var("MICRO_DISASM").is_ok();
+    let plain = std::env::var("MICRO_PLAIN").is_ok();
     for (name, source, expected) in WORKLOADS {
         if only
             .as_deref()
@@ -185,6 +190,9 @@ fn porffor_micro() {
         let mut totals = None;
         for round in 0..=samples {
             let mut vm = Interp::new();
+            if plain {
+                vm.set_dispatch_fusion(false);
+            }
             vm.link_intrinsics(&symbols);
             let start = Instant::now();
             let outcome = vm.run(&code);
@@ -203,6 +211,10 @@ fn porffor_micro() {
             if round > 0 {
                 times.push(ms);
             }
+            #[cfg(feature = "dispatch-census")]
+            if round == 0 {
+                print_census(name, &vm, outcome.dispatched_this_run);
+            }
         }
         let (computrons, dispatched, raw) = totals.expect("at least one run");
         if times.is_empty() {
@@ -217,5 +229,22 @@ fn porffor_micro() {
             times[times.len() - 1],
             median * 1e6 / dispatched as f64
         );
+    }
+}
+
+/// The `CENSUS <workload> <n> <count> <share> <ops>` lines: the 12 most
+/// frequent straight-line n-grams for each length, with their share of the
+/// run's dispatches.
+#[cfg(feature = "dispatch-census")]
+fn print_census(name: &str, vm: &Interp, dispatched: u64) {
+    for n in 2..=ironhorse_vm::cost::CENSUS_MAX_GRAM {
+        for row in vm.cost_recorder().census(n).into_iter().take(12) {
+            println!(
+                "CENSUS {name} {n} {} {:.4} {}",
+                row.count,
+                row.count as f64 * n as f64 / dispatched as f64,
+                row.ops.join(",")
+            );
+        }
     }
 }

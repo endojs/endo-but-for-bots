@@ -48,6 +48,10 @@ ironhorse-runtime = { path = "../ironhorse-runtime" }
 # instruction-identical object-code firewall proof is not established by that test.
 default = []
 cost-calibration = []
+# Census of straight-line opcode n-grams (pairs to 5-grams) on top of the
+# cost-calibration histogram, for choosing dispatch fusions. Instrumentation
+# only: it observes dispatch and never feeds the meter.
+dispatch-census = ["cost-calibration"]
 # Shipping workers opt in; instrumentation cannot unify into this configuration.
 consensus = ["deterministic-math"]
 # Pure-Rust, software-only provider. Default builds retain platform compatibility.

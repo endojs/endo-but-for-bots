@@ -53,6 +53,12 @@ mod off {
         /// No-op when the feature is off.
         #[inline(always)]
         pub fn on_builtin(&mut self, _method: NativeMethod) {}
+
+        /// The decoded extent of the instruction just recorded by
+        /// [`Self::on_dispatch`], for the `dispatch-census` n-gram count.
+        /// No-op when the feature is off.
+        #[inline(always)]
+        pub fn on_sequence(&mut self, _pc: usize, _len: usize) {}
     }
 }
 
@@ -87,6 +93,9 @@ mod on {
         /// clean equivalent (each distinct `Math(id)` / `DataViewGet(n)` is its
         /// own key, which is the finer granularity the report wants anyway).
         builtins: std::collections::HashMap<NativeMethod, u64>,
+        /// Straight-line opcode n-grams (`dispatch-census` only).
+        #[cfg(feature = "dispatch-census")]
+        census: Box<Census>,
     }
 
     impl Default for CostRecorder {
@@ -94,8 +103,58 @@ mod on {
             CostRecorder {
                 opcodes: Box::new([0u64; XS_CODE_COUNT]),
                 builtins: std::collections::HashMap::new(),
+                #[cfg(feature = "dispatch-census")]
+                census: Box::default(),
             }
         }
+    }
+
+    /// The longest n-gram the census records.
+    #[cfg(feature = "dispatch-census")]
+    pub const CENSUS_MAX_GRAM: usize = 5;
+
+    /// Dynamic counts of opcode sequences that ran in straight line: each
+    /// instruction began where the previous one ended, in the same
+    /// dispatch. A taken branch, call, return or catch landing starts a new
+    /// chain, so every counted n-gram is a candidate for static fusion
+    /// (only its last member may transfer control).
+    #[cfg(feature = "dispatch-census")]
+    #[derive(Debug, Clone, Default)]
+    struct Census {
+        /// The opcode `on_dispatch` saw last, not yet placed in the chain.
+        current: u8,
+        /// The chain so far, oldest first (at most `CENSUS_MAX_GRAM - 1`).
+        chain: Vec<u8>,
+        /// Where the last chained instruction ended.
+        next_pc: usize,
+        /// Count per n-gram, keyed by its opcodes (length 2 to
+        /// `CENSUS_MAX_GRAM`).
+        grams: std::collections::HashMap<Vec<u8>, u64>,
+    }
+
+    #[cfg(feature = "dispatch-census")]
+    impl Census {
+        fn record(&mut self, pc: usize, len: usize) {
+            if pc != self.next_pc {
+                self.chain.clear();
+            }
+            self.chain.push(self.current);
+            if self.chain.len() > CENSUS_MAX_GRAM {
+                self.chain.remove(0);
+            }
+            for start in 0..self.chain.len().saturating_sub(1) {
+                *self.grams.entry(self.chain[start..].to_vec()).or_insert(0) += 1;
+            }
+            self.next_pc = pc + len;
+        }
+    }
+
+    /// One census row: an opcode sequence (mnemonics) and its count.
+    #[cfg(feature = "dispatch-census")]
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct CensusEntry {
+        pub ops: Vec<&'static str>,
+        pub count: u64,
     }
 
     impl CostRecorder {
@@ -105,6 +164,39 @@ mod on {
         #[inline]
         pub fn on_dispatch(&mut self, op: Opcode) {
             self.opcodes[op as usize] += 1;
+            #[cfg(feature = "dispatch-census")]
+            {
+                self.census.current = op as u8;
+            }
+        }
+
+        /// The decoded extent of the instruction just recorded by
+        /// [`Self::on_dispatch`]. Feeds the `dispatch-census` n-gram count;
+        /// a no-op without that feature.
+        #[inline]
+        pub fn on_sequence(&mut self, _pc: usize, _len: usize) {
+            #[cfg(feature = "dispatch-census")]
+            self.census.record(_pc, _len);
+        }
+
+        /// Every recorded n-gram of length `n`, most frequent first, ties
+        /// broken by the opcode bytes (`dispatch-census` only).
+        #[cfg(feature = "dispatch-census")]
+        pub fn census(&self, n: usize) -> Vec<CensusEntry> {
+            let mut rows: Vec<(&Vec<u8>, u64)> = self
+                .census
+                .grams
+                .iter()
+                .filter(|(ops, _)| ops.len() == n)
+                .map(|(ops, &count)| (ops, count))
+                .collect();
+            rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+            rows.into_iter()
+                .map(|(ops, count)| CensusEntry {
+                    ops: ops.iter().map(|&op| CODE_NAMES[op as usize]).collect(),
+                    count,
+                })
+                .collect()
         }
 
         /// Record one native builtin invocation, keyed by the dispatched
@@ -379,6 +471,8 @@ mod on {
     }
 }
 
+#[cfg(feature = "dispatch-census")]
+pub use on::{CensusEntry, CENSUS_MAX_GRAM};
 #[cfg(feature = "cost-calibration")]
 pub use on::{CostModel, CostRecorder, CostReport, HistogramEntry, WorkInputs, WorkModel};
 
@@ -529,5 +623,36 @@ mod on_tests {
             CostModel::builtin_work(NativeMethod::ObjectValueOf),
             WorkModel::Constant
         );
+    }
+}
+
+#[cfg(all(test, feature = "dispatch-census"))]
+mod census_tests {
+    use super::*;
+    use crate::opcode::Opcode;
+
+    #[test]
+    fn census_counts_straight_line_grams_and_breaks_at_jumps() {
+        let mut r = CostRecorder::default();
+        // get_local (2 bytes) at 0, integer (2) at 2, less (1) at 4, then a
+        // jump: get_local at 10 starts a new chain.
+        for (op, pc, len) in [
+            (Opcode::XS_CODE_GET_LOCAL_1, 0, 2),
+            (Opcode::XS_CODE_INTEGER_1, 2, 2),
+            (Opcode::XS_CODE_LESS, 4, 1),
+            (Opcode::XS_CODE_GET_LOCAL_1, 10, 2),
+            (Opcode::XS_CODE_POP, 12, 1),
+        ] {
+            r.on_dispatch(op);
+            r.on_sequence(pc, len);
+        }
+        let pairs = r.census(2);
+        assert_eq!(pairs.len(), 3);
+        assert!(pairs.iter().all(|row| row.count == 1));
+        assert!(!pairs.iter().any(|row| row.ops == ["less", "get_local"]));
+        let triples = r.census(3);
+        assert_eq!(triples.len(), 1);
+        assert_eq!(triples[0].ops, ["get_local", "integer", "less"]);
+        assert!(r.census(4).is_empty());
     }
 }

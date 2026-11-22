@@ -516,6 +516,22 @@ pub struct Interp {
     /// the cross-segment call path, which is itself gated on
     /// [`Self::func_segments`] being non-empty (an eval having run).
     top_level_code: Option<std::rc::Rc<[u8]>>,
+    #[boot_new(true)]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Whether dispatch may use the derived, layout-preserving dispatch
+    /// buffers of [`super::fuse`]. A host-side switch for differential
+    /// testing ([`Interp::set_dispatch_fusion`]): results, computrons, meter
+    /// checks, allocation and snapshot bytes are the same either way. Never
+    /// persisted; a restored machine starts with the default.
+    dispatch_fusion: bool,
     #[boot_new(Tracked::new(
         Default::default(),
         snapshot_dirt.clone(),

@@ -798,6 +798,8 @@ mod tests {
             "cost",
             "step_limit",
             "n_dispatched",
+            // Host switch for the derived dispatch buffers (`fuse.rs`).
+            "dispatch_fusion",
         ];
         const BOOT_DERIVED: &[&str] = &[
             "realm",

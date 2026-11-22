@@ -57,6 +57,7 @@ const FRESH_ORDER: &[&str] = &[
     "code_segments",
     "active_segment",
     "top_level_code",
+    "dispatch_fusion",
     "func_segments",
     "functions",
     "bound_functions",

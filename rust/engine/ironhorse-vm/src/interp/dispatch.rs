@@ -342,6 +342,8 @@ impl Interp {
                     remaining: len - pc,
                 }));
             }
+            // The `dispatch-census` n-gram count; compiles away otherwise.
+            self.cost.on_sequence(pc, ilen);
 
             use Opcode::*;
             match op {

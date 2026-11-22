@@ -65,6 +65,7 @@ mod errors;
 mod eval;
 mod frames;
 mod function;
+mod fuse;
 mod invoke;
 mod iterable;
 mod render;
