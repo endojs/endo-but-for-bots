@@ -950,7 +950,11 @@ impl Interp {
                     dispatch_flow!(self.exec_to_string(code, pc, return_depth, size), pc)
                 }
                 XS_CODE_INCREMENT | XS_CODE_DECREMENT => {
-                    dispatch_flow!(self.exec_increment(code, pc, return_depth, op, size), pc)
+                    if self.step_integer_in_place(op == XS_CODE_INCREMENT) {
+                        pc += size as usize;
+                    } else {
+                        dispatch_flow!(self.exec_increment(code, pc, return_depth, op, size), pc)
+                    }
                 }
                 XS_CODE_EXPONENTIATION => {
                     dispatch_flow!(self.exec_exponentiation(code, pc, return_depth, size), pc)
@@ -3869,6 +3873,48 @@ impl Interp {
     // inside this opcode. A postfix expression that preserves its
     // old value also emits `TO_NUMERIC` first. BigInt uses XS's
     // `_inc`/`_dec`, which add/subtract the static BigInt one.
+    /// The `INCREMENT`/`DECREMENT` arm's inline half: an Integer top that
+    /// stays an Integer steps in place and answers `true`; anything else
+    /// (a Number, the int boundary, BigInt, a value needing `ToNumeric`, an
+    /// empty stack) answers `false` and runs [`Self::exec_increment`]. For
+    /// such a top that function's `ToNumeric` is the identity and its
+    /// rewrite of the top with itself changes nothing, so both leave the
+    /// same slot (kind, payload, and the untouched link/id/flag); neither
+    /// meters anything beyond the dispatch.
+    #[inline(always)]
+    pub(in crate::interp) fn step_integer_in_place(&mut self, inc: bool) -> bool {
+        let Some(top) = self.stack.last_mut() else {
+            return false;
+        };
+        let (Kind::Integer, Payload::Integer(v)) = (top.kind, top.value) else {
+            return false;
+        };
+        let stepped = if inc {
+            v.checked_add(1)
+        } else {
+            v.checked_sub(1)
+        };
+        // XS promotes at INT_MAX for increment and at -INT_MAX (not
+        // INT_MIN) for decrement; both promotions are the slow half's.
+        match stepped {
+            Some(n) if n != i32::MIN => {
+                top.value = Payload::Integer(n);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// [`Self::exec_increment`] for the fast-path equivalence tests: the
+    /// next program counter, or `None` when the arm exits the loop.
+    #[cfg(test)]
+    pub(in crate::interp) fn exec_increment_next(&mut self, op: Opcode) -> Option<usize> {
+        match self.exec_increment(&[], 0, 0, op, 1) {
+            Flow::Next(pc) => Some(pc),
+            Flow::Exit(_) => None,
+        }
+    }
+
     /// The dispatch loop's `INCREMENT` arm, which also runs `DECREMENT`.
     #[inline(never)]
     fn exec_increment(
