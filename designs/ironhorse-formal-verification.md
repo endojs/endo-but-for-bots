@@ -3,19 +3,62 @@
 | | |
 |---|---|
 | **Created** | 2026-11-19 |
+| **Updated** | 2026-11-22 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 
 ## Status
 
-At Created, none of this has been implemented.
-Phase 0 starts as soon as this document lands.
-No Kani harness, `ironhorse-spec` crate, manifest, runner or ledger exists in the tree yet.
-The measurements cited below come from a feasibility spike.
-It ran Kani 0.68 with CBMC 6.11 in a throwaway worktree at `a4155de9`, and that worktree has
-since been removed.
-None of its harnesses were committed.
-Each phase updates this section and the ledger (`rust/engine/VERIFICATION.md`) as it lands.
+As of 2026-11-22, Phase 0 to Phase 2 have landed, Phase 3 in part, Phase 4 in part.
+The ledger, [`rust/engine/VERIFICATION.md`](../rust/engine/VERIFICATION.md), states every
+proved claim with its exact domain and is generated from the manifest
+(`rust/engine/verification/proofs.toml` and `proofs.d/*.toml`).
+Where a claim below differs from the catalogue, the ledger and the manifest are authoritative;
+the catalogue entries carry an **As landed** note where the difference matters.
+
+**Proved (Kani 0.68.0, bounded where stated).**
+MTR-1 to MTR-6, NUM-1 to NUM-9 (NUM-3 and NUM-9 in part), SNAP-1 to SNAP-4, TXT-1 (the
+per-unit kernels), STR-1 (`image_free_marks` only), STR-2 and STR-3, plus the canaries KANI-1
+and KANI-2.
+The runner reports 114 harnesses over 25 guarantee IDs: 90 in the `pr` tier (252 s wall on a
+4-core development host) and 24 `nightly` (2190 s, peak 6.05 GB for the 48-byte atom parse).
+`verify.py mutants` kills all 73 seeded mutants (2403 s), and `verify.py selftest` rejects every
+deliberately bad harness.
+
+**Tested, not proved.**
+`Math.imul` (timed out at 600 s); the integer Mod fast path against Number::remainder (900 s)
+and the Number paths of Mul and Mod; `days_from_civil` against the spec day model beyond
+years -10000 to 10000 (600 s); NUM-10 array-index recognition (900 s); `civil_fields`' float
+floor division, `time_clip` and `date_from_components_exact`; `MeterImage::decode_fields` and
+`Signature::decode`; the `BTreeSet` duplicate-tag shape above 64 atoms; the `Vec`-building
+transcoders; `SlotArena::try_from_image`.
+Float32 typed-array elements are neither proved nor model-tested by this work.
+The ledger's "Tested, not proved" section names the covering test for each.
+
+**Not attempted.**
+NUM-11 (BigInt), STR-1(b) and (c) (the `FreeList` extraction was judged too risky for the
+serialised LIFO reuse order), the NUM-6 `lastIndexOf` variant, contract-based proofs, and Bolero
+companions (the companions are ordinary seeded and exhaustive tests instead).
+
+**Defects fixed** (each with a regression test):
+meter accumulation overflow from restored states (`5714b2e8`);
+the meter wrap branch now fails closed instead of resetting the index (`952e08a9`, breaking,
+awaiting maintainer sign-off);
+`String.fromCharCode` for Numbers at or above 2^63 (`32a0daaf`);
+non-canonical slot records (`086ed0bf`) and short slot records panicking in release
+(`00546987`);
+the quadratic atom duplicate-tag check (`8c3c0067`);
+row-encoder panics past the arena and `runtime_intern_floor` wrapping (`4f8c582f`);
+WTF-8 code points above U+10FFFF (`3dbbda5f`);
+`instruction_len` `usize` overflow on 32-bit targets (`6ed5c3a4`).
+
+**Infrastructure.**
+`ironhorse-spec` (`3b4b96b1`, `6e325f48`, `fd147f23`, `34ec367f`), the runner `verify.py`
+with its unit tests and self-test (`c68860d1`, `ce71a232`), the ledger, manifest and mutants
+(`01572154`), the `ironhorse-kani` CI job and the nightly workflow (`fcd3d1f0`).
+The runner treats every check in a proof module as harness code, so an unreachable helper
+assertion fails the run unless the manifest allows that function by name, and `verify.py check`
+fails on any `cfg(kani)` code swap the manifest does not list.
 
 ## What is the Problem Being Solved?
 
@@ -307,8 +350,12 @@ The rule:
   `i128::rem_euclid` is fine.
 - A kernel that uses these operations is rewritten to integer-only bit arithmetic before it is
   verified.
-  The rewrite must be behaviour-identical on all inputs, and the proof against the model is what
-  establishes that.
+  The rewrite must be behaviour-identical at every call site.
+  The proof establishes only that the kernel equals the model on its stated domain; identity
+  with the replaced code at the call sites is reviewed and differential-tested, not proved.
+  (For example, `relative_index` differs from the legacy float clamp on a non-integral input
+  such as (-2.5, 5), which no call site passes, since every caller applies
+  ToIntegerOrInfinity first.)
   It is benchmarked under
   [§ Performance and metering discipline](#performance-and-metering-discipline).
 - Stubbing is not an acceptable substitute in a ledger claim.
@@ -508,7 +555,9 @@ Each entry gives:
   - the shift count is `ToUint32(b) mod 32`;
   - `>>>` yields `Integer(u)` exactly when `u ≤ i32::MAX`, and `Number(u)` otherwise.
 
-  `imul` and `clz32` equal their models for all inputs.
+  `clz32` equals its model for all inputs.
+  `imul` was planned the same way; as landed it is tested against its model, not proved (the
+  32-bit multiplier equivalence timed out at 600 s).
 - Spec: §6.1.6.1.9 to §6.1.6.1.19, §21.3.2.19 (imul), §21.3.2.11 (clz32).
 - Method: Kani all-inputs, 2^64 per binary op.
 - Refactor: the extraction.
@@ -552,6 +601,13 @@ Each entry gives:
   The (b) lemma is unknown: the spike's "sign rule on i32 operands" took 0.1 s, but exactness was
   not attempted separately.
 - Mutant: drop the `x < 0 && r == 0 → -0` branch of Mod.
+- **As landed:** (a) Add and Sub are proved bit-identical to the Number path (nightly) with
+  default checks; the `--no-overflow-checks` flag first planned was not needed.
+  (b) Mul is proved against the model directly, ties-to-even above 2^53 and -0 included, so the
+  product lemma is subsumed; the Number path's float `*` is not proved.
+  (c) Div is by construction, as planned.
+  (d) Mod is tested, not proved: the proof against Number::remainder timed out at 900 s, also in a
+  division-free form.
 
 **NUM-4. Integer/Number canonical representation.**
 - Kernel: `ironhorse-vm/src/interp/coerce.rs` `Interp::slot_from_number` (an associated fn with
@@ -570,6 +626,9 @@ Each entry gives:
   1.7 s.
   Tier `pr`.
 - Mutant: drop the sign test, so -0 becomes `Integer(0)`.
+- **As landed:** the proved claim is stronger on NaN: every NaN becomes the canonical NaN
+  `0x7FF8_0000_0000_0000` (`Slot::number` canonicalises), so `to_number` has the input's bits for
+  every non-NaN input and the canonical NaN otherwise.
 
 **NUM-5. SameValue, SameValueZero, IsStrictlyEqual on immediates.**
 - Kernel:
@@ -659,6 +718,8 @@ Each entry gives:
   Float32 (`n as f32`) is a float cast the spike did not measure.
   If it is expensive it moves to `nightly`.
 - Mutant: Uint8Clamped truncates instead of rounding.
+- **As landed:** proved for the seven integer kinds, Float64 (NaN stored canonically) and
+  Float16; Float32 is not covered.
 
 **NUM-9. Date day and civil arithmetic.**
 - Kernel:
@@ -694,6 +755,13 @@ Each entry gives:
 - Cost: estimated "moderate" by the survey (i128 division is slow in CBMC; no loops).
   Tier `nightly`.
 - Mutant: `⌊(y-1901)/100⌋` with truncating division.
+- **As landed:** (b) is proved as stated (the round trip on the TimeClip day range), but it is
+  self-consistency, not conformance.
+  (a) is proved against the spec day model with month and day symbolic for every year in
+  -10000..=10000 (nightly), 1900..=2100 and named boundary years (pr); over the whole TimeClip
+  year range it timed out at 600 s and is tested.
+  (c) and (d) are tested only.
+  (e) holds by construction: `civil_fields` now calls `civil_from_days`.
 
 **NUM-10. Array-index string recognition.**
 - Kernel: `interp/numeric.rs` `string_to_index` and `string_to_array_like_index`.
@@ -709,6 +777,7 @@ Each entry gives:
   digit loop.
 - Cost: estimated; not measured.
 - Mutant: accept a leading `0` on multi-digit strings.
+- **As landed:** tested, not proved; the proof timed out at 900 s.
 
 **NUM-11. BigInt limbs and NumberToBigInt.**
 - Kernel: `interp/bigint.rs`, the limb operations:
@@ -741,6 +810,7 @@ Each entry gives:
   The harnesses assume trimmed inputs, and the ledger lists "snapshot-decoded BigInt chunks are
   trimmed" as an unproved obligation of the restore path.
 - Mutant: drop the final carry limb in `bi_add_mag`.
+- **As landed:** not attempted.
 
 ### The meter
 
@@ -867,6 +937,13 @@ found.
     (`nightly`).
   - (d) and (e): estimated.
 - Mutant: accept trailing bytes.
+- **As landed:** (a) and (b) are proved for every input of up to 16, 32 and 48 bytes, all
+  nightly; (c) for two atoms (lengths 1 and 3) and three (0, 2 and 3), with the duplicate scan
+  proved separately for up to four tags; (d) follows from (b) and (c) on those domains; (e) on
+  every `usize`.
+  Under `cfg(kani)` `first_duplicate` compiles only its pairwise scan, which a shipped build
+  also takes for every container of at most 64 atoms; the `BTreeSet` shape above that is tested,
+  not proved.
 
 **SNAP-2. Slot record codec.**
 - Kernel: `ironhorse-snapshot/src/slot_codec.rs` `encode_slot`/`put_slot`, `decode_slot`,
@@ -910,6 +987,9 @@ found.
   They stay with cargo-fuzz and Bolero; only the framing primitives are proved.
 - Cost: estimated easy, tier `pr`.
 - Mutant: reserve `count` unclamped.
+- **As landed:** proved for the `Cursor` reads, the field readers, `decode_u32s`, `Version::decode`
+  and `reserve_hint`; `MeterImage::decode_fields` and `Signature::decode` are tested, not proved,
+  and `decode_heap` was not attempted.
 
 **SNAP-4. Bytecode instruction framing.**
 - Kernel: `ironhorse-vm/src/opcode.rs` `instruction_len`, `encoded_instruction_len`, `remap_ids`
@@ -969,6 +1049,10 @@ found.
   - Bolero over sequences for (a) through (d), with Kani on `[u8; ≤ 4]` for the non-allocating
     `wtf8_code_point` and `code_point_units` (estimated cheap).
 - Mutant: `0xF0..=0xF7` kept after the fix.
+- **As landed:** the allocation-free per-unit and per-code-point kernels are proved on their
+  whole domains (pr), and the order claim (d) for strings of lengths (1, 2) and (2, 2); the
+  `Vec`-building transcoders are tested, not proved, including the one-unit `SymbolName` round
+  trip planned as a nightly proof.
 
 ### Structural invariants
 
@@ -996,6 +1080,9 @@ found.
 - Refactor: the `FreeList` extraction for (b) and (c).
 - Cost: (a) is estimated easy now, tier `pr`; (b) and (c) are `nightly`.
 - Mutant: `free` forgets to set `free_marks`.
+- **As landed:** only (a), for slot counts 0 to 4 and free lists of up to five entries (nightly).
+  (b) and (c) were not attempted: the `FreeList` extraction was judged too risky for the
+  serialised LIFO reuse order.
 
 **STR-2. Chunk-chain parser progress.**
 - Kernel: `value.rs` `ChunkReader::checked_block_at` and `chunk_allocation_fits`.
@@ -1251,7 +1338,7 @@ The ledger holds what is true now, and the runner keeps it honest.
 
 ### CI
 
-- **`verify-ironhorse` (pull requests).** It runs the `pr` tier.
+- **`ironhorse-kani` in `ci.yml` (pull requests).** It runs the `pr` tier.
   Target: under about 10 minutes wall time on a 4-vCPU/16 GB runner.
   The selection is by estimate: the `pr` entries above total a few minutes of solver time,
   plus one cold build per crate (measured on the loaded host at 43 s for the VM and 21 s for the
@@ -1275,9 +1362,13 @@ The ledger holds what is true now, and the runner keeps it honest.
 
 ## Performance and metering discipline
 
-- **Behaviour identity is proved, speed is measured.**
-  Every rewrite for provability must be behaviour-identical on every input, and the proof
-  against the model establishes exactly that.
+- **Kernels are proved against the model; behaviour identity is reviewed and tested; speed is
+  measured.**
+  Every rewrite for provability must be behaviour-identical at every call site.
+  The proof establishes that the kernel equals the spec model on its stated domain.
+  Identity with the code it replaces is reviewed and differential-tested (the replaced float
+  forms are kept in the tests), not proved: `relative_index`, for one, differs from the legacy
+  float form on non-integral inputs such as (-2.5, 5), which no call site passes.
   That covers integer-only ToIntN, `number_to_bigint` by shifting, the `relative_index`
   consolidation and the `civil_fields_ms` split.
   The repository rule is that a numeric-representation choice is substantiated by measurement.
@@ -1327,7 +1418,7 @@ A phase is done when the runner is green on it, not when its harnesses exist.
    - Add `ironhorse-spec` with the ToIntN and f16 models and their known-answer tests.
    - Add workspace `check-cfg` for `cfg(kani)` and the `cfg(kani)` target dependency.
    - Add `proofs.toml`, `verify.py` with its self-test fixtures, `VERIFICATION.md`, the canary
-     group, the `verify-ironhorse` job and its `ci-changes.py` registration.
+     group, the `ironhorse-kani` job and its `ci-changes.py` registration.
    - Measure the PR-tier budget on the real runner, establish which output format carries cover
      and unreachable statuses, and pin library-unreachable counts.
    - Land the meter: MTR-1 to MTR-6, the saturation fix, and the wrap-branch fix (after sign-off;
@@ -1413,20 +1504,31 @@ A phase is done when the runner is green on it, not when its harnesses exist.
 - [ ] Maintainer sign-off on the meter wrap-branch change, and the decision on a meter-version
       identity change.
 - [ ] Pin the ECMA-262 edition and re-check every clause number cited here.
-- [ ] Confirm that `[target.'cfg(kani)'.dependencies]` resolves for `ironhorse-spec` under
-      `cargo kani`.
-- [ ] Establish which Kani output format reliably carries cover and unreachable statuses, then
-      drop the all-formats-agree requirement.
-- [ ] Measure library-unreachable counts and the PR-tier wall time on the CI runner.
-- [ ] Establish whether WTF-8 F5..F7 is reachable from the JSON tokenizer.
-- [ ] Confirm against the snapshot fixtures that no stored slot record has a non-zero pad or
-      unused byte.
+- [x] Confirm that `[target.'cfg(kani)'.dependencies]` resolves for `ironhorse-spec` under
+      `cargo kani` (the NUM proofs link it).
+- [x] Establish which Kani output format reliably carries cover and unreachable statuses:
+      `--export-json` (SARIF lists failures only); the runner cross-checks it against the
+      regular text verdict only.
+- [ ] Measure the PR-tier wall time and budgets on the CI runner.
+      Library-unreachable counts are pinned per harness from measured runs on a 4-core
+      development host, and so is the PR tier's wall time.
+- [x] Establish whether WTF-8 F5..F7 is reachable from the JSON tokenizer: not from guest input
+      today (`3dbbda5f`); the kernel is fixed regardless.
+- [x] Confirm against the snapshot fixtures that no stored slot record has a non-zero pad or
+      unused byte: every snapshot, store and fixture suite passes unchanged after `086ed0bf`.
 - [ ] Kind/payload pairing well-formedness of slot records is unproved.
       Decide whether it belongs to the codec or to the image layer.
 - [ ] "Snapshot-decoded BigInt chunks are trimmed" is an unproved restore-path obligation that
       NUM-11 assumes.
-- [ ] The NUM-3(b) product lemma, and NUM-9's f64-floor-division versus `div_euclid` agreement,
-      may exceed Kani's budget; their fallback is Bolero plus a written argument.
+- [x] The NUM-3(b) product lemma: subsumed, since the Mul fast path is proved against the model
+      directly.
+- [ ] NUM-9's f64 floor division in `civil_fields`, `time_clip` and `date_from_components_exact`
+      are tested only.
+- [ ] Proofs that timed out and now rest on tests: `Math.imul` (600 s), the Mod fast path
+      (900 s), NUM-10 (900 s), `days_from_civil` against the model beyond years -10000 to 10000
+      (600 s); and `MeterImage::decode_fields` and `Signature::decode`, which have no harness.
+- [ ] Float32 typed-array elements have neither a proof nor a model-based test.
+- [ ] NUM-11, STR-1(b) and (c), and the NUM-6 `lastIndexOf` variant were not attempted.
 - [ ] Dispatcher operand-bound safety (the bridge from SNAP-4 to `operand_*`) needs a
       `fetch(code, pc)` refactor before it can be proved.
 - [ ] Atom totality beyond 48 bytes, and multi-unit `SymbolName` round trips, are beyond the

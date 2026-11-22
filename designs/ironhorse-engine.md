@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-02 |
-| **Updated** | 2026-11-19 |
+| **Updated** | 2026-11-22 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Approved (2026-07-02, program supervisor `port-xs-to-rust-memory-safe-engine`; all ten open questions resolved, see § Resolved Questions) |
 | **Revised** | 2026-07-04 — **metering doctrine: accuracy over parity** (maintainer directive). The meter is Ironhorse's own release-versioned deterministic cost model, a proxy for real (wall-clock) execution cost, NOT a reproduction of XS's computron counts. The XS differential oracle is retained for **result** correctness only; computron comparison is demoted to advisory telemetry. This selects the "stated determinism-equivalence proof" branch the § Prompt already permitted. See § Metering (requirement 1a) and § Agoric consensus compatibility for the authoritative statement. |
@@ -792,6 +792,13 @@ slot-pointer arithmetic silently reading wrong stack slots) is
 unrepresentable against typed arena accessors.
 CI enforcement is `forbid(unsafe_code)`, ordinary arena/GC unit tests, the fuzz
 targets below, and ASAN/UBSAN instrumentation scoped to the C oracle harness.
+Separately, Kani bounded-model-checking proofs now cover a set of named
+guarantees over small kernels (the meter, numeric conversions, snapshot and
+bytecode framing, transcoder kernels), each over a stated domain; see
+[ironhorse-formal-verification](ironhorse-formal-verification.md) and the
+ledger in `rust/engine/VERIFICATION.md`.
+They are functional properties of source code under Kani's model of Rust, not a
+memory-safety result and not a substitute for Miri.
 The oracle sanitizer runner compiles all XS and shim C objects with Clang and
 links the sanitizer runtimes into the Rust harness; it does not instrument Rust.
 UBSAN excludes the pinned upstream `c/moddable/xs/sources/` directory, whose

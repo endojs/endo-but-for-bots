@@ -319,6 +319,11 @@ recoverable host-abort paths; those allocations are now released without
 suppressing leak reports or duplicating XS's ordinary exception cleanup.
 
 The pure-Rust engine crates enforce `forbid(unsafe_code)` and run ordinary unit and fuzz tests.
+Named guarantees of small kernels (the meter, the numeric conversions, snapshot and bytecode
+framing, the transcoder kernels) are also proved with Kani over stated, bounded domains; the
+proved claims, their bounds and what fell back to tests are in [VERIFICATION.md](VERIFICATION.md).
+The `ironhorse-kani` CI job proves the `pr` tier on every relevant change, and
+`ironhorse-kani-nightly.yml` proves the rest and checks that the proofs kill seeded mutants.
 There is no Miri CI lane; the previously named `*_is_miri_clean` tests have descriptive
 behavior names and do not establish a Miri result.
 

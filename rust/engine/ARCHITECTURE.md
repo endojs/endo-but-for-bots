@@ -29,7 +29,7 @@ is supplied through a trait owned by the VM.
 | `ironhorse-compile` | Lexer, parser, scoper, coder and budgeted source compilation. |
 | `ironhorse-regexp` | XSRE-derived regexp compiler and backtracking matcher. |
 | `ironhorse-snapshot` | Atom codecs, validated images, side-table ledger, heap stores and checkpoints. |
-| `ironhorse-spec` | Integer-only ECMA-262 reference models for proofs; depends on no engine crate. |
+| `ironhorse-spec` | Integer-only ECMA-262 reference models for the Kani proofs ([VERIFICATION.md](VERIFICATION.md)); depends on no engine crate. |
 | `ironhorse-262` | Test262 orchestration, compiler comparisons and XS result differential. |
 | `ironhorse-fuzz` | Testable fuzz logic; nested fuzz project provides libFuzzer entry points. |
 | `xs-oracle` | XS C/FFI reference compiler and runtime for development and CI. |
