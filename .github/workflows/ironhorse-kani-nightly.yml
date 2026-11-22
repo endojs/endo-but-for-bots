@@ -42,11 +42,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check the proof manifest, ledger and runner
-        run: |
-          python3 rust/engine/scripts/test-verify.py
-          python3 rust/engine/scripts/verify.py check
-          python3 rust/engine/scripts/verify.py ledger --check
+      - name: Test the proof runner
+        run: python3 rust/engine/scripts/test-verify.py
 
       - name: Cache Kani
         id: cache-kani
@@ -75,6 +72,13 @@ jobs:
           key: ${{ runner.os }}-ironhorse-kani-${{ env.KANI_VERSION }}-${{ hashFiles('rust/engine/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-ironhorse-kani-${{ env.KANI_VERSION }}-
+
+      # `check` lists the harnesses with `cargo kani list`, so it runs after
+      # Kani is installed.
+      - name: Check the proof manifest and ledger
+        run: |
+          python3 rust/engine/scripts/verify.py check
+          python3 rust/engine/scripts/verify.py ledger --check
 
       - name: Prove the nightly tier
         run: |
