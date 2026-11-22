@@ -1615,8 +1615,7 @@ impl Interp {
             return false;
         }
         for index in start..end {
-            let name = index.to_string();
-            let id = self.symbol_ids.get(&name).copied();
+            let id = self.index_name_id(index);
             let mut owner = self.instance_prototype(inst);
             while !owner.is_null() {
                 if self.proxies.contains_key(&owner)
@@ -2257,7 +2256,7 @@ impl Interp {
     /// dynamically, so `HasProperty` is `false` and `Get` is `undefined`
     /// without consulting anything further.
     fn array_generic_index_answerable(&mut self, o: crate::value::SlotIndex, k: u64) -> bool {
-        if self.symbol_ids.contains_key(k.to_string()) {
+        if self.index_name_id(k).is_some() {
             return true;
         }
         let mut level = o;

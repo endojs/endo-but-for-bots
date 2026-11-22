@@ -20,9 +20,14 @@
 pub use ironhorse_text::SymbolName;
 
 /// The name-to-id map, plus a [`SymbolIds::stamp`] that changes whenever
-/// the map may have changed.
+/// the map may have changed, plus a derived index of the names that are the
+/// decimal spelling of a `u32` (see [`SymbolIds::get_index`]).
 #[derive(Clone)]
-pub(crate) struct SymbolIds(std::collections::HashMap<SymbolName, u16>, u64);
+pub(crate) struct SymbolIds(
+    std::collections::HashMap<SymbolName, u16>,
+    u64,
+    std::collections::BTreeMap<u32, u16>,
+);
 
 /// A process-wide source of [`SymbolIds::stamp`] values. Every possible
 /// mutation takes a fresh one, so two maps (or one map at two times) share a
@@ -33,9 +38,32 @@ fn fresh_symbol_ids_stamp() -> u64 {
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The `u32` whose `to_string()` is exactly `name`, if any: ASCII digits, no
+/// leading zero unless the whole name is `0`, and in range. This is a
+/// bijection between such names and `u32` values, so a lookup of
+/// `index.to_string()` and a lookup of `index` here find the same entry.
+fn decimal_u32_name(name: &SymbolName) -> Option<u32> {
+    let bytes = name.as_bytes();
+    if bytes.is_empty() || bytes.len() > 10 || (bytes.len() > 1 && bytes[0] == b'0') {
+        return None;
+    }
+    let mut value: u64 = 0;
+    for &b in bytes {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        value = value * 10 + u64::from(b - b'0');
+    }
+    u32::try_from(value).ok()
+}
+
 impl Default for SymbolIds {
     fn default() -> Self {
-        Self(Default::default(), fresh_symbol_ids_stamp())
+        Self(
+            Default::default(),
+            fresh_symbol_ids_stamp(),
+            Default::default(),
+        )
     }
 }
 
@@ -107,20 +135,39 @@ impl SymbolIds {
     pub fn get(&self, name: impl SymbolLookup) -> Option<&u16> {
         name.with_cesu8(|bytes| self.0.get(bytes))
     }
+    /// `self.get(index.to_string())` without building the name: the id of
+    /// the name spelling `index` in decimal, if one is interned. The derived
+    /// table is maintained by every mutation below (there is no removal), is
+    /// empty in most programs, and is never persisted: a restored machine
+    /// re-inserts its names and so rebuilds it.
+    #[inline]
+    pub fn get_index(&self, index: u32) -> Option<&u16> {
+        if self.2.is_empty() {
+            return None;
+        }
+        self.2.get(&index)
+    }
     pub fn contains_key(&self, name: impl SymbolLookup) -> bool {
         self.get(name).is_some()
     }
     pub fn insert(&mut self, name: impl Into<SymbolName>, id: u16) -> Option<u16> {
         self.1 = fresh_symbol_ids_stamp();
-        self.0.insert(name.into(), id)
+        let name = name.into();
+        if let Some(index) = decimal_u32_name(&name) {
+            self.2.insert(index, id);
+        }
+        self.0.insert(name, id)
     }
-    /// Conservatively counts as a mutation whether or not the caller inserts.
-    pub fn entry(
-        &mut self,
-        name: SymbolName,
-    ) -> std::collections::hash_map::Entry<'_, SymbolName, u16> {
+    /// Bind `name` to `id` unless it is already bound (the first binding
+    /// wins). Counts as a mutation whether or not it inserts.
+    pub fn insert_if_absent(&mut self, name: SymbolName, id: u16) {
         self.1 = fresh_symbol_ids_stamp();
-        self.0.entry(name)
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.0.entry(name) {
+            if let Some(index) = decimal_u32_name(entry.key()) {
+                self.2.insert(index, id);
+            }
+            entry.insert(id);
+        }
     }
     /// Equal stamps mean an unchanged map: a derived cache keyed on this
     /// stamp stays valid exactly while no name has been added or rebound.
@@ -182,6 +229,43 @@ pub(crate) fn decode_refusal(halt: crate::Halt) -> crate::RunOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_table_matches_decimal_name_lookups() {
+        let mut ids = SymbolIds::default();
+        let names = [
+            "0",
+            "00",
+            "01",
+            "1",
+            "7",
+            "42",
+            "4294967295",
+            "4294967296",
+            "99999999999",
+            "-1",
+            "+1",
+            "1e3",
+            "1.0",
+            " 1",
+            "x",
+            "",
+            "\u{0660}",
+        ];
+        for (k, name) in names.iter().enumerate() {
+            ids.insert(*name, k as u16 + 1);
+        }
+        ids.insert_if_absent(SymbolName::from("5"), 100);
+        ids.insert_if_absent(SymbolName::from("42"), 200);
+        ids.insert("7", 300);
+        for index in [0u32, 1, 5, 7, 42, 100, u32::MAX, u32::MAX - 1] {
+            assert_eq!(ids.get_index(index), ids.get(index.to_string()), "{index}");
+        }
+        assert_eq!(ids.get_index(42), Some(&6));
+        assert_eq!(ids.get_index(7), Some(&300));
+        assert_eq!(ids.get_index(5), Some(&100));
+        assert_eq!(SymbolIds::default().get_index(0), None);
+    }
 
     #[test]
     fn single_symbol_is_id_one() {

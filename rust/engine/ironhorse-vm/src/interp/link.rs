@@ -66,7 +66,7 @@ impl Interp {
         // compiler assigned it in this program.
         for (k, name) in names.iter().enumerate() {
             let id = (k + 1) as u16;
-            self.symbol_ids.entry(name.clone()).or_insert(id);
+            self.symbol_ids.insert_if_absent(name.clone(), id);
         }
     }
 

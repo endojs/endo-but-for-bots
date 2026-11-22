@@ -72,7 +72,7 @@ fn every_symbol_table_mutation_takes_a_fresh_stamp() {
     assert_ne!(second, first);
     ids.get("a");
     assert_eq!(ids.stamp(), second);
-    ids.entry("b".into()).or_insert(2);
+    ids.insert_if_absent("b".into(), 2);
     assert_ne!(ids.stamp(), second);
     assert_ne!(crate::symbols::SymbolIds::default().stamp(), first);
 }

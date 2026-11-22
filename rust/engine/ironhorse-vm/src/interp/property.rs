@@ -640,7 +640,7 @@ impl Interp {
                 // Compact writes do not materialize a property name in XS.
                 // Look up an existing name only: interning every literal index
                 // charged a name-slot allocation and shifted exact metering.
-                let key_id = self.symbol_ids.get(index.to_string()).copied();
+                let key_id = self.index_read_key_id(index);
                 if let Some(key_id) = key_id.filter(|id| self.find_property(inst, *id).is_some()) {
                     if define {
                         let descriptor = OrdinaryDescriptor {
