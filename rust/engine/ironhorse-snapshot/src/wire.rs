@@ -37,9 +37,15 @@ pub(crate) fn be_u64_at(p: &[u8], at: usize) -> Option<u64> {
 /// cast it replaces) means such an impossible value reads back as a
 /// truncated length or an out-of-range index that the decoders refuse,
 /// never as a small valid one; every value a valid image carries converts
-/// exactly, so encoded bytes are unchanged.
+/// exactly, so encoded bytes are unchanged. Debug and test builds assert
+/// the invariant instead, so a caller that breaks it is found rather than
+/// silently saturated.
 #[inline]
 pub(crate) fn wire_len(len: usize) -> u32 {
+    debug_assert!(
+        u32::try_from(len).is_ok(),
+        "wire length {len} exceeds u32::MAX"
+    );
     u32::try_from(len).unwrap_or(u32::MAX)
 }
 
