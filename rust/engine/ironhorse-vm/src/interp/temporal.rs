@@ -1539,8 +1539,11 @@ mod civil_spec_tests {
 
 #[cfg(kani)]
 mod proofs {
-    //! NUM-9: the civil-date kernels against the `ironhorse-spec` Date model.
+    //! NUM-9: the civil-date kernels: a round trip on the whole TimeClip
+    //! day range, and days_from_civil against the `ironhorse-spec` day
+    //! model on the concrete years the harnesses name.
     use super::{civil_from_days, days_from_civil};
+    use ironhorse_spec::date::day_from_civil;
 
     /// civil_from_days is a left inverse of days_from_civil on the TimeClip
     /// day range.
@@ -1552,5 +1555,63 @@ mod proofs {
         assert_eq!(days_from_civil(y, m, d), Some(day));
         kani::cover!(day == -100_000_000, "the earliest TimeClip day");
         kani::cover!(m == 2 && d == 29, "a leap day");
+    }
+
+    /// days_from_civil(y, m, d) equals the ironhorse-spec day model
+    /// (DayFromYear plus the MonthFromTime/DateFromTime offsets) for every
+    /// month and day, including the nonexistent ones, in year `y`.
+    fn matches_the_spec_in(y: i64) {
+        let m: u32 = kani::any();
+        let d: u32 = kani::any();
+        let got = days_from_civil(y, m, d);
+        assert_eq!(got, day_from_civil(y, m, d));
+        kani::cover!(m == 2 && d == 29 && got.is_some(), "a leap day exists");
+        kani::cover!(m == 2 && d == 29 && got.is_none(), "a leap day is refused");
+        kani::cover!(m == 12 && d == 31, "the last day of the year");
+    }
+
+    /// The day model against the kernel on years around the epoch and on
+    /// each kind of century and 400-year boundary, both signs.
+    #[kani::proof]
+    #[kani::unwind(6)]
+    fn num9_days_from_civil_matches_spec_epoch_years() {
+        for y in [1968, 1969, 1970, 1971, 1972] {
+            matches_the_spec_in(y);
+        }
+    }
+
+    #[kani::proof]
+    #[kani::unwind(12)]
+    fn num9_days_from_civil_matches_spec_boundary_years() {
+        for y in [-401, -400, -1, 0, 1, 1600, 1601, 1900, 1901, 2000, 2100] {
+            matches_the_spec_in(y);
+        }
+    }
+
+    /// Every year from 1900 to 2100, symbolic: a century that is not a
+    /// 400-year boundary (1900, 2100) and one that is (2000).
+    #[kani::proof]
+    fn num9_days_from_civil_matches_spec_1900_to_2100() {
+        let y: i64 = kani::any();
+        kani::assume((1900..=2100).contains(&y));
+        matches_the_spec_in(y);
+    }
+
+    /// Every year from -10000 to 10000, symbolic (fifty 400-year cycles
+    /// either side of year 0). The whole TimeClip year range
+    /// (-271821..=275760) did not finish in 600 s.
+    #[kani::proof]
+    fn num9_days_from_civil_matches_spec_10000_years() {
+        let y: i64 = kani::any();
+        kani::assume((-10_000..=10_000).contains(&y));
+        matches_the_spec_in(y);
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn num9_days_from_civil_matches_spec_time_clip_ends() {
+        for y in [-271_822, -271_821, 275_759, 275_760] {
+            matches_the_spec_in(y);
+        }
     }
 }

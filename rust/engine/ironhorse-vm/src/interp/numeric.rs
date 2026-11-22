@@ -1270,7 +1270,7 @@ mod proofs {
     }
 
     /// The integer path and the Number path give bit-identical results for
-    /// int32 operands. Float addition: `--no-overflow-checks`, nightly.
+    /// int32 operands. Float addition, default checks, nightly.
     #[kani::proof]
     fn num3_add_paths_agree() {
         let (x, y): (i32, i32) = (kani::any(), kani::any());
