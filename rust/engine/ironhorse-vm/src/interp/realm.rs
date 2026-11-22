@@ -49,6 +49,13 @@ pub struct CompartmentEnvironment {
     /// bindings later deleted. The symbol table and intrinsic prototypes are
     /// shared across compartments, but this history is per global object.
     pub(super) binding_names: std::collections::BTreeSet<u16>,
+    /// The `symbol_ids` stamp at which [`Interp::install_pending_intrinsics`]
+    /// last found this environment caught up on every standard global (no
+    /// missing binding); 0, which no stamp takes, when it has not. Derived,
+    /// never persisted, and consulted only to skip recomputing an empty
+    /// catch-up roster. One word, because environments are moved by value
+    /// across guest re-entry and their size is on those native frames.
+    pub(super) globals_caught_up_at: u64,
     pub(super) global_props: std::collections::HashMap<u16, crate::value::SlotIndex>,
     /// The compartment's `globalLexicals` (`fx_Compartment`,
     /// `xsModule.c:3030`), by interned key id.
@@ -104,6 +111,7 @@ impl CompartmentEnvironment {
             global_props: Default::default(),
             global_lexicals: Default::default(),
             binding_names: Default::default(),
+            globals_caught_up_at: 0,
             modules: Default::default(),
             source_compiler: None,
             shared_compiler: None,

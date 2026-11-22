@@ -1025,6 +1025,8 @@ mod tests {
         // Global head is boot-fingerprinted; its derived property map is rebuilt
         // from slots. PRMS carries the unhandled reason. Owner/global-names/compiler
         // are host configuration; shared boot is explicitly unpersistable.
+        // `globals_caught_up_at` is a derived, never-persisted skip witness for
+        // the global catch-up; a restored environment starts without one.
         assert_eq!(
             fields,
             [
@@ -1032,6 +1034,7 @@ mod tests {
                 "global_props",
                 "global_lexicals",
                 "binding_names",
+                "globals_caught_up_at",
                 "modules",
                 "compiler_required",
                 "unhandled_rejection",

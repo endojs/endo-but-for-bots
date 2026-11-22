@@ -4501,7 +4501,8 @@ impl Interp {
     /// image instead carries the historical numeric name floor. Treating ids
     /// below that floor as bound is the conservative legacy rule that preserves
     /// deletion markers; surviving global-property ids cover later bindings.
-    fn rebuild_binding_history(&mut self) {
+    pub(super) fn rebuild_binding_history(&mut self) {
+        self.environment.globals_caught_up_at = 0;
         self.environment.binding_names.clear();
         self.environment
             .binding_names

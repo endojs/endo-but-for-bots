@@ -19,8 +19,26 @@
 
 pub use ironhorse_text::SymbolName;
 
-#[derive(Clone, Default)]
-pub(crate) struct SymbolIds(std::collections::HashMap<SymbolName, u16>);
+/// The name-to-id map, plus a [`SymbolIds::stamp`] that changes whenever
+/// the map may have changed.
+#[derive(Clone)]
+pub(crate) struct SymbolIds(std::collections::HashMap<SymbolName, u16>, u64);
+
+/// A process-wide source of [`SymbolIds::stamp`] values. Every possible
+/// mutation takes a fresh one, so two maps (or one map at two times) share a
+/// stamp only when one is an unmodified copy of the other. The value is never
+/// persisted or otherwise observable; only stamp equality is consulted.
+fn fresh_symbol_ids_stamp() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+impl Default for SymbolIds {
+    fn default() -> Self {
+        Self(Default::default(), fresh_symbol_ids_stamp())
+    }
+}
+
 impl SymbolIds {
     pub fn get(&self, name: impl Into<SymbolName>) -> Option<&u16> {
         self.0.get(&name.into())
@@ -29,13 +47,21 @@ impl SymbolIds {
         self.get(name).is_some()
     }
     pub fn insert(&mut self, name: impl Into<SymbolName>, id: u16) -> Option<u16> {
+        self.1 = fresh_symbol_ids_stamp();
         self.0.insert(name.into(), id)
     }
+    /// Conservatively counts as a mutation whether or not the caller inserts.
     pub fn entry(
         &mut self,
         name: SymbolName,
     ) -> std::collections::hash_map::Entry<'_, SymbolName, u16> {
+        self.1 = fresh_symbol_ids_stamp();
         self.0.entry(name)
+    }
+    /// Equal stamps mean an unchanged map: a derived cache keyed on this
+    /// stamp stays valid exactly while no name has been added or rebound.
+    pub fn stamp(&self) -> u64 {
+        self.1
     }
 }
 
