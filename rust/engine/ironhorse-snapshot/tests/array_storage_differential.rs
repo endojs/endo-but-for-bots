@@ -311,7 +311,14 @@ const CEILING_SPARSE: &[Step] = &[
     Crank("/*may-halt*/ var spr; for (var i = 1; i < 1000000; i++) spr[i * 5] = i; spr.length"),
 ];
 
+const NAMED_KEYS: &[Step] = &[
+    Crank("var nk = [10, 11, 12]; nk['01'] = 'lead'; nk['4294967295'] = 'max'; var t = nk['1'] + ':' + nk['01'] + ':' + nk.length + ':' + Object.keys(nk).join() + ':' + JSON.stringify(Object.getOwnPropertyDescriptor(nk, '2')) + ':' + JSON.stringify(Object.getOwnPropertyDescriptor(nk, 'length')); t"),
+    Crank("var nk; var t; t = Reflect.get(nk, '0') + ':' + ('length' in nk) + ':' + nk.hasOwnProperty('2') + ':' + nk.hasOwnProperty('3') + ':' + Reflect.ownKeys(nk).join() + ':' + nk.propertyIsEnumerable('length'); t"),
+    Crank("function ak() { return JSON.stringify(Object.getOwnPropertyDescriptor(arguments, 'length')) + ':' + arguments['1'] + ':' + Object.getOwnPropertyDescriptor(arguments, '0').value; } var t = ak('x', 'y'); t"),
+];
+
 const CORPUS: &[(&str, &[Step])] = &[
+    ("named_keys", NAMED_KEYS),
     ("holes_and_far", HOLES_AND_FAR),
     ("length_changes", LENGTH_CHANGES),
     ("thin_and_refill", THIN_AND_REFILL),
