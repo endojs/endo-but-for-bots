@@ -75,6 +75,9 @@ Nothing in Phase 0 changes engine behaviour.
 
 ### 0.1 Commit the micro-bench roster
 
+Status: done in `4e6f22b9`; four more workloads in `70e68b6b`.
+See [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md).
+
 - File: `rust/engine/ironhorse-vm/tests/porffor_micro_bench.rs`, from the survey's scratch copy.
   It holds 21 workloads (13 top-level, 8 function-local twins), each with its expected result, and
   prints median time, computrons and dispatch count.
@@ -87,6 +90,9 @@ Nothing in Phase 0 changes engine behaviour.
 - Gate: clippy and fmt only.
 
 ### 0.2 The A/B protocol
+
+Status: done; callgrind `Ir` became the deciding measure and timing the supporting one (see
+[PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), Method).
 
 The host noise is large: single samples vary ±25-40% inside one process and run medians move
 ±2-20% (FINDINGS §B.2).
@@ -126,6 +132,10 @@ measurement cannot split the credit.
 
 ### 1.1 Number fast paths in arithmetic, comparison, `+` and bitwise
 
+Status: done in `b25b8971` (`int_loop_fn` 1.76x `Ir`); `exec_increment` in `16d2c31f`; `equality`
+not attempted.
+See [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md).
+
 - **Porffor:** T3 and T4, `compiler/render.js:5459-5463`, `:5500-5503`,
   `compiler/codegen.js:1217-1221`.
 - **Ironhorse:** `rust/engine/ironhorse-vm/src/interp/coerce.rs:443` (`binary_arith`), `:544`
@@ -154,6 +164,9 @@ measurement cannot split the credit.
 
 ### 1.2 Reorder the `disposed` guard in `dispatch_get_property`
 
+Status: done in `4c876960` (reorder only; `prop_getset_fn` 1.43x `Ir`).
+See [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md).
+
 - **Porffor:** none; this is a profiling discovery (FINDINGS E1).
 - **Ironhorse:** `rust/engine/ironhorse-vm/src/interp/dispatch/property_read.rs:197-200`, where
   `self.symbol_ids.get("disposed")` (allocating a `SymbolName` and hashing it,
@@ -168,6 +181,9 @@ measurement cannot split the credit.
 - **Keep if:** `prop_getset_fn` `Ir` falls by at least 15%; wall time is expected to agree.
 
 ### 1.3 Short-circuit `install_pending_intrinsics` for `JSON.stringify`
+
+Status: done in `42bf95dd` (`json` 4.72x `Ir`); the hot caller was `to_read_key`, not `toJSON`.
+See [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md).
 
 - **Porffor:** none directly; FINDINGS E2.
 - **Ironhorse:** `rust/engine/ironhorse-vm/src/interp/natives/json.rs:925` calls
@@ -192,6 +208,10 @@ measurement cannot split the credit.
 
 ### 1.4 String+String concatenation on the stored bytes
 
+Status: done in `23550ede` (`string_concat` 4.50x `Ir`); the other string constructors not
+attempted.
+See [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md).
+
 - **Porffor:** T11's narrow concatenation, `compiler/render.js:4917-4925`.
 - **Ironhorse:** `rust/engine/ironhorse-vm/src/interp/strings.rs:130-142` (`concat_add`).
 - **Design:**
@@ -215,6 +235,9 @@ These are survey candidates 5-8: larger edits, still without new caches.
 
 ### 2.1 A cheap hasher for `SlotIndex`- and `u16`-keyed tables
 
+Status: done in `9039b94e`, finish fixed in `069b449c`.
+See [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md).
+
 - **Porffor:** none (FINDINGS E3).
 - **Ironhorse:** the side tables in `state.rs`, for example `functions`
   (`rust/engine/ironhorse-vm/src/interp/state.rs:566`), `bound_functions` (`:582`),
@@ -237,6 +260,9 @@ These are survey candidates 5-8: larger edits, still without new caches.
 
 ### 2.2 Array index keys without `to_string` and a symbol lookup
 
+Status: done in `25086f23` (a derived `BTreeMap`, `array_rw_fn` 1.17x `Ir`).
+See [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md).
+
 - **Porffor:** related to T19, `compiler/builtins/_internal_object.ts:182-184`.
 - **Ironhorse:** `rust/engine/ironhorse-vm/src/interp/property.rs:643` (every `a[i] = v`),
   `rust/engine/ironhorse-vm/src/interp/property/keys.rs:559-560` (`index_read_key_id`),
@@ -252,6 +278,9 @@ These are survey candidates 5-8: larger edits, still without new caches.
 - **Keep if:** `array_rw_fn` `Ir` falls by at least 15%.
 
 ### 2.3 Overwrite an existing own writable data property in place
+
+Status: done in `8803168e` (`prop_getset_fn` 1.40x `Ir`).
+See [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md).
 
 - **Porffor:** related to T7's own-hit set cache, `compiler/builtins/_internal_object.ts:2168-2170`.
 - **Ironhorse:** `rust/engine/ironhorse-vm/src/interp/property/ordinary.rs:794-808`
@@ -270,6 +299,9 @@ These are survey candidates 5-8: larger edits, still without new caches.
 - **Keep if:** `prop_getset_fn` reaches at least 1.25x over the Phase 1 tree.
 
 ### 2.4 Direct global `var` access
+
+Status: deferred.
+See [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), Losses.
 
 - **Porffor:** none (FINDINGS E6).
 - **Ironhorse:** `rust/engine/ironhorse-vm/src/interp/dispatch/environment.rs:91-113` (read) and
@@ -295,6 +327,9 @@ Order: T19 and T10 first (monotone flags, cheapest to prove), then T8, then T7, 
 
 ### 3.1 T19: no index keys on prototypes
 
+Status: deferred; blocked on a per-slot exotic-class tag.
+See [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), Losses.
+
 - **Porffor:** `compiler/builtins/_internal_object.ts:182-184`,
   `compiler/builtins/array.ts:345-352`.
 - **Ironhorse:** the push path walks prototypes per element
@@ -313,6 +348,9 @@ Order: T19 and T10 first (monotone flags, cheapest to prove), then T8, then T7, 
 
 ### 3.2 T10: exact filter of keys that can intercept assignment
 
+Status: bitset deferred; its exact part shipped in `6ac8bbed` (`ctor_fn` 1.23x `Ir`).
+See [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md).
+
 - **Porffor:** `compiler/render.js:4461-4462`, `compiler/builtins/_internal_object.ts:1137-1142`.
 - **Ironhorse:** the set walk (`rust/engine/ironhorse-vm/src/interp/property/ordinary.rs:794-808`),
   which looks for setters and read-only properties up the chain when creating an own property.
@@ -327,6 +365,10 @@ Order: T19 and T10 first (monotone flags, cheapest to prove), then T8, then T7, 
 - **Keep if:** the new workload improves by at least 1.25x.
 
 ### 3.3 T8: prototype-chain cache validated by a flagged-prototype epoch
+
+Status: deferred with T7 (design recorded); the double lookup it targeted was removed by
+`8803168e`.
+See [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), Losses.
 
 - **Porffor:** `compiler/builtins/_internal_object.ts:565-580`, `:1356-1360`, `:1386-1387`.
 - **Ironhorse:** the get walk (`rust/engine/ironhorse-vm/src/interp/property/ordinary.rs:711-733`)
@@ -346,6 +388,9 @@ Order: T19 and T10 first (monotone flags, cheapest to prove), then T8, then T7, 
 - **Keep if:** `method_calls_fn` reaches at least 1.25x over the Phase 2 tree.
 
 ### 3.4 T7: inline caches keyed by bytecode offset
+
+Status: deferred; design and blocking invariant recorded.
+See [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), Losses.
 
 - **Porffor:** `compiler/builtins/_internal_object.ts:1333-1337`, `compiler/codegen.js:5044-5045`
   (no caches for run-once code, T23).
@@ -368,6 +413,9 @@ Order: T19 and T10 first (monotone flags, cheapest to prove), then T8, then T7, 
 
 ### 3.5 T11: an ASCII bit for strings
 
+Status: not started; no profile showed a conversion worth it.
+See [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), Losses.
+
 - **Porffor:** `compiler/codegen.js:4692-4694`, `compiler/render.js:4752`.
 - **Ironhorse:** strings are UTF-16BE (`rust/engine/ironhorse-vm/src/interp/strings.rs:9-17`), so
   indexing is already O(1); the bit can only speed conversions, for example
@@ -383,6 +431,9 @@ Order: T19 and T10 first (monotone flags, cheapest to prove), then T8, then T7, 
 ## Phase 4: build level
 
 ### 4.1 T24: PGO, LTO and codegen units
+
+Status: measured, not adopted.
+See [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), Losses.
 
 - **Porffor:** `compiler/index.js:152-153` (LTO), `:163-164` (PGO), `:195-196`
   (`-ffp-contract=off`).
@@ -410,13 +461,13 @@ Order: T19 and T10 first (monotone flags, cheapest to prove), then T8, then T7, 
 
 | Item | Status | Reason |
 |---|---|---|
-| Loop-header slimming (survey #9, `rust/engine/ironhorse-vm/src/interp/dispatch.rs:222-334`) | Deferred until after Phase 1 | Estimated 15-25% on simple-op code, but it edits the meter-check and decode-error paths directly; the 4096-boundary positions, `StepLimit` values and failing pc must stay identical, and the frame gate is tight. |
-| Call setup pooling and lazy `id_map` (#10, `rust/engine/ironhorse-vm/src/interp/frames.rs:340`) | Pooling deferred to after Phase 2; lazy `id_map` deferred indefinitely | Pooling is low risk; the lazy `id_map` is a persisted row (`rust/engine/ironhorse-vm/src/interp/persist.rs:2459`) and must reproduce shadowing and `UNWIND` pruning exactly. |
-| Single own lookup in the get walk (#11) | Folded into 3.3 | T8 removes the same repeated lookups. |
+| Loop-header slimming (survey #9, `rust/engine/ironhorse-vm/src/interp/dispatch.rs:222-334`) | Partly done in `3c923cbf` (instruction length); the armed-flag fold not done | Estimated 15-25% on simple-op code, but it edits the meter-check and decode-error paths directly; the 4096-boundary positions, `StepLimit` values and failing pc must stay identical, and the frame gate is tight. |
+| Call setup pooling and lazy `id_map` (#10, `rust/engine/ironhorse-vm/src/interp/frames.rs:340`) | Pooling deferred with a measured bound below the threshold; lazy `id_map` deferred indefinitely | Pooling is low risk; the lazy `id_map` is a persisted row (`rust/engine/ironhorse-vm/src/interp/persist.rs:2459`) and must reproduce shadowing and `UNWIND` pruning exactly. |
+| Single own lookup in the get walk (#11) | Done directly in `8803168e` | T8 removes the same repeated lookups. |
 | Dense array storage (#12, `rust/engine/ironhorse-vm/src/bulk.rs:173-185`) | Deferred | Medium risk; `side_charge` (`rust/engine/ironhorse-vm/src/bulk.rs:194`) must charge the same, and the row stream must stay ascending. |
 | `Slot` double tag and `Result` plumbing (#13) | Deferred | Broad refactor for an estimated 5-10%. |
 | Direct native-method dispatch (#14, T13) | After Phase 2 | Depends on the cheaper lookups; metering must match the generic path exactly. |
-| Static key ids instead of strings (#15) | Opportunistic, any phase | Zero risk; do it when touching each site. |
+| Static key ids instead of strings (#15) | Opportunistic; `af8eab3b` made string lookups allocation-free instead | Zero risk; do it when touching each site. |
 | `s[i]` temporaries (#16) | Opportunistic | Small; the chunk itself must stay. |
 | Shapes (T6), append builders (T12), arena redesign (T20), generational GC (T21) | Rejected | Change allocation sequence, heap image or determinism (FINDINGS F4, F7). |
 | Any compiler change (T14-T16, T25) | Rejected | Bytecode must equal XS's (`rust/engine/ironhorse-compile/tests/coder_byte_identity.rs:1-9`). |
