@@ -135,3 +135,42 @@ fn in_place_reads_answer_every_shape() {
         );
     }
 }
+
+/// Programs that CREATE properties through `[[Set]]` and definitions, in the
+/// shapes the creation shortcuts must leave alone: index-named keys routed
+/// to the index store (spelled as numbers, strings and computed names),
+/// receivers that differ from the object, inherited setters, Proxy, typed
+/// array, String and function prototypes, non-extensible targets.
+const CREATIONS: &[(&str, &str)] = &[
+    ("function P(x) { this.x = x; this.y = x + 1; } var p = new P(1); Object.keys(p).join() + p.y", "x,y2"),
+    ("var o = {}; o['7'] = 1; o[8] = 2; o.z = 3; var k = '9'; o[k] = 4; Object.keys(o).join()", "7,8,9,z"),
+    ("var o = { '3': 'a' }; o['3'] = 'b'; o[3] = 'c'; Object.defineProperty(o, '4', { value: 'd', enumerable: true }); Object.keys(o).join() + o[3] + o[4]", "3,4cd"),
+    ("var o = {}; Object.defineProperty(o, '5', { get() { return 'g'; } }); o['5'] = 1; o[5]", "g"),
+    ("var a = []; a['2'] = 'x'; a.q = 1; [a.length, a[2], a.q].join()", "3,x,1"),
+    ("var o = Object.preventExtensions({}); o.n = 1; String(o.n)", "undefined"),
+    ("'use strict'; var o = Object.preventExtensions({}); try { o.n = 1; 'no' } catch (e) { e.constructor.name }", "TypeError"),
+    ("var p = { set n(v) { this.m = v * 2; } }; var o = Object.create(p); o.n = 4; [o.m, o.hasOwnProperty('n')].join()", "8,false"),
+    ("var o = {}; var r = {}; Reflect.set(o, 'n', 5, r); [String(o.n), r.n].join()", "undefined,5"),
+    ("var r = Object.preventExtensions({}); [Reflect.set({}, 'n', 5, r), String(r.n)].join()", "false,undefined"),
+    ("var t = {}; var p = new Proxy(t, {}); var o = Object.create(p); o.n = 6; [o.n, String(t.n)].join()", "6,undefined"),
+    ("var o = Object.create(new Int8Array(2)); o[0] = 7; o.n = 8; [o[0], o.n, o.hasOwnProperty(0)].join()", "7,8,true"),
+    ("var s = Object.create(new String('ab')); s[0] = 'z'; s[5] = 'y'; s.n = 1; [s[0], s[5], s.n].join()", "a,y,1"),
+    ("function f() {} var o = Object.create(f); o.name = 'x'; o.length = 3; o.prototype = 1; [o.name, o.length, o.prototype, o.hasOwnProperty('prototype')].join()", "f,0,1,true"),
+    ("for (var i = 0; i < 3; i++) globalThis['v' + i] = i; v0 + v1 + v2", "3"),
+    ("class A { constructor() { this.a = 1; } } class B extends A { constructor() { super(); this.b = this.a + 1; } } var b = new B(); Object.keys(b).join() + b.b", "a,b2"),
+    ("var o = {}; o.k = 1; delete o.k; o.k = 2; o.k", "2"),
+];
+
+#[test]
+fn creations_match_the_general_path() {
+    for (source, expected) in CREATIONS {
+        let line = assert_fast_paths_unobservable(
+            source,
+            super::property::FAST_OWN_OVERWRITE | super::property::FAST_SET_ABSENT,
+        );
+        assert!(
+            line.starts_with("completed=true") && line.contains(&format!("result={expected:?}")),
+            "{source}: {line}"
+        );
+    }
+}

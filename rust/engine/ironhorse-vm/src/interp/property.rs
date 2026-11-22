@@ -12,6 +12,11 @@ mod read_index;
 
 /// [`fast_path_on`]'s bit for `Interp::overwrite_own_data_property`.
 pub(in crate::interp) const FAST_OWN_OVERWRITE: u8 = 1;
+/// [`fast_path_on`]'s bit for the creation shortcuts: the receiver lookup
+/// `ordinary_set_on_receiver` skips after its walk saw the receiver miss, and
+/// the index-name text `ordinary_define_own_property` skips for an id never
+/// bound to a decimal name.
+pub(in crate::interp) const FAST_SET_ABSENT: u8 = 2;
 
 /// Test-only: the fast-path bits switched off on this thread, so a
 /// differential test can run a program with and without them.

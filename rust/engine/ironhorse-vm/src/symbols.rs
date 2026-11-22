@@ -21,12 +21,14 @@ pub use ironhorse_text::SymbolName;
 
 /// The name-to-id map, plus a [`SymbolIds::stamp`] that changes whenever
 /// the map may have changed, plus a derived index of the names that are the
-/// decimal spelling of a `u32` (see [`SymbolIds::get_index`]).
+/// decimal spelling of a `u32` (see [`SymbolIds::get_index`]) and the ids
+/// ever bound to one (see [`SymbolIds::may_bind_index_name`]).
 #[derive(Clone)]
 pub(crate) struct SymbolIds(
     std::collections::HashMap<SymbolName, u16>,
     u64,
     std::collections::BTreeMap<u32, u16>,
+    crate::int_hash::IntSet<u16>,
 );
 
 /// A process-wide source of [`SymbolIds::stamp`] values. Every possible
@@ -62,6 +64,7 @@ impl Default for SymbolIds {
         Self(
             Default::default(),
             fresh_symbol_ids_stamp(),
+            Default::default(),
             Default::default(),
         )
     }
@@ -147,6 +150,15 @@ impl SymbolIds {
         }
         self.2.get(&index)
     }
+    /// Whether `id` has ever been bound to a decimal-`u32` name. A superset
+    /// (ids are added with their name and never removed, even when the name
+    /// is rebound), so `false` proves that no name `get_index` answers for is
+    /// bound to `id` now: in particular that `id`'s name, if the table agrees
+    /// on it, is not a canonical index.
+    #[inline]
+    pub fn may_bind_index_name(&self, id: u16) -> bool {
+        !self.3.is_empty() && self.3.contains(&id)
+    }
     pub fn contains_key(&self, name: impl SymbolLookup) -> bool {
         self.get(name).is_some()
     }
@@ -155,6 +167,7 @@ impl SymbolIds {
         let name = name.into();
         if let Some(index) = decimal_u32_name(&name) {
             self.2.insert(index, id);
+            self.3.insert(id);
         }
         self.0.insert(name, id)
     }
@@ -165,6 +178,7 @@ impl SymbolIds {
         if let std::collections::hash_map::Entry::Vacant(entry) = self.0.entry(name) {
             if let Some(index) = decimal_u32_name(entry.key()) {
                 self.2.insert(index, id);
+                self.3.insert(id);
             }
             entry.insert(id);
         }
@@ -265,6 +279,15 @@ mod tests {
         assert_eq!(ids.get_index(7), Some(&300));
         assert_eq!(ids.get_index(5), Some(&100));
         assert_eq!(SymbolIds::default().get_index(0), None);
+        for id in 0..=400u16 {
+            let binds_index = ids
+                .0
+                .iter()
+                .any(|(name, &bound)| bound == id && decimal_u32_name(name).is_some());
+            assert!(!binds_index || ids.may_bind_index_name(id), "{id}");
+        }
+        assert!(!ids.may_bind_index_name(15));
+        assert!(!SymbolIds::default().may_bind_index_name(1));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! Property ordinary operations.
-use super::{fast_path_on, FAST_OWN_OVERWRITE};
+use super::{fast_path_on, FAST_OWN_OVERWRITE, FAST_SET_ABSENT};
 use crate::interp::*;
 
 impl Interp {
@@ -224,7 +224,13 @@ impl Interp {
         // keeps indexes by index and has no named slot under this name — so a
         // `defineProperty` spelled by name lands in the same place a plain
         // write does, rather than creating a second, shadowing storage.
-        if self.find_property(inst, id).is_none() {
+        //
+        // `scalar_key_text` answers only for a name the table binds to `id`,
+        // and an index name is a decimal-`u32` one, so an id never bound to
+        // one has no index to route: skip building its text.
+        if self.find_property(inst, id).is_none()
+            && (self.symbol_ids.may_bind_index_name(id) || !fast_path_on(FAST_SET_ABSENT))
+        {
             if let Some(index) = self
                 .scalar_key_text(id)
                 .as_deref()
@@ -836,10 +842,14 @@ impl Interp {
         // `ordinary_set`'s walk: `mop_set_inner` differs from it only for a
         // Proxy or a typed array, which `dispatch_set_property` sent apart.
         let mut current = inst;
+        let mut absent_on = None;
         loop {
             let own = self
                 .ordinary_get_own_descriptor(current, id)
                 .or_else(|| self.exotic_own_descriptor(current, id));
+            if own.is_none() && current == inst {
+                absent_on = Some(inst);
+            }
             if let Some(descriptor) = own {
                 if descriptor.is_accessor() {
                     let setter = descriptor.set.unwrap_or_else(Slot::undefined);
@@ -883,7 +893,7 @@ impl Interp {
             }
             current = parent;
         }
-        self.ordinary_set_on_receiver(code, id, value, receiver)
+        self.ordinary_set_on_receiver(code, id, value, receiver, absent_on)
             .map(SetInPlace::Done)
     }
 
@@ -946,6 +956,7 @@ impl Interp {
             return Ok(true);
         }
         let mut current = inst;
+        let mut absent_on = None;
         loop {
             // Functions keep their `length`, `name`, and (when constructable)
             // `prototype` own properties in side tables.  They participate in
@@ -954,6 +965,9 @@ impl Interp {
             let own = self
                 .ordinary_get_own_descriptor(current, id)
                 .or_else(|| self.exotic_own_descriptor(current, id));
+            if own.is_none() && current == inst {
+                absent_on = Some(inst);
+            }
             if let Some(descriptor) = own {
                 if descriptor.is_accessor() {
                     let setter = descriptor.set.unwrap_or_else(Slot::undefined);
@@ -993,7 +1007,7 @@ impl Interp {
             // does.
             current = parent;
         }
-        self.ordinary_set_on_receiver(code, id, value, receiver)
+        self.ordinary_set_on_receiver(code, id, value, receiver, absent_on)
     }
 
     /// [`Self::ordinary_set`] as one leg of [`Interp::set_legs`]
@@ -1012,10 +1026,14 @@ impl Interp {
         receiver: Slot,
     ) -> Result<SetLeg, Step> {
         let mut current = inst;
+        let mut absent_on = None;
         loop {
             let own = self
                 .ordinary_get_own_descriptor(current, id)
                 .or_else(|| self.exotic_own_descriptor(current, id));
+            if own.is_none() && current == inst {
+                absent_on = Some(inst);
+            }
             if let Some(descriptor) = own {
                 if descriptor.is_accessor() {
                     let setter = descriptor.set.unwrap_or_else(Slot::undefined);
@@ -1045,7 +1063,7 @@ impl Interp {
             }
             current = parent;
         }
-        self.ordinary_set_on_receiver(code, id, value, receiver)
+        self.ordinary_set_on_receiver(code, id, value, receiver, absent_on)
             .map(SetLeg::Done)
     }
 
@@ -1054,6 +1072,12 @@ impl Interp {
     /// property of the receiver. Expanded in its callers, `ordinary_set`, its
     /// leg [`Self::ordinary_set_walk`] and `SET_PROPERTY`'s in-place
     /// assignment, as it was written inline in the first.
+    ///
+    /// `absent_on` names an object the caller's walk has just found to have
+    /// no own property `id` (its first level, when that missed): the walk
+    /// since only read the levels above it, so the receiver's own lookup
+    /// below would find nothing again and is skipped when the receiver is
+    /// that object.
     #[inline(always)]
     fn ordinary_set_on_receiver(
         &mut self,
@@ -1061,6 +1085,7 @@ impl Interp {
         id: u16,
         value: Slot,
         receiver: Slot,
+        absent_on: Option<crate::value::SlotIndex>,
     ) -> Result<bool, Step> {
         let receiver_inst = match receiver.value {
             Payload::Reference(receiver_inst) if receiver.kind == Kind::Reference => receiver_inst,
@@ -1099,9 +1124,12 @@ impl Interp {
                 },
             );
         }
-        let receiver_own = self
-            .ordinary_get_own_descriptor(receiver_inst, id)
-            .or_else(|| self.exotic_own_descriptor(receiver_inst, id));
+        let receiver_own = if absent_on == Some(receiver_inst) && fast_path_on(FAST_SET_ABSENT) {
+            None
+        } else {
+            self.ordinary_get_own_descriptor(receiver_inst, id)
+                .or_else(|| self.exotic_own_descriptor(receiver_inst, id))
+        };
         if let Some(existing) = receiver_own {
             if existing.is_accessor() || existing.writable == Some(false) {
                 return Ok(false);
