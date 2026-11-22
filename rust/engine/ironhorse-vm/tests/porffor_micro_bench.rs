@@ -3,8 +3,9 @@
 //! Each workload isolates one hot interpreter path (integer and float
 //! arithmetic, relational loops, property get/set, array and typed-array
 //! element access, string concatenation and indexing, calls, closures,
-//! method calls, collections, JSON). The `_fn` twins run the same loop over
-//! function locals instead of global-object `var`s.
+//! method calls, collections, JSON, prototype methods, constructors). The
+//! `_fn` twins run the same loop over function locals instead of
+//! global-object `var`s.
 //!
 //! Ignored under plain `cargo test`; run it explicitly in release:
 //!
@@ -129,6 +130,30 @@ const WORKLOADS: &[(&str, &str, &str)] = &[
         "typed_array_fn",
         "(function () { var a = new Int32Array(10000); var s = 0; for (var r = 0; r < 20; r++) { for (var i = 0; i < 10000; i++) { a[i] = a[i] + i; s = (s + a[i]) | 0; } } return s; })()",
         "1909015408",
+    ),
+    // Property and array access shapes the roster above lacks: a method
+    // found two prototypes up, index stores that create elements (not
+    // `push`), out-of-range index reads, and a constructor creating own
+    // properties.
+    (
+        "proto_method_fn",
+        "(function () { class A { constructor() { this.v = 1; } get1() { return this.v; } } class B extends A {} class C extends B {} var c = new C(); var t = 0; for (var i = 0; i < 300000; i++) { t += c.get1(); } return t; })()",
+        "300000",
+    ),
+    (
+        "array_fill_sum_fn",
+        "(function () { var a = []; for (var i = 0; i < 100000; i++) { a[i] = i; } var s = 0; for (var j = 0; j < 3; j++) { for (var i = 0; i < 100000; i++) { s += a[i]; } } return s; })()",
+        "14999850000",
+    ),
+    (
+        "array_hole_fn",
+        "(function () { var a = [1, 2, 3]; var t = 0; for (var i = 0; i < 300000; i++) { if (a[i & 7] === undefined) t++; } return t; })()",
+        "187500",
+    ),
+    (
+        "ctor_fn",
+        "(function () { function P(x, y) { this.x = x; this.y = y; this.z = x + y; } var t = 0; for (var i = 0; i < 100000; i++) { var p = new P(i, 1); t += p.z; } return t; })()",
+        "5000050000",
     ),
 ];
 
