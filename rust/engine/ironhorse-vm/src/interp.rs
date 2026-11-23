@@ -3098,6 +3098,8 @@ impl Interp {
         // buffer from a nested segment. Only the cross-segment call path reads
         // it, and that path is gated on an eval having defined a function.
         self.top_level_code = Some(shared.clone());
+        // Derive this crank's dispatch buffer (`fuse.rs`); host state only.
+        self.install_dispatch_buffer(&shared);
         // Top-level functions defined by this crank lazily promote the
         // current buffer into `code_segments` at their first CODE opcode.
         // No-function cranks retain no segment and keep the common path

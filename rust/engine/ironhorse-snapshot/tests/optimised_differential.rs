@@ -295,6 +295,9 @@ const EDGES: &[&str] = &[
     "(function () { var n = 0; for (var i = 0; i <= 900; i++) { n++; } for (var i = 900; i > 0; i--) { n++; } for (var i = 900; i >= 0; i -= 1) { n++; } return n; })()",
     "(function () { var n = 0; for (var i = 2147483000; i < 2147483647; i++) { n++; } return n + ':' + i; })()",
     "(function () { var n = 0; for (var i = -2147483000; i > -2147483647; i--) { n++; } return n + ':' + i; })()",
+    // XS keeps an Integer through INT_MAX + 1 and -INT_MAX - 1 only as a
+    // Number; the globals carry the representation into the snapshot.
+    "var up, down; (function () { for (var i = 2147483000; i <= 2147483647; i++) {} up = i; for (var j = -2147483000; j > -2147483648; j--) {} down = j; })(); up + ':' + down",
     "(function () { var n = 0; for (var i = 0.5; i < 600; i++) { n++; } return n + ':' + i; })()",
     "(function () { var n = 0; for (var i = 0; i < 600.5; i++) { n += i; } return n; })()",
     "(function () { var n = 0; var i = '0'; for (; i < 600; i++) { n++; } return n + ':' + typeof i; })()",
@@ -303,7 +306,12 @@ const EDGES: &[&str] = &[
     "(function () { var s = 0; for (let i = 0; i < 700; i++) { s += i; } return s; })()",
     "(function () { var fs = []; for (let i = 0; i < 300; i++) { fs.push(() => i); } var s = 0; for (var j = 0; j < fs.length; j++) { s += fs[j](); } return s; })()",
     "(function () { try { for (let i = 0; i < x; i++) {} let x = 3; } catch (e) { return e.name; } })()",
+    "(function () { function f(a, b) { return a; } let y = 2; try { f(x, y); } catch (e) { return e.name; } let x = 1; })()",
+    "(function () { let y = 2; try { return y + x; } catch (e) { return e.name; } let x = 1; })()",
+    "(function () { let y = 2; try { return x < y ? 1 : 2; } catch (e) { return e.name; } let x = 1; })()",
     "(function () { const k = 5; var n = 0; try { for (var i = 0; i < 300; i++) { n++; if (i === 299) k++; } } catch (e) { return n + e.name; } })()",
+    "(function () { var n = 0; try { for (const i = 0; i < 9; i++) { n++; } } catch (e) { return n + e.name; } })()",
+    "(function () { var n = 0, m = 10; for (var i = 0; i < 500; i++) { n++; m--; n++; } return n + ':' + m; })()",
     "(function () { var n = 0; for (var i = 0; i < 1000; i++) { if (i % 3) continue; n++; } return n; })()",
     "(function () { var n = 0, i = 0; do { n += i; i++; } while (i < 900); return n; })()",
     "(function () { var n = 0, i = 0; while (i < 900) { i++; if (i & 1) { continue; } n += i; } return n; })()",

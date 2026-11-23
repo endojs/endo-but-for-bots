@@ -1832,6 +1832,12 @@ impl Interp {
             return Err(refuse("invalid native name rows"));
         }
         *self.code_segments = state.segments.into_iter().map(std::rc::Rc::from).collect();
+        // Rebuild the derived dispatch buffers (`fuse.rs`), which are never
+        // persisted.
+        for segment in 0..self.code_segments.len() {
+            let buffer = self.code_segments[segment].clone();
+            self.install_dispatch_buffer(&buffer);
+        }
         self.func_segments.clear();
         for row in state.functions {
             let owner = crate::value::SlotIndex(row.owner);

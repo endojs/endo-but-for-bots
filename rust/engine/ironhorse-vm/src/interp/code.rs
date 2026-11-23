@@ -27,6 +27,7 @@ impl Interp {
             .top_level_code
             .clone()
             .unwrap_or_else(|| std::rc::Rc::from(code));
+        self.install_dispatch_buffer(&buffer);
         self.code_segments.push(buffer);
         self.active_segment = Some(segment);
         segment

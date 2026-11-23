@@ -1160,7 +1160,7 @@ fn int32_of(slot: &Slot) -> i32 {
 /// an unsigned shift whose result exceeds the i32 range a Number; every other
 /// result is an Integer.
 #[inline]
-fn int32_bit_result(op: BitOp, ai: i32, bi: i32) -> Slot {
+pub(super) fn int32_bit_result(op: BitOp, ai: i32, bi: i32) -> Slot {
     let shift = (bi & 0x1f) as u32;
     match op {
         BitOp::And => Slot::integer(ai & bi),

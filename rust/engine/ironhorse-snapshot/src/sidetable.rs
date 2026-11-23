@@ -800,6 +800,9 @@ mod tests {
             "n_dispatched",
             // Host switch for the derived dispatch buffers (`fuse.rs`).
             "dispatch_fusion",
+            // The derived dispatch buffers themselves: host state rebuilt
+            // at install, never persisted.
+            "dispatch_buffers",
         ];
         const BOOT_DERIVED: &[&str] = &[
             "realm",

@@ -162,6 +162,26 @@ fn operand_id(code: &[u8], pc: usize, off: usize) -> u16 {
     u16::from_le_bytes([code[pc + off], code[pc + off + 1]])
 }
 
+/// In the arm of an opcode that can head a fused sequence (`fuse.rs`):
+/// when the dispatch buffer carries a tag at `pc`, run the rest of the
+/// sequence as one step and continue after it, or leave on a closing
+/// branch's meter refusal; otherwise fall through to the arm's own body.
+/// The loop has already checked, charged and counted the head.
+macro_rules! fused_head {
+    ($machine:expr, $code:expr, $program_counter:ident) => {
+        if let Some(tag) = $machine.fused_tag($code, $program_counter) {
+            match $machine.run_fused($code, $program_counter, tag) {
+                super::fuse::Fused::Next(next) => {
+                    $program_counter = next;
+                    continue;
+                }
+                super::fuse::Fused::MeterAbort => return Step::Host(Halt::MeterAbort),
+                super::fuse::Fused::Plain => {}
+            }
+        }
+    };
+}
+
 mod environment;
 mod iteration;
 mod operators;
@@ -427,6 +447,10 @@ impl Interp {
                     }
                 }
                 XS_CODE_GET_LOCAL_1 | XS_CODE_GET_LOCAL_2 => {
+                    // The head of a fused sequence (`fuse.rs`): this
+                    // dispatch has been charged and counted; the rest of
+                    // the sequence runs as one step, or declines.
+                    fused_head!(self, code, pc);
                     let k = self.local_operand(op, code, pc);
                     match self.get_local(k) {
                         Some(s) => {
@@ -710,15 +734,18 @@ impl Interp {
                 XS_CODE_STORE_ARROW => dispatch_flow!(self.exec_store_arrow(pc, size), pc),
                 // ---- literals ---------------------------------------
                 XS_CODE_INTEGER_1 => {
+                    fused_head!(self, code, pc);
                     self.push(Slot::integer(operand_s1(code, pc, 1)));
                     pc += size as usize;
                 }
                 XS_CODE_INTEGER_2 => {
+                    fused_head!(self, code, pc);
                     let v = i16::from_le_bytes([code[pc + 1], code[pc + 2]]) as i32;
                     self.push(Slot::integer(v));
                     pc += size as usize;
                 }
                 XS_CODE_INTEGER_4 => {
+                    fused_head!(self, code, pc);
                     let v = i32::from_le_bytes([
                         code[pc + 1],
                         code[pc + 2],
@@ -832,6 +859,7 @@ impl Interp {
                 }
                 // ---- comparison -------------------------------------
                 XS_CODE_LESS => {
+                    fused_head!(self, code, pc);
                     dispatch_result!(
                         self.relational(code, RelOp::Less),
                         pc,
@@ -842,6 +870,7 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_LESS_EQUAL => {
+                    fused_head!(self, code, pc);
                     dispatch_result!(
                         self.relational(code, RelOp::LessEqual),
                         pc,
@@ -852,6 +881,7 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_MORE => {
+                    fused_head!(self, code, pc);
                     dispatch_result!(
                         self.relational(code, RelOp::More),
                         pc,
@@ -862,6 +892,7 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_MORE_EQUAL => {
+                    fused_head!(self, code, pc);
                     dispatch_result!(
                         self.relational(code, RelOp::MoreEqual),
                         pc,
@@ -3731,7 +3762,7 @@ impl Interp {
     /// Whether a write to frame local `k` needs [`Self::exec_guarded_local_write`]:
     /// the binding is immutable or still in its temporal dead zone.
     #[inline]
-    fn local_write_is_guarded(&self, k: usize) -> bool {
+    pub(super) fn local_write_is_guarded(&self, k: usize) -> bool {
         self.local_index(k).is_some_and(|index| {
             let local = self.locals[index];
             local.flag & XS_DONT_SET_FLAG != 0 || local.kind == Kind::Uninitialized

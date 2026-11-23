@@ -527,11 +527,24 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     /// Whether dispatch may use the derived, layout-preserving dispatch
-    /// buffers of [`super::fuse`]. A host-side switch for differential
+    /// buffers of `fuse.rs`. A host-side switch for differential
     /// testing ([`Interp::set_dispatch_fusion`]): results, computrons, meter
     /// checks, allocation and snapshot bytes are the same either way. Never
     /// persisted; a restored machine starts with the default.
     dispatch_fusion: bool,
+    #[boot_new(Default::default())]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// The derived dispatch buffers of the installed bytecode buffers
+    /// (`fuse.rs`). Host state rebuilt at install, never persisted.
+    dispatch_buffers: crate::interp::fuse::DispatchBuffers,
     #[boot_new(Tracked::new(
         Default::default(),
         snapshot_dirt.clone(),
