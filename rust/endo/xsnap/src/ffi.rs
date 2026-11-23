@@ -247,6 +247,20 @@ extern "C" {
     /// recoverable abort that landed there.
     pub fn fxRunPromiseJobsGuarded(the: *mut XsMachine) -> c_int;
     pub fn fxRunLoopGuarded(the: *mut XsMachine) -> c_int;
+    /// xsnap-platform.c: `xsDefine(xsGlobal, xsID(name),
+    /// xsNewHostFunction(callback, length), flag)` under an XS try frame.
+    /// Returns 0, -1 if it threw, or the exit status of an abort.
+    pub fn fxDefineHostFunctionGuarded(
+        the: *mut XsMachine,
+        name: *const c_char,
+        callback: XsCallback,
+        length: c_int,
+        flag: c_int,
+        mask: c_int,
+    ) -> c_int;
+    /// xsnap-platform.c: `fxID` under an XS try frame, storing the `txID`
+    /// through `id`. Returns 0, or nonzero as above.
+    pub fn fxIDGuarded(the: *mut XsMachine, name: *const c_char, id: *mut c_void) -> c_int;
     /// xsnap-platform.c: the global `eval` of `source` under an XS try
     /// frame, with a non-primitive completion value converted to a string
     /// inside it. Returns 0 with the value in `*result`, -1 if it threw, or

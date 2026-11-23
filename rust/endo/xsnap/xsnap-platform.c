@@ -345,6 +345,56 @@ int fxEvalGuarded(txMachine* the, txString source, txSlot* result)
 	return status;
 }
 
+/* ---- Guarded define and key lookup for Machine::define_function / id ---- */
+
+/*
+ * xs.h's xsDefine(xsGlobal, xsID(name), xsNewHostFunction(callback,
+ * length), flag) under an XS try frame.  fxDefineID throws a TypeError
+ * when the global already has a non-configurable property of that name
+ * (or is frozen), and fxID aborts when the key table is full; with no
+ * jump record installed either one longjmps through a NULL firstJump.
+ * Returns 0, -1 if it threw, or the exit status of an abort that landed
+ * here.  Must be called between fxBeginHost and fxEndHost.
+ */
+int fxDefineHostFunctionGuarded(txMachine* the, txString name, txCallback callback,
+	txInteger length, txInteger flag, txInteger mask)
+{
+	int status = 0;
+	the->exitStatus = 0;
+	mxTry(the) {
+		txID id = fxID(the, name);
+		/* the function, the global, and what fxNewHostFunction pushes. */
+		fxOverflow(the, -8, C_NULL, 0);
+		fxNewHostFunction(the, callback, length, id, XS_NO_ID);
+		mxPush(mxGlobal);
+		fxDefineID(the, id, (txFlag)flag, (txFlag)mask);
+		mxPop();
+	}
+	mxCatch(the) {
+		status = the->exitStatus ? the->exitStatus : -1;
+		the->exitStatus = 0;
+	}
+	return status;
+}
+
+/*
+ * fxID under an XS try frame, for the key-table-full abort.  Returns 0
+ * with the key in *id, or nonzero as fxDefineHostFunctionGuarded.
+ */
+int fxIDGuarded(txMachine* the, txString name, void* id)
+{
+	int status = 0;
+	the->exitStatus = 0;
+	mxTry(the) {
+		*(txID*)id = fxID(the, name);
+	}
+	mxCatch(the) {
+		status = the->exitStatus ? the->exitStatus : -1;
+		the->exitStatus = 0;
+	}
+	return status;
+}
+
 /* ---- Guarded drains for Machine::run_promise_jobs / quiesce / run_loop ---- */
 
 /*

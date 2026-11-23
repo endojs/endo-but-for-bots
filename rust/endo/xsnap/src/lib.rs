@@ -243,25 +243,42 @@ impl Machine {
     }
 
     /// Look up or create an identifier (symbol) for the given name.
+    ///
+    /// # Panics
+    /// If `name` holds an interior NUL, or XS's key table is full.
     pub fn id(&self, name: &str) -> i32 {
         let c_name = CString::new(name).unwrap();
+        let mut id: u32 = 0;
         // SAFETY: `self.raw` is the live machine this `Machine` owns;
-        // `c_name` is NUL-terminated and outlives `fxID`, which copies it into
-        // the key table. The one way out other than returning is key-table
-        // exhaustion, whose `fxAbort` longjmps to the outermost XS jump
-        // (`fxExitToHost`), past this frame, as described under `eval`.
-        unsafe {
+        // `c_name` is NUL-terminated and outlives the call, and `fxID` copies
+        // it into the key table. `fxIDGuarded` runs `fxID` under an XS try
+        // frame, so the key-table-full abort lands in C (at top level; see
+        // `eval` for a call from inside a host callback). `id` is a `u32`,
+        // wide enough for `txID` in either XS build (`txU2`, or `txU4` under
+        // `mx32bitID`), and zeroed so that a 16-bit store leaves a clean
+        // value on this little-endian target.
+        let status = unsafe {
             let the = fxBeginHost(self.raw);
-            let id = fxID(the, c_name.as_ptr());
+            let status = fxIDGuarded(the, c_name.as_ptr(), &mut id as *mut u32 as *mut c_void);
             fxEndHost(the);
-            id
-        }
+            status
+        };
+        assert!(
+            status == 0,
+            "xsnap: fxID({name:?}) aborted (exit status {status})"
+        );
+        id as i32
     }
 
     /// Define a host function on the global object.
     ///
     /// The callback receives `the: *mut XsMachine` and can access
-    /// arguments via the XS stack (frame[-2 - index]).
+    /// arguments via the XS stack (frame[-1 - index]).
+    ///
+    /// # Panics
+    /// If `name` holds an interior NUL, or the definition throws (the
+    /// global already has a non-configurable `name`, or is frozen) or
+    /// aborts.
     pub fn define_function(&self, name: &str, callback: XsCallback, length: i32) {
         // Track for snapshot callback table (dedup by pointer).
         {
@@ -274,46 +291,30 @@ impl Machine {
             }
         }
         let c_name = CString::new(name).unwrap();
-        // SAFETY: `self.raw` is the live machine this `Machine` owns. The
-        // sequence is xs.h's `xsDefine` expanded: `fxOverflow` reserves 8
-        // slots before the one push `fxNewHostFunction` makes and the one
-        // `fx_push` below; `fxDefineID` consumes the value and the explicit
-        // `stack.add(1)` pops the target, leaving the stack as found.
-        // `callback` is an `extern "C"` fn the caller promises honours the
-        // host-callback contract; it is also recorded for the snapshot table.
-        unsafe {
+        // xsDontEnum; the mask adds xsDontDelete and xsDontSet.
+        let attrs: c_int = 4;
+        let mask: c_int = attrs | 2 | 4 | 8;
+        // SAFETY: `self.raw` is the live machine this `Machine` owns.
+        // `fxDefineHostFunctionGuarded` is xs.h's
+        // `xsDefine(xsGlobal, xsID(name), xsNewHostFunction(callback,
+        // length), xsDontEnum)` under an XS try frame: it reserves its stack
+        // slots and balances its pushes, and a throw from `fxDefineID` (a
+        // non-configurable existing property) or an abort lands in that C
+        // frame and restores the stack, so `fxEndHost` pops exactly the
+        // frame `fxBeginHost` pushed. `c_name` outlives the call. `callback`
+        // is an `extern "C"` fn the caller promises honours the host-callback
+        // contract; it is also recorded for the snapshot table.
+        let status = unsafe {
             let the = fxBeginHost(self.raw);
-            let id = fxID(the, c_name.as_ptr());
-
-            // Equivalent to:
-            //   xsDefine(xsGlobal, xsID(name),
-            //     xsNewHostFunction(callback, length), xsDontEnum)
-            //
-            // xsDefine expands to:
-            //   fxPush(value)        — push value first
-            //   fxPush(this)         — push target object
-            //   fxDefineID(the, id, attrs, mask)
-            //   the->stack++         — pop
-            fxOverflow(the, -8, ptr::null(), 0);
-
-            // Create host function — pushes value onto stack
-            fxNewHostFunction(the, callback, length, id, XS_NO_ID);
-            // Stack: [function]  (value is on top)
-
-            // Push global (the target object) on top of the value
-            fx_push(the, xs_global(the));
-            // Stack: [function, global]
-
-            // xsDontEnum = 4
-            let attrs: u8 = 4;
-            let mask: u8 = attrs | 2 | 4 | 8; // xsDontDelete | xsDontEnum | xsDontSet
-            fxDefineID(the, id, attrs, mask);
-
-            // Pop (xsDefine does the->stack++)
-            (*the).stack = (*the).stack.add(1);
-
+            let status =
+                fxDefineHostFunctionGuarded(the, c_name.as_ptr(), callback, length, attrs, mask);
             fxEndHost(the);
-        }
+            status
+        };
+        assert!(
+            status == 0,
+            "xsnap: defining host function {name:?} failed (status {status})"
+        );
     }
 
     /// Process all pending promise reactions (microtask queue).
@@ -2480,6 +2481,32 @@ mod tests {
             machine.eval("settled"),
             Some(JsValue::Boolean(true))
         ));
+    }
+
+    /// `fxDefineID` throws when the global already has a non-configurable
+    /// property of that name; with no jump record that throw used to
+    /// longjmp through a NULL `firstJump`. It now fails as a Rust panic and
+    /// leaves the machine usable.
+    #[test]
+    fn define_function_over_a_non_configurable_global_panics_cleanly() {
+        unsafe extern "C" fn noop(_the: *mut XsMachine) {}
+        let machine = new_machine();
+        machine
+            .eval(
+                "Object.defineProperty(globalThis, 'taken', { value: 1, configurable: false }); 0",
+            )
+            .unwrap();
+        let defined = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            machine.define_function("taken", noop, 0)
+        }));
+        assert!(defined.is_err());
+        match machine.eval("taken + 1").unwrap() {
+            JsValue::Integer(n) => assert_eq!(n, 2),
+            other => panic!("expected 2, got {:?}", js_value_debug(&other)),
+        }
+        // Ordinary definitions and key lookups still work.
+        machine.define_function("free", noop, 0);
+        assert_eq!(machine.id("free"), machine.id("free"));
     }
 
     #[test]
