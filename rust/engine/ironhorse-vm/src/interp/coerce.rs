@@ -383,9 +383,8 @@ impl Interp {
     /// for a Number `fromIndex` at `base`+1 or, absent, `length - 1`; `None`
     /// when nothing is scanned.
     pub(super) fn arg_to_last_index(&self, base: usize, argc: usize, length: u32) -> Option<u32> {
-        let last = length.checked_sub(1)?;
         if argc < 2 {
-            return Some(last);
+            return length.checked_sub(1);
         }
         let n = self
             .stack
@@ -393,12 +392,7 @@ impl Interp {
             .and_then(numeric_of)
             .unwrap_or(0.0);
         let t = if n.is_nan() { 0.0 } else { n.trunc() };
-        if t >= 0.0 {
-            Some(if t >= f64::from(last) { last } else { t as u32 })
-        } else {
-            let k = f64::from(length) + t;
-            (k >= 0.0).then_some(k as u32)
-        }
+        crate::numeric_kernel::last_relative_index(t, length)
     }
 
     /// ToBoolean with chunk access: a heap string is truthy iff its

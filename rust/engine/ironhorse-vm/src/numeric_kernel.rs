@@ -159,6 +159,33 @@ pub(crate) fn relative_index(relative: f64, len: u64) -> u64 {
     }
 }
 
+/// The first index `Array.prototype.lastIndexOf` examines, ECMA-262
+/// §23.1.3.20 steps 3–7, for the `ToIntegerOrInfinity` result `relative` of
+/// a present `fromIndex` and the length `len`:
+///
+/// > 3. If len = 0, return -1𝔽.
+/// > 5. If n = -∞, return -1𝔽.
+/// > 6. If n ≥ 0, then a. Let k be min(n, len - 1).
+/// > 7. Else, a. Let k be len + n.
+///
+/// `None` when no index is examined (`len = 0`, or `k < 0`, which includes
+/// `n = -∞`); otherwise `Some(k)`, with `k < len`. An absent `fromIndex`
+/// (step 4's `n = len - 1`) is the caller's.
+#[inline]
+pub(crate) fn last_relative_index(relative: f64, len: u32) -> Option<u32> {
+    let last = len.checked_sub(1)?;
+    if relative >= 0.0 {
+        Some(if relative >= f64::from(last) {
+            last
+        } else {
+            relative as u32
+        })
+    } else {
+        let k = f64::from(len) + relative;
+        (k >= 0.0).then_some(k as u32)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
