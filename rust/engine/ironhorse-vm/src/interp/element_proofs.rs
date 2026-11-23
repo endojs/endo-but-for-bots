@@ -212,3 +212,45 @@ fn num8_float16_element() {
         "a subnormal or zero pattern"
     );
 }
+
+/// Float32 stores the binary32 roundTiesToEven model of the Number (NaN as
+/// `0x7FC0_0000`), and decodes every non-NaN binary32 to exactly the
+/// model's binary64 widening and every binary32 NaN to a NaN. This rests on
+/// Kani's encoding of the `f64 as f32` and `f32 as f64` casts, which the
+/// KANI-3 canary checks at their boundaries; neither cast is on R1's list.
+#[kani::proof]
+fn num8_float32_element() {
+    let bits: u64 = kani::any();
+    let bytes: [u8; 4] = encoded(2, f64::from_bits(bits));
+    let stored = u32::from_le_bytes(bytes);
+    assert_eq!(stored, ironhorse_spec::binary64_to_binary32(bits));
+    let raw: [u8; 4] = kani::any();
+    let single = u32::from_le_bytes(raw);
+    let slot = decode_element_le(2, &raw).expect("a Number element");
+    let value = decoded_value(slot);
+    if single & 0x7F80_0000 == 0x7F80_0000 && single & 0x7F_FFFF != 0 {
+        assert!(value.is_nan());
+        kani::cover!(single != 0x7FC0_0000, "a non-canonical binary32 NaN");
+    } else {
+        assert_eq!(
+            value.to_bits(),
+            ironhorse_spec::binary32_to_binary64(single)
+        );
+        kani::cover!(
+            single & 0x7F80_0000 == 0 && single != 0,
+            "a binary32 subnormal"
+        );
+    }
+    kani::cover!(
+        bits == 0x3FF0_0000_1000_0000 && stored == 0x3F80_0000,
+        "a tie rounding to even"
+    );
+    kani::cover!(
+        (bits >> 52) & 0x7FF < 1023 - 126 && stored & 0x7FFF_FFFF != 0 && stored & 0x7F80_0000 == 0,
+        "a binary32 subnormal result"
+    );
+    kani::cover!(
+        (bits >> 52) & 0x7FF == 1023 + 127 && stored & 0x7FFF_FFFF == 0x7F80_0000,
+        "a finite value rounding to infinity"
+    );
+}

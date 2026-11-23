@@ -171,6 +171,11 @@ pub(crate) fn relative_index(relative: f64, len: u64) -> u64 {
 /// `None` when no index is examined (`len = 0`, or `k < 0`, which includes
 /// `n = -∞`); otherwise `Some(k)`, with `k < len`. An absent `fromIndex`
 /// (step 4's `n = len - 1`) is the caller's.
+///
+/// `relative` must be integral or infinite, as ToIntegerOrInfinity
+/// returns: for a non-integral value just below zero, such as `-1e-20`, the
+/// float `len + relative` rounds to `len` and the result would be
+/// `Some(len)`, one past the last index.
 #[inline]
 pub(crate) fn last_relative_index(relative: f64, len: u32) -> Option<u32> {
     let last = len.checked_sub(1)?;
@@ -553,6 +558,47 @@ mod proofs {
             kani::cover!(
                 bits >> 63 == 0 && got == len && bits != f64::INFINITY.to_bits() && len > 0,
                 "a finite relative above len"
+            );
+        }
+    }
+
+    /// `lastIndexOf`'s start index: for every integral or infinite
+    /// `relative` and every `u32` length, `last_relative_index` equals the
+    /// §23.1.3.20 steps 3–7 model, and so a start it returns is below `len`.
+    /// (Not for every `f64`: a non-integral `relative` just below zero, such
+    /// as `-1e-20`, gives `Some(len)`, because the float `len + relative`
+    /// rounds to `len`. Kani found this; no caller passes one, since
+    /// `Interp::arg_to_last_index` truncates first.)
+    #[kani::proof]
+    fn num6_last_relative_index_matches_spec() {
+        let bits: u64 = kani::any();
+        let len: u32 = kani::any();
+        let got = last_relative_index(f64::from_bits(bits), len);
+        if let Some(want) = ironhorse_spec::last_index_start(bits, u64::from(len)) {
+            assert_eq!(got.map(u64::from), want);
+            assert!(got.is_none_or(|k| k < len));
+            kani::cover!(
+                bits == f64::NEG_INFINITY.to_bits() && len > 0,
+                "fromIndex = -∞ searches nothing"
+            );
+            kani::cover!(
+                bits >> 63 == 1 && got.is_none() && bits != f64::NEG_INFINITY.to_bits() && len > 0,
+                "a finite fromIndex below -len searches nothing"
+            );
+            kani::cover!(
+                bits >> 63 == 1 && got.is_some_and(|k| k > 0 && k < len - 1),
+                "a negative fromIndex counted from the end"
+            );
+            kani::cover!(
+                bits >> 63 == 0
+                    && len > 1
+                    && got == Some(len - 1)
+                    && bits != f64::INFINITY.to_bits(),
+                "a finite fromIndex at or above len - 1"
+            );
+            kani::cover!(
+                bits == (-0.0f64).to_bits() && got == Some(0) && len > 0,
+                "-0 starts at 0"
             );
         }
     }

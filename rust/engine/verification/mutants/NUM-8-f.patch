@@ -1,0 +1,12 @@
+Mutant NUM-8-f: Float32 decodes its bytes big-endian.
+--- a/ironhorse-vm/src/interp.rs
++++ b/ironhorse-vm/src/interp.rs
+@@ -3305,7 +3305,7 @@
+     Some(match kind {
+         0 | 1 => return None,
+         // Float32
+-        2 => Slot::number(f32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64),
++        2 => Slot::number(f32::from_be_bytes([b[0], b[1], b[2], b[3]]) as f64),
+         // Float64
+         3 => Slot::number(f64::from_le_bytes([
+             b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],

@@ -1,0 +1,12 @@
+Mutant NUM-6-d: lastIndexOf with fromIndex = -len searches nothing instead of index 0.
+--- a/ironhorse-vm/src/numeric_kernel.rs
++++ b/ironhorse-vm/src/numeric_kernel.rs
+@@ -182,7 +182,7 @@
+         })
+     } else {
+         let k = f64::from(len) + relative;
+-        (k >= 0.0).then_some(k as u32)
++        (k > 0.0).then_some(k as u32)
+     }
+ }
+ 

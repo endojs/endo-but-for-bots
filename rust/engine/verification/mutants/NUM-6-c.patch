@@ -1,0 +1,14 @@
+Mutant NUM-6-c: lastIndexOf clamps a large fromIndex to len instead of len - 1.
+--- a/ironhorse-vm/src/numeric_kernel.rs
++++ b/ironhorse-vm/src/numeric_kernel.rs
+@@ -175,8 +175,8 @@
+ pub(crate) fn last_relative_index(relative: f64, len: u32) -> Option<u32> {
+     let last = len.checked_sub(1)?;
+     if relative >= 0.0 {
+-        Some(if relative >= f64::from(last) {
+-            last
++        Some(if relative >= f64::from(len) {
++            len
+         } else {
+             relative as u32
+         })

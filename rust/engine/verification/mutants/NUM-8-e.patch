@@ -1,0 +1,12 @@
+Mutant NUM-8-e: Float32 stores a NaN with a nonzero payload instead of the canonical quiet NaN.
+--- a/ironhorse-vm/src/interp.rs
++++ b/ironhorse-vm/src/interp.rs
+@@ -3353,7 +3353,7 @@
+         // Float32
+         2 => {
+             let value = if n.is_nan() {
+-                f32::from_bits(0x7fc0_0000)
++                f32::from_bits(0x7fc0_0001)
+             } else {
+                 n as f32
+             };

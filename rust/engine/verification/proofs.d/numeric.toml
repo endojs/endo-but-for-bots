@@ -142,8 +142,8 @@ canary = false
 [[guarantee]]
 id = "NUM-6"
 title = "Relative-index clamping"
-claim = "For every Number n that is integral or ±∞ (the range of ToIntegerOrInfinity) and every len < 2^53, numeric_kernel::relative_index(n, len) equals the spec clamp computed in i128 (0 if n = -∞; max(len + n, 0) if n < 0; min(n, len) otherwise); for every f64 n (NaN and fractions included) the result is in 0..=len. It is the one clamp behind Array.prototype splice, copyWithin, fill, toSpliced and the generic slice, the %TypedArray% relative indices, String.prototype.slice's string_arg_to_index and Interp::arg_to_index."
-spec = "ECMA-262 §23.1.3.28 Array.prototype.slice steps 3-6 (quoted in ironhorse-spec/src/relative_index.rs); the same steps in §23.1.3.4 copyWithin, §23.1.3.7 fill, §23.1.3.31 splice, §23.1.3.35 toSpliced, §23.2.3 %TypedArray% methods and §22.1.3.22 String.prototype.slice"
+claim = "For every Number n that is integral or ±∞ (the range of ToIntegerOrInfinity) and every len < 2^53, numeric_kernel::relative_index(n, len) equals the spec clamp computed in i128 (0 if n = -∞; max(len + n, 0) if n < 0; min(n, len) otherwise); for every f64 n (NaN and fractions included) the result is in 0..=len. It is the one clamp behind Array.prototype splice, copyWithin, fill, toSpliced and the generic slice, the %TypedArray% relative indices, String.prototype.slice's string_arg_to_index and Interp::arg_to_index. Also, for every Number n that is integral or ±∞ and every u32 length len, numeric_kernel::last_relative_index(n, len), the start index of the dense Array.prototype.lastIndexOf path (Interp::arg_to_last_index, which passes ToIntegerOrInfinity(fromIndex); an absent fromIndex gives len - 1 without the kernel), is None exactly when §23.1.3.20 steps 3-8 examine no index (len = 0, n = -∞, or len + n < 0) and otherwise Some(min(n, len - 1)) for n >= 0 and Some(len + n) for n < 0; so a start it returns is below len (on that domain only: Kani refuted the bound for a non-integral n just below zero, e.g. -1e-20, whose float len + n rounds to len; the only caller truncates first, so this is the kernel's precondition, not a shipped defect). The kernel keeps the float len + n of the code it was extracted from. Not covered: the %TypedArray% lastIndexOf start (its own i128 form in natives/buffer.rs), the generic Array path, and String.prototype.lastIndexOf, which clamps differently."
+spec = "ECMA-262 §23.1.3.28 Array.prototype.slice steps 3-6 (quoted in ironhorse-spec/src/relative_index.rs); the same steps in §23.1.3.4 copyWithin, §23.1.3.7 fill, §23.1.3.31 splice, §23.1.3.35 toSpliced, §23.2.3 %TypedArray% methods and §22.1.3.22 String.prototype.slice; §23.1.3.20 Array.prototype.lastIndexOf steps 3-7 (quoted in ironhorse-spec/src/relative_index.rs last_index_start)"
 trusted = ["Kani 0.68 / CBMC 6.11", "the ironhorse-spec models", "the harnesses"]
 
 [[harness]]
@@ -159,6 +159,22 @@ time_budget_s = 17
 memory_budget_gb = 1
 unreachable = 0
 mutants = ["NUM-6-a", "NUM-6-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-6"
+crate = "ironhorse-vm"
+name = "numeric_kernel::proofs::num6_last_relative_index_matches_spec"
+tier = "nightly"
+statement = "last_relative_index(f64::from_bits(b), len) equals ironhorse_spec::last_index_start(b, len), and so is None or below len, whenever the model accepts b (integral or infinite). Not for every b: Kani refuted the unrestricted bound with a non-integral b just below zero (e.g. -1e-20), for which the float len + b rounds to len; no caller passes one."
+domain = "every b: u64 and every len: u32; equality on the b the model accepts (integral or ±∞)"
+unwind = 0
+flags = []
+time_budget_s = 45
+memory_budget_gb = 1
+unreachable = 0
+mutants = ["NUM-6-c", "NUM-6-d"]
 expect = "pass"
 canary = false
 
@@ -221,8 +237,8 @@ canary = false
 [[guarantee]]
 id = "NUM-8"
 title = "Typed-array element encode and decode"
-claim = "For each integer element kind (Int8, Int16, Int32, Uint8, Uint16, Uint32, Uint8Clamped) and every u64 bit pattern b, encode_element_le(kind, b) stores exactly the little-endian bytes of the clause's conversion model (ToInt8 … ToUint32, ToUint8Clamp), and decode_element_le of those bytes is Integer(v) of the model value v, or Number(v) for a Uint32 above i32::MAX; for every byte pattern of the element width (all 2^8, 2^16 or 2^32), decode then encode returns the same bytes. Float64 stores a non-NaN Number's own bits and every NaN as 0x7FF8_0000_0000_0000, and decodes any 8 bytes to the Number with those bits (a NaN canonicalised, as Slot::number does); Float16 stores the NUM-7 rounding and decodes with the NUM-7 widening. Float32 is not covered."
-spec = "ECMA-262 §25.1.3.17 NumericToRawBytes, §25.1.3.15 RawBytesToNumeric, the conversion operations of Table 71 (§7.1.6-§7.1.12)"
+claim = "For each integer element kind (Int8, Int16, Int32, Uint8, Uint16, Uint32, Uint8Clamped) and every u64 bit pattern b, encode_element_le(kind, b) stores exactly the little-endian bytes of the clause's conversion model (ToInt8 … ToUint32, ToUint8Clamp), and decode_element_le of those bytes is Integer(v) of the model value v, or Number(v) for a Uint32 above i32::MAX; for every byte pattern of the element width (all 2^8, 2^16 or 2^32), decode then encode returns the same bytes. Float64 stores a non-NaN Number's own bits and every NaN as 0x7FF8_0000_0000_0000, and decodes any 8 bytes to the Number with those bits (a NaN canonicalised, as Slot::number does); Float16 stores the NUM-7 rounding and decodes with the NUM-7 widening. Float32 stores the binary32 roundTiesToEven model of every u64 bit pattern (overflow to ±∞ of the sign, NaN as 0x7FC0_0000), and decodes every non-NaN 4-byte pattern to exactly the model's binary64 widening and every binary32 NaN to a NaN; this rests on Kani's encoding of the f64 as f32 and f32 as f64 casts (not on R1's list), which the KANI-3 canary checks at their rounding, subnormal and overflow boundaries."
+spec = "ECMA-262 §25.1.3.17 NumericToRawBytes, §25.1.3.15 RawBytesToNumeric, the conversion operations of Table 71 (§7.1.6-§7.1.12); the Float32 cases quoted in ironhorse-spec/src/float32.rs; IEEE 754-2019 §3.3, §4.3.1, §7.4"
 trusted = ["Kani 0.68 / CBMC 6.11", "the ironhorse-spec models", "the harnesses"]
 
 [[harness]]
@@ -375,6 +391,23 @@ memory_budget_gb = 1
 unreachable = 58
 unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::decode_element_le (26), numeric_kernel::to_uint8_clamp (13), numeric_kernel::number_to_u64_wrapping (9), interp::encode_element_le (4), core::num::<impl usize>::abs_diff (2), ironhorse_spec::binary64_to_binary16 (2), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1)."
 mutants = ["NUM-7-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-8"
+crate = "ironhorse-vm"
+name = "interp::element_proofs::num8_float32_element"
+tier = "pr"
+statement = "encode_element_le(2, f64::from_bits(b)) is the little-endian bytes of ironhorse_spec::binary64_to_binary32(b); decode_element_le(2, raw) is a NaN for a binary32 NaN and otherwise a Number with the bits of ironhorse_spec::binary32_to_binary64."
+domain = "every b: u64 (all 2^64 binary64 bit patterns); every raw: [u8; 4]"
+unwind = 0
+flags = []
+time_budget_s = 9
+memory_budget_gb = 2
+unreachable = 76
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::decode_element_le (24), interp::f64_to_f16_bits (14), numeric_kernel::to_uint8_clamp (13), numeric_kernel::number_to_u64_wrapping (9), interp::f16_bits_to_f64 (7), interp::encode_element_le (4), core::num::<impl usize>::abs_diff (2), interp::f64_to_f16_bits::{closure#0} (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The element kind is the constant 2 (Float32), so the other kinds' arms of encode_element_le and decode_element_le, and the integer and binary16 kernels only they call, are dead."
+mutants = ["NUM-8-e", "NUM-8-f"]
 expect = "pass"
 canary = false
 
@@ -817,3 +850,26 @@ mutants = ["NUM-9-d", "NUM-9-a", "NUM-9-b"]
 expect = "pass"
 canary = false
 
+# KANI-3 belongs with NUM-8's Float32 proof, which relies on the casts it pins.
+[[guarantee]]
+id = "KANI-3"
+title = "Canary: Kani's f64 to f32 and f32 to f64 casts are right at their boundaries"
+claim = "Kani computes f64 as f32 with roundTiesToEven (two ties, one just above a tie, a subnormal tie, a binary64 subnormal to -0), overflow to ±∞ at and above (2 - 2^-24) × 2^127 and the largest finite binary32 just below it, NaN kept a NaN, and f32 as f64 exactly (2^-149), each as rustc computes it. Unlike KANI-1 it pins correct values, so it fails if a Kani or CBMC change breaks either cast, and NUM-8's Float32 claim must then be withdrawn."
+spec = "IEEE 754-2019 §5.4.2 formatOf conversions with §4.3.1 roundTiesToEven and §7.4 overflow; the expected bits were computed by rustc (scratch program) and match ironhorse_spec::binary64_to_binary32's known answers."
+trusted = ["Kani 0.68 / CBMC 6.11"]
+
+[[harness]]
+guarantee = "KANI-3"
+crate = "ironhorse-spec"
+name = "kani_canaries::float_casts_round_correctly"
+tier = "pr"
+statement = "Each pinned cast equals rustc's result."
+domain = "the ten pinned inputs listed in the harness"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = []
+expect = "pass"
+canary = true

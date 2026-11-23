@@ -13,6 +13,13 @@
 //! cannot fold the operation at compile time: the result comes from Kani's
 //! encoding, which is what is under test.
 //!
+//! `float_casts_round_correctly` is the opposite kind of canary: it asserts
+//! the *true* results of `f64 as f32` and `f32 as f64` at their rounding,
+//! subnormal and overflow boundaries, so it passes only while Kani encodes
+//! these casts as rustc computes them. It was written to measure the casts
+//! before NUM-8's Float32 proof relied on them, and it stays as that
+//! proof's tripwire.
+//!
 //! The last canary is a deliberately false assertion, run with
 //! `expect = "fail"`: it proves the runner notices a failed check.
 
@@ -72,6 +79,41 @@ fn float_powf_is_miscomputed() {
         r != 9.0,
         "true value 9.0: Kani's f64 powf may be fixed; review"
     );
+}
+
+/// The bits of `pins(value) as f32`.
+fn narrowed(value: f64) -> u32 {
+    (pins(value) as f32).to_bits()
+}
+
+/// `f64 as f32` rounds to nearest with ties to even, flushes below half the
+/// smallest subnormal to zero, overflows to infinity, and keeps a NaN a
+/// NaN; `f32 as f64` is exact. Each expected value is rustc's.
+#[kani::proof]
+fn float_casts_round_correctly() {
+    // 1 + 2^-24 ties between 1 and 1 + 2^-23: to even.
+    assert_eq!(narrowed(f64::from_bits(0x3FF0_0000_1000_0000)), 0x3F80_0000);
+    // 1 + 3 × 2^-24 ties between 1 + 2^-23 (odd) and 1 + 2^-22: up.
+    assert_eq!(narrowed(f64::from_bits(0x3FF0_0000_3000_0000)), 0x3F80_0002);
+    // Just above the first tie rounds up.
+    assert_eq!(narrowed(f64::from_bits(0x3FF0_0000_1000_0001)), 0x3F80_0001);
+    // 2^-150 ties between 0 and 2^-149: to even, +0; 3 × 2^-150 rounds up.
+    assert_eq!(narrowed(f64::from_bits(0x3690_0000_0000_0000)), 0x0000_0000);
+    assert_eq!(narrowed(f64::from_bits(0x36A8_0000_0000_0000)), 0x0000_0002);
+    // A binary64 subnormal narrows to -0 with its sign.
+    assert_eq!(narrowed(f64::from_bits(0x8000_0000_0000_0001)), 0x8000_0000);
+    // The overflow threshold (2 - 2^-24) × 2^127 ties to infinity; just
+    // below it is the largest finite binary32.
+    assert_eq!(narrowed(f64::from_bits(0x47EF_FFFF_F000_0000)), 0x7F80_0000);
+    assert_eq!(narrowed(f64::from_bits(0x47EF_FFFF_EFFF_FFFF)), 0x7F7F_FFFF);
+    assert_eq!(narrowed(f64::from_bits(0xC7F0_0000_0000_0000)), 0xFF80_0000);
+    assert!((pins(f64::NAN) as f32).is_nan());
+    // Widening is exact: the smallest binary32 subnormal is 2^-149.
+    let tiny: f32 = kani::any();
+    kani::assume(tiny.to_bits() == 1);
+    let wide = f64::from(tiny).to_bits();
+    kani::cover!(wide == 0x36A0_0000_0000_0000, "2^-149 widens exactly");
+    assert_eq!(wide, 0x36A0_0000_0000_0000);
 }
 
 /// A false assertion. The manifest expects this harness to FAIL; if the
