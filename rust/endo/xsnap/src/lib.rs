@@ -40,34 +40,49 @@ pub const DEFAULT_CREATION: XsCreation = XsCreation {
     native_stack_size: 0,
 };
 
-/// Initialize the XS shared cluster. Must be called once before
-/// creating any machines, and `terminate_shared_cluster` must be
-/// called on shutdown.
-pub fn initialize_shared_cluster() {
-    // SAFETY: UNVERIFIED — the Rust declaration in ffi.rs takes no
-    // arguments, but xsAtomics.c defines `fxInitializeSharedCluster(txMachine* the)`,
-    // so the callee reads an indeterminate `the` register. `fxInitialize...`
-    // ignores it; `fxTerminate...` compares it against waiter records without
-    // dereferencing it. Declaring the parameter and passing null would make
-    // the call well-defined.
-    // The C function also increments a process-global usage count without a
-    // lock, so concurrent callers race; `ensure_shared_cluster` is the
-    // serialised entry point.
-    unsafe { fxInitializeSharedCluster() }
+/// Serialises every call that changes the XS shared cluster's usage count.
+///
+/// `fxInitializeSharedCluster` and `fxTerminateSharedCluster` (xsAtomics.c)
+/// increment and decrement a process-global count, and allocate or free the
+/// cluster at its edges, with no lock. XS calls them itself from
+/// `fxCreateMachine`, `fxReadSnapshot` and `fxDeleteMachine`, and each worker
+/// creates and deletes its machine on its own thread, so unserialised calls
+/// race: a lost update can free the cluster (its waiter mutex and shared
+/// timers) while a machine still uses it. Every such call in this crate holds
+/// this lock.
+fn cluster_lock() -> std::sync::MutexGuard<'static, ()> {
+    static CLUSTER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // A panic while holding the lock leaves no torn state of ours behind
+    // (the guarded state is in C), so a poisoned lock is still usable.
+    CLUSTER.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Tear down the XS shared cluster.
-pub fn terminate_shared_cluster() {
-    // SAFETY: UNVERIFIED — the Rust declaration in ffi.rs takes no
-    // arguments, but xsAtomics.c defines `fxTerminateSharedCluster(txMachine* the)`,
-    // so the callee reads an indeterminate `the` register. `fxInitialize...`
-    // ignores it; `fxTerminate...` compares it against waiter records without
-    // dereferencing it. Declaring the parameter and passing null would make
-    // the call well-defined.
-    // This is a safe fn, yet tearing the cluster down (the last use frees
-    // it) while machines still use its shared chunks or timers is not
-    // guarded against here.
-    unsafe { fxTerminateSharedCluster() }
+/// Initialize the XS shared cluster, taking one reference to it. Must be
+/// called before creating any machines; each call is balanced by one
+/// `terminate_shared_cluster` on shutdown.
+pub fn initialize_shared_cluster() {
+    let _cluster = cluster_lock();
+    // SAFETY: the declaration matches xsAtomics.c's
+    // `fxInitializeSharedCluster(txMachine* the)`, which does not use `the`;
+    // `cluster_lock` serialises the unlocked usage count it increments.
+    unsafe { fxInitializeSharedCluster(ptr::null_mut()) }
+}
+
+/// Tear down the XS shared cluster, dropping one reference to it.
+///
+/// # Safety
+/// Each call must balance an earlier `initialize_shared_cluster` (or the
+/// one `ensure_shared_cluster` takes) whose reference has not been dropped
+/// yet. An unbalanced call can drop the count to zero, freeing the cluster
+/// while live machines still hold references to it.
+pub unsafe fn terminate_shared_cluster() {
+    let _cluster = cluster_lock();
+    // SAFETY: the declaration matches xsAtomics.c's
+    // `fxTerminateSharedCluster(txMachine* the)`; with a null `the` it
+    // skips the per-machine waiter cleanup and only drops one reference,
+    // which the caller guarantees it holds. `cluster_lock` serialises the
+    // unlocked usage count.
+    unsafe { fxTerminateSharedCluster(ptr::null_mut()) }
 }
 
 /// Idempotently initialize the XS shared cluster.
@@ -78,10 +93,7 @@ pub fn terminate_shared_cluster() {
 pub fn ensure_shared_cluster() {
     use std::sync::Once;
     static CLUSTER_INIT: Once = Once::new();
-    // SAFETY: `Once` serialises the one call, so the C function's unlocked
-    // usage counter is not raced. The prototype mismatch noted on
-    // `initialize_shared_cluster` (UNVERIFIED) applies here too.
-    CLUSTER_INIT.call_once(|| unsafe { fxInitializeSharedCluster() });
+    CLUSTER_INIT.call_once(initialize_shared_cluster);
 }
 
 /// An XS JavaScript machine.
@@ -112,10 +124,13 @@ impl Machine {
     /// Create a new XS machine with the given creation parameters.
     pub fn new(creation: &XsCreation, name: &str) -> Option<Machine> {
         let c_name = CString::new(name).ok()?;
+        let _cluster = cluster_lock();
         // SAFETY: `creation` is a live, fully initialised `XsCreation` that
-        // XS only reads; `c_name` is NUL-terminated and outlives the call (XS
-        // copies the name); a null context and `XS_NO_ID` archive are the
-        // documented "none" values. A null return is handled below.
+        // XS only reads; `_cluster` serialises the shared-cluster usage count
+        // `fxCreateMachine` increments; `c_name` is NUL-terminated and
+        // outlives the call (XS copies the name); a null context and
+        // `XS_NO_ID` archive are the documented "none" values. A null return
+        // is handled below.
         let raw = unsafe {
             fxCreateMachine(
                 creation as *const XsCreation,
@@ -501,13 +516,17 @@ impl Machine {
             slot_size: 0,
             slots: ptr::null_mut(),
         };
+        let cluster = cluster_lock();
         // SAFETY: UNVERIFIED — `fxReadSnapshot` rebuilds the heap from the
         // bytes it is given and is not hardened against a crafted snapshot;
         // this safe fn accepts any bytes, so its soundness rests on them being
         // a snapshot this host wrote (the daemon's own CAS). The call itself:
         // `snapshot`, its `MemReadStream` stream, `signature`, `callbacks` and `c_name`
         // are live for the call and only read through `mem_read`.
+        // `cluster` serialises the shared-cluster usage count that
+        // `fxReadSnapshot` increments (and decrements again on failure).
         let raw = unsafe { ffi::fxReadSnapshot(&mut snapshot, c_name.as_ptr(), ptr::null_mut()) };
+        drop(cluster);
         if raw.is_null() {
             Err(SnapshotError::Read(snapshot.error))
         } else {
@@ -803,13 +822,17 @@ impl Machine {
             slot_size: 0,
             slots: ptr::null_mut(),
         };
+        let cluster = cluster_lock();
         // SAFETY: UNVERIFIED — `fxReadSnapshot` rebuilds the heap from the
         // bytes it is given and is not hardened against a crafted snapshot;
         // this safe fn accepts any bytes, so its soundness rests on them being
         // a snapshot this host wrote (the daemon's own CAS). The call itself:
         // `snapshot`, its `FileReadStream` stream, `signature`, `callbacks` and `c_name`
         // are live for the call and only read through `file_read`.
+        // `cluster` serialises the shared-cluster usage count that
+        // `fxReadSnapshot` increments (and decrements again on failure).
         let raw = unsafe { ffi::fxReadSnapshot(&mut snapshot, c_name.as_ptr(), ptr::null_mut()) };
+        drop(cluster);
         if raw.is_null() {
             Err(SnapshotError::Read(snapshot.error))
         } else {
@@ -970,11 +993,14 @@ impl Machine {
 impl Drop for Machine {
     fn drop(&mut self) {
         if !self.raw.is_null() {
+            let _cluster = cluster_lock();
             // SAFETY: a `Machine` that is dropped owns `raw` (the borrowed
             // views the host callbacks build are `ManuallyDrop`), so this is
             // the one delete; `raw` is nulled straight after. No host object
             // destructors read the context pointer, so it does not matter that
-            // `run_xs_program` frees the `HostPowers` first.
+            // `run_xs_program` frees the `HostPowers` first. `_cluster`
+            // serialises the shared-cluster usage count `fxDeleteMachine`
+            // decrements.
             unsafe { fxDeleteMachine(self.raw) };
             self.raw = ptr::null_mut();
         }

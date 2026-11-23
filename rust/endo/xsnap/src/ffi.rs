@@ -210,9 +210,12 @@ extern "C" {
     pub fn fxCollectGarbage(the: *mut XsMachine);
     pub fn fxEnableGarbageCollection(the: *mut XsMachine, enable: i32);
 
-    // Shared cluster (required init/teardown)
-    pub fn fxInitializeSharedCluster();
-    pub fn fxTerminateSharedCluster();
+    // Shared cluster (required init/teardown). xsAtomics.c takes the
+    // machine, used only to drop its Atomics waiters on terminate (skipped
+    // for null). Both update a process-global usage count with no lock:
+    // see `lib.rs`'s `cluster_lock`.
+    pub fn fxInitializeSharedCluster(the: *mut XsMachine);
+    pub fn fxTerminateSharedCluster(the: *mut XsMachine);
 
     // Promise jobs
     pub fn fxRunPromiseJobs(the: *mut XsMachine);
