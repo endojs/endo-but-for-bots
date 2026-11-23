@@ -37,6 +37,49 @@ fn compile(source: &str) -> (Vec<u8>, Vec<SymbolName>) {
     (bytecode, parse_symbols(&symbols))
 }
 
+/// The guest compiler `Compartment.prototype.evaluate` needs, as
+/// `persist_gates.rs` builds it.
+struct TestCompiler;
+
+impl ironhorse_vm::SourceCompiler for TestCompiler {
+    fn compile_source(
+        &self,
+        source: &str,
+        strict: bool,
+        raw_budget: u64,
+        charge: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+        match ironhorse_compile::compile_atoms_budgeted_firewalled(
+            source,
+            ironhorse_compile::Goal::Eval,
+            strict,
+            raw_budget,
+            charge,
+        ) {
+            Ok(compiled) => Ok(ironhorse_vm::CompiledSource {
+                bytecode: compiled.bytecode,
+                symbols: compiled.symbols,
+                parse_meter_raw: compiled.parse_meter_raw,
+                parse_computrons: compiled.parse_computrons,
+            }),
+            Err(ironhorse_compile::CompileError::MeterAbort) => {
+                Err(ironhorse_vm::SourceCompileError::MeterAbort)
+            }
+            Err(ironhorse_compile::CompileError::Invariant(detail)) => {
+                Err(ironhorse_vm::SourceCompileError::Invariant(detail))
+            }
+            Err(ironhorse_compile::CompileError::Parse(error)) => {
+                Err(ironhorse_vm::SourceCompileError::Syntax(error.message))
+            }
+        }
+    }
+}
+
+fn with_compiler(mut machine: Interp) -> Interp {
+    machine.set_source_compiler(Rc::new(TestCompiler));
+    machine
+}
+
 #[derive(Clone, Copy)]
 enum Step {
     /// Run one crank of guest source.
@@ -83,7 +126,7 @@ fn meter_host(
 impl Side {
     fn new(sparse: bool, interval: Option<u64>, abort_at: Option<usize>) -> Side {
         force_sparse_array_items(sparse);
-        let mut machine = Interp::new();
+        let mut machine = with_compiler(Interp::new());
         let checks = Rc::new(RefCell::new(Vec::new()));
         if let Some(interval) = interval {
             machine.arm_meter(interval, meter_host(checks.clone(), abort_at));
@@ -125,20 +168,23 @@ impl Side {
             }
             Step::Collect => {
                 // A machine a halt left non-quiescent refuses; both must.
-                let refused = self.machine.collect_garbage().is_err();
-                Some((refused, String::new(), String::new(), 0, 0, 0))
+                let refused = self.machine.collect_garbage().err();
+                let reason = format!("{refused:?}");
+                Some((refused.is_some(), reason, String::new(), 0, 0, 0))
             }
             Step::Restore => {
                 let bytes = self.machine.write_snapshot(&sig());
                 if let Ok(bytes) = &bytes {
-                    let mut restored = from_snapshot_bytes(bytes, &sig()).expect("restore");
+                    let mut restored =
+                        with_compiler(from_snapshot_bytes(bytes, &sig()).expect("restore"));
                     if self.machine.meter_is_armed() {
                         restored
                             .reattach_meter_host(meter_host(self.checks.clone(), self.abort_at));
                     }
                     self.machine = restored;
                 }
-                Some((bytes.is_err(), String::new(), String::new(), 0, 0, 0))
+                let reason = format!("{:?}", bytes.as_ref().err());
+                Some((bytes.is_err(), reason, String::new(), 0, 0, 0))
             }
             Step::Ceiling(above) => {
                 let ceiling = self.machine.chunks().byte_size() + above;
@@ -184,7 +230,7 @@ fn differential(
                 Step::Crank(source) if !source.contains("/*may-halt*/") => {
                     assert!(flag, "{name} step {n} halted: {halt}");
                 }
-                Step::Collect | Step::Restore => assert!(!flag, "{name} step {n} refused"),
+                Step::Collect | Step::Restore => assert!(!flag, "{name} step {n}: {halt}"),
                 _ => {}
             }
         }
@@ -317,7 +363,30 @@ const NAMED_KEYS: &[Step] = &[
     Crank("function ak() { return JSON.stringify(Object.getOwnPropertyDescriptor(arguments, 'length')) + ':' + arguments['1'] + ':' + Object.getOwnPropertyDescriptor(arguments, '0').value; } var t = ak('x', 'y'); t"),
 ];
 
+/// Hardened arrays and array natives under `lockdown()`, across a
+/// collection and a snapshot restore.
+const LOCKDOWN: &[Step] = &[
+    Crank("lockdown(); var hz = harden([3, 1, 2]); var r = ''; try { hz.push(4); } catch (e) { r = e.name; } var t = Object.isFrozen(hz) + ':' + Object.isFrozen(Array.prototype) + ':' + r + ':' + hz.slice().sort().join() + ':' + hz.map(function (x) { return x * 2; }).join() + ':' + hz.indexOf(2) + ':' + hz.concat([9]).join(); t"),
+    Crank("var h2 = []; for (var i = 0; i < 300; i++) h2[i] = i; h2[1000] = 'gap'; harden(h2); var r = ''; try { (function () { 'use strict'; h2[0] = 1; })(); } catch (e) { r = e.name; } var t = Object.isFrozen(h2) + ':' + r + ':' + h2.reduce(function (a, b) { return typeof b === 'number' ? a + b : a; }, 0) + ':' + h2.lastIndexOf('gap') + ':' + Object.keys(h2).length; t"),
+    Collect,
+    Restore,
+    Crank("var h2; var hz; var t; var m = []; for (var i = 0; i < 2000; i++) m.push(i); m.length = 100; m[5000] = 1; delete m[5000]; for (var i = 100; i < 400; i++) m[i] = -i; var r = ''; try { (function () { 'use strict'; hz.length = 0; })(); } catch (e) { r = e.name; } t = r + ':' + m.length + ':' + m.filter(function (v) { return v < 0; }).length + ':' + h2.slice(295, 302).join() + ':' + Object.isFrozen(h2) + ':' + [].concat(hz, m.slice(0, 2)).join(); t"),
+];
+
+/// Arrays shared into guest `Compartment`s after `lockdown()`, and array
+/// natives run inside them. A live or once-built guest `Compartment` makes the
+/// image unpersistable here, so this program collects but never restores.
+const COMPARTMENTS: &[Step] = &[
+    Crank("lockdown(); var hz = harden([3, 1, 2]); var big = []; for (var i = 0; i < 500; i++) big.push(i); var t = (function () { var c = new Compartment({globals: {shared: hz, big: big}}); return c.evaluate('shared.concat(big.slice(0, 3)).join() + \":\" + big.filter(function (v) { return v % 100 === 0; }).join() + \":\" + Object.isFrozen(Array.prototype) + \":\" + (shared === globalThis.shared)'); })(); t"),
+    Crank("var big; var t; (function () { new Compartment({globals: {big: big}}).evaluate('big.length = 10; big[20] = 1; delete big[20]; big[4294967294] = 2; delete big[4294967294]; big.length = 10; big.push(5)'); })(); t = big.join() + ':' + Object.isFrozen(big); t"),
+    Collect,
+    Crank("var h3 = []; for (var i = 0; i < 300; i++) h3[i] = i; h3[1000] = 'gap'; harden(h3); var t = new Compartment({globals: {h3: h3}}).evaluate('var r = \"\"; try { h3.push(1); } catch (e) { r = e.name; } r + \":\" + h3.lastIndexOf(\"gap\") + \":\" + Object.keys(h3).length'); t"),
+    Crank("var t = new Compartment().evaluate('var x = []; for (var i = 0; i < 100; i++) x[i * 3] = i; x.sort(); var y = Array.from({length: 50}, function (_, i) { return i; }); y.splice(10, 30); x.length + \":\" + Object.keys(x).length + \":\" + y.join()'); t"),
+];
+
 const CORPUS: &[(&str, &[Step])] = &[
+    ("lockdown", LOCKDOWN),
+    ("compartments", COMPARTMENTS),
     ("named_keys", NAMED_KEYS),
     ("holes_and_far", HOLES_AND_FAR),
     ("length_changes", LENGTH_CHANGES),

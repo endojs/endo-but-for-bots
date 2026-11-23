@@ -165,6 +165,20 @@ thread_local! {
     /// nothing a program, the meter or a snapshot sees; the differential
     /// test `tests/array_storage_differential.rs` holds it to that.
     static FORCE_SPARSE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Items moved by representation conversions on this thread, the host
+    /// work the conversions do. Updated only on the conversion paths, so it
+    /// costs the hot paths nothing; it never affects what a program sees.
+    static CONVERSION_WORK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many items representation conversions have moved on this thread. A
+/// diagnostics hook for the host-work-per-computron test.
+pub fn array_item_conversion_work() -> u64 {
+    CONVERSION_WORK.get()
+}
+
+fn count_conversion_work(items: usize) {
+    CONVERSION_WORK.set(CONVERSION_WORK.get().saturating_add(items as u64));
 }
 
 /// Force (or stop forcing) the ordered-map representation, on this thread,
@@ -516,6 +530,7 @@ impl ArrayItems {
             slots.resize(index as usize, None);
             slots.push(Some(*value));
         }
+        count_conversion_work(map.len());
         self.repr = ItemsRepr::Dense {
             slots,
             count: count as usize,
@@ -536,6 +551,7 @@ impl ArrayItems {
                 map.insert(index as u32, *value);
             }
         }
+        count_conversion_work(*count);
         let debt = u32::try_from(*count).unwrap_or(u32::MAX);
         self.repr = ItemsRepr::Sparse { map, debt, skip: 0 };
     }
