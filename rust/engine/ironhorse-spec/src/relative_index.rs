@@ -73,6 +73,43 @@ pub fn relative_index(relative: u64, len: u64) -> Option<u64> {
     Some(k as u64)
 }
 
+/// The first index searched by ECMA-262 §23.1.3.20
+/// Array.prototype.lastIndexOf ( searchElement [ , fromIndex ] ), with `len`
+/// the object's length and `relative` the bit pattern of
+/// `ToIntegerOrInfinity(fromIndex)` for a present `fromIndex`:
+///
+/// > 3. If len = 0, return -1𝔽.
+/// > 4. If fromIndex is present, let n be ? ToIntegerOrInfinity(fromIndex);
+/// >    else let n be len - 1.
+/// > 5. If n = -∞, return -1𝔽.
+/// > 6. If n ≥ 0, then
+/// >    a. Let k be min(n, len - 1).
+/// > 7. Else,
+/// >    a. Let k be len + n.
+/// > 8. Repeat, while k ≥ 0, …
+/// > 9. Return -1𝔽.
+///
+/// `None` if `relative` is not a ToIntegerOrInfinity result (NaN, or a
+/// non-integral finite Number); `Some(None)` when the search examines no
+/// index and returns -1 (step 3, step 5, or step 8 with `k < 0`);
+/// otherwise `Some(Some(k))`, the index step 8 examines first.
+pub fn last_index_start(relative: u64, len: u64) -> Option<Option<u64>> {
+    let n = integer_or_infinity_saturated(relative)?;
+    if len == 0 || relative == 0xFFF0_0000_0000_0000 {
+        // Steps 3 and 5.
+        return Some(None);
+    }
+    let len = i128::from(len);
+    let k = if n >= 0 {
+        // Step 6 (including +∞).
+        n.min(len - 1)
+    } else {
+        // Step 7.
+        len + n
+    };
+    Some((k >= 0).then_some(k as u64))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +174,40 @@ mod tests {
         }
         assert_eq!(relative_index(b(f64::NAN), 3), None);
         assert_eq!(relative_index(b(2.5), 3), None);
+    }
+
+    #[test]
+    fn last_index_start_known_answers() {
+        // test262 test/built-ins/Array/prototype/lastIndexOf: the
+        // 15.4.4.15-5-* fromIndex conversions (-Infinity, Infinity, -0,
+        // beyond the length), 15.4.4.15-6-* (min(n, len - 1), e.g.
+        // [1, 2, 3].lastIndexOf(3, 1) starts at 1) and 15.4.4.15-7-*
+        // (len + n, e.g. [1, 2, 3, 4].lastIndexOf(4, -1) starts at 3 and
+        // lastIndexOf(2, -4) at 0); then the u32 length boundary.
+        let cases: &[(f64, u64, Option<u64>)] = &[
+            (f64::NEG_INFINITY, 5, None),
+            (f64::INFINITY, 5, Some(4)),
+            (-0.0, 5, Some(0)),
+            (0.0, 0, None),
+            (f64::INFINITY, 0, None),
+            (9.0, 5, Some(4)),
+            (4.0, 5, Some(4)),
+            (2.0, 5, Some(2)),
+            (-1.0, 5, Some(4)),
+            (1.0, 3, Some(1)),
+            (-1.0, 4, Some(3)),
+            (-4.0, 4, Some(0)),
+            (-5.0, 5, Some(0)),
+            (-6.0, 5, None),
+            (-1e300, 5, None),
+            (4294967295.0, 4294967295, Some(4294967294)),
+            (-4294967295.0, 4294967295, Some(0)),
+            (-4294967296.0, 4294967295, None),
+        ];
+        for &(n, len, want) in cases {
+            assert_eq!(last_index_start(b(n), len), Some(want), "{n} {len}");
+        }
+        assert_eq!(last_index_start(b(f64::NAN), 3), None);
+        assert_eq!(last_index_start(b(-2.5), 3), None);
     }
 }

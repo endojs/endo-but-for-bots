@@ -26,8 +26,10 @@
 #![forbid(unsafe_code)]
 
 pub mod arith;
+pub mod bigint;
 pub mod date;
 pub mod float16;
+pub mod float32;
 pub mod index_string;
 pub mod int32;
 pub mod number;
@@ -38,8 +40,9 @@ pub mod to_integer;
 mod kani_canaries;
 
 pub use float16::{binary16_to_binary64, binary64_to_binary16, f16_bits_to_f64, f64_to_f16_bits};
+pub use float32::{binary32_to_binary64, binary64_to_binary32};
 pub use number::{decompose, Decomposed};
-pub use relative_index::{integer_or_infinity_saturated, relative_index};
+pub use relative_index::{integer_or_infinity_saturated, last_index_start, relative_index};
 pub use to_integer::{
     to_int16, to_int32, to_int8, to_uint16, to_uint32, to_uint8, to_uint8_clamp,
     truncate_to_integer_mod_2n,
