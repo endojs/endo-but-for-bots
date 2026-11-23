@@ -63,7 +63,8 @@ fn debug_machine(ps: &mut powers::HostPowers) -> Option<Machine> {
     debug::debug_reset();
     debug::debug_enable();
     let machine = Machine::new(&DEFAULT_CREATION, "debug-test").expect("machine creation failed");
-    machine.register_powers(ps as *mut powers::HostPowers);
+    // SAFETY: each test keeps `ps` alive, untouched, past its machine.
+    unsafe { machine.register_powers(ps as *mut powers::HostPowers) };
     if !debug::debug_is_active() {
         eprintln!("debug not compiled in — skipping test");
         debug::debug_reset();

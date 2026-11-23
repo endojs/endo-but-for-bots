@@ -12,8 +12,36 @@ pub mod modules;
 pub mod process;
 pub mod sqlite;
 
+use crate::ffi::XsMachine;
 use cap_std::fs::Dir;
 use std::collections::HashMap;
+
+/// The `HostPowers` this machine's context points at.
+///
+/// Panics if no context is set: a machine restored from a snapshot has the
+/// powers callbacks live before anything has called `register_powers` or
+/// `set_context` on it, and the panic (caught by the callback's `guard_ffi`)
+/// fails the callback closed instead of dereferencing null.
+///
+/// # Safety
+/// Call only from a powers host callback on `the`, the machine XS passed it,
+/// whose context was set by `Machine::register_powers` (or `set_context`)
+/// under that fn's contract: null or a live `HostPowers`. The reference
+/// must not be kept past the callback.
+pub(crate) unsafe fn host_powers<'a>(the: *mut XsMachine) -> &'a HostPowers {
+    // SAFETY: `the` is the live machine (host-callback contract). Its
+    // context is null (rejected here) or, per `set_context`'s contract, a
+    // live `HostPowers` that nothing mutates while JS runs, so a shared
+    // borrow for the rest of the callback is sound.
+    unsafe {
+        let context = (*the).context as *const HostPowers;
+        assert!(
+            !context.is_null(),
+            "xsnap: a powers callback ran on a machine with no HostPowers context"
+        );
+        &*context
+    }
+}
 
 /// Host powers for an XS worker.
 ///

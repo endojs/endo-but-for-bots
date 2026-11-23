@@ -350,7 +350,8 @@ mod tests {
             crate::ensure_shared_cluster();
             let mut powers = crate::powers::HostPowers::new();
             let machine = crate::Machine::new(&crate::DEFAULT_CREATION, "views").unwrap();
-            machine.register_powers(&mut powers);
+            // SAFETY: `powers` outlives `machine` and is not touched while JS runs.
+            unsafe { machine.register_powers(&mut powers) };
             let empty_digest = hex::encode(Sha256::digest(b""));
             let verdict = machine
                 .eval(

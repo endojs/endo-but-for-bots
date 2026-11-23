@@ -7,7 +7,6 @@
 //!   realPath(dirToken, path) -> string
 
 use crate::ffi::*;
-use crate::powers::HostPowers;
 use crate::worker_io::{arg_str, set_result_string};
 
 /// `getPid() -> number`
@@ -121,12 +120,11 @@ pub unsafe extern "C" fn host_join_path(the: *mut XsMachine) {
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_real_path(the: *mut XsMachine) {
     // SAFETY: host-callback contract (`worker_io`). Arguments 0 and 1 via
-    // `arg_str` (a missing one reads as `undefined`). `context` is dereferenced
-    // as `HostPowers` without a check, under the same UNVERIFIED caveat as
-    // `fs::get_powers`; the shared borrow is only read, never held past the
+    // `arg_str` (a missing one reads as `undefined`). `host_powers` checks
+    // the context; the shared borrow is only read, never held past the
     // callback.
     crate::worker_io::guard_ffi(|| unsafe {
-        let powers = &*((*the).context as *const HostPowers);
+        let powers = crate::powers::host_powers(the);
         let dir_token = arg_str(the, 0);
         let path = arg_str(the, 1);
 

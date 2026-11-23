@@ -20,7 +20,6 @@
 //!   link(dirOrToken, srcPath, dstPath) -> undefined
 
 use crate::ffi::*;
-use crate::powers::HostPowers;
 use crate::worker_io::{
     abort_if_ffi_panicked, arg_integer, arg_slot, arg_str, read_typed_array_bytes,
     set_result_string,
@@ -29,21 +28,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
-
-/// Helper: get HostPowers from the machine context.
-///
-/// # Safety
-/// Machine context must have been set to a valid `*mut HostPowers`.
-unsafe fn get_powers(the: *mut XsMachine) -> &'static HostPowers {
-    // SAFETY: UNVERIFIED — `context` is dereferenced without a null or type
-    // check. `register_powers` sets it before JS runs on a fresh machine,
-    // but on a machine restored from a snapshot these callbacks are live as
-    // soon as `fxReadSnapshot` returns, and only `run_xs_program`'s ordering
-    // (not this crate's API) sets the context first. The `'static` lifetime
-    // is also wider than the truth: the `HostPowers` box is freed when the
-    // worker stops, so the reference must not outlive the callback.
-    unsafe { &*((*the).context as *const HostPowers) }
-}
 
 /// Helper: read a raw byte slice argument from the XS stack frame.
 ///
@@ -216,10 +200,10 @@ fn root_to_abs(path: &str) -> std::path::PathBuf {
 /// `the` must be valid, `slot_index` must be in range.
 unsafe fn resolve_dir(the: *mut XsMachine, slot_index: usize) -> Result<cap_std::fs::Dir, String> {
     // SAFETY: host-callback contract; `arg_slot` yields argument
-    // `slot_index` or the local `absent` slot (`undefined`). The `DIR_MAP` borrow is taken only
-    // after the slot has been coerced, so a re-entrant callback in that
-    // coercion cannot observe it; `get_powers` carries its own UNVERIFIED
-    // note. The returned `Dir` is an owned clone.
+    // `slot_index` or the local `absent` slot (`undefined`). The `DIR_MAP`
+    // borrow is taken only after the slot has been coerced, so a re-entrant
+    // callback in that coercion cannot observe it; `host_powers` rejects a
+    // missing context. The returned `Dir` is an owned clone.
     DIR_MAP.with(|dir_map| unsafe {
         let mut absent = XsSlot::default();
         let slot = arg_slot(the, slot_index, &mut absent);
@@ -234,7 +218,7 @@ unsafe fn resolve_dir(the: *mut XsMachine, slot_index: usize) -> Result<cap_std:
             }
         } else {
             let token = arg_str(the, slot_index);
-            let powers = get_powers(the);
+            let powers = crate::powers::host_powers(the);
             match powers.get_dir(&token) {
                 Some(dir) => dir.try_clone().map_err(|e| format!("Error: {}", e)),
                 None => Err(format!("Error: unknown directory token '{}'", token)),
@@ -1259,6 +1243,7 @@ pub unsafe fn register(machine: &crate::Machine) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::powers::HostPowers;
 
     #[test]
     fn reentrant_coercion_panic_prevents_outer_host_effects() {
@@ -1281,7 +1266,8 @@ mod tests {
                     temp.path(), cap_std::ambient_authority(),
                 ).unwrap());
                 let machine = crate::Machine::new(&crate::DEFAULT_CREATION, "coercion-panic").unwrap();
-                machine.register_powers(&mut powers);
+                // SAFETY: `powers` outlives `machine` and is not touched while JS runs.
+                unsafe { machine.register_powers(&mut powers) };
                 machine.eval("var reader = openReader('test', 'victim'); var db = sqliteOpen(':memory:'); var hasher = sha256Init();").unwrap();
                 let reader = match machine.eval("reader").unwrap() {
                     crate::JsValue::Integer(handle) => handle as u32,
@@ -1312,7 +1298,8 @@ mod tests {
             cap_std::fs::Dir::open_ambient_dir(temp.path(), cap_std::ambient_authority()).unwrap(),
         );
         let machine = crate::Machine::new(&crate::DEFAULT_CREATION, "gc-move").unwrap();
-        machine.register_powers(&mut powers);
+        // SAFETY: `powers` outlives `machine` and is not touched while JS runs.
+        unsafe { machine.register_powers(&mut powers) };
         // Garbage ahead of `data` in the chunk heap, so compaction slides
         // `data` down; the churn in `toString` then reuses its old address.
         machine
@@ -1358,7 +1345,8 @@ mod tests {
             cap_std::fs::Dir::open_ambient_dir(temp.path(), cap_std::ambient_authority()).unwrap(),
         );
         let machine = crate::Machine::new(&crate::DEFAULT_CREATION, "argc").unwrap();
-        machine.register_powers(&mut powers);
+        // SAFETY: `powers` outlives `machine` and is not touched while JS runs.
+        unsafe { machine.register_powers(&mut powers) };
         // Leave live-looking slots in the free stack below the next call's
         // frame, so a read past argc would find something other than the
         // scope slot.
@@ -1391,6 +1379,34 @@ mod tests {
         match machine.eval("joinPath('a', 'b')").unwrap() {
             crate::JsValue::String(s) => assert_eq!(s, "a/b"),
             _ => panic!("joinPath must return a string"),
+        }
+    }
+
+    /// A powers callback on a machine with no `HostPowers` context (as on a
+    /// machine restored from a snapshot before anything sets it) must fail
+    /// closed rather than dereference a null context.
+    #[test]
+    fn powers_callback_without_a_context_fails_closed() {
+        for action in [
+            "readFileText('test', 'x')",
+            "loadModuleSource('x')",
+            "realPath('test', 'x')",
+        ] {
+            std::thread::spawn(move || {
+                crate::ensure_shared_cluster();
+                let mut powers = HostPowers::new();
+                let machine = crate::Machine::new(&crate::DEFAULT_CREATION, "no-context").unwrap();
+                // SAFETY: `powers` outlives `machine`, and the context is
+                // then cleared to null, which `set_context` permits.
+                unsafe {
+                    machine.register_powers(&mut powers);
+                    machine.set_context(std::ptr::null_mut::<HostPowers>());
+                }
+                machine.eval(action);
+                assert!(crate::worker_io::ffi_panicked(), "{action}");
+            })
+            .join()
+            .unwrap();
         }
     }
 

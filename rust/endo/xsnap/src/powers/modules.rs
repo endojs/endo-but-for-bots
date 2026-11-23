@@ -9,15 +9,7 @@
 //!   resolveModule(specifier, referrer) -> string (resolved specifier)
 
 use crate::ffi::*;
-use crate::powers::HostPowers;
 use crate::worker_io::{arg_str, set_result_string};
-
-/// Helper: get HostPowers from the machine context.
-unsafe fn get_powers(the: *mut XsMachine) -> &'static HostPowers {
-    // SAFETY: UNVERIFIED — the same unchecked `context` dereference, and the
-    // same too-wide `'static`, as `fs::get_powers`.
-    unsafe { &*((*the).context as *const HostPowers) }
-}
 
 /// `loadModuleSource(specifier) -> string | undefined`
 ///
@@ -33,7 +25,7 @@ pub unsafe extern "C" fn host_load_module_source(the: *mut XsMachine) {
     // the next XS call, and results reach `xsResult` through helpers that copy
     // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
-        let powers = get_powers(the);
+        let powers = crate::powers::host_powers(the);
         let specifier = arg_str(the, 0);
 
         match powers.get_module(&specifier) {

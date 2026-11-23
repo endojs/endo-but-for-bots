@@ -140,13 +140,19 @@ impl Machine {
     }
 
     /// Set the host context pointer (retrievable from host functions).
-    pub fn set_context<T>(&self, ctx: *mut T) {
-        // SAFETY: the write itself is sound: `self.raw` is the live machine
-        // this `Machine` owns, and nothing reads `context` concurrently
-        // (`Machine` is `!Send`). UNVERIFIED as an API: this safe fn accepts
-        // any pointer of any type, and the powers callbacks later dereference
-        // `context` as a `HostPowers` (see `powers::fs::get_powers`), so safe
-        // code can set up a type confusion or a dangling pointer.
+    ///
+    /// # Safety
+    /// The powers callbacks (`register_powers`) dereference `context` as a
+    /// `HostPowers`, so on a machine that has them registered (including one
+    /// restored from a snapshot that carries them), `ctx` must be null or
+    /// point at a live `powers::HostPowers` that outlives every later entry
+    /// into this machine's JS, and that nothing mutates while such an entry
+    /// runs.
+    pub unsafe fn set_context<T>(&self, ctx: *mut T) {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns, and
+        // nothing reads `context` concurrently (`Machine` is `!Send`); what
+        // the pointer is used for is the caller's obligation, per this fn's
+        // contract.
         unsafe { (*self.raw).context = ctx as *mut c_void };
     }
 
@@ -901,16 +907,18 @@ unsafe fn slot_to_value(the: *mut XsMachine, slot: *mut XsSlot, ty: i8) -> JsVal
 impl Machine {
     /// Set up host powers and register all host functions.
     ///
-    /// The HostPowers pointer must outlive the Machine.
     /// Registers filesystem, crypto, and module loading host functions.
-    pub fn register_powers(&self, powers: *mut powers::HostPowers) {
-        self.set_context(powers);
+    ///
+    /// # Safety
+    /// As [`Machine::set_context`] with `powers`: it must point at a live
+    /// `HostPowers` for as long as this machine's JS can run, and nothing
+    /// may mutate it while JS runs.
+    pub unsafe fn register_powers(&self, powers: *mut powers::HostPowers) {
+        // SAFETY: `powers` meets `set_context`'s contract, per this fn's.
+        unsafe { self.set_context(powers) };
         // SAFETY: the `register` fns only call `define_function` on this
-        // live machine. UNVERIFIED as an API: this safe fn takes a raw
-        // pointer that every powers callback later dereferences as a live
-        // `HostPowers` (`get_powers`), with nothing tying its lifetime to the
-        // machine's; the "must outlive the Machine" rule above is enforced
-        // only by callers.
+        // live machine, whose context was just set to the `HostPowers`
+        // their callbacks read (`powers::host_powers`).
         unsafe {
             powers::fs::register(self);
             powers::crypto::register(self);
@@ -1366,7 +1374,11 @@ fn register_host_powers(machine: &Machine) -> *mut powers::HostPowers {
         host_powers.add_dir("root", root);
     }
     let powers_ptr = Box::into_raw(Box::new(host_powers));
-    machine.register_powers(powers_ptr);
+    // SAFETY: `powers_ptr` is a fresh, leaked box that only the powers
+    // callbacks read. `run_xs_program` frees it after its last entry into
+    // the machine's JS (just before dropping the machine);
+    // `run_xs_archive_loaded` never frees it.
+    unsafe { machine.register_powers(powers_ptr) };
     powers_ptr
 }
 
@@ -2761,7 +2773,9 @@ mod tests {
 
     fn new_machine_with_powers(powers: &mut powers::HostPowers) -> Machine {
         let machine = new_machine();
-        machine.register_powers(powers as *mut powers::HostPowers);
+        // SAFETY: the caller's `powers` outlives the returned machine in
+        // every test, and is not touched while JS runs.
+        unsafe { machine.register_powers(powers as *mut powers::HostPowers) };
         machine
     }
 
