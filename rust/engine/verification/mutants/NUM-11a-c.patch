@@ -1,0 +1,12 @@
+Mutant NUM-11a-c: bi_cmp_mag orders magnitudes of different lengths backwards.
+--- a/ironhorse-vm/src/interp/bigint.rs
++++ b/ironhorse-vm/src/interp/bigint.rs
+@@ -201,7 +201,7 @@
+ fn bi_cmp_mag(a: &[u32], b: &[u32]) -> std::cmp::Ordering {
+     use std::cmp::Ordering;
+     if a.len() != b.len() {
+-        return a.len().cmp(&b.len());
++        return b.len().cmp(&a.len());
+     }
+     for i in (0..a.len()).rev() {
+         if a[i] != b[i] {

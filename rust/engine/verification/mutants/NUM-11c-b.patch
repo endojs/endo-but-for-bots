@@ -1,0 +1,16 @@
+Mutant NUM-11c-b: bi_low_u64 ignores the sign.
+--- a/ironhorse-vm/src/interp/bigint.rs
++++ b/ironhorse-vm/src/interp/bigint.rs
+@@ -42,11 +42,7 @@
+     if let Some(&l1) = magnitude.get(1) {
+         u |= (l1 as u64) << 32;
+     }
+-    if negative {
+-        u.wrapping_neg()
+-    } else {
+-        u
+-    }
++    u
+ }
+ 
+ /// Convert a trimmed BigInt to the nearest IEEE-754 binary64 value, using

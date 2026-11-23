@@ -1,0 +1,12 @@
+Mutant NUM-11c-a: BigInt to Number rounds ties away from zero.
+--- a/ironhorse-vm/src/interp/bigint.rs
++++ b/ironhorse-vm/src/interp/bigint.rs
+@@ -79,7 +79,7 @@
+     if discarded > 0 {
+         let round = bit(discarded - 1);
+         let sticky = (0..discarded - 1).any(bit);
+-        if round && (sticky || significand & 1 != 0) {
++        if round {
+             significand += 1;
+             if significand == 1u64 << 53 {
+                 significand >>= 1;

@@ -1,0 +1,12 @@
+Mutant NUM-11b-a: asIntN returns a positive value whose top bit is the sign bit unchanged.
+--- a/ironhorse-vm/src/interp/bigint.rs
++++ b/ironhorse-vm/src/interp/bigint.rs
+@@ -130,7 +130,7 @@
+         .expect("a non-zero BigInt has a leading limb");
+     let magnitude_bits = (magnitude.len() as u64 - 1) * 32 + u64::from(32 - top.leading_zeros());
+ 
+-    if !negative && ((!signed && magnitude_bits <= bits) || (signed && magnitude_bits < bits)) {
++    if !negative && ((!signed && magnitude_bits <= bits) || (signed && magnitude_bits <= bits)) {
+         return WidthResult::Unchanged;
+     }
+     if negative && signed {

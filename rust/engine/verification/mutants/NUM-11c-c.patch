@@ -1,0 +1,12 @@
+Mutant NUM-11c-c: a BigUint64 element above 2^63 reads as negative.
+--- a/ironhorse-vm/src/interp/bigint.rs
++++ b/ironhorse-vm/src/interp/bigint.rs
+@@ -480,7 +480,7 @@
+ /// This is the numeric core of `DataView.prototype.getBigInt64`/
+ /// `getBigUint64` and the BigInt64/BigUint64 typed-array element read.
+ pub(super) fn u64_to_signed_limbs(signed: bool, u: u64) -> (bool, Vec<u32>) {
+-    let (neg, mag) = if signed && (u as i64) < 0 {
++    let (neg, mag) = if (u as i64) < 0 {
+         // Magnitude of a negative i64 without overflowing at i64::MIN.
+         (true, (u as i64 as i128).unsigned_abs() as u64)
+     } else {

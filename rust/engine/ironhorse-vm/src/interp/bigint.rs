@@ -654,3 +654,811 @@ pub(super) fn parse_bigint_string(source: &str) -> Option<(bool, Vec<u32>)> {
     let magnitude = bi_trim(magnitude);
     Some((negative && !bi_is_zero(&magnitude), magnitude))
 }
+
+#[cfg(test)]
+mod model_tests {
+    //! Ordinary tests of the BigInt kernels against the `ironhorse-spec`
+    //! models, at widths and sizes beyond the NUM-11 Kani bounds.
+    use super::*;
+    use ironhorse_spec::bigint as spec;
+
+    fn encode(x: i128) -> (bool, Vec<u32>) {
+        let m = x.unsigned_abs();
+        let limbs = vec![
+            m as u32,
+            (m >> 32) as u32,
+            (m >> 64) as u32,
+            (m >> 96) as u32,
+        ];
+        (x < 0, bi_trim(limbs))
+    }
+
+    fn value(negative: bool, magnitude: &[u32]) -> i128 {
+        let m = magnitude
+            .iter()
+            .rev()
+            .fold(0i128, |v, &limb| (v << 32) | i128::from(limb));
+        if negative {
+            -m
+        } else {
+            m
+        }
+    }
+
+    /// Values of up to three limbs concentrated at limb and sign boundaries.
+    fn samples() -> Vec<i128> {
+        let mut out = vec![0, 1, -1, 2, -2];
+        for k in [31u32, 32, 33, 63, 64, 65, 95] {
+            for d in [-1i128, 0, 1] {
+                out.push((1i128 << k) + d);
+                out.push(-(1i128 << k) - d);
+            }
+        }
+        let mut state = 0x0B16_u64;
+        for _ in 0..200 {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            let wide = (i128::from(z) << 64 | i128::from(z.rotate_left(17))) >> (32 + z % 90);
+            out.push(wide);
+        }
+        out
+    }
+
+    /// `bi_as_n` equals BigInt.asIntN / asUintN at every width 0..=126,
+    /// returns `Unchanged` only for a value already in range, and refuses a
+    /// width above 65536 only when the result would not be the argument.
+    #[test]
+    fn as_n_matches_the_spec_at_every_width() {
+        for x in samples() {
+            let (negative, magnitude) = encode(x);
+            for bits in 0..=126u64 {
+                for signed in [false, true] {
+                    let want = if signed {
+                        spec::as_int_n(bits as u32, x)
+                    } else {
+                        spec::as_uint_n(bits as u32, x)
+                    };
+                    match bi_as_n(negative, &magnitude, bits, signed) {
+                        WidthResult::Unchanged => assert_eq!(x, want, "{x} {bits} {signed}"),
+                        WidthResult::Value(neg, mag) => {
+                            let (neg, mag) = bi_canonical(neg, mag);
+                            assert_eq!((neg, mag), encode(want), "{x} {bits} {signed}");
+                        }
+                        WidthResult::TooLarge => panic!("{x} {bits} refused"),
+                    }
+                }
+            }
+            for signed in [false, true] {
+                let result = bi_as_n(negative, &magnitude, 65_537, signed);
+                let in_range = x >= 0 || signed;
+                assert_eq!(
+                    result,
+                    if x == 0 {
+                        WidthResult::Value(false, vec![0])
+                    } else if in_range {
+                        WidthResult::Unchanged
+                    } else {
+                        WidthResult::TooLarge
+                    },
+                    "{x} wide {signed}"
+                );
+            }
+        }
+    }
+
+    /// `bi_add`, `bi_cmp`, `bi_bitwise`, `bi_low_u64` and `bi_to_f64` on
+    /// values of up to three limbs (the proofs stop at two, or three for
+    /// the conversions).
+    #[test]
+    fn three_limb_operations_match_the_spec() {
+        let values = samples();
+        for &x in &values {
+            let (nx, mx) = encode(x);
+            assert_eq!(bi_low_u64(nx, &mx), spec::to_big_uint64(x));
+            assert_eq!(
+                bi_to_f64(nx, &mx).to_bits(),
+                ironhorse_spec::arith::number_value_of_integer(x)
+            );
+            for &y in values.iter().step_by(7) {
+                let (ny, my) = encode(y);
+                assert_eq!(bi_add(nx, &mx, ny, &my), encode(spec::add(x, y)));
+                assert_eq!(bi_add(nx, &mx, !ny, &my), encode(spec::subtract(x, y)));
+                assert_eq!(bi_cmp(nx, &mx, ny, &my), spec::compare(x, y));
+                for (op, model) in [
+                    (BitOp::And, spec::BitwiseOp::And),
+                    (BitOp::Or, spec::BitwiseOp::Or),
+                    (BitOp::Xor, spec::BitwiseOp::Xor),
+                ] {
+                    assert_eq!(
+                        bi_bitwise(op, nx, &mx, ny, &my),
+                        encode(spec::bitwise(model, x, y))
+                    );
+                }
+                assert_eq!(value(nx, &mx), x);
+            }
+        }
+    }
+}
+
+#[cfg(kani)]
+mod proofs {
+    //! Kani proofs of the BigInt sign-magnitude kernels (NUM-11a), the
+    //! width conversions `BigInt.asIntN` / `BigInt.asUintN` (NUM-11b) and the
+    //! BigInt conversions to Number, to 64 bits and from raw bytes (NUM-11c),
+    //! against the `ironhorse-spec` BigInt models
+    //! (`rust/engine/VERIFICATION.md`).
+    //!
+    //! Every input is a canonical BigInt with a *concrete* limb count and
+    //! symbolic limbs: a symbolic count makes the kernels' `Vec` allocation
+    //! sizes symbolic, and CBMC then exhausted 13 GB within seconds on a
+    //! two-limb add. So each property is one harness per limb-count
+    //! combination, and the bound (at most two or three limbs) is part of
+    //! each claim.
+    use super::*;
+    use ironhorse_spec::bigint as spec;
+
+    /// A canonical BigInt of exactly `N` limbs, as the chunk store holds it:
+    /// trimmed (the top limb is nonzero when `N > 1`) and zero never
+    /// negative.
+    fn any_bigint<const N: usize>() -> (bool, [u32; N]) {
+        let limbs: [u32; N] = kani::any();
+        // Read both limbs unconditionally, so no index check sits behind a
+        // short-circuit that some `N` never takes.
+        let (low, top) = (limbs[0], limbs[N - 1]);
+        kani::assume(N == 1 || top != 0);
+        let negative: bool = kani::any();
+        kani::assume(!negative || N > 1 || low != 0);
+        (negative, limbs)
+    }
+
+    /// The mathematical value of `(negative, magnitude)` for at most three
+    /// limbs.
+    fn value(negative: bool, magnitude: &[u32]) -> i128 {
+        assert!(magnitude.len() <= 3);
+        let mut v = 0i128;
+        for &limb in magnitude.iter().rev() {
+            v = (v << 32) | i128::from(limb);
+        }
+        if negative {
+            -v
+        } else {
+            v
+        }
+    }
+
+    /// The canonical encoding of `x` (`|x| < 2^96`): its sign and its
+    /// magnitude's limbs, of which the first `len` are used.
+    fn encoding(x: i128) -> (bool, [u32; 3], usize) {
+        let m = x.unsigned_abs();
+        assert!(m >> 96 == 0);
+        let limbs = [m as u32, (m >> 32) as u32, (m >> 64) as u32];
+        let len = if limbs[2] != 0 {
+            3
+        } else if limbs[1] != 0 {
+            2
+        } else {
+            1
+        };
+        (x < 0, limbs, len)
+    }
+
+    /// `(negative, magnitude)` is exactly the canonical encoding of `x`.
+    fn assert_encodes(negative: bool, magnitude: &[u32], x: i128) {
+        let (want_negative, want, len) = encoding(x);
+        assert_eq!(negative, want_negative);
+        assert_eq!(magnitude.len(), len);
+        for (got, want) in magnitude.iter().zip(want) {
+            assert_eq!(*got, want);
+        }
+    }
+
+    /// `(negative, magnitude)` is in the chunk store's canonical form.
+    fn assert_canonical(negative: bool, magnitude: &[u32]) {
+        assert!(!magnitude.is_empty(), "at least one limb");
+        assert!(
+            magnitude.len() == 1 || magnitude[magnitude.len() - 1] != 0,
+            "no zero high limb"
+        );
+        assert!(!negative || !bi_is_zero(magnitude), "no negative zero");
+    }
+
+    // NUM-11a --------------------------------------------------------------
+
+    /// BigInt `+` and `-`: `bi_add(na, a, nb, b)` and, as `bigint_arith`
+    /// computes `a - b`, `bi_add(na, a, !nb, b)` (so `b = 0n` arrives as a
+    /// negative zero), are canonical and equal BigInt::add and
+    /// BigInt::subtract. Returns the model value and the result's length.
+    fn check_add_sub<const A: usize, const B: usize>(subtract: bool) -> (i128, usize) {
+        let (na, a) = any_bigint::<A>();
+        let (nb, b) = any_bigint::<B>();
+        let (neg, mag) = bi_add(na, &a, if subtract { !nb } else { nb }, &b);
+        let (x, y) = (value(na, &a), value(nb, &b));
+        let want = if subtract {
+            spec::subtract(x, y)
+        } else {
+            spec::add(x, y)
+        };
+        assert_encodes(neg, &mag, want);
+        (want, mag.len())
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11a_add_1_1() {
+        let (want, len) = check_add_sub::<1, 1>(false);
+        kani::cover!(len > 1, "a carry into a new limb");
+        kani::cover!(want == 0 || len < 1, "opposite signs cancelling a limb");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11a_add_1_2() {
+        let (want, len) = check_add_sub::<1, 2>(false);
+        kani::cover!(len > 2, "a carry into a new limb");
+        kani::cover!(want == 0 || len < 2, "opposite signs cancelling a limb");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11a_add_2_1() {
+        let (want, len) = check_add_sub::<2, 1>(false);
+        kani::cover!(len > 2, "a carry into a new limb");
+        kani::cover!(want == 0 || len < 2, "opposite signs cancelling a limb");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11a_add_2_2() {
+        let (want, len) = check_add_sub::<2, 2>(false);
+        kani::cover!(len > 2, "a carry into a new limb");
+        kani::cover!(want == 0 || len < 2, "opposite signs cancelling a limb");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11a_sub_1_1() {
+        let (want, len) = check_add_sub::<1, 1>(true);
+        kani::cover!(want == 0 || len < 1, "a difference cancelling a limb");
+        kani::cover!(want < 0, "a negative difference");
+        kani::cover!(len > 1, "a difference of opposite signs carrying");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11a_sub_1_2() {
+        let (want, len) = check_add_sub::<1, 2>(true);
+        kani::cover!(want == 0 || len < 2, "a difference cancelling a limb");
+        kani::cover!(want < 0, "a negative difference");
+        kani::cover!(len > 2, "a difference of opposite signs carrying");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11a_sub_2_1() {
+        let (want, len) = check_add_sub::<2, 1>(true);
+        kani::cover!(want == 0 || len < 2, "a difference cancelling a limb");
+        kani::cover!(want < 0, "a negative difference");
+        kani::cover!(len > 2, "a difference of opposite signs carrying");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11a_sub_2_2() {
+        let (want, len) = check_add_sub::<2, 2>(true);
+        kani::cover!(want == 0 || len < 2, "a difference cancelling a limb");
+        kani::cover!(want < 0, "a negative difference");
+        kani::cover!(len > 2, "a difference of opposite signs carrying");
+    }
+
+    /// `bi_cmp` of two canonical BigInts is BigInt::lessThan / equal.
+    fn check_cmp<const A: usize, const B: usize>() -> std::cmp::Ordering {
+        let (na, a) = any_bigint::<A>();
+        let (nb, b) = any_bigint::<B>();
+        let got = bi_cmp(na, &a, nb, &b);
+        assert_eq!(got, spec::compare(value(na, &a), value(nb, &b)));
+        got
+    }
+
+    /// Comparison, for every pair of limb counts up to two.
+    #[kani::proof]
+    #[kani::unwind(3)]
+    fn num11a_compare() {
+        let same_length = check_cmp::<2, 2>();
+        kani::cover!(
+            same_length == std::cmp::Ordering::Equal,
+            "equal two-limb values"
+        );
+        let shorter = check_cmp::<1, 2>();
+        kani::cover!(
+            shorter == std::cmp::Ordering::Greater,
+            "a one-limb value above a negative two-limb one"
+        );
+        let longer = check_cmp::<2, 1>();
+        kani::cover!(
+            longer == std::cmp::Ordering::Less,
+            "a negative two-limb value below a one-limb one"
+        );
+        let one = check_cmp::<1, 1>();
+        kani::cover!(one == std::cmp::Ordering::Less, "one limb below another");
+    }
+
+    /// `bi_canonical` (`store_bigint`'s normalisation) of any sign and any
+    /// `L` limbs is canonical and keeps the value; of a canonical BigInt
+    /// with its sign flipped (`-x`, as the dispatch loop's `MINUS` arm
+    /// builds it) it is canonical and equals BigInt::unaryMinus.
+    fn check_canonical<const L: usize>() -> (bool, usize) {
+        let limbs: [u32; L] = kani::any();
+        let negative: bool = kani::any();
+        let (neg, mag) = bi_canonical(negative, limbs.to_vec());
+        assert_canonical(neg, &mag);
+        assert_eq!(value(neg, &mag), value(negative, &limbs));
+        (negative && !neg, mag.len())
+    }
+
+    fn check_negation<const N: usize>() -> i128 {
+        let (negative, limbs) = any_bigint::<N>();
+        let (neg, mag) = bi_canonical(!negative, limbs.to_vec());
+        assert_canonical(neg, &mag);
+        let want = spec::unary_minus(value(negative, &limbs));
+        assert_eq!(value(neg, &mag), want);
+        want
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn num11a_canonical() {
+        check_canonical::<0>();
+        check_canonical::<1>();
+        let (dropped_sign, _) = check_canonical::<2>();
+        kani::cover!(dropped_sign, "a negative zero normalised to 0n");
+        let (_, len) = check_canonical::<3>();
+        kani::cover!(len == 1, "three limbs trimmed to one");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11a_negation() {
+        let zero = check_negation::<1>();
+        kani::cover!(zero == 0, "-0n is 0n");
+        let wide = check_negation::<2>();
+        kani::cover!(wide > 0, "a negative two-limb value negated");
+    }
+
+    /// The BigInt operator for one `spec::BitwiseOp`.
+    fn bit_op(op: spec::BitwiseOp) -> BitOp {
+        match op {
+            spec::BitwiseOp::And => BitOp::And,
+            spec::BitwiseOp::Or => BitOp::Or,
+            spec::BitwiseOp::Xor => BitOp::Xor,
+        }
+    }
+
+    /// BigInt `&`, `|`, `^`: `bi_bitwise` of two canonical BigInts is
+    /// canonical and equals BigIntBitwiseOp.
+    fn check_bitwise<const A: usize, const B: usize>() -> (i128, i128, i128) {
+        let (na, a) = any_bigint::<A>();
+        let (nb, b) = any_bigint::<B>();
+        let op = match kani::any::<u8>() % 3 {
+            0 => spec::BitwiseOp::And,
+            1 => spec::BitwiseOp::Or,
+            _ => spec::BitwiseOp::Xor,
+        };
+        let (neg, mag) = bi_bitwise(bit_op(op), na, &a, nb, &b);
+        assert_canonical(neg, &mag);
+        let (x, y) = (value(na, &a), value(nb, &b));
+        let want = spec::bitwise(op, x, y);
+        assert_eq!(value(neg, &mag), want);
+        (x, y, want)
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11a_bitwise_1_1() {
+        let (x, y, want) = check_bitwise::<1, 1>();
+        kani::cover!(x < 0 && y < 0 && want < 0, "two negative operands");
+        kani::cover!(
+            x < 0 && y > 0 && want > 0,
+            "a negative operand masking a positive one"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11a_bitwise_1_2() {
+        let (x, y, want) = check_bitwise::<1, 2>();
+        kani::cover!(x < 0 && y < 0 && want < 0, "two negative operands");
+        kani::cover!(
+            x < 0 && y > 0 && want > 0,
+            "a negative operand masking a positive one"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11a_bitwise_2_1() {
+        let (x, y, want) = check_bitwise::<2, 1>();
+        kani::cover!(x < 0 && y < 0 && want < 0, "two negative operands");
+        kani::cover!(
+            x < 0 && y > 0 && want > 0,
+            "a negative operand masking a positive one"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11a_bitwise_2_2() {
+        let (x, y, want) = check_bitwise::<2, 2>();
+        kani::cover!(x < 0 && y < 0 && want < 0, "two negative operands");
+        kani::cover!(
+            x < 0 && y > 0 && want > 0,
+            "a negative operand masking a positive one"
+        );
+    }
+
+    // NUM-11b --------------------------------------------------------------
+
+    /// `bi_as_n(neg, mag, bits, signed)` for a canonical BigInt of `N` limbs:
+    /// it never refuses, an unchanged result already equals the model, and
+    /// a new result, once canonicalised as `make_bigint` does, equals
+    /// BigInt.asIntN / BigInt.asUintN. `bits` must be concrete: a symbolic
+    /// width makes the result's `vec![0; bits.div_ceil(32)]` a symbolic-size
+    /// allocation, which exhausted the solver's memory. Returns
+    /// `(signed, input, model, unchanged)`.
+    fn check_as_n<const N: usize>(bits: u64) -> (bool, i128, i128, bool) {
+        let (negative, limbs) = any_bigint::<N>();
+        let signed: bool = kani::any();
+        let x = value(negative, &limbs);
+        let want = if signed {
+            spec::as_int_n(bits as u32, x)
+        } else {
+            spec::as_uint_n(bits as u32, x)
+        };
+        // Every arm compares a sign and limbs with the model's encoding, so
+        // no harness check is unreachable at widths where an arm is: a
+        // refusal compares an empty magnitude, which fails.
+        let unchanged = match bi_as_n(negative, &limbs, bits, signed) {
+            WidthResult::Unchanged => {
+                assert_encodes(negative, &limbs, want);
+                true
+            }
+            WidthResult::Value(neg, mag) => {
+                let (neg, mag) = bi_canonical(neg, mag);
+                assert_encodes(neg, &mag, want);
+                false
+            }
+            WidthResult::TooLarge => {
+                assert_encodes(false, &[], want);
+                false
+            }
+        };
+        (signed, x, want, unchanged)
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_1_limb_width_0() {
+        let (_, x, want, _) = check_as_n::<1>(0);
+        kani::cover!(x != 0 && want == 0, "a nonzero value reduced to 0n");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_1_limb_width_1() {
+        let (signed, x, want, unchanged) = check_as_n::<1>(1);
+        kani::cover!(
+            signed && x > 0 && want < 0,
+            "asIntN turning a positive value negative"
+        );
+        kani::cover!(!signed && x < 0 && want > 0, "asUintN of a negative value");
+        kani::cover!(!unchanged && x != want, "a value reduced");
+        kani::cover!(
+            unchanged && x != 0,
+            "a value already in range, returned as is"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_1_limb_width_2() {
+        let (signed, x, want, unchanged) = check_as_n::<1>(2);
+        kani::cover!(
+            signed && x > 0 && want < 0,
+            "asIntN turning a positive value negative"
+        );
+        kani::cover!(!signed && x < 0 && want > 0, "asUintN of a negative value");
+        kani::cover!(!unchanged && x != want, "a value reduced");
+        kani::cover!(
+            unchanged && x != 0,
+            "a value already in range, returned as is"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_1_limb_width_31() {
+        let (signed, x, want, unchanged) = check_as_n::<1>(31);
+        kani::cover!(
+            signed && x > 0 && want < 0,
+            "asIntN turning a positive value negative"
+        );
+        kani::cover!(!signed && x < 0 && want > 0, "asUintN of a negative value");
+        kani::cover!(!unchanged && x != want, "a value reduced");
+        kani::cover!(
+            unchanged && x != 0,
+            "a value already in range, returned as is"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_1_limb_width_32() {
+        let (signed, x, want, unchanged) = check_as_n::<1>(32);
+        kani::cover!(
+            signed && x > 0 && want < 0,
+            "asIntN turning a positive value negative"
+        );
+        kani::cover!(!signed && x < 0 && want > 0, "asUintN of a negative value");
+        kani::cover!(!unchanged && x != want, "a value reduced");
+        kani::cover!(
+            unchanged && x != 0,
+            "a value already in range, returned as is"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_1_limb_width_33() {
+        let (signed, x, want, unchanged) = check_as_n::<1>(33);
+        kani::cover!(!signed && x < 0 && want > 0, "asUintN of a negative value");
+        kani::cover!(!unchanged && x != want, "a value reduced");
+        kani::cover!(
+            unchanged && x != 0,
+            "a value already in range, returned as is"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_1_limb_width_34() {
+        let (signed, x, want, unchanged) = check_as_n::<1>(34);
+        kani::cover!(!signed && x < 0 && want > 0, "asUintN of a negative value");
+        kani::cover!(!unchanged && x != want, "a value reduced");
+        kani::cover!(
+            unchanged && x != 0,
+            "a value already in range, returned as is"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_1_limb_width_63() {
+        let (signed, x, want, unchanged) = check_as_n::<1>(63);
+        kani::cover!(!signed && x < 0 && want > 0, "asUintN of a negative value");
+        kani::cover!(!unchanged && x != want, "a value reduced");
+        kani::cover!(
+            unchanged && x != 0,
+            "a value already in range, returned as is"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_1_limb_width_64() {
+        let (signed, x, want, unchanged) = check_as_n::<1>(64);
+        kani::cover!(!signed && x < 0 && want > 0, "asUintN of a negative value");
+        kani::cover!(!unchanged && x != want, "a value reduced");
+        kani::cover!(
+            unchanged && x != 0,
+            "a value already in range, returned as is"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_2_limbs_width_0() {
+        let (_, x, want, _) = check_as_n::<2>(0);
+        kani::cover!(x != 0 && want == 0, "a nonzero value reduced to 0n");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_2_limbs_width_1() {
+        let (signed, x, want, unchanged) = check_as_n::<2>(1);
+        kani::cover!(
+            signed && x > 0 && want < 0,
+            "asIntN turning a positive value negative"
+        );
+        kani::cover!(!signed && x < 0 && want > 0, "asUintN of a negative value");
+        kani::cover!(!unchanged && x != want, "a value reduced");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_2_limbs_width_2() {
+        let (signed, x, want, unchanged) = check_as_n::<2>(2);
+        kani::cover!(
+            signed && x > 0 && want < 0,
+            "asIntN turning a positive value negative"
+        );
+        kani::cover!(!signed && x < 0 && want > 0, "asUintN of a negative value");
+        kani::cover!(!unchanged && x != want, "a value reduced");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_2_limbs_width_31() {
+        let (signed, x, want, unchanged) = check_as_n::<2>(31);
+        kani::cover!(
+            signed && x > 0 && want < 0,
+            "asIntN turning a positive value negative"
+        );
+        kani::cover!(!signed && x < 0 && want > 0, "asUintN of a negative value");
+        kani::cover!(!unchanged && x != want, "a value reduced");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_2_limbs_width_32() {
+        let (signed, x, want, unchanged) = check_as_n::<2>(32);
+        kani::cover!(
+            signed && x > 0 && want < 0,
+            "asIntN turning a positive value negative"
+        );
+        kani::cover!(!signed && x < 0 && want > 0, "asUintN of a negative value");
+        kani::cover!(!unchanged && x != want, "a value reduced");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_2_limbs_width_33() {
+        let (signed, x, want, unchanged) = check_as_n::<2>(33);
+        kani::cover!(
+            signed && x > 0 && want < 0,
+            "asIntN turning a positive value negative"
+        );
+        kani::cover!(!signed && x < 0 && want > 0, "asUintN of a negative value");
+        kani::cover!(!unchanged && x != want, "a value reduced");
+        kani::cover!(
+            unchanged && x != 0,
+            "a value already in range, returned as is"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_2_limbs_width_34() {
+        let (signed, x, want, unchanged) = check_as_n::<2>(34);
+        kani::cover!(
+            signed && x > 0 && want < 0,
+            "asIntN turning a positive value negative"
+        );
+        kani::cover!(!signed && x < 0 && want > 0, "asUintN of a negative value");
+        kani::cover!(!unchanged && x != want, "a value reduced");
+        kani::cover!(
+            unchanged && x != 0,
+            "a value already in range, returned as is"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_2_limbs_width_63() {
+        let (signed, x, want, unchanged) = check_as_n::<2>(63);
+        kani::cover!(
+            signed && x > 0 && want < 0,
+            "asIntN turning a positive value negative"
+        );
+        kani::cover!(!signed && x < 0 && want > 0, "asUintN of a negative value");
+        kani::cover!(!unchanged && x != want, "a value reduced");
+        kani::cover!(
+            unchanged && x != 0,
+            "a value already in range, returned as is"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11b_as_n_2_limbs_width_64() {
+        let (signed, x, want, unchanged) = check_as_n::<2>(64);
+        kani::cover!(
+            signed && x > 0 && want < 0,
+            "asIntN turning a positive value negative"
+        );
+        kani::cover!(!signed && x < 0 && want > 0, "asUintN of a negative value");
+        kani::cover!(!unchanged && x != want, "a value reduced");
+        kani::cover!(
+            unchanged && x != 0,
+            "a value already in range, returned as is"
+        );
+    }
+
+    // NUM-11c --------------------------------------------------------------
+
+    /// `bi_to_f64` of a canonical BigInt of `N` limbs is 𝔽(ℝ(x)), the
+    /// nearest binary64 with ties to even, bit for bit (`+0` for `0n`).
+    fn check_to_number<const N: usize>() -> (i128, u64) {
+        let (negative, limbs) = any_bigint::<N>();
+        let got = bi_to_f64(negative, &limbs).to_bits();
+        let x = value(negative, &limbs);
+        assert_eq!(got, ironhorse_spec::arith::number_value_of_integer(x));
+        (x, got)
+    }
+
+    #[kani::proof]
+    #[kani::unwind(55)]
+    fn num11c_to_number_1_2_limbs() {
+        let (zero, bits) = check_to_number::<1>();
+        kani::cover!(zero == 0 && bits == 0, "0n is +0");
+        let (x, _) = check_to_number::<2>();
+        kani::cover!(x > 1 << 53 && x & 0x7FF == 0x400, "a tie rounding to even");
+        kani::cover!(
+            x < -(1 << 53) && x & 0x7FF == 0x7FF,
+            "a negative value rounding up"
+        );
+    }
+
+    #[kani::proof]
+    #[kani::unwind(98)]
+    fn num11c_to_number_3_limbs() {
+        let (x, bits) = check_to_number::<3>();
+        kani::cover!(
+            x > 0 && x & ((1 << 43) - 1) == 1 << 42,
+            "a tie with no sticky bit"
+        );
+        kani::cover!(
+            x > 0 && x & ((1 << 43) - 1) == (1 << 42) | 1,
+            "a sticky bit breaking a tie"
+        );
+        kani::cover!(
+            bits & ((1 << 52) - 1) == 0 && x & (1 << 42) != 0,
+            "a carry renormalising"
+        );
+    }
+
+    /// `bi_low_u64` of a canonical BigInt of `N` limbs is ToBigUint64, and
+    /// read as `i64` it is ToBigInt64.
+    fn check_low_u64<const N: usize>() -> (i128, u64) {
+        let (negative, limbs) = any_bigint::<N>();
+        let x = value(negative, &limbs);
+        let got = bi_low_u64(negative, &limbs);
+        assert_eq!(got, spec::to_big_uint64(x));
+        assert_eq!(got as i64, spec::to_big_int64(x));
+        (x, got)
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11c_to_big_int64() {
+        let (x, got) = check_low_u64::<1>();
+        kani::cover!(x < 0 && got > 1 << 63, "a negative one-limb value");
+        let (x, got) = check_low_u64::<2>();
+        kani::cover!(
+            x < -(1 << 63) && (got as i64) > 0,
+            "a negative value wrapping positive"
+        );
+        let (x, got) = check_low_u64::<3>();
+        kani::cover!(x > 0 && x >> 64 != 0 && got == 0, "a multiple of 2^64");
+    }
+
+    /// `u64_to_signed_limbs(signed, u)`, the BigInt64/BigUint64 element and
+    /// DataView read, canonicalised as `make_bigint` does, equals
+    /// RawBytesToNumeric of the little-endian bytes of `u`; and its low 64
+    /// bits give back `u`, so a store of the value read writes the same
+    /// bytes.
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn num11c_raw_bytes_to_bigint() {
+        let signed: bool = kani::any();
+        let u: u64 = kani::any();
+        let (neg, limbs) = u64_to_signed_limbs(signed, u);
+        let (neg, mag) = bi_canonical(neg, limbs);
+        assert_canonical(neg, &mag);
+        let want = spec::raw_bytes_to_bigint(signed, u.to_le_bytes());
+        assert_eq!(value(neg, &mag), want);
+        assert_eq!(bi_low_u64(neg, &mag), u);
+        kani::cover!(signed && u == 1 << 63, "BigInt64 minimum");
+        kani::cover!(!signed && u >> 63 == 1, "a BigUint64 above 2^63");
+    }
+}

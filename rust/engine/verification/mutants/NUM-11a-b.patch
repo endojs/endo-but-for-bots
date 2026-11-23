@@ -1,0 +1,12 @@
+Mutant NUM-11a-b: bi_sub_mag forgets to propagate a borrow.
+--- a/ironhorse-vm/src/interp/bigint.rs
++++ b/ironhorse-vm/src/interp/bigint.rs
+@@ -239,7 +239,7 @@
+         let mut d = x - y - borrow;
+         if d < 0 {
+             d += 1 << 32;
+-            borrow = 1;
++            borrow = 0;
+         } else {
+             borrow = 0;
+         }

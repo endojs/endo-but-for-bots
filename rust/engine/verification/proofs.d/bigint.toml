@@ -1,0 +1,661 @@
+# BigInt kernels (NUM-11a, NUM-11b, NUM-11c): designs/ironhorse-formal-verification.md,
+# "Numeric kernels", NUM-11. Merged into proofs.toml by verify.py.
+# The harnesses prove the pure kernels in ironhorse-vm/src/interp/bigint.rs,
+# which the Interp BigInt methods call between their chunk reads, allocations
+# and meter ticks. Every input has a concrete limb count (and, for asIntN /
+# asUintN, a concrete width): a symbolic count or width makes the kernels'
+# Vec allocation sizes symbolic, and CBMC then exhausted 10 to 13 GB within
+# seconds. Budgets are 3x the time measured on the development host (4 cores,
+# one cargo kani at a time), at least 5 s; memory budgets are the measured
+# peak of the whole ironhorse-vm batch, rounded up, since the runner measures
+# per batch, not per harness.
+
+[[guarantee]]
+id = "NUM-11a"
+title = "BigInt sign-magnitude add, subtract, compare, negate, bitwise and canonical form (bounded)"
+claim = "For every canonical BigInt operand (sign plus little-endian u32 limbs, trimmed, zero never negative) of one or two limbs: bi_add(na, a, nb, b) and bi_add(na, a, !nb, b) (how bigint_arith computes a + b and a - b, so a zero subtrahend arrives as a negative zero) return exactly the canonical encoding of BigInt::add and BigInt::subtract; bi_cmp equals BigInt::lessThan / BigInt::equal as a three-way order; bi_bitwise for &, | and ^ returns the canonical encoding of BigIntBitwiseOp. bi_canonical (store_bigint's normalisation, which every stored BigInt passes through) of any sign and any 0 to 3 limbs is canonical and keeps the value, and of a canonical one- or two-limb BigInt with its sign flipped (the MINUS arm's make_bigint(!neg, mag)) equals BigInt::unaryMinus, so -0n is 0n. None of these panics on that domain. Bounds: operands of at most two limbs (|x| < 2^64), results of at most three; each limb-count combination is its own harness (concrete counts). Not proved: bi_mul_mag, bi_div_rem_mag and the shifts, operands above two limbs (tested with three-limb samples), and that snapshot-decoded chunks are canonical (read_bigint trims but keeps a stored sign byte on zero)."
+spec = "ECMA-262 §6.1.6.2.1 BigInt::unaryMinus, §6.1.6.2.7 BigInt::add, §6.1.6.2.8 BigInt::subtract, §6.1.6.2.12 BigInt::lessThan, §6.1.6.2.13 BigInt::equal, §6.1.6.2.17 BigIntBitwiseOp with §6.1.6.2.18-20 (quoted in ironhorse-spec/src/bigint.rs); the canonical form is the engine contract in ironhorse-vm/src/interp/bigint.rs: magnitudes \"trimmed to a nonzero high limb, except zero, represented by [0]\", and make_bigint's \"a -0 normalizes to +0\"."
+trusted = ["Kani 0.68 / CBMC 6.11", "the ironhorse-spec models", "the harnesses"]
+
+[[guarantee]]
+id = "NUM-11b"
+title = "BigInt.asIntN and BigInt.asUintN (bounded)"
+claim = "For every canonical BigInt of one or two limbs, both signednesses, and each width bits in {0, 1, 2, 31, 32, 33, 34, 63, 64}: bi_as_n(negative, magnitude, bits, signed), the kernel of Interp::bigint_as_n, never refuses (TooLarge); when it returns Unchanged the argument already equals BigInt.asIntN / BigInt.asUintN of it (so returning the argument without allocating is right), and otherwise its result, canonicalised as make_bigint does, is exactly the canonical encoding of the model's value. The widths are the boundaries of the kernel's limb count (1 to 2), its top-limb mask (bits mod 32 = 0, 1, 2, 31) and its sign-bit position; each (width, limb count) pair is its own harness, because a symbolic width makes the result's vec![0; bits.div_ceil(32)] a symbolic-size allocation (CBMC ran out of memory) and one harness at one width already takes about 20 s. Every other width from 0 to 126, and three-limb values, are tested, not proved (interp::bigint test as_n_matches_the_spec_at_every_width), as is the refusal above 65536 bits."
+spec = "ECMA-262 §21.2.2.1 BigInt.asIntN ( bits, bigint ) steps 3-4 and §21.2.2.2 BigInt.asUintN ( bits, bigint ) step 3, with §5.2.5 modulo (quoted in ironhorse-spec/src/bigint.rs); step 1's ToIndex and step 2's ToBigInt are outside the kernel."
+trusted = ["Kani 0.68 / CBMC 6.11", "the ironhorse-spec models", "the harnesses"]
+
+[[guarantee]]
+id = "NUM-11c"
+title = "BigInt to Number, ToBigInt64 / ToBigUint64 and BigInt64 element reads (bounded)"
+claim = "For every canonical BigInt of one to three limbs (|x| < 2^96), bi_to_f64 (the kernel of Interp::bigint_to_f64, behind Number(bigint)) has exactly the bits of the Number value for x, the nearest binary64 with ties to even, +0 for 0n; the kernel is integer-only apart from its from_bits, 0.0 and infinity constants, so this rests on no float operation. Its overflow-to-infinity branch needs at least 1024 bits and is not reached at this bound. For every canonical BigInt of one to three limbs, bi_low_u64 (behind slot_to_bigint_u64, the BigInt case of every BigInt64Array / BigUint64Array / DataView store) is ToBigUint64 and, read as i64, ToBigInt64. For every u64 and both signednesses, u64_to_signed_limbs (every BigInt64 / BigUint64 element and DataView read), canonicalised as make_bigint does, is RawBytesToNumeric of its little-endian bytes, and bi_low_u64 of it gives the u64 back, so a store of a value read writes the bytes it was read from."
+spec = "ECMA-262 §21.1.1.1 Number ( value ) step 2 (a BigInt prim gives 𝔽(ℝ(prim))), §6.1.6.1 the Number value for x (ironhorse-spec arith::number_value_of_integer); §7.1.15 ToBigInt64 and §7.1.16 ToBigUint64 steps 2-3; the BigInt cases of §25.1.3.15 RawBytesToNumeric (quoted in ironhorse-spec/src/bigint.rs)."
+trusted = ["Kani 0.68 / CBMC 6.11", "the ironhorse-spec models", "the harnesses"]
+
+[[harness]]
+guarantee = "NUM-11a"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11a_add_1_1"
+tier = "pr"
+statement = "bi_add(na, a, nb, b) is exactly the canonical encoding of a + b."
+domain = "every canonical BigInt (trimmed; zero never negative) a of exactly 1 limb and b of exactly 1 limb"
+unwind = 4
+flags = []
+time_budget_s = 13
+memory_budget_gb = 3
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), interp::bigint::bi_sub_mag (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), ironhorse_spec::bigint::subtract (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11a-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11a"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11a_add_1_2"
+tier = "pr"
+statement = "bi_add(na, a, nb, b) is exactly the canonical encoding of a + b."
+domain = "every canonical BigInt (trimmed; zero never negative) a of exactly 1 limb and b of exactly 2 limbs"
+unwind = 4
+flags = []
+time_budget_s = 18
+memory_budget_gb = 3
+unreachable = 14
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::bigint::bi_cmp_mag (4), core::num::<impl usize>::abs_diff (2), interp::bigint::bi_add (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), ironhorse_spec::bigint::subtract (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11a-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11a"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11a_add_2_1"
+tier = "pr"
+statement = "bi_add(na, a, nb, b) is exactly the canonical encoding of a + b."
+domain = "every canonical BigInt (trimmed; zero never negative) a of exactly 2 limbs and b of exactly 1 limb"
+unwind = 4
+flags = []
+time_budget_s = 17
+memory_budget_gb = 3
+unreachable = 14
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::bigint::bi_cmp_mag (4), core::num::<impl usize>::abs_diff (2), interp::bigint::bi_add (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), ironhorse_spec::bigint::subtract (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11a-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11a"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11a_add_2_2"
+tier = "pr"
+statement = "bi_add(na, a, nb, b) is exactly the canonical encoding of a + b."
+domain = "every canonical BigInt (trimmed; zero never negative) a of exactly 2 limbs and b of exactly 2 limbs"
+unwind = 4
+flags = []
+time_budget_s = 25
+memory_budget_gb = 3
+unreachable = 8
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), ironhorse_spec::bigint::subtract (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11a-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11a"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11a_sub_1_1"
+tier = "pr"
+statement = "bi_add(na, a, !nb, b) (bigint_arith's a - b) is exactly the canonical encoding of a - b."
+domain = "every canonical BigInt (trimmed; zero never negative) a of exactly 1 limb and b of exactly 1 limb"
+unwind = 4
+flags = []
+time_budget_s = 14
+memory_budget_gb = 3
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), interp::bigint::bi_sub_mag (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), ironhorse_spec::bigint::add (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11a-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11a"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11a_sub_1_2"
+tier = "pr"
+statement = "bi_add(na, a, !nb, b) (bigint_arith's a - b) is exactly the canonical encoding of a - b."
+domain = "every canonical BigInt (trimmed; zero never negative) a of exactly 1 limb and b of exactly 2 limbs"
+unwind = 4
+flags = []
+time_budget_s = 15
+memory_budget_gb = 3
+unreachable = 14
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::bigint::bi_cmp_mag (4), core::num::<impl usize>::abs_diff (2), interp::bigint::bi_add (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), ironhorse_spec::bigint::add (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11a-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11a"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11a_sub_2_1"
+tier = "pr"
+statement = "bi_add(na, a, !nb, b) (bigint_arith's a - b) is exactly the canonical encoding of a - b."
+domain = "every canonical BigInt (trimmed; zero never negative) a of exactly 2 limbs and b of exactly 1 limb"
+unwind = 4
+flags = []
+time_budget_s = 15
+memory_budget_gb = 3
+unreachable = 14
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::bigint::bi_cmp_mag (4), core::num::<impl usize>::abs_diff (2), interp::bigint::bi_add (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), ironhorse_spec::bigint::add (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11a-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11a"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11a_sub_2_2"
+tier = "nightly"
+statement = "bi_add(na, a, !nb, b) (bigint_arith's a - b) is exactly the canonical encoding of a - b."
+domain = "every canonical BigInt (trimmed; zero never negative) a of exactly 2 limbs and b of exactly 2 limbs"
+unwind = 4
+flags = []
+time_budget_s = 28
+memory_budget_gb = 3
+unreachable = 8
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), ironhorse_spec::bigint::add (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11a-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11a"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11a_compare"
+tier = "pr"
+statement = "bi_cmp(na, a, nb, b) == the model's three-way order of a and b."
+domain = "every pair of canonical BigInt (trimmed; zero never negative)s of 1 or 2 limbs each (four concrete length combinations, checked in sequence)"
+unwind = 3
+flags = []
+time_budget_s = 6
+memory_budget_gb = 3
+unreachable = 2
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl isize>::overflowing_neg (1), std::fmt::Arguments::<'_>::from_str (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11a-c"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11a"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11a_canonical"
+tier = "pr"
+statement = "bi_canonical(negative, limbs) is canonical and has the value of (negative, limbs)."
+domain = "every sign and every limbs: [u32; L] for L = 0, 1, 2, 3 (checked in sequence)"
+unwind = 5
+flags = []
+time_budget_s = 24
+memory_budget_gb = 3
+unreachable = 6
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11a-d"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11a"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11a_negation"
+tier = "pr"
+statement = "bi_canonical(!negative, magnitude) of a canonical BigInt is the canonical encoding of BigInt::unaryMinus of it."
+domain = "every canonical BigInt (trimmed; zero never negative) of 1 or 2 limbs (checked in sequence)"
+unwind = 4
+flags = []
+time_budget_s = 8
+memory_budget_gb = 3
+unreachable = 9
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1), std::vec::Vec::<u32>::push_mut (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11a-d"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11a"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11a_bitwise_1_1"
+tier = "pr"
+statement = "bi_bitwise(op, na, a, nb, b) is exactly the canonical encoding of BigIntBitwiseOp(op, a, b)."
+domain = "every canonical BigInt (trimmed; zero never negative) a of exactly 1 limb and b of exactly 1 limb; op symbolic among &, |, ^"
+unwind = 4
+flags = []
+time_budget_s = 16
+memory_budget_gb = 3
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), std::vec::in_place_collect::needs_realloc::<u32, u32> (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11a-e"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11a"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11a_bitwise_1_2"
+tier = "pr"
+statement = "bi_bitwise(op, na, a, nb, b) is exactly the canonical encoding of BigIntBitwiseOp(op, a, b)."
+domain = "every canonical BigInt (trimmed; zero never negative) a of exactly 1 limb and b of exactly 2 limbs; op symbolic among &, |, ^"
+unwind = 4
+flags = []
+time_budget_s = 18
+memory_budget_gb = 3
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), std::vec::in_place_collect::needs_realloc::<u32, u32> (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11a-e"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11a"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11a_bitwise_2_1"
+tier = "pr"
+statement = "bi_bitwise(op, na, a, nb, b) is exactly the canonical encoding of BigIntBitwiseOp(op, a, b)."
+domain = "every canonical BigInt (trimmed; zero never negative) a of exactly 2 limbs and b of exactly 1 limb; op symbolic among &, |, ^"
+unwind = 4
+flags = []
+time_budget_s = 22
+memory_budget_gb = 3
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), std::vec::in_place_collect::needs_realloc::<u32, u32> (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11a-e"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11a"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11a_bitwise_2_2"
+tier = "pr"
+statement = "bi_bitwise(op, na, a, nb, b) is exactly the canonical encoding of BigIntBitwiseOp(op, a, b)."
+domain = "every canonical BigInt (trimmed; zero never negative) a of exactly 2 limbs and b of exactly 2 limbs; op symbolic among &, |, ^"
+unwind = 4
+flags = []
+time_budget_s = 20
+memory_budget_gb = 3
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), std::vec::in_place_collect::needs_realloc::<u32, u32> (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11a-e"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_1_limb_width_0"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 0, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(0, x) (signed) or BigInt.asUintN(0, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 1 limb; signed symbolic; bits = 0 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 5
+memory_budget_gb = 3
+unreachable = 32
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::bigint::bi_as_n (9), ironhorse_spec::bigint::as_int_n (4), core::num::<impl u64>::div_ceil (3), interp::bigint::bi_mask_width (3), core::num::<impl usize>::abs_diff (2), <std::iter::Take<I> as std::iter::Iterator>::try_fold::check::<'_, &u32, (), std::ops::ControlFlow<()>, {closure@std::iter::Iterator::all::check<&u32, {closure@ironhorse-vm/src/interp/bigint.rs:141:22: 141:29}>::{closure#0}}>::{closure#0} (1), <usize as std::slice::SliceIndex<[u32]>>::index (1), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::alloc::Layout::max_size_for_alignment (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_1_limb_width_1"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 1, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(1, x) (signed) or BigInt.asUintN(1, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 1 limb; signed symbolic; bits = 1 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 35
+memory_budget_gb = 3
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), <std::iter::Take<I> as std::iter::Iterator>::try_fold::check::<'_, &u32, (), std::ops::ControlFlow<()>, {closure@std::iter::Iterator::all::check<&u32, {closure@ironhorse-vm/src/interp/bigint.rs:141:22: 141:29}>::{closure#0}}>::{closure#0} (1), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_1_limb_width_2"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 2, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(2, x) (signed) or BigInt.asUintN(2, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 1 limb; signed symbolic; bits = 2 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 41
+memory_budget_gb = 3
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), <std::iter::Take<I> as std::iter::Iterator>::try_fold::check::<'_, &u32, (), std::ops::ControlFlow<()>, {closure@std::iter::Iterator::all::check<&u32, {closure@ironhorse-vm/src/interp/bigint.rs:141:22: 141:29}>::{closure#0}}>::{closure#0} (1), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_1_limb_width_31"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 31, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(31, x) (signed) or BigInt.asUintN(31, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 1 limb; signed symbolic; bits = 31 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 64
+memory_budget_gb = 3
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), <std::iter::Take<I> as std::iter::Iterator>::try_fold::check::<'_, &u32, (), std::ops::ControlFlow<()>, {closure@std::iter::Iterator::all::check<&u32, {closure@ironhorse-vm/src/interp/bigint.rs:141:22: 141:29}>::{closure#0}}>::{closure#0} (1), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_1_limb_width_32"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 32, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(32, x) (signed) or BigInt.asUintN(32, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 1 limb; signed symbolic; bits = 32 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 51
+memory_budget_gb = 3
+unreachable = 14
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), interp::bigint::bi_mask_width (2), <std::iter::Take<I> as std::iter::Iterator>::try_fold::check::<'_, &u32, (), std::ops::ControlFlow<()>, {closure@std::iter::Iterator::all::check<&u32, {closure@ironhorse-vm/src/interp/bigint.rs:141:22: 141:29}>::{closure#0}}>::{closure#0} (1), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), core::num::<impl u64>::div_ceil (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_1_limb_width_33"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 33, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(33, x) (signed) or BigInt.asUintN(33, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 1 limb; signed symbolic; bits = 33 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 58
+memory_budget_gb = 3
+unreachable = 17
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::bigint::bi_as_n (5), core::num::<impl usize>::abs_diff (2), <std::iter::Take<I> as std::iter::Iterator>::try_fold::check::<'_, &u32, (), std::ops::ControlFlow<()>, {closure@std::iter::Iterator::all::check<&u32, {closure@ironhorse-vm/src/interp/bigint.rs:141:22: 141:29}>::{closure#0}}>::{closure#0} (1), <usize as std::slice::SliceIndex<[u32]>>::index (1), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_1_limb_width_34"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 34, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(34, x) (signed) or BigInt.asUintN(34, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 1 limb; signed symbolic; bits = 34 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 57
+memory_budget_gb = 3
+unreachable = 17
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::bigint::bi_as_n (5), core::num::<impl usize>::abs_diff (2), <std::iter::Take<I> as std::iter::Iterator>::try_fold::check::<'_, &u32, (), std::ops::ControlFlow<()>, {closure@std::iter::Iterator::all::check<&u32, {closure@ironhorse-vm/src/interp/bigint.rs:141:22: 141:29}>::{closure#0}}>::{closure#0} (1), <usize as std::slice::SliceIndex<[u32]>>::index (1), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_1_limb_width_63"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 63, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(63, x) (signed) or BigInt.asUintN(63, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 1 limb; signed symbolic; bits = 63 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 61
+memory_budget_gb = 3
+unreachable = 17
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::bigint::bi_as_n (5), core::num::<impl usize>::abs_diff (2), <std::iter::Take<I> as std::iter::Iterator>::try_fold::check::<'_, &u32, (), std::ops::ControlFlow<()>, {closure@std::iter::Iterator::all::check<&u32, {closure@ironhorse-vm/src/interp/bigint.rs:141:22: 141:29}>::{closure#0}}>::{closure#0} (1), <usize as std::slice::SliceIndex<[u32]>>::index (1), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_1_limb_width_64"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 64, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(64, x) (signed) or BigInt.asUintN(64, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 1 limb; signed symbolic; bits = 64 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 55
+memory_budget_gb = 3
+unreachable = 20
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::bigint::bi_as_n (5), core::num::<impl usize>::abs_diff (2), interp::bigint::bi_mask_width (2), <std::iter::Take<I> as std::iter::Iterator>::try_fold::check::<'_, &u32, (), std::ops::ControlFlow<()>, {closure@std::iter::Iterator::all::check<&u32, {closure@ironhorse-vm/src/interp/bigint.rs:141:22: 141:29}>::{closure#0}}>::{closure#0} (1), <usize as std::slice::SliceIndex<[u32]>>::index (1), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), core::num::<impl u64>::div_ceil (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_2_limbs_width_0"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 0, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(0, x) (signed) or BigInt.asUintN(0, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 2 limbs; signed symbolic; bits = 0 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 5
+memory_budget_gb = 3
+unreachable = 32
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::bigint::bi_as_n (9), ironhorse_spec::bigint::as_int_n (4), core::num::<impl u64>::div_ceil (3), interp::bigint::bi_mask_width (3), core::num::<impl usize>::abs_diff (2), <std::iter::Take<I> as std::iter::Iterator>::try_fold::check::<'_, &u32, (), std::ops::ControlFlow<()>, {closure@std::iter::Iterator::all::check<&u32, {closure@ironhorse-vm/src/interp/bigint.rs:141:22: 141:29}>::{closure#0}}>::{closure#0} (1), <usize as std::slice::SliceIndex<[u32]>>::index (1), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::alloc::Layout::max_size_for_alignment (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_2_limbs_width_1"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 1, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(1, x) (signed) or BigInt.asUintN(1, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 2 limbs; signed symbolic; bits = 1 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 27
+memory_budget_gb = 3
+unreachable = 14
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::bigint::bi_as_n (3), core::num::<impl usize>::abs_diff (2), <std::iter::Take<I> as std::iter::Iterator>::try_fold::check::<'_, &u32, (), std::ops::ControlFlow<()>, {closure@std::iter::Iterator::all::check<&u32, {closure@ironhorse-vm/src/interp/bigint.rs:141:22: 141:29}>::{closure#0}}>::{closure#0} (1), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_2_limbs_width_2"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 2, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(2, x) (signed) or BigInt.asUintN(2, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 2 limbs; signed symbolic; bits = 2 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 32
+memory_budget_gb = 3
+unreachable = 14
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::bigint::bi_as_n (3), core::num::<impl usize>::abs_diff (2), <std::iter::Take<I> as std::iter::Iterator>::try_fold::check::<'_, &u32, (), std::ops::ControlFlow<()>, {closure@std::iter::Iterator::all::check<&u32, {closure@ironhorse-vm/src/interp/bigint.rs:141:22: 141:29}>::{closure#0}}>::{closure#0} (1), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_2_limbs_width_31"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 31, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(31, x) (signed) or BigInt.asUintN(31, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 2 limbs; signed symbolic; bits = 31 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 55
+memory_budget_gb = 3
+unreachable = 14
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::bigint::bi_as_n (3), core::num::<impl usize>::abs_diff (2), <std::iter::Take<I> as std::iter::Iterator>::try_fold::check::<'_, &u32, (), std::ops::ControlFlow<()>, {closure@std::iter::Iterator::all::check<&u32, {closure@ironhorse-vm/src/interp/bigint.rs:141:22: 141:29}>::{closure#0}}>::{closure#0} (1), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_2_limbs_width_32"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 32, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(32, x) (signed) or BigInt.asUintN(32, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 2 limbs; signed symbolic; bits = 32 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 47
+memory_budget_gb = 3
+unreachable = 17
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): interp::bigint::bi_as_n (3), core::num::<impl usize>::abs_diff (2), interp::bigint::bi_mask_width (2), <std::iter::Take<I> as std::iter::Iterator>::try_fold::check::<'_, &u32, (), std::ops::ControlFlow<()>, {closure@std::iter::Iterator::all::check<&u32, {closure@ironhorse-vm/src/interp/bigint.rs:141:22: 141:29}>::{closure#0}}>::{closure#0} (1), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), core::num::<impl u64>::div_ceil (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::pop (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_2_limbs_width_33"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 33, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(33, x) (signed) or BigInt.asUintN(33, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 2 limbs; signed symbolic; bits = 33 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 64
+memory_budget_gb = 3
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), interp::bigint::bi_as_n (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_2_limbs_width_34"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 34, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(34, x) (signed) or BigInt.asUintN(34, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 2 limbs; signed symbolic; bits = 34 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 67
+memory_budget_gb = 3
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), interp::bigint::bi_as_n (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_2_limbs_width_63"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 63, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(63, x) (signed) or BigInt.asUintN(63, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 2 limbs; signed symbolic; bits = 63 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 132
+memory_budget_gb = 3
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), interp::bigint::bi_as_n (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11b"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11b_as_n_2_limbs_width_64"
+tier = "nightly"
+statement = "bi_as_n(negative, magnitude, 64, signed) never refuses; Unchanged only when the argument equals the model; otherwise the canonicalised result encodes BigInt.asIntN(64, x) (signed) or BigInt.asUintN(64, x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 2 limbs; signed symbolic; bits = 64 (concrete)"
+unwind = 4
+flags = []
+time_budget_s = 73
+memory_budget_gb = 3
+unreachable = 14
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), interp::bigint::bi_as_n (2), interp::bigint::bi_mask_width (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), core::num::<impl u64>::div_ceil (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::push_mut (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11b-a", "NUM-11b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11c"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11c_to_number_1_2_limbs"
+tier = "nightly"
+statement = "bi_to_f64(negative, magnitude).to_bits() == number_value_of_integer(x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 1 limb, then of exactly 2 limbs (checked in sequence)"
+unwind = 55
+flags = []
+time_budget_s = 352
+memory_budget_gb = 3
+unreachable = 2
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl isize>::overflowing_neg (1), std::fmt::Arguments::<'_>::from_str (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11c-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11c"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11c_to_number_3_limbs"
+tier = "nightly"
+statement = "bi_to_f64(negative, magnitude).to_bits() == number_value_of_integer(x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 3 limbs (|x| < 2^96)"
+unwind = 98
+flags = []
+time_budget_s = 372
+memory_budget_gb = 3
+unreachable = 7
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): ironhorse_spec::arith::number_value_of_integer (3), interp::bigint::bi_to_f64 (2), core::num::<impl isize>::overflowing_neg (1), std::fmt::Arguments::<'_>::from_str (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11c-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11c"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11c_to_big_int64"
+tier = "pr"
+statement = "bi_low_u64(negative, magnitude) == ToBigUint64(x) and, as i64, == ToBigInt64(x)."
+domain = "every canonical BigInt (trimmed; zero never negative) of exactly 1, 2 and 3 limbs (checked in sequence)"
+unwind = 4
+flags = []
+time_budget_s = 5
+memory_budget_gb = 3
+unreachable = 2
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl isize>::overflowing_neg (1), std::fmt::Arguments::<'_>::from_str (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11c-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "NUM-11c"
+crate = "ironhorse-vm"
+name = "interp::bigint::proofs::num11c_raw_bytes_to_bigint"
+tier = "pr"
+statement = "bi_canonical(u64_to_signed_limbs(signed, u)) encodes RawBytesToNumeric(BigInt64 or BigUint64, u.to_le_bytes()), and bi_low_u64 of it == u."
+domain = "every u: u64 and both signednesses"
+unwind = 4
+flags = []
+time_budget_s = 8
+memory_budget_gb = 3
+unreachable = 9
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): core::num::<impl usize>::abs_diff (2), alloc::raw_vec::RawVecInner::grow_amortized (1), core::num::<impl isize>::overflowing_neg (1), std::alloc::Global::grow_impl_runtime (1), std::alloc::Layout::max_size_for_alignment (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::Vec::<u32>::push_mut (1). The Vec growth and reallocation paths are dead because every vector these kernels build is created at its final capacity; the remaining entries are kernel and model branches that this harness's concrete limb counts, width or operation exclude (for example the equal-length loop of bi_cmp_mag when the operand lengths differ, or the model's subtract in an add harness)."
+mutants = ["NUM-11c-c"]
+expect = "pass"
+canary = false
