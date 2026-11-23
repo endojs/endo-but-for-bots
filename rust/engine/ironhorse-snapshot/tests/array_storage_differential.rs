@@ -106,6 +106,9 @@ struct Seen {
 struct Side {
     machine: Interp,
     sparse: bool,
+    /// Also switch the other round-2 accelerators off: dispatch fusion and
+    /// (debug builds) the exotic-membership fast paths.
+    all_off: bool,
     linked: bool,
     checks: Rc<RefCell<Vec<u64>>>,
     abort_at: Option<usize>,
@@ -124,9 +127,10 @@ fn meter_host(
 }
 
 impl Side {
-    fn new(sparse: bool, interval: Option<u64>, abort_at: Option<usize>) -> Side {
+    fn new(sparse: bool, all_off: bool, interval: Option<u64>, abort_at: Option<usize>) -> Side {
         force_sparse_array_items(sparse);
         let mut machine = with_compiler(Interp::new());
+        machine.set_dispatch_fusion(!all_off);
         let checks = Rc::new(RefCell::new(Vec::new()));
         if let Some(interval) = interval {
             machine.arm_meter(interval, meter_host(checks.clone(), abort_at));
@@ -135,6 +139,7 @@ impl Side {
         Side {
             machine,
             sparse,
+            all_off,
             linked: false,
             checks,
             abort_at,
@@ -144,6 +149,8 @@ impl Side {
 
     fn step(&mut self, step: Step) -> Seen {
         force_sparse_array_items(self.sparse);
+        #[cfg(debug_assertions)]
+        ironhorse_vm::diagnostics::set_exotic_bits_disabled(self.all_off);
         let outcome = match step {
             Step::Crank(source) => {
                 let (bytecode, names) = compile(source);
@@ -177,6 +184,7 @@ impl Side {
                 if let Ok(bytes) = &bytes {
                     let mut restored =
                         with_compiler(from_snapshot_bytes(bytes, &sig()).expect("restore"));
+                    restored.set_dispatch_fusion(!self.all_off);
                     if self.machine.meter_is_armed() {
                         restored
                             .reattach_meter_host(meter_host(self.checks.clone(), self.abort_at));
@@ -207,6 +215,8 @@ impl Side {
                 .map_err(|error| format!("{error:?}")),
         };
         force_sparse_array_items(false);
+        #[cfg(debug_assertions)]
+        ironhorse_vm::diagnostics::set_exotic_bits_disabled(false);
         seen
     }
 }
@@ -220,8 +230,21 @@ fn differential(
     interval: Option<u64>,
     abort_at: Option<usize>,
 ) -> (usize, usize) {
-    let mut hybrid = Side::new(false, interval, abort_at);
-    let mut sparse = Side::new(true, interval, abort_at);
+    differential_with(name, steps, interval, abort_at, false)
+}
+
+/// [`differential`], where `all_off` also switches the map-only side's
+/// other round-2 accelerators off, so every accelerator on is compared with
+/// every one off.
+fn differential_with(
+    name: &str,
+    steps: &[Step],
+    interval: Option<u64>,
+    abort_at: Option<usize>,
+    all_off: bool,
+) -> (usize, usize) {
+    let mut hybrid = Side::new(false, false, interval, abort_at);
+    let mut sparse = Side::new(true, all_off, interval, abort_at);
     for (n, &step) in steps.iter().enumerate() {
         let a = hybrid.step(step);
         let b = sparse.step(step);
@@ -419,6 +442,16 @@ fn unmetered_runs_agree() {
 fn metered_runs_agree_on_every_check() {
     for (name, steps) in CORPUS {
         differential(name, steps, Some(50), None);
+    }
+}
+
+/// Every round-2 accelerator on (dense items, exotic-membership fast paths,
+/// dispatch fusion) against every one off, unmetered and metered.
+#[test]
+fn all_accelerators_off_agree_with_all_on() {
+    for (name, steps) in CORPUS {
+        differential_with(name, steps, None, None, true);
+        differential_with(name, steps, Some(50), None, true);
     }
 }
 

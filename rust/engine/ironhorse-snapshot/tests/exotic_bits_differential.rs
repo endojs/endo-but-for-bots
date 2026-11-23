@@ -24,7 +24,7 @@ use guest_compile::compile;
 
 use ironhorse_snapshot::machine::{from_snapshot_bytes, MachineSnapshot};
 use ironhorse_snapshot::Signature;
-use ironhorse_vm::diagnostics::set_exotic_bits_disabled;
+use ironhorse_vm::diagnostics::{force_sparse_array_items, set_exotic_bits_disabled};
 use ironhorse_vm::Interp;
 
 fn sig() -> Signature {
@@ -70,9 +70,22 @@ fn observe(machine: &mut Interp, source: &str, first: bool) -> (String, Vec<u8>)
     (line, bytes)
 }
 
-fn run(setup: &str, probe: &str, between: Between, disabled: bool) -> Vec<(String, Vec<u8>)> {
-    set_exotic_bits_disabled(disabled);
+/// Which accelerators the "off" side of a comparison switches off.
+#[derive(Clone, Copy, Debug)]
+enum Off {
+    /// Only the exotic-membership fast paths.
+    Bits,
+    /// Every round-2 accelerator: the fast paths, dense array items and
+    /// dispatch fusion (also on every restored machine).
+    All,
+}
+
+fn run(setup: &str, probe: &str, between: Between, off: Option<Off>) -> Vec<(String, Vec<u8>)> {
+    let all_off = matches!(off, Some(Off::All));
+    set_exotic_bits_disabled(off.is_some());
+    force_sparse_array_items(all_off);
     let mut machine = Interp::new();
+    machine.set_dispatch_fusion(!all_off);
     let mut seen = vec![observe(&mut machine, setup, true)];
     for _ in 0..2 {
         if matches!(between, Between::Collect | Between::Both) {
@@ -82,23 +95,25 @@ fn run(setup: &str, probe: &str, between: Between, disabled: bool) -> Vec<(Strin
         if matches!(between, Between::Restore | Between::Both) && !seen.last().unwrap().1.is_empty()
         {
             machine = from_snapshot_bytes(&seen.last().unwrap().1, &sig()).expect("restore");
+            machine.set_dispatch_fusion(!all_off);
             assert!(machine.exotic_bits_cover_tables(), "after restore");
         }
         seen.push(observe(&mut machine, probe, false));
     }
     set_exotic_bits_disabled(false);
+    force_sparse_array_items(false);
     seen
 }
 
-fn assert_unobservable(setup: &str, probe: &str, expected: &str) {
+fn assert_unobservable(setup: &str, probe: &str, expected: &str, which: Off) {
     for between in [
         Between::Nothing,
         Between::Collect,
         Between::Restore,
         Between::Both,
     ] {
-        let on = run(setup, probe, between, false);
-        let off = run(setup, probe, between, true);
+        let on = run(setup, probe, between, None);
+        let off = run(setup, probe, between, Some(which));
         for (crank, (a, b)) in on.iter().zip(&off).enumerate() {
             assert_eq!(a.0, b.0, "{between:?} crank {crank}: {setup} / {probe}");
             assert!(
@@ -263,6 +278,16 @@ const CASES: &[(&str, &str, &str)] = &[
 #[test]
 fn exotic_bits_are_unobservable() {
     for (setup, probe, expected) in CASES {
-        assert_unobservable(setup, probe, expected);
+        assert_unobservable(setup, probe, expected, Off::Bits);
+    }
+}
+
+/// The same corpus with every round-2 accelerator off on one side (the
+/// fast paths, dense array items and dispatch fusion) against all of them
+/// on: the accelerators together are as unobservable as each alone.
+#[test]
+fn all_accelerators_together_are_unobservable() {
+    for (setup, probe, expected) in CASES {
+        assert_unobservable(setup, probe, expected, Off::All);
     }
 }

@@ -1,10 +1,18 @@
-//! Gate D: dispatch with and without the derived dispatch buffers.
+//! Gate D: every round-2 accelerator on against every one off.
 //!
 //! Round 2 of the performance campaign (`rust/engine/PORFFOR-ROUND2-PLAN.md`,
 //! "The new differential gate (D)") adds accelerators that must be
 //! unobservable: dispatch fusion over a layout-preserving derived buffer
-//! (`ironhorse-vm/src/interp/fuse.rs`). [`Interp::set_dispatch_fusion`]
-//! switches them off. Every case here runs the same cranks on two fresh
+//! (`ironhorse-vm/src/interp/fuse.rs`, switched by
+//! [`Interp::set_dispatch_fusion`]), the exotic-membership fast paths
+//! (`ironhorse-vm/src/exotic_bits.rs`, switched off on a thread by
+//! `diagnostics::set_exotic_bits_disabled` in debug builds) and the dense
+//! array item store (`ironhorse-vm/src/bulk.rs`, kept in the map on a thread
+//! by `diagnostics::force_sparse_array_items`). The plain side of every case
+//! here runs with all three off and the accelerated side with all three on,
+//! so the accelerators are also compared together, not only one at a time
+//! as `exotic_bits_differential.rs` and `array_storage_differential.rs` do.
+//! Every case runs the same cranks on two fresh
 //! machines, one accelerated and one plain, and requires the same
 //! observation: completion, halt, result, the machine-lifetime and per-run
 //! computrons, dispatch count and raw meter index, the meter host's whole
@@ -178,6 +186,15 @@ fn observe_crank(machine: &mut Interp, source: &str, mode: Mode) -> Crank {
     }
 }
 
+/// Switch this thread's accelerators on (`true`, the default) or off: the
+/// exotic-membership fast paths (debug builds only; release builds always
+/// use them) and the dense array item store. Fusion is per machine.
+fn thread_accelerators(on: bool) {
+    #[cfg(debug_assertions)]
+    ironhorse_vm::diagnostics::set_exotic_bits_disabled(!on);
+    ironhorse_vm::diagnostics::force_sparse_array_items(!on);
+}
+
 fn fresh_machine(fused: bool) -> Interp {
     let mut machine = Interp::new();
     machine.set_dispatch_fusion(fused);
@@ -187,6 +204,7 @@ fn fresh_machine(fused: bool) -> Interp {
 
 /// Run `cranks` on a fresh machine. Only the last crank runs under `mode`.
 fn run_machine(fused: bool, cranks: &[&str], host: Host, mode: Mode) -> Run {
+    thread_accelerators(fused);
     let checks = Rc::new(RefCell::new(Vec::new()));
     let mut machine = fresh_machine(fused);
     attach(&mut machine, host, &checks, true);
@@ -200,6 +218,7 @@ fn run_machine(fused: bool, cranks: &[&str], host: Host, mode: Mode) -> Run {
         observed.push(observe_crank(&mut machine, source, mode));
     }
     let checks = checks.borrow().clone();
+    thread_accelerators(true);
     Run {
         cranks: observed,
         checks,
@@ -531,6 +550,7 @@ fn suspended_sweep(setup: &str, resumes: &[&str], host: Host) {
             .clone()
             .unwrap_or_else(|error| panic!("{setup} after {k} resumes: {error}"));
         let resume = |fused: bool| {
+            thread_accelerators(fused);
             let mut machine = from_snapshot_bytes(&image, &sig()).expect("restore");
             machine.set_dispatch_fusion(fused);
             machine.set_source_compiler(Rc::new(TestCompiler));
@@ -541,6 +561,7 @@ fn suspended_sweep(setup: &str, resumes: &[&str], host: Host) {
                 .map(|source| observe_crank(&mut machine, source, Mode::Run))
                 .collect();
             let checks = checks.borrow().clone();
+            thread_accelerators(true);
             Run { cranks, checks }
         };
         let fused = resume(true);
