@@ -108,20 +108,15 @@ pub unsafe extern "C" fn host_random_hex256(the: *mut XsMachine) {
 /// contract described in `worker_io`.
 pub unsafe extern "C" fn host_random_fill(the: *mut XsMachine) {
     // SAFETY: host-callback contract (`worker_io`). Argument 0 (`undefined`
-    // if missing) is measured, then
-    // filled by `write_typed_array_bytes`, which re-reads `byteLength` and
-    // writes only if `buf` still covers it, so a getter that changes its
-    // answer cannot cause an over-read of `buf`.
+    // if missing) is filled by `fill_typed_array_bytes`, which checks the
+    // view's range against its buffer before allocating, and calls no XS from
+    // the fill closure.
     crate::worker_io::guard_ffi(|| unsafe {
         let mut slot_absent = XsSlot::default();
         let slot = arg_slot(the, 0, &mut slot_absent);
-        let byte_length = crate::worker_io::typed_array_byte_length(the, slot);
-        if byte_length == 0 {
-            return;
-        }
-        let mut buf = vec![0u8; byte_length];
-        rand::RngCore::fill_bytes(&mut OsRng, &mut buf);
-        crate::worker_io::write_typed_array_bytes(the, slot, &buf);
+        crate::worker_io::fill_typed_array_bytes(the, slot, |buf| {
+            rand::RngCore::fill_bytes(&mut OsRng, buf)
+        });
     });
 }
 
@@ -344,6 +339,55 @@ pub unsafe fn register(machine: &crate::Machine) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A view-like object whose `byteLength`/`byteOffset` overflow XS's own
+    /// `txInteger` range check must read and write nothing, not copy
+    /// `byteLength` bytes out of (or into) a two-byte buffer; a negative
+    /// `byteLength` must not reach a `usize` allocation.
+    #[test]
+    fn lying_typed_array_views_are_rejected_before_the_copy() {
+        std::thread::spawn(|| {
+            crate::ensure_shared_cluster();
+            let mut powers = crate::powers::HostPowers::new();
+            let machine = crate::Machine::new(&crate::DEFAULT_CREATION, "views").unwrap();
+            machine.register_powers(&mut powers);
+            let empty_digest = hex::encode(Sha256::digest(b""));
+            let verdict = machine
+                .eval(
+                    "var hex = function (b) { return Array.prototype.map.call( \
+                         new Uint8Array(b), function (x) { \
+                         return (x < 16 ? '0' : '') + x.toString(16); }).join(''); }; \
+                     var buffer = new ArrayBuffer(2); \
+                     var huge = { byteLength: 0x7fffffff, byteOffset: 1, buffer: buffer }; \
+                     var past = { byteLength: 2, byteOffset: 1, buffer: buffer }; \
+                     var negative = { byteLength: -1, byteOffset: 0, buffer: buffer }; \
+                     randomFillBytes(huge); randomFillBytes(past); randomFillBytes(negative); \
+                     var untouched = new Uint8Array(buffer).join(',') === '0,0'; \
+                     [hex(sha256Bytes(huge)), hex(sha256Bytes(past)), \
+                      hex(sha256Bytes(negative)), String(untouched)].join(' ')",
+                )
+                .unwrap();
+            let crate::JsValue::String(verdict) = verdict else {
+                panic!("verdict must be a string");
+            };
+            assert_eq!(
+                verdict,
+                format!("{empty_digest} {empty_digest} {empty_digest} true")
+            );
+            assert!(!crate::worker_io::ffi_panicked());
+            // An in-bounds view still round-trips.
+            let ok = machine
+                .eval(
+                    "var v = new Uint8Array(new ArrayBuffer(8), 2, 4); \
+                     randomFillBytes(v); \
+                     hex(sha256Bytes(v)) === hex(sha256Bytes(new Uint8Array(v)))",
+                )
+                .unwrap();
+            assert!(matches!(ok, crate::JsValue::Boolean(true)));
+        })
+        .join()
+        .unwrap();
+    }
 
     #[test]
     fn worker_panic_does_not_expose_hasher_state_to_siblings() {

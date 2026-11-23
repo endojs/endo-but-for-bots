@@ -623,19 +623,25 @@ pub fn take_ffi_panic() -> Option<FfiPanic> {
 //   (directly, or via `arg_str`, `arg_integer` and `powers::fs`'s helpers),
 //   which compares the index with `fxArgc` and hands back a caller-owned
 //   `undefined` slot for a missing argument, as JS itself would supply.
+// - XS reserves no stack for the host beyond its frame. The C API brackets
+//   every push with `xsOverflow` (`fxOverflow`); the typed-array helpers do
+//   the same (`push_reserved`) rather than `fx_push` alone.
 //
-// What XS does NOT establish, and the helpers below do not check either. Each
-// is marked `SAFETY: UNVERIFIED` at the helper that embodies it, not at every
-// callback that inherits it:
+// What XS does NOT establish, and this crate does not handle either
+// (UNVERIFIED, and cross-cutting, so stated once here rather than at every
+// callback that inherits it):
 //
-// - XS reserves no stack for the host. The C API brackets every push with
-//   `xsOverflow` (`fxOverflow`); `fx_push` does not, so a push made while the
-//   JS stack is full writes below `stack_bottom`.
 // - Any XS call that can run JS or throw (`fxToString` on an object, `fxGetID`
 //   through a getter) can `longjmp` to the nearest XS `try`, skipping the Rust
 //   frames in between: the callback body's live `Drop` values and
 //   `guard_ffi`'s bookkeeping (see `reset_capturing`). Rust only defines a
-//   `longjmp` over frames with nothing to drop.
+//   `longjmp` over frames with nothing to drop. A recoverable `fxAbort`
+//   (metering, stack or memory exhaustion, including `push_reserved`'s
+//   `fxOverflow`) is worse: it longjmps to the *outermost* jump record. The
+//   fix is to keep every XS call that can throw or abort inside a C-level
+//   `mxTry` (as `fxEvalGuarded` does for `Machine::eval`) and report the
+//   outcome to Rust as a status, or to have callbacks throw only after their
+//   Rust frames have returned.
 
 /// The slot holding argument `index` of the current host-callback frame, or
 /// `absent` (set to `undefined`) when the script passed fewer arguments.
@@ -842,134 +848,164 @@ pub unsafe extern "C" fn host_send_raw_frame(the: *mut XsMachine) {
     });
 }
 
+/// Push a copy of `*slot`, reserving the stack slot first.
+///
+/// # Safety
+/// As [`read_typed_array_bytes`]; the caller pops what this pushes.
+unsafe fn push_reserved(the: *mut XsMachine, slot: *mut XsSlot) {
+    // SAFETY: `fxOverflow` checks that one more slot fits above
+    // `stack_bottom` (it aborts the machine otherwise, never returning), so
+    // the `fx_push` that follows writes inside the stack, as xs.h's own
+    // `xsOverflow` + push does. XS reserves nothing for a host callback
+    // beyond its frame, so without the check a callback entered with a full
+    // stack would write below `stack_bottom`.
+    unsafe {
+        fxOverflow(the, -1, std::ptr::null(), 0);
+        fx_push(the, *slot);
+    }
+}
+
+/// Read property `name` of `*slot` as an integer (`fxToInteger`).
+///
+/// # Safety
+/// As [`read_typed_array_bytes`].
+unsafe fn get_integer_property(the: *mut XsMachine, slot: *mut XsSlot, name: &CStr) -> i32 {
+    // SAFETY: `push_reserved` pushes one slot, which `fxGetID` replaces with
+    // the property value at `(*the).stack` (running any getter, which keeps
+    // the value on the stack and so reachable), `fxToInteger` converts it in
+    // place, and `fx_pop` removes it, leaving the stack as found. `fxID`
+    // copies the NUL-terminated `name`.
+    unsafe {
+        push_reserved(the, slot);
+        fxGetID(the, fxID(the, name.as_ptr()));
+        abort_if_ffi_panicked();
+        let value = fxToInteger(the, (*the).stack);
+        abort_if_ffi_panicked();
+        fx_pop(the);
+        value
+    }
+}
+
+/// Push `slot.buffer` and check that `byte_length` bytes at `byte_offset`
+/// lie inside that ArrayBuffer. Returns whether they do; either way the
+/// buffer is left pushed at `(*the).stack` for the caller to use and pop.
+///
+/// `fxGetArrayBufferData` and `fxSetArrayBufferData` check
+/// `length < byteOffset + byteLength` in `txInteger`, which overflows for a
+/// `byteLength` near `i32::MAX` (a script can pass any object with lying
+/// `byteLength`/`byteOffset`/`buffer` properties), and then copy out of
+/// bounds. The check here is done in `i64` against the buffer's real length,
+/// with no JS running between it and the caller's copy.
+///
+/// # Safety
+/// As [`read_typed_array_bytes`].
+unsafe fn push_buffer_and_check(
+    the: *mut XsMachine,
+    slot: *mut XsSlot,
+    byte_offset: i32,
+    byte_length: i32,
+) -> bool {
+    // SAFETY: as `get_integer_property`, minus the pop: the `buffer` value is
+    // left on the stack (reachable) for the caller. `fxGetArrayBufferLength`
+    // reads the length of the ArrayBuffer instance (throwing a TypeError for
+    // anything else, as `fxGetArrayBufferData` would) and runs no JS.
+    unsafe {
+        push_reserved(the, slot);
+        fxGetID(the, fxID(the, c"buffer".as_ptr()));
+        abort_if_ffi_panicked();
+        let length = i64::from(fxGetArrayBufferLength(the, (*the).stack));
+        let (offset, count) = (i64::from(byte_offset), i64::from(byte_length));
+        offset >= 0 && count >= 0 && offset + count <= length
+    }
+}
+
 /// Read bytes from a TypedArray (e.g. Uint8Array) argument slot.
+///
+/// Returns `None` for an empty view, and also for a view-like object whose
+/// `byteLength`/`byteOffset` do not lie inside its `buffer`.
 ///
 /// # Safety
 /// Call only from a host callback (the host-callback contract above), with
-/// `slot` pointing at a slot of `the`'s current frame.
+/// `slot` pointing at a slot of `the`'s current frame, or at a slot the
+/// caller owns that outlives the call (`arg_slot`'s `absent`).
 pub unsafe fn read_typed_array_bytes(the: *mut XsMachine, slot: *mut XsSlot) -> Option<Vec<u8>> {
-    // SAFETY: UNVERIFIED — each `fx_push` below runs without `fxOverflow`
-    // (see "What XS does NOT establish"). Otherwise: `the` and `slot` are
-    // valid per the caller; each push is popped before the next, leaving the
-    // stack as found; `fxGetID` replaces the pushed value with the property
-    // read through the JS getter, at `(*the).stack`. `fxGetArrayBufferData`
-    // bounds-checks `byte_offset + byte_length` against the real ArrayBuffer
-    // (throwing a RangeError otherwise) and copies exactly `byte_length`
-    // bytes into `buf`, which holds `byte_length` bytes. A `byteLength`
-    // getter that lies cannot overrun `buf`: the copy length is the value
-    // `buf` was sized from.
+    // SAFETY: `the` and `slot` are valid per the caller; the helpers balance
+    // their pushes, and the one slot `push_buffer_and_check` leaves is popped
+    // on both paths. The range `byte_offset..byte_offset + byte_length` was
+    // checked against the buffer just pushed, with no JS run since, so
+    // `fxGetArrayBufferData` copies exactly `byte_length` in-bounds bytes into
+    // `buf`, which holds `byte_length` bytes. A `byteLength` getter that
+    // lies cannot overrun `buf`: the copy length is the value `buf` was sized
+    // from.
     unsafe {
-        fx_push(the, *slot);
-        let byte_length_id = fxID(the, c"byteLength".as_ptr());
-        fxGetID(the, byte_length_id);
-        abort_if_ffi_panicked();
-        let byte_length = fxToInteger(the, (*the).stack) as usize;
-        abort_if_ffi_panicked();
-        fx_pop(the);
-
-        if byte_length == 0 {
+        let byte_length = get_integer_property(the, slot, c"byteLength");
+        if byte_length <= 0 {
             return None;
         }
-
-        fx_push(the, *slot);
-        let byte_offset_id = fxID(the, c"byteOffset".as_ptr());
-        fxGetID(the, byte_offset_id);
-        abort_if_ffi_panicked();
-        let byte_offset = fxToInteger(the, (*the).stack) as i32;
-        abort_if_ffi_panicked();
-        fx_pop(the);
-
-        fx_push(the, *slot);
-        let buffer_id = fxID(the, c"buffer".as_ptr());
-        fxGetID(the, buffer_id);
-        abort_if_ffi_panicked();
+        let byte_offset = get_integer_property(the, slot, c"byteOffset");
+        if !push_buffer_and_check(the, slot, byte_offset, byte_length) {
+            fx_pop(the);
+            return None;
+        }
         let buffer_slot = (*the).stack;
-
-        let mut buf = vec![0u8; byte_length];
+        let mut buf = vec![0u8; byte_length as usize];
         fxGetArrayBufferData(
             the,
             buffer_slot,
             byte_offset,
             buf.as_mut_ptr() as *mut std::os::raw::c_void,
-            byte_length as i32,
+            byte_length,
         );
         fx_pop(the);
-
         Some(buf)
     }
 }
 
-/// Read the `byteLength` of a TypedArray (e.g. Uint8Array) argument
-/// slot without copying its contents.
+/// Fill a TypedArray (e.g. Uint8Array) argument slot in place: `fill` is
+/// handed a zeroed buffer of the view's `byteLength`, and what it leaves
+/// there is written at the view's `byteOffset`. Returns the number of bytes
+/// written; an empty view, or a view-like object whose range does not lie
+/// inside its `buffer`, writes nothing (and does not call `fill`) and
+/// returns 0.
+///
+/// The view is checked before the buffer is allocated, so a lying
+/// `byteLength` cannot make the host allocate and fill gigabytes it will
+/// then not write. `fill` must not call into XS.
 ///
 /// # Safety
 /// As [`read_typed_array_bytes`].
-pub unsafe fn typed_array_byte_length(the: *mut XsMachine, slot: *mut XsSlot) -> usize {
-    // SAFETY: UNVERIFIED — `fx_push` without `fxOverflow`, as in
-    // `read_typed_array_bytes`. Otherwise `the` and `slot` are valid per
-    // the caller, `fxID` reads a static NUL-terminated name, and the one
-    // push is popped before returning.
-    unsafe {
-        fx_push(the, *slot);
-        let byte_length_id = fxID(the, c"byteLength".as_ptr());
-        fxGetID(the, byte_length_id);
-        abort_if_ffi_panicked();
-        let byte_length = fxToInteger(the, (*the).stack) as usize;
-        abort_if_ffi_panicked();
-        fx_pop(the);
-        byte_length
-    }
-}
-
-/// Write `data` into a TypedArray (e.g. Uint8Array) argument slot,
-/// in place, mirroring `read_typed_array_bytes`. Writes exactly the
-/// view's `byteLength` bytes at its `byteOffset` and returns the
-/// number written; a `data` shorter than the view, or an empty view,
-/// writes nothing and returns 0.
-///
-/// # Safety
-/// As [`read_typed_array_bytes`].
-pub unsafe fn write_typed_array_bytes(
+pub unsafe fn fill_typed_array_bytes(
     the: *mut XsMachine,
     slot: *mut XsSlot,
-    data: &[u8],
+    fill: impl FnOnce(&mut [u8]),
 ) -> usize {
-    // SAFETY: as `typed_array_byte_length`, whose contract this shares.
-    let byte_length = unsafe { typed_array_byte_length(the, slot) };
-    if byte_length == 0 || data.len() < byte_length {
-        return 0;
-    }
-    // SAFETY: UNVERIFIED — `fx_push` without `fxOverflow`, as in
-    // `read_typed_array_bytes`. Otherwise: `data` holds at least
-    // `byte_length` bytes (checked just above) and `fxSetArrayBufferData`
-    // only reads `byte_length` bytes from it, after bounds-checking the
-    // destination range against the real ArrayBuffer; it never writes
-    // through the `*mut` cast of `data`.
+    // SAFETY: as `read_typed_array_bytes`: balanced pushes, and the range
+    // checked against the pushed buffer with no JS since (`fill` is pure
+    // Rust, per this fn's contract). `data` holds exactly `byte_length`
+    // bytes, and `fxSetArrayBufferData` only reads `byte_length` bytes from
+    // it; it never writes through the `*mut` cast of `data`.
     unsafe {
-        fx_push(the, *slot);
-        let byte_offset_id = fxID(the, c"byteOffset".as_ptr());
-        fxGetID(the, byte_offset_id);
-        abort_if_ffi_panicked();
-        let byte_offset = fxToInteger(the, (*the).stack) as i32;
-        abort_if_ffi_panicked();
-        fx_pop(the);
-
-        fx_push(the, *slot);
-        let buffer_id = fxID(the, c"buffer".as_ptr());
-        fxGetID(the, buffer_id);
-        abort_if_ffi_panicked();
+        let byte_length = get_integer_property(the, slot, c"byteLength");
+        if byte_length <= 0 {
+            return 0;
+        }
+        let byte_offset = get_integer_property(the, slot, c"byteOffset");
+        if !push_buffer_and_check(the, slot, byte_offset, byte_length) {
+            fx_pop(the);
+            return 0;
+        }
+        let mut data = vec![0u8; byte_length as usize];
+        fill(&mut data);
         let buffer_slot = (*the).stack;
-
         fxSetArrayBufferData(
             the,
             buffer_slot,
             byte_offset,
-            data.as_ptr() as *mut std::os::raw::c_void,
-            byte_length as i32,
+            data.as_mut_ptr() as *mut std::os::raw::c_void,
+            byte_length,
         );
         fx_pop(the);
-
-        byte_length
+        data.len()
     }
 }
 
