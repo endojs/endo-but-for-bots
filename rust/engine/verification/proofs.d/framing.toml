@@ -42,7 +42,7 @@ trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
 [[guarantee]]
 id = "STR-1"
 title = "Slot-arena free-list image acceptance (bounded)"
-claim = "For every slot_count in 0..=4, every free list of up to 5 u32 entries and every live: u32, SlotArena::image_free_marks accepts iff the entries are distinct and below slot_count and free.len() + live == slot_count, and then marks exactly the free slots. try_from_image (which builds on it) and the counts beyond the bound are tested exhaustively, not proved; the FreeList extraction for alloc/free/mark/sweep preservation was not attempted."
+claim = "For every slot_count in 0..=4, every free list of up to 5 u32 entries and every live: u32, SlotArena::image_free_marks accepts iff the entries are distinct and below slot_count and free.len() + live == slot_count, and then marks exactly the free slots. try_from_image (which builds on it) and the counts beyond the bound are tested exhaustively, not proved; preservation of the invariant under alloc/free/mark/sweep is STR-1b, and free-list order and the low-water mark are STR-1c, both proved on the extracted FreeList kernel."
 spec = "ironhorse-vm/src/value.rs SlotArena::free_marks: \"kept in exact sync by every free-list writer\"; try_from_image: \"Rejects out-of-range and duplicate free entries and inconsistent counts.\""
 trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
 
