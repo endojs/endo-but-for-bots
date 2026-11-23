@@ -239,6 +239,11 @@ extern "C" {
     /// Safe wrapper: runs fxRunPromiseJobs inside mxTry/mxCatch.
     /// Returns 0 on success, or the XS abort status on abort.
     pub fn fxRunPromiseJobsMetered(the: *mut XsMachine) -> c_int;
+    /// xsnap-platform.c: the global `eval` of `source` under an XS try
+    /// frame, with a non-primitive completion value converted to a string
+    /// inside it. Returns 0 with the value in `*result`, -1 if it threw, or
+    /// the exit status of a recoverable abort that landed in that frame.
+    pub fn fxEvalGuarded(the: *mut XsMachine, source: *const c_char, result: *mut XsSlot) -> c_int;
 
     // Lockdown host functions (compiled in when mxLockdown is
     // defined; a runner that installs them as globals must include

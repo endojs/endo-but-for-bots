@@ -237,46 +237,18 @@ pub trait JsMachine {
 /// The xsnap implementation, which changes no behaviour: every method below is
 /// the existing call with its answer re-spelled.
 ///
-/// **`Machine::eval` cannot report a failed evaluation at all: it crashes.**
-/// Its own documentation says it "Returns `None` if the evaluation throws". It
-/// does not. `fxBeginHost` installs no outermost `txJump`, so anything that
-/// unwinds inside XS longjmps past a frame Rust no longer owns and the process
-/// takes SIGSEGV. Measured, each in its own process: a guest `throw`, a SYNTAX
-/// ERROR (`var = ;`) and a `ReferenceError` all crash. Only a source carrying
-/// an interior NUL comes back `None` — and that fails in `CString::new`,
-/// before any JS runs.
+/// `Machine::eval` evaluates under an XS try frame (`fxEvalGuarded` in
+/// `xsnap/xsnap-platform.c`) and answers `None` when the evaluation throws (a
+/// syntax error, a guest `throw`, a `ReferenceError`) or a recoverable abort
+/// ends it, and also when the source carries an interior NUL. The NUL case is
+/// checked first below so it can be classified as `Compile`; every other
+/// `None` is a program that did not complete normally, `Halt`. xsnap does not
+/// hand back the thrown value, so the detail cannot name it.
 ///
-/// So the two `Err` arms below are the only reachable ones, and they are
-/// classified for what they actually are rather than for what a failed
-/// evaluation would be: an interior NUL is a source this engine cannot be
-/// handed (`Compile`), and a null host frame is an engine fault (`Engine`).
-/// The first version of this impl answered [`JsMachineErrorKind::Halt`] — "the
-/// program ran and did not complete normally" — for both, which is wrong in
-/// 100% of reachable cases, because the program never runs.
-///
-/// **This is not new and was not found here.** `xsnap/src/archive.rs`'s
-/// `install_archive` calls `Machine::eval` six times in production, and the
-/// comment above them already names the crash: "a throw that unwinds out of an
-/// eval into the host frame crashes XS, and a ReferenceError in the program
-/// being run must surface as a clean failure, not a SIGSEGV". Its workaround
-/// is `eval_wrapped`, which inlines the source into a `try`/`catch` and
-/// returns a bool.
-///
-/// **Why this impl does not use `eval_wrapped`.** Wrapping is not
-/// semantics-preserving: a `function` declaration inside a `try` block does
-/// not hoist to global scope, which is why `install_archive` leaves its first
-/// four evals unwrapped and wraps only the ones that run user code. A
-/// `JsMachine::eval` that silently changed declaration hoisting would be a
-/// wrong answer where there is currently a crash, and `eval_wrapped` returns
-/// no completion value. The real fix is a `c_setjmp` guard of the shape
-/// `fxRunPromiseJobsMetered` uses in `xsnap/xsnap-platform.c` — with the
-/// caveat that that function lives under `#ifdef mxMetering` and restores from
-/// `exitStatus` rather than rendering a thrown value, so it is a template and
-/// not a copy. That is XS-glue work with its own review.
-///
-/// `a_failing_eval_through_xsnap_segfaults` in `tests/js_machine_trait.rs`
-/// pins the defect across all three shapes and is `#[ignore]`d because running
-/// it kills the test binary.
+/// `install_archive` in `xsnap/src/archive.rs` still wraps user code in
+/// `eval_wrapped`, which predates the guard; wrapping is not
+/// semantics-preserving (a `function` declaration inside a `try` block does
+/// not hoist to global scope), so this impl does not use it.
 impl JsMachine for xsnap::Machine {
     fn eval(&mut self, source: &str) -> Result<String, JsMachineError> {
         // Checked here so the two reachable failures can be told apart. XS
@@ -291,10 +263,9 @@ impl JsMachine for xsnap::Machine {
         }
         xsnap::Machine::eval_to_string(self, source).ok_or_else(|| {
             JsMachineError::new(
-                JsMachineErrorKind::Engine,
-                "xsnap: the host frame could not be entered. A failed \
-                 EVALUATION does not reach here — it crashes the process; see \
-                 this impl's documentation.",
+                JsMachineErrorKind::Halt,
+                "xsnap: the evaluation threw or was aborted (xsnap does not \
+                 report the thrown value)",
             )
         })
     }

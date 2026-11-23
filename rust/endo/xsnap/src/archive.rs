@@ -843,10 +843,9 @@ function __makeArchiveCompartment(compName) {
     // `function` declaration inside a try block does not hoist to
     // the global scope. The last (and the entry import that the
     // caller runs next) run arbitrary user code, so they go through
-    // the inline try/catch wrapper — a throw that unwinds out of an
-    // eval into the host frame crashes XS, and a ReferenceError in
-    // the program being run must surface as a clean failure, not a
-    // SIGSEGV.
+    // the inline try/catch wrapper, which reports the thrown error's
+    // message and stack; a bare `Machine::eval` would only say that it
+    // threw.
     if machine.eval(&registry_js).is_none() {
         return false;
     }

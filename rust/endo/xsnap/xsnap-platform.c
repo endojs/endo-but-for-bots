@@ -286,6 +286,65 @@ void fxRunLoop(txMachine* the)
 	fxCheckUnhandledRejections(the, 1);
 }
 
+/* ---- Guarded eval for Machine::eval ---- */
+
+/*
+ * Call the global `eval` on `source` inside an XS try frame.
+ *
+ * Machine::eval (src/lib.rs) calls this between fxBeginHost and
+ * fxEndHost.  fxBeginHost installs no jump record, so without this a
+ * throw longjmps to whatever `the->firstJump` holds: NULL at top level
+ * (fxJump then dereferences it), or a jump record below a Rust caller's
+ * frames when Machine::eval runs inside a host callback.  Here the jump
+ * lands in this C frame instead.
+ *
+ * On success the completion value is left in *result and 0 is returned.
+ * A value other than undefined, null, a boolean, a number or a string is
+ * converted to a string first, while the try is still in place, because
+ * that conversion runs JS (`toString`) that can throw.  The value is kept
+ * on the XS stack during the conversion so that it stays reachable, and
+ * once it is a primitive the caller can read it without calling into JS.
+ *
+ * If the evaluation or the conversion throws, returns -1.  A recoverable
+ * fxAbort (fxExitToHost) longjmps to the outermost jump record; when this
+ * try is the outermost one (Machine::eval at top level) it lands here and
+ * the exit status is returned.  Either way the stack, scope, frame and
+ * code are restored to what they were on entry.
+ */
+int fxEvalGuarded(txMachine* the, txString source, txSlot* result)
+{
+	int status = 0;
+	the->exitStatus = 0;
+	mxTry(the) {
+		/* `this`, the frame fxCallID builds, and the one argument. */
+		fxOverflow(the, -8, C_NULL, 0);
+		mxPush(mxGlobal);
+		fxCallID(the, fxID(the, "eval"));
+		mxPushStringC(source);
+		fxRunCount(the, 1);
+		switch (the->stack->kind) {
+		case XS_UNDEFINED_KIND:
+		case XS_NULL_KIND:
+		case XS_BOOLEAN_KIND:
+		case XS_INTEGER_KIND:
+		case XS_NUMBER_KIND:
+		case XS_STRING_KIND:
+		case XS_STRING_X_KIND:
+			break;
+		default:
+			fxToString(the, the->stack);
+			break;
+		}
+		*result = *(the->stack);
+		mxPop();
+	}
+	mxCatch(the) {
+		status = the->exitStatus ? the->exitStatus : -1;
+		the->exitStatus = 0;
+	}
+	return status;
+}
+
 /* ---- Metering helpers ---- */
 
 #ifdef mxMetering

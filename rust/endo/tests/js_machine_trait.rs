@@ -219,33 +219,21 @@ fn a_guest_throw_is_an_error() {
     );
 }
 
-/// `xsnap::Machine::eval` documents "Returns `None` if the evaluation throws".
-/// It does not. It installs no outermost `txJump`, so an XS throw longjmps
-/// past a frame Rust no longer owns and the process takes **SIGSEGV**.
-///
-/// `#[ignore]` because running it kills the test binary, taking every other
-/// test in this file with it — so this is a pinned, runnable reproduction
-/// (`cargo test -p endo --test js_machine_trait -- --ignored`) rather than a
-/// gate.
-///
-/// **Not caused by the `JsMachine` extraction, and not fixed by it.** The
-/// defect predates this file; `xsnap::Machine::eval` had no caller outside
-/// `#[cfg(test)]`, which is why nothing had met it. The fix is a `c_setjmp`
-/// guard of the shape `fxRunPromiseJobsMetered` already uses in
-/// `xsnap/xsnap-platform.c`, which is a change to the XS glue and belongs in
-/// its own review rather than inside an architecture-review finding about an
-/// abstraction.
+/// A guest throw through xsnap is an `Err` too. `xsnap::Machine::eval` used to
+/// install no outermost `txJump`, so the throw longjmped through a NULL jump
+/// record and the process took SIGSEGV; it now evaluates under an XS try
+/// frame (`fxEvalGuarded` in `xsnap/xsnap-platform.c`) and reports `None`.
 #[test]
-#[ignore = "SIGSEGVs the test binary: xsnap::Machine::eval has no jump guard"]
-fn a_guest_throw_through_xsnap_segfaults() {
+fn a_guest_throw_through_xsnap_is_an_error() {
     let mut xs = xsnap::Machine::new(&xsnap::DEFAULT_CREATION, "js-machine-throw")
         .expect("an xsnap machine");
-    let outcome = (&mut xs as &mut dyn JsMachine).eval("throw new Error('boom')");
-    assert!(
-        outcome.is_err(),
-        "if this line is REACHED, the jump guard landed and this test should \
-         become an ordinary one beside `a_guest_throw_is_an_error`"
-    );
+    for source in ["throw new Error('boom')", "var = ;", "notDefined + 1"] {
+        let error = (&mut xs as &mut dyn JsMachine)
+            .eval(source)
+            .expect_err("a throw is not a completion");
+        assert_eq!(error.kind(), JsMachineErrorKind::Halt, "{source}");
+        assert!(!error.detail().is_empty(), "{source}");
+    }
 }
 
 /// IronHorse's error taxonomy survives the trait (F157, which this extraction

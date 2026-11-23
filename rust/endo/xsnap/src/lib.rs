@@ -163,67 +163,47 @@ impl Machine {
 
     /// Evaluate a JavaScript expression.
     ///
-    /// Uses `eval()` via the XS call mechanism:
-    /// `xsCall1(xsGlobal, xsID("eval"), xsString(source))`
+    /// Calls the global `eval` on `source` (xsnap-platform.c's
+    /// `fxEvalGuarded`) under an XS try frame.
     ///
-    /// Returns `None` if the evaluation throws.
+    /// Returns `None` if the evaluation throws (a syntax error, a guest
+    /// `throw`, or a completion value whose `toString` throws), if a
+    /// recoverable abort ends it, or if `source` holds an interior NUL.
     pub fn eval(&self, source: &str) -> Option<JsValue> {
         let c_source = CString::new(source).ok()?;
 
-        // SAFETY: UNVERIFIED — `fxBeginHost` installs no `try`, so a script
-        // that throws (or a `toString` that throws in `slot_to_value`), or a
-        // recoverable `fxAbort` (xsnap-platform.c's `fxExitToHost`), longjmps
-        // to a jump record whose C frame may already have returned, skipping
-        // `fxEndHost` and `c_source`'s drop; CI's build-xsnap comments record
-        // the resulting SIGSEGV, and the doc above ("Returns `None` if the
-        // evaluation throws") is not what happens. On the non-throwing path:
-        // `self.raw` is the live machine owned by this `Machine`, used on its
-        // own thread; `fxOverflow` reserves the frame plus one argument
-        // before the two pushes; the pops balance the pushes; `c_source`
-        // outlives `fxString`, which copies it.
+        // SAFETY: `self.raw` is the live machine owned by this `Machine`,
+        // used on its own thread. `fxEvalGuarded` runs between `fxBeginHost`
+        // and `fxEndHost`, and keeps every throw from the evaluation (and
+        // from converting its value) in its own C frame: its `mxTry` is the
+        // nearest jump record for the whole call, so no `longjmp` crosses this
+        // frame or `c_source`'s drop. It restores the stack on either path,
+        // so `fxEndHost` pops exactly the host frame `fxBeginHost` pushed.
+        // `c_source` outlives the call, and XS copies it. On success
+        // `scratch` holds a primitive, so `slot_to_value` calls no JS and
+        // allocates nothing: a string's chunk pointer is copied out before
+        // `fxEndHost`.
+        //
+        // UNVERIFIED in one case: a recoverable `fxAbort` (metering, stack
+        // or memory exhaustion) longjmps to the *outermost* jump record, not
+        // the nearest. At top level that is `fxEvalGuarded`'s own, but when
+        // `eval` runs inside a host callback (`host_import_archive`) the
+        // outermost record is below that callback's Rust frames, which the
+        // abort then skips; see "What XS does NOT establish" in `worker_io`.
         unsafe {
             let the = fxBeginHost(self.raw);
             if the.is_null() {
                 return None;
             }
-
-            // Equivalent to: xsCall1(xsGlobal, xsID("eval"), xsString(source))
-            //
-            // Expanded:
-            //   xsOverflow(-XS_FRAME_COUNT-1)
-            //   fxPush(xsGlobal)        — push `this`
-            //   fxCallID(the, evalID)    — set up call frame
-            //   fxPush(xsString(src))    — push argument
-            //   fxRunCount(the, 1)       — execute with 1 arg
-            //   result = fxPop()         — pop result
-
-            let eval_id = fxID(the, c"eval".as_ptr());
-
-            fxOverflow(the, -(XS_FRAME_COUNT + 1), ptr::null(), 0);
-
-            // Push global as `this`
-            fx_push(the, xs_global(the));
-
-            // Set up the call frame for eval
-            fxCallID(the, eval_id);
-
-            // Push the source string as the argument
-            fxString(the, &mut (*the).scratch, c_source.as_ptr());
-            fx_push(the, (*the).scratch);
-
-            // Execute with 1 argument
-            fxRunCount(the, 1);
-
-            // Pop the result
-            let result_slot = fx_pop(the);
-            (*the).scratch = result_slot;
-
-            let ty = fxTypeOf(the, &mut (*the).scratch);
-            let value = slot_to_value(the, &mut (*the).scratch, ty);
-
+            let status = fxEvalGuarded(the, c_source.as_ptr(), &mut (*the).scratch);
+            let value = if status == 0 {
+                let ty = fxTypeOf(the, &mut (*the).scratch);
+                Some(slot_to_value(the, &mut (*the).scratch, ty))
+            } else {
+                None
+            };
             fxEndHost(the);
-
-            Some(value)
+            value
         }
     }
 
@@ -882,11 +862,14 @@ impl Machine {
 ///
 /// # Safety
 /// `the` must be a live machine inside a host entry and `slot` one of its
-/// slots whose type tag is `ty`.
+/// slots whose type tag is `ty`, holding a primitive (undefined, null, a
+/// boolean, a number or a string), as `fxEvalGuarded` leaves it.
 unsafe fn slot_to_value(the: *mut XsMachine, slot: *mut XsSlot, ty: i8) -> JsValue {
-    // SAFETY: per the contract above; each string pointer is copied out by
-    // `xs_string_to_utf8` before XS runs again. Coercing a reference calls
-    // its `toString`, which can throw (see the UNVERIFIED note in `eval`).
+    // SAFETY: per the contract above. On a primitive these conversions run
+    // no JS and cannot throw; `fxToString` of a string returns its pointer
+    // without allocating, and `xs_string_to_utf8` copies it out before XS
+    // runs again. (The fallback arm would call a reference's `toString`,
+    // which can throw, but the contract excludes references.)
     unsafe {
         match ty {
             XS_UNDEFINED_TYPE => JsValue::Undefined,
@@ -2658,6 +2641,73 @@ mod tests {
             JsValue::Integer(n) => assert_eq!(n, 42),
             other => panic!("expected 42, got {:?}", js_value_debug(&other)),
         }
+    }
+
+    /// `eval` used to call XS with no jump record installed, so any throw
+    /// longjmped through a NULL `firstJump` and the process took SIGSEGV.
+    #[test]
+    fn eval_returns_none_when_the_evaluation_throws() {
+        let machine = new_machine();
+        for source in [
+            "throw new Error('boom')",
+            "var = ;",
+            "undefinedVariable + 1",
+            "({ toString() { throw new Error('no string'); } })",
+            "Symbol('cannot be a string')",
+            "(function f() { return f(); })()",
+        ] {
+            assert!(machine.eval(source).is_none(), "{source}");
+            // The machine is intact afterwards.
+            match machine.eval("1 + 1").unwrap() {
+                JsValue::Integer(n) => assert_eq!(n, 2, "after {source}"),
+                other => panic!("after {source}: {:?}", js_value_debug(&other)),
+            }
+        }
+        match machine
+            .eval("({ toString() { return 'coerced'; } })")
+            .unwrap()
+        {
+            JsValue::String(s) => assert_eq!(s, "coerced"),
+            other => panic!("expected 'coerced', got {:?}", js_value_debug(&other)),
+        }
+    }
+
+    /// A throwing `eval` made from inside a host callback, itself called
+    /// inside a JS `try`, must come back to the callback as `None`, not
+    /// longjmp over the callback's Rust frames to the JS `catch`.
+    #[test]
+    fn nested_eval_throw_stays_inside_the_host_callback() {
+        thread_local! {
+            static NESTED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+        }
+        unsafe extern "C" fn eval_throwing(the: *mut XsMachine) {
+            // SAFETY: test host callback; the borrowed `Machine` view is
+            // never dropped (it does not own `the`), as in
+            // `host_import_archive`.
+            let machine = std::mem::ManuallyDrop::new(Machine {
+                raw: the,
+                registered_callbacks: RefCell::new(Vec::new()),
+            });
+            let failed = machine.eval("throw new Error('inner')").is_none();
+            NESTED.with(|n| n.set(Some(failed)));
+            // SAFETY: host-callback contract; `xsResult` is `frame[1]`.
+            unsafe {
+                fxBoolean(the, &mut (*the).scratch, i32::from(failed));
+                *(*the).frame.add(1) = (*the).scratch;
+            }
+        }
+        let machine = new_machine();
+        machine.define_function("evalThrowing", eval_throwing, 0);
+        match machine
+            .eval(
+                "(function () { try { return evalThrowing(); } catch (e) { return 'caught'; } })()",
+            )
+            .unwrap()
+        {
+            JsValue::Boolean(b) => assert!(b),
+            other => panic!("expected true, got {:?}", js_value_debug(&other)),
+        }
+        assert_eq!(NESTED.with(|n| n.get()), Some(true));
     }
 
     #[test]
