@@ -3,7 +3,7 @@
 //! Magnitudes use little-endian u32 limbs, trimmed to a nonzero high limb,
 //! except zero, represented by `[0]`. The limb count is the size charged by
 //! the interpreter's BigInt metering; callers own admission and allocation costs.
-use super::trim_ecma_whitespace;
+use super::{trim_ecma_whitespace, BitOp};
 
 /// Trim trailing (most-significant) zero limbs, leaving at least one limb.
 pub(super) fn bi_trim(mut mag: Vec<u32>) -> Vec<u32> {
@@ -18,6 +18,161 @@ pub(super) fn bi_trim(mut mag: Vec<u32>) -> Vec<u32> {
 
 pub(super) fn bi_is_zero(mag: &[u32]) -> bool {
     mag.iter().all(|&d| d == 0)
+}
+
+/// The canonical form of a sign and limbs, as a BigInt chunk stores it:
+/// trimmed (no zero high limb above the first), and zero never negative.
+pub(super) fn bi_canonical(negative: bool, magnitude: Vec<u32>) -> (bool, Vec<u32>) {
+    let magnitude = bi_trim(magnitude);
+    let negative = if bi_is_zero(&magnitude) {
+        false
+    } else {
+        negative
+    };
+    (negative, magnitude)
+}
+
+/// The low 64 bits of `(negative, magnitude)` in two's complement: the
+/// value modulo 2^64, what a BigInt64/BigUint64 store keeps.
+pub(super) fn bi_low_u64(negative: bool, magnitude: &[u32]) -> u64 {
+    let mut u: u64 = 0;
+    if let Some(&l0) = magnitude.first() {
+        u |= l0 as u64;
+    }
+    if let Some(&l1) = magnitude.get(1) {
+        u |= (l1 as u64) << 32;
+    }
+    if negative {
+        u.wrapping_neg()
+    } else {
+        u
+    }
+}
+
+/// Convert a trimmed BigInt to the nearest IEEE-754 binary64 value, using
+/// round-to-nearest, ties-to-even. Reading only the leading 53 bits and the
+/// discarded round/sticky bits avoids an intermediate `f64` accumulation
+/// (and therefore avoids double rounding for wide values).
+pub(super) fn bi_to_f64(negative: bool, magnitude: &[u32]) -> f64 {
+    if bi_is_zero(magnitude) {
+        return 0.0;
+    }
+
+    let top = *magnitude.last().expect("a BigInt has at least one limb");
+    let bit_length = (magnitude.len() - 1) * 32 + (32 - top.leading_zeros() as usize);
+    let mut exponent = bit_length - 1;
+    let discarded = bit_length.saturating_sub(53);
+
+    let bit = |position: usize| -> bool {
+        magnitude
+            .get(position / 32)
+            .is_some_and(|limb| limb & (1u32 << (position % 32)) != 0)
+    };
+    let mut significand = 0u64;
+    for position in (discarded..bit_length).rev() {
+        significand = (significand << 1) | u64::from(bit(position));
+    }
+    if bit_length < 53 {
+        significand <<= 53 - bit_length;
+    }
+
+    if discarded > 0 {
+        let round = bit(discarded - 1);
+        let sticky = (0..discarded - 1).any(bit);
+        if round && (sticky || significand & 1 != 0) {
+            significand += 1;
+            if significand == 1u64 << 53 {
+                significand >>= 1;
+                exponent += 1;
+            }
+        }
+    }
+
+    if exponent > 1023 {
+        return if negative {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        };
+    }
+    let sign = u64::from(negative) << 63;
+    let biased = (exponent as u64 + 1023) << 52;
+    let fraction = significand - (1u64 << 52);
+    f64::from_bits(sign | biased | fraction)
+}
+
+/// What `BigInt.asIntN` / `BigInt.asUintN` produce for a BigInt.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum WidthResult {
+    /// The argument already lies in the target range: return it as is,
+    /// allocating nothing.
+    Unchanged,
+    /// A new BigInt with this sign and these limbs (not yet trimmed).
+    Value(bool, Vec<u32>),
+    /// The result would need more than [`MAX_BIGINT_WIDTH_BITS`] bits.
+    TooLarge,
+}
+
+/// The widest result `BigInt.asIntN` / `BigInt.asUintN` builds.
+const MAX_BIGINT_WIDTH_BITS: u64 = 64 * 1024;
+
+/// Reduce the trimmed BigInt `(negative, magnitude)` modulo `2**bits`,
+/// interpreting the retained high bit as a sign bit when `signed`
+/// (`asIntN`). Widths that would require an adversarially large positive
+/// result are [`WidthResult::TooLarge`]; widths wider than an
+/// already-representable value return [`WidthResult::Unchanged`].
+pub(super) fn bi_as_n(negative: bool, magnitude: &[u32], bits: u64, signed: bool) -> WidthResult {
+    if bits == 0 || bi_is_zero(magnitude) {
+        return WidthResult::Value(false, vec![0]);
+    }
+    let top = *magnitude
+        .last()
+        .expect("a non-zero BigInt has a leading limb");
+    let magnitude_bits = (magnitude.len() as u64 - 1) * 32 + u64::from(32 - top.leading_zeros());
+
+    if !negative && ((!signed && magnitude_bits <= bits) || (signed && magnitude_bits < bits)) {
+        return WidthResult::Unchanged;
+    }
+    if negative && signed {
+        let minimum_at_width = magnitude_bits == bits
+            && magnitude
+                .iter()
+                .take(magnitude.len() - 1)
+                .all(|&limb| limb == 0)
+            && top.is_power_of_two();
+        if magnitude_bits < bits || minimum_at_width {
+            return WidthResult::Unchanged;
+        }
+    }
+    if bits > MAX_BIGINT_WIDTH_BITS {
+        return WidthResult::TooLarge;
+    }
+
+    let limb_count = bits.div_ceil(32) as usize;
+    let mut unsigned = vec![0u32; limb_count];
+    let copied = limb_count.min(magnitude.len());
+    unsigned[..copied].copy_from_slice(&magnitude[..copied]);
+    if negative {
+        for limb in &mut unsigned {
+            *limb = !*limb;
+        }
+        bi_add_one_in_place(&mut unsigned);
+    }
+    bi_mask_width(&mut unsigned, bits);
+
+    if signed {
+        let sign_index = (bits - 1) as usize;
+        let sign_set = unsigned[sign_index / 32] & (1u32 << (sign_index % 32)) != 0;
+        if sign_set {
+            for limb in &mut unsigned {
+                *limb = !*limb;
+            }
+            bi_add_one_in_place(&mut unsigned);
+            bi_mask_width(&mut unsigned, bits);
+            return WidthResult::Value(true, unsigned);
+        }
+    }
+    WidthResult::Value(false, unsigned)
 }
 
 /// Add one modulo the fixed width of `limbs`.
@@ -213,6 +368,33 @@ pub(super) fn bi_from_twos_complement(mut limbs: Vec<u32>) -> (bool, Vec<u32>) {
     }
     let magnitude = bi_trim(limbs);
     (negative && !bi_is_zero(&magnitude), magnitude)
+}
+
+/// BigInt `&`/`|`/`^` (`op` is one of [`BitOp::And`], [`BitOp::Or`],
+/// [`BitOp::Xor`]) over the spec's infinite two's-complement values. One
+/// extra high limb preserves sign extension while the operation runs; the
+/// result is converted back to sign+magnitude form.
+pub(super) fn bi_bitwise(
+    op: BitOp,
+    a_negative: bool,
+    a_magnitude: &[u32],
+    b_negative: bool,
+    b_magnitude: &[u32],
+) -> (bool, Vec<u32>) {
+    let width = a_magnitude.len().max(b_magnitude.len()) + 1;
+    let a_twos = bi_to_twos_complement(a_negative, a_magnitude, width);
+    let b_twos = bi_to_twos_complement(b_negative, b_magnitude, width);
+    let result = a_twos
+        .into_iter()
+        .zip(b_twos)
+        .map(|(a_limb, b_limb)| match op {
+            BitOp::And => a_limb & b_limb,
+            BitOp::Or => a_limb | b_limb,
+            BitOp::Xor => a_limb ^ b_limb,
+            _ => unreachable!("only the three logical BigInt ops call this helper"),
+        })
+        .collect();
+    bi_from_twos_complement(result)
 }
 
 /// Convert a nonnegative magnitude to `usize` only when it does not exceed

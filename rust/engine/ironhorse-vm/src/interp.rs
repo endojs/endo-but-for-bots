@@ -141,10 +141,10 @@ use numeric::{
 
 mod bigint;
 use bigint::{
-    bi_add, bi_add_mag, bi_add_one_in_place, bi_bit_length, bi_cmp, bi_div_rem_mag,
-    bi_from_twos_complement, bi_is_zero, bi_mask_width, bi_mul, bi_mul_mag, bi_shl_bits,
-    bi_shr_mag, bi_sub_mag, bi_to_decimal, bi_to_twos_complement, bi_trim, bi_usize_up_to,
-    number_to_bigint, parse_bigint_string, parse_bigint_string_u64, u64_to_signed_limbs,
+    bi_add, bi_add_mag, bi_as_n, bi_bit_length, bi_bitwise, bi_canonical, bi_cmp, bi_div_rem_mag,
+    bi_is_zero, bi_low_u64, bi_mul, bi_mul_mag, bi_shl_bits, bi_shr_mag, bi_sub_mag, bi_to_decimal,
+    bi_to_f64, bi_trim, bi_usize_up_to, number_to_bigint, parse_bigint_string,
+    parse_bigint_string_u64, u64_to_signed_limbs, WidthResult,
 };
 
 #[doc(hidden)]
