@@ -174,6 +174,9 @@ pub const CHUNK_EXTENT_BYTES: u32 = 64 * 1024;
 use std::cell::{Cell, Ref, RefCell};
 use std::rc::Rc;
 
+mod free_list;
+use free_list::FreeList;
+
 /// A source of snapshot pages for **lazy reification** (store seam
 /// design, phase 3): the arenas fault a page/extent in on first touch
 /// instead of reading the whole heap at resume. Implemented outside
@@ -845,33 +848,38 @@ pub struct SlotArena {
     /// dispatches on `lazy`, which the detached hot path already
     /// branched on, so eager machines keep their exact pre-H1 path.
     slots: Vec<Cell<Slot>>,
-    free: Vec<u32>,
-    /// The free list's low-water mark: the shortest the list has been
-    /// since the last [`SlotArena::acknowledge_free_list`], or since the
-    /// arena was built, when it starts at the list's length. The list
-    /// changes only at its end — the LIFO pop in [`SlotArena::alloc`] and
-    /// the pushes in [`SlotArena::free`] and the sweep — so every entry
-    /// below the mark is as it was then, and a checkpoint ships only the
-    /// segments from the mark on.
-    free_low: usize,
+    /// The allocation bookkeeping, every write to which goes through
+    /// [`FreeList`]'s methods (STR-1b and STR-1c prove them):
+    ///
+    /// - `free`, the free list in the LIFO reuse order the snapshot
+    ///   serializes.
+    /// - `free_low`, the free list's low-water mark: the shortest the list
+    ///   has been since the last [`SlotArena::acknowledge_free_list`], or
+    ///   since the arena was built, when it starts at the list's length.
+    ///   The list changes only at its end — the LIFO pop in
+    ///   [`SlotArena::alloc`] and the pushes in [`SlotArena::free`] and the
+    ///   sweep — so every entry below the mark is as it was then, and a
+    ///   checkpoint ships only the segments from the mark on.
+    /// - `free_marks`, twin of `free` as one bit per record, kept in exact
+    ///   sync by every free-list writer: `free` keeps the LIFO reuse order
+    ///   the snapshot serializes; this bitmap answers "is `i` free?" in
+    ///   O(1). Without it the sweep and the page-granular partial collector
+    ///   scan the free `Vec` per record — O(records x free-list length),
+    ///   quadratic on exactly the large-free-list heaps the segmented free
+    ///   list (store seam phase 9) exists to support.
+    /// - `marks`, one mark bit per slot, used by the mark-sweep collector.
+    ///   The collector clears all marks before a collection, a free slot
+    ///   cannot be marked, and the sweep moves the unmarked-and-not-already-
+    ///   free slots onto the free list, so no slot is both free and marked
+    ///   while a collection runs. Between collections a slot freed after
+    ///   the sweep keeps its stale mark until the next `clear_marks` or its
+    ///   reuse.
+    /// - `live`, the count of live (non-free) slots, mirroring
+    ///   `currentHeapCount`.
+    book: FreeList,
     /// The identity the current [`FreeListAck`] carries, replaced by each
     /// acknowledgement. A new arena's is carried by none.
     free_ack: Rc<()>,
-    /// Twin of `free` as one bit per record, kept in exact sync by
-    /// every free-list writer: `free` keeps the LIFO reuse order the
-    /// snapshot serializes; this bitmap answers "is `i` free?" in O(1).
-    /// Without it the sweep and the page-granular partial collector
-    /// scan the free `Vec` per record — O(records x free-list length),
-    /// quadratic on exactly the large-free-list heaps the segmented
-    /// free list (store seam phase 9) exists to support.
-    free_marks: Vec<bool>,
-    /// One mark bit per slot, used by the mark-sweep collector. A slot
-    /// is never both free and marked; the collector clears all marks
-    /// before a collection and sweeps the unmarked-and-not-already-free
-    /// slots onto the free list.
-    marks: Vec<bool>,
-    /// Count of live (non-free) slots, mirroring `currentHeapCount`.
-    live: u32,
     /// One dirty bit per [`SLOTS_PER_PAGE`]-record page, set by the
     /// record-mutating paths ([`SlotArena::alloc`],
     /// [`SlotArena::get_mut`]) and drained by the incremental snapshot
@@ -954,12 +962,8 @@ impl SlotArena {
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
             slots: Vec::new(),
-            free: Vec::new(),
-            free_low: 0,
+            book: FreeList::new(),
             free_ack: Rc::default(),
-            free_marks: Vec::new(),
-            marks: Vec::new(),
-            live: 0,
             dirty: Vec::new(),
             unbacked: Vec::new(),
             lazy: None,
@@ -999,12 +1003,8 @@ impl SlotArena {
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
             slots: Vec::new(),
-            free_low: free.len(),
-            free,
+            book: FreeList::restored(free, free_marks, live),
             free_ack: Rc::default(),
-            free_marks,
-            marks: vec![false; slot_count as usize],
-            live,
             dirty: vec![false; pages],
             // Every backed page starts holding exactly what the source
             // will serve for it.
@@ -1045,7 +1045,7 @@ impl SlotArena {
             return;
         }
         let records = backing.source.slot_page(page);
-        backing.validate_records(page, &records, &self.free_marks);
+        backing.validate_records(page, &records, &self.book.free_marks);
         let start = page as usize * SLOTS_PER_PAGE as usize;
         for (k, s) in records.into_iter().enumerate() {
             backing.set(start + k, s);
@@ -1229,24 +1229,21 @@ impl SlotArena {
     /// Allocate a slot, reusing the free list first (XS semantics).
     pub fn alloc(&mut self, slot: Slot) -> SlotIndex {
         if self.capacity() > self.ceiling
-            || (self.free.is_empty() && self.capacity() >= self.ceiling)
+            || (self.book.free.is_empty() && self.capacity() >= self.ceiling)
         {
             heap_exhausted();
         }
         // The ceiling admitted the slot; a failure to grow the record
         // vectors now is the host allocator's.
-        if self.free.is_empty()
+        if self.book.free.is_empty()
             && ((self.lazy.is_none() && self.slots.try_reserve(1).is_err())
-                || self.free_marks.try_reserve(1).is_err()
-                || self.marks.try_reserve(1).is_err())
+                || !self.book.reserve_growth())
         {
             host_allocation_failed();
         }
         self.snapshot_dirt.content();
         self.snapshot_dirt.liveness();
-        self.live += 1;
-        if let Some(i) = self.free.pop() {
-            self.free_low = self.free_low.min(self.free.len());
+        if let Some(i) = self.book.take() {
             self.property_index.get_mut().free(SlotIndex(i));
             // Fault the page first: overwriting one record of a
             // non-resident page and then marking nothing would let a
@@ -1257,8 +1254,9 @@ impl SlotArena {
                 Some(b) => b.set(i as usize, slot),
                 None => self.slots[i as usize].set(slot),
             }
-            self.free_marks[i as usize] = false;
-            self.marks[i as usize] = false;
+            // After the fault: the fault validates the page against the
+            // free map, in which `i` is still free.
+            self.book.claim(i);
             self.mark_dirty_slot(i);
             SlotIndex(i)
         } else {
@@ -1270,8 +1268,7 @@ impl SlotArena {
                 Some(b) => b.push(slot),
                 None => self.slots.push(Cell::new(slot)),
             }
-            self.free_marks.push(false);
-            self.marks.push(false);
+            self.book.append();
             self.mark_dirty_slot(i);
             SlotIndex(i)
         }
@@ -1283,13 +1280,11 @@ impl SlotArena {
             !index.is_null() && index.0 < self.capacity(),
             "invalid slot index in free"
         );
-        assert!(!self.is_free(index.0), "double free of slot");
-        let live = self.live.checked_sub(1).expect("slot live count underflow");
-        self.snapshot_dirt.liveness();
-        self.property_index.get_mut().free(index);
-        self.free.push(index.0);
-        self.free_marks[index.0 as usize] = true;
-        self.live = live;
+        let (dirt, properties) = (&self.snapshot_dirt, self.property_index.get_mut());
+        self.book.release(index.0, || {
+            dirt.liveness();
+            properties.free(index);
+        });
     }
 
     /// Read a record by value (`Slot` is `Copy`; after inlining only
@@ -1370,9 +1365,7 @@ impl SlotArena {
 
     /// Clear every mark bit. Called at the start of a collection.
     pub fn clear_marks(&mut self) {
-        for m in self.marks.iter_mut() {
-            *m = false;
-        }
+        self.book.clear_marks();
     }
 
     /// Mark a slot reachable. Returns `true` if it was not already
@@ -1384,19 +1377,12 @@ impl SlotArena {
             return false;
         }
         assert!(index.0 < self.capacity(), "mark of out-of-arena slot");
-        assert!(!self.is_free(index.0), "mark of free slot");
-        let i = index.0 as usize;
-        if self.marks[i] {
-            false
-        } else {
-            self.marks[i] = true;
-            true
-        }
+        self.book.mark(index.0)
     }
 
     #[inline]
     pub fn is_marked(&self, index: SlotIndex) -> bool {
-        !index.is_null() && self.marks[index.0 as usize]
+        !index.is_null() && self.book.marks[index.0 as usize]
     }
 
     /// Whether `idx` is on the free list — the liveness query the
@@ -1410,7 +1396,7 @@ impl SlotArena {
     /// sweep and the partial collector ask this once per record, so a
     /// free-`Vec` scan here would be quadratic in the free-list length.
     fn is_free(&self, i: u32) -> bool {
-        self.free_marks.get(i as usize).copied().unwrap_or(false)
+        self.book.is_free(i)
     }
 
     /// Sweep: every allocated slot that is not marked and not already
@@ -1424,26 +1410,23 @@ impl SlotArena {
     /// side-table entries keyed by it (the GC side-table liveness
     /// contract) — same deterministic index order as [`Self::sweep`].
     pub fn sweep_each(&mut self, swept: &mut dyn FnMut(SlotIndex)) -> u32 {
-        let mut reclaimed = 0u32;
-        for i in 0..self.capacity() {
-            if !self.marks[i as usize] && !self.is_free(i) {
-                self.property_index.get_mut().free(SlotIndex(i));
-                self.snapshot_dirt.liveness();
-                self.free.push(i);
-                self.free_marks[i as usize] = true;
-                self.live -= 1;
-                reclaimed += 1;
-                swept(SlotIndex(i));
-            }
-        }
-        reclaimed
+        let capacity = self.capacity();
+        let (dirt, properties) = (&self.snapshot_dirt, self.property_index.get_mut());
+        self.book.sweep_each(
+            capacity,
+            |i| {
+                properties.free(SlotIndex(i));
+                dirt.liveness();
+            },
+            |i| swept(SlotIndex(i)),
+        )
     }
 
     /// Live slot count. XS accounts 32 bytes per slot; this is the
     /// count `currentHeapCount` reports.
     #[inline]
     pub fn live_count(&self) -> u32 {
-        self.live
+        self.book.live
     }
 
     /// XS-accounted capacity: 32 bytes per addressable record.
@@ -1506,9 +1489,9 @@ impl SlotArena {
             }
         };
         records
-            + self.free.capacity() * size_of::<u32>()
-            + self.free_marks.capacity()
-            + self.marks.capacity()
+            + self.book.free.capacity() * size_of::<u32>()
+            + self.book.free_marks.capacity()
+            + self.book.marks.capacity()
             + self.dirty.capacity()
             + self.unbacked.capacity()
     }
@@ -1583,7 +1566,7 @@ impl SlotArena {
     /// original would have — keeping post-restore allocation deterministic.
     #[inline]
     pub fn free_list(&self) -> &[u32] {
-        &self.free
+        &self.book.free
     }
 
     /// Acknowledge the free list as the store now holds it, after a
@@ -1592,7 +1575,7 @@ impl SlotArena {
     /// restored from the store is adopted with
     /// [`SlotArena::free_list_baseline`] instead.
     pub fn acknowledge_free_list(&mut self) -> FreeListAck {
-        self.free_low = self.free.len();
+        self.book.acknowledge();
         self.free_ack = Rc::new(());
         FreeListAck {
             identity: self.free_ack.clone(),
@@ -1616,7 +1599,7 @@ impl SlotArena {
     /// acknowledged again since, and the caller must treat the whole list
     /// as changed.
     pub fn free_list_unchanged_prefix(&self, ack: &FreeListAck) -> Option<usize> {
-        Rc::ptr_eq(&ack.identity, &self.free_ack).then_some(self.free_low)
+        Rc::ptr_eq(&ack.identity, &self.free_ack).then_some(self.book.free_low)
     }
 
     /// Rebuild an arena from a serialized image: the flat record array, the
@@ -1637,7 +1620,6 @@ impl SlotArena {
         live: u32,
     ) -> Result<SlotArena, SlotArenaImageError> {
         let free_marks = Self::image_free_marks(slots.len(), &free, live)?;
-        let marks = vec![false; slots.len()];
         let dirty = vec![false; slots.len().div_ceil(SLOTS_PER_PAGE as usize)];
         let unbacked = vec![false; dirty.len()];
         Ok(SlotArena {
@@ -1645,12 +1627,8 @@ impl SlotArena {
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
             slots: slots.into_iter().map(Cell::new).collect(),
-            free_low: free.len(),
-            free,
+            book: FreeList::restored(free, free_marks, live),
             free_ack: Rc::default(),
-            free_marks,
-            marks,
-            live,
             dirty,
             unbacked,
             lazy: None,
