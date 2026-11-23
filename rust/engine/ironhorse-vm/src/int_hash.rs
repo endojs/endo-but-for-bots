@@ -9,18 +9,30 @@
 //! fallback), keyed by a secret per-process seed; finishing XORs the high
 //! half of the state into the low half.
 //!
-//! Why this is safe for these tables and not for strings:
+//! Why this is acceptable for these tables and not for strings (a
+//! performance choice, not a security boundary; `rust/engine/SECURITY-SEAMS.md`
+//! section 2.4):
 //!
-//! - The keys are not chosen by the guest. A guest influences which arena
-//!   slots and key ids exist (by allocating, interning and collecting), but
-//!   it cannot pick their values, and the seed it would need to aim
-//!   collisions is drawn from the OS through `RandomState` once per process
-//!   and never leaves it. The fold and the finishing shift mix every key bit
+//! - A guest shapes the key set but cannot learn the seed. Slots come from a
+//!   deterministic LIFO free list or arena growth, and key ids are assigned
+//!   densely in interning order, so by allocating filler objects, interning
+//!   names in a chosen order and collecting, a guest can place the keys of a
+//!   table at an arithmetic progression of a stride it picks, or choose
+//!   which name gets which id. What it cannot do is aim collisions: that
+//!   needs the seed, which is drawn from the OS through `RandomState` once
+//!   per process, never persisted, and not observable (iteration order is
+//!   never exposed, computrons do not count probes, and a guest has no
+//!   clock). The fold and the finishing shift mix every key bit
 //!   into the low bits that pick the bucket, so a structured key set (an
 //!   arithmetic progression of handles with a power-of-two stride, say)
 //!   spreads like any other; a bare multiplicative or identity hash would put
 //!   such a set in one bucket chain, and the fold alone still crowds strides
-//!   of 2^18 and up into about half the buckets a uniform hash fills.
+//!   of 2^18 and up into about half the buckets a uniform hash fills. The
+//!   mixer is not a keyed pseudorandom function: the argument is seed secrecy
+//!   plus measured spread. If the seed leaked, a guest could make one
+//!   table's keys share a probe sequence, which costs unmetered host time
+//!   quadratic in that table's size; results, computrons and snapshot bytes
+//!   would still be correct.
 //! - Tables keyed by guest-spelled text (`SymbolName`, registry keys) keep
 //!   SipHash.
 //! - Iteration order stays seeded per process, exactly as with `RandomState`:
