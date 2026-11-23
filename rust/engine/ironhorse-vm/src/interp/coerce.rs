@@ -440,7 +440,26 @@ impl Interp {
     // unsupported rather than producing a spurious `NaN`. (A reference
     // operand ToPrimitives to `NaN` for a plain object, which matches XS,
     // so it is left on the numeric path.)
+    //
+    // Two operands that are already Numbers (either XS slot kind) take the
+    // inline fast path: `ToNumeric` is the identity on them, so the generic
+    // path would compute exactly `apply_arith` over the same two slots. Every
+    // other operand pair falls back to [`Self::binary_arith_generic`].
+    #[inline]
     pub(super) fn binary_arith(&mut self, code: &[u8], op: ArithOp) -> Result<(), Step> {
+        if let [.., a, b] = self.stack[..] {
+            if is_number_kind(a.kind) && is_number_kind(b.kind) {
+                self.replace_operand_pair(apply_arith(op, &a, &b));
+                return Ok(());
+            }
+        }
+        self.binary_arith_generic(code, op)
+    }
+
+    /// The general `binary_arith`: `ToNumeric` on both operands, left to
+    /// right, then BigInt or Number arithmetic.
+    #[inline(never)]
+    pub(super) fn binary_arith_generic(&mut self, code: &[u8], op: ArithOp) -> Result<(), Step> {
         let n = self.stack.len();
         if n < 2 {
             return Err(Step::Host(Halt::EngineInvariant(
@@ -471,7 +490,26 @@ impl Interp {
         Ok(())
     }
 
+    /// Bitwise and shift operators. Two Number operands (either XS slot
+    /// kind) take the inline fast path: `ToNumeric` is the identity on them,
+    /// so the generic path reduces to `ToInt32` of each and the same
+    /// [`int32_bit_result`]. Everything else falls back to
+    /// [`Self::binary_bit_generic`].
+    #[inline]
     pub(super) fn binary_bit(&mut self, code: &[u8], op: BitOp) -> Result<(), Step> {
+        if let [.., a, b] = self.stack[..] {
+            if is_number_kind(a.kind) && is_number_kind(b.kind) {
+                self.replace_operand_pair(int32_bit_result(op, int32_of(&a), int32_of(&b)));
+                return Ok(());
+            }
+        }
+        self.binary_bit_generic(code, op)
+    }
+
+    /// The general bitwise operator: `ToNumeric` (or `ToNumber` for `>>>`)
+    /// on both operands, left to right, then BigInt or Int32 arithmetic.
+    #[inline(never)]
+    pub(super) fn binary_bit_generic(&mut self, code: &[u8], op: BitOp) -> Result<(), Step> {
         let n = self.stack.len();
         if n < 2 {
             return Err(Step::Host(Halt::EngineInvariant("bitwise:stack-underflow")));
@@ -513,24 +551,7 @@ impl Interp {
         }
         let ai = to_int32(to_number(&a));
         let bi = to_int32(to_number(&b));
-        let r = match op {
-            BitOp::And => ai & bi,
-            BitOp::Or => ai | bi,
-            BitOp::Xor => ai ^ bi,
-            BitOp::Shl => ((ai as u32) << (bi & 0x1f)) as i32,
-            BitOp::Sar => ai >> (bi & 0x1f),
-            BitOp::Shr => ((ai as u32) >> (bi & 0x1f)) as i32,
-        };
-        // Unsigned shift can exceed i32 range; XS keeps it a number
-        // when the high bit is set.
-        if let BitOp::Shr = op {
-            let u = (ai as u32) >> (bi & 0x1f);
-            if u > i32::MAX as u32 {
-                self.push(Slot::number(u as f64));
-                return Ok(());
-            }
-        }
-        self.push(Slot::integer(r));
+        self.push(int32_bit_result(op, ai, bi));
         Ok(())
     }
 
@@ -541,7 +562,37 @@ impl Interp {
     /// string/numeric pair needs `ToNumber(string)` (or `ToPrimitive` of a
     /// reference), outside the covered subset, so it returns `Err` and the
     /// caller self-names unsupported.
+    ///
+    /// Two Number operands (either XS slot kind) take the inline fast path:
+    /// `ToPrimitive` and `ToNumeric` are the identity on them, so the generic
+    /// path reduces to [`relational_numbers`] over the same two values.
+    /// Everything else falls back to [`Self::relational_generic`].
+    #[inline]
     pub(super) fn relational(&mut self, code: &[u8], op: RelOp) -> Result<(), Step> {
+        if let [.., a, b] = self.stack[..] {
+            if is_number_kind(a.kind) && is_number_kind(b.kind) {
+                let r = match (a.value, b.value) {
+                    // Exact: every i32 is a binary64, so this agrees with the
+                    // f64 comparison below.
+                    (Payload::Integer(x), Payload::Integer(y)) => match op {
+                        RelOp::Less => x < y,
+                        RelOp::LessEqual => x <= y,
+                        RelOp::More => x > y,
+                        RelOp::MoreEqual => x >= y,
+                    },
+                    _ => relational_numbers(op, to_number(&a), to_number(&b)),
+                };
+                self.replace_operand_pair(Slot::boolean(r));
+                return Ok(());
+            }
+        }
+        self.relational_generic(code, op)
+    }
+
+    /// The general relational comparison: `ToPrimitive` on both operands,
+    /// left to right, then string, BigInt or Number comparison.
+    #[inline(never)]
+    pub(super) fn relational_generic(&mut self, code: &[u8], op: RelOp) -> Result<(), Step> {
         let n = self.stack.len();
         if n < 2 {
             return Err(Step::Host(Halt::EngineInvariant(
@@ -632,17 +683,7 @@ impl Interp {
         }
         let x = to_number(&self.to_number_value(code, a)?);
         let y = to_number(&self.to_number_value(code, b)?);
-        let r = if x.is_nan() || y.is_nan() {
-            false
-        } else {
-            match op {
-                RelOp::Less => x < y,
-                RelOp::LessEqual => x <= y,
-                RelOp::More => x > y,
-                RelOp::MoreEqual => x >= y,
-            }
-        };
-        self.push(Slot::boolean(r));
+        self.push(Slot::boolean(relational_numbers(op, x, y)));
         Ok(())
     }
 
@@ -1016,7 +1057,26 @@ impl Interp {
     /// (unsupported); a string operand means concatenation
     /// ([`Self::concat_add`]); otherwise the numeric fast path
     /// ([`Self::binary_arith`]).
+    ///
+    /// Two Number operands (either XS slot kind) take the inline fast path:
+    /// `ToPrimitive` is the identity on them and neither is a String or
+    /// BigInt, so the generic path ends in `apply_arith(Add)` over the same
+    /// two slots. Everything else falls back to [`Self::op_add_generic`].
+    #[inline]
     pub(super) fn op_add(&mut self, code: &[u8]) -> Result<(), Step> {
+        if let [.., a, b] = self.stack[..] {
+            if is_number_kind(a.kind) && is_number_kind(b.kind) {
+                self.replace_operand_pair(apply_arith(ArithOp::Add, &a, &b));
+                return Ok(());
+            }
+        }
+        self.op_add_generic(code)
+    }
+
+    /// The general `+`: `ToPrimitive` on both operands, left to right, then
+    /// concatenation, BigInt addition or Number addition.
+    #[inline(never)]
+    pub(super) fn op_add_generic(&mut self, code: &[u8]) -> Result<(), Step> {
         let n = self.stack.len();
         if n < 2 {
             return Err(Step::Host(Halt::EngineInvariant("add:stack-underflow")));
@@ -1050,6 +1110,18 @@ impl Interp {
         self.binary_arith(code, ArithOp::Add)
     }
 
+    /// Replace the two topmost operands with `result`. The value stack ends
+    /// exactly as the generic paths leave it (`truncate(n - 2)` then
+    /// `push(result)`): one slot shorter, same capacity, `result` on top.
+    /// Callers have already matched at least two operands.
+    #[inline]
+    fn replace_operand_pair(&mut self, result: Slot) {
+        self.stack.pop();
+        if let Some(top) = self.stack.last_mut() {
+            *top = result;
+        }
+    }
+
     /// The Symbol primitive carried by a primitive or boxed receiver.
     pub(super) fn symbol_this_value(&mut self, this: Slot) -> Result<Slot, Step> {
         if this.kind == Kind::Symbol {
@@ -1064,5 +1136,60 @@ impl Interp {
                 .ok_or_else(|| self.catchable_type_error_msg("this: not a symbol".into())),
             _ => Err(self.catchable_type_error_msg("this: not a symbol".into())),
         }
+    }
+}
+
+/// Whether a slot kind is a Number, in either of XS's representations
+/// (`XS_INTEGER_KIND` or `XS_NUMBER_KIND`).
+#[inline]
+fn is_number_kind(kind: Kind) -> bool {
+    matches!(kind, Kind::Integer | Kind::Number)
+}
+
+/// `ToInt32` of a Number slot. An integer payload is already an Int32, which
+/// is what `to_int32(to_number(..))` returns for it.
+#[inline]
+fn int32_of(slot: &Slot) -> i32 {
+    match slot.value {
+        Payload::Integer(i) => i,
+        _ => to_int32(to_number(slot)),
+    }
+}
+
+/// The result of a bitwise or shift operator on two Int32 operands. XS keeps
+/// an unsigned shift whose result exceeds the i32 range a Number; every other
+/// result is an Integer.
+#[inline]
+pub(super) fn int32_bit_result(op: BitOp, ai: i32, bi: i32) -> Slot {
+    let shift = (bi & 0x1f) as u32;
+    match op {
+        BitOp::And => Slot::integer(ai & bi),
+        BitOp::Or => Slot::integer(ai | bi),
+        BitOp::Xor => Slot::integer(ai ^ bi),
+        BitOp::Shl => Slot::integer(((ai as u32) << shift) as i32),
+        BitOp::Sar => Slot::integer(ai >> shift),
+        BitOp::Shr => {
+            let u = (ai as u32) >> shift;
+            if u > i32::MAX as u32 {
+                Slot::number(u as f64)
+            } else {
+                Slot::integer(u as i32)
+            }
+        }
+    }
+}
+
+/// The Number arm of the abstract relational comparison: any NaN operand
+/// makes every operator `false`.
+#[inline]
+fn relational_numbers(op: RelOp, x: f64, y: f64) -> bool {
+    if x.is_nan() || y.is_nan() {
+        return false;
+    }
+    match op {
+        RelOp::Less => x < y,
+        RelOp::LessEqual => x <= y,
+        RelOp::More => x > y,
+        RelOp::MoreEqual => x >= y,
     }
 }

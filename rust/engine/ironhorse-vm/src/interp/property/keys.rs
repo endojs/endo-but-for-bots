@@ -556,8 +556,22 @@ impl Interp {
     /// loop. XS mints nothing either: `XS_CODE_GET_PROPERTY_AT` passes
     /// `(XS_NO_ID, index)` straight to `mxBehaviorGetProperty`, so the dropped
     /// `tick_slot_alloc` is also the metering-faithful answer.
+    ///
+    /// Answered from the name table's derived index of decimal names, which
+    /// finds exactly the entry `index.to_string()` would, without building
+    /// the string.
     pub(in crate::interp) fn index_read_key_id(&self, index: u32) -> Option<u16> {
-        self.symbol_ids.get(index.to_string()).copied()
+        self.symbol_ids.get_index(index).copied()
+    }
+
+    /// [`Self::index_read_key_id`] for a `u64` index: the id of the name
+    /// `index.to_string()`, if interned. A value past `u32::MAX` has no entry
+    /// in the derived index and takes the name lookup.
+    pub(in crate::interp) fn index_name_id(&self, index: u64) -> Option<u16> {
+        match u32::try_from(index) {
+            Ok(index) => self.index_read_key_id(index),
+            Err(_) => self.symbol_ids.get(index.to_string()).copied(),
+        }
     }
 
     /// Re-resolve a [`ReadKey`] that was captured earlier in the same

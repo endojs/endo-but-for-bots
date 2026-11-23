@@ -1615,8 +1615,7 @@ impl Interp {
             return false;
         }
         for index in start..end {
-            let name = index.to_string();
-            let id = self.symbol_ids.get(&name).copied();
+            let id = self.index_name_id(index);
             let mut owner = self.instance_prototype(inst);
             while !owner.is_null() {
                 if self.proxies.contains_key(&owner)
@@ -2183,8 +2182,7 @@ impl Interp {
         let array_limit = self.arrays.get(&o).map_or(0, |array| {
             array
                 .items()
-                .keys()
-                .next_back()
+                .last_key()
                 .and_then(|index| index.checked_add(1))
                 .unwrap_or(array.length)
                 .max(array.length)
@@ -2209,8 +2207,7 @@ impl Interp {
         let index_prop_limit = self.index_props.get(&o).map_or(0, |props| {
             props
                 .items()
-                .keys()
-                .next_back()
+                .last_key()
                 .and_then(|index| index.checked_add(1))
                 .unwrap_or(props.length)
                 .max(props.length)
@@ -2257,7 +2254,7 @@ impl Interp {
     /// dynamically, so `HasProperty` is `false` and `Get` is `undefined`
     /// without consulting anything further.
     fn array_generic_index_answerable(&mut self, o: crate::value::SlotIndex, k: u64) -> bool {
-        if self.symbol_ids.contains_key(k.to_string()) {
+        if self.index_name_id(k).is_some() {
             return true;
         }
         let mut level = o;
@@ -3727,7 +3724,7 @@ impl Interp {
             if let Some(array) = self.arrays.get(&current) {
                 if start <= u64::from(u32::MAX) {
                     let start = start as u32;
-                    if let Some((&index, _)) = array.items().range(start..).next() {
+                    if let Some(index) = array.items().first_key_from(start) {
                         let index = u64::from(index);
                         if index < len && next.is_none_or(|found| index < found) {
                             next = Some(index);
@@ -3743,7 +3740,7 @@ impl Interp {
             if let Some(props) = self.index_props.get(&current) {
                 if start <= u64::from(u32::MAX) {
                     let start = start as u32;
-                    if let Some((&index, _)) = props.items().range(start..).next() {
+                    if let Some(index) = props.items().first_key_from(start) {
                         let index = u64::from(index);
                         if index < len && next.is_none_or(|found| index < found) {
                             next = Some(index);
@@ -3789,7 +3786,7 @@ impl Interp {
             }
             if let Some(array) = self.arrays.get(&current) {
                 let upper = start.min(u64::from(u32::MAX)) as u32;
-                if let Some((&index, _)) = array.items().range(..=upper).next_back() {
+                if let Some(index) = array.items().last_key_through(upper) {
                     let index = u64::from(index);
                     if previous.is_none_or(|found| index > found) {
                         previous = Some(index);
@@ -3799,7 +3796,7 @@ impl Interp {
             // The reverse counterpart's third source, for the same reason.
             if let Some(props) = self.index_props.get(&current) {
                 let upper = start.min(u64::from(u32::MAX)) as u32;
-                if let Some((&index, _)) = props.items().range(..=upper).next_back() {
+                if let Some(index) = props.items().last_key_through(upper) {
                     let index = u64::from(index);
                     if previous.is_none_or(|found| index > found) {
                         previous = Some(index);

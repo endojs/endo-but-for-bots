@@ -12,7 +12,7 @@ use super::*;
 pub struct ArrayRowView<'a> {
     pub owner: u32,
     pub length: u32,
-    pub(crate) items: &'a std::collections::BTreeMap<u32, Slot>,
+    pub(crate) items: &'a crate::bulk::ArrayItems,
 }
 
 impl ArrayRowView<'_> {
@@ -23,7 +23,23 @@ impl ArrayRowView<'_> {
 
     /// The present items ascending by index, as the owned row orders them.
     pub fn items(&self) -> impl ExactSizeIterator<Item = (u32, Slot)> + '_ {
-        self.items.iter().map(|(index, value)| (*index, *value))
+        self.items.iter().map(|(index, value)| (index, *value))
+    }
+}
+
+impl Interp {
+    /// How many `arrays` rows and how many `index_props` rows hold their
+    /// items in the dense representation. A diagnostic for the
+    /// representation differential test, which must see both forms; the
+    /// representation is not part of any row.
+    #[doc(hidden)]
+    pub fn dense_item_store_counts(&self) -> (usize, usize) {
+        let arrays = self.arrays.values();
+        let index_props = self.index_props.values();
+        (
+            arrays.filter(|row| row.items().is_dense()).count(),
+            index_props.filter(|row| row.items().is_dense()).count(),
+        )
     }
 }
 

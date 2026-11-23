@@ -3,8 +3,8 @@
 //! The reverse table is derived, never serialized. All mutation goes through
 //! this type so boot cloning, GC pruning and snapshot restoration cannot leave
 //! it stale. There is deliberately no mutable map/value access.
+use crate::int_hash::IntMap as HashMap;
 use crate::value::SlotIndex;
-use std::collections::HashMap;
 use std::ops::Deref;
 
 #[derive(Clone, Default)]

@@ -156,12 +156,495 @@ impl SideRefCounts {
 /// the 128 inserts between two pre-flights stay well inside their block.
 const ITEM_GROWTH_BOUND: usize = 512;
 
+thread_local! {
+    /// Test-only switch: keep every item store in the ordered-map
+    /// representation (the pre-dense behaviour). Read only where a store
+    /// would ENTER the dense representation, never on an access, so the
+    /// switch costs nothing on the paths it guards. The representation is
+    /// not observable, so the switch can change host time and memory but
+    /// nothing a program, the meter or a snapshot sees; the differential
+    /// test `tests/array_storage_differential.rs` holds it to that.
+    static FORCE_SPARSE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Items moved by representation conversions on this thread, the host
+    /// work the conversions do. Updated only on the conversion paths, so it
+    /// costs the hot paths nothing; it never affects what a program sees.
+    static CONVERSION_WORK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many items representation conversions have moved on this thread. A
+/// diagnostics hook for the host-work-per-computron test.
+pub fn array_item_conversion_work() -> u64 {
+    CONVERSION_WORK.get()
+}
+
+fn count_conversion_work(items: usize) {
+    CONVERSION_WORK.set(CONVERSION_WORK.get().saturating_add(items as u64));
+}
+
+/// Force (or stop forcing) the ordered-map representation, on this thread,
+/// for every item store that would become dense from now on. A diagnostics
+/// hook for the representation differential test; stores already dense
+/// stay dense until a mutation moves them.
+pub fn force_sparse_array_items(force: bool) {
+    FORCE_SPARSE.set(force);
+}
+
+/// The dense representation's slack: a dense store whose span (highest
+/// index + 1) would exceed `2 * count + DENSE_SLACK` leaves the dense form.
+const DENSE_SLACK: u64 = 4;
+
+/// Whether `span` slots may hold `count` items densely (the leave rule).
+#[inline]
+const fn dense_fits(span: u64, count: u64) -> bool {
+    span <= 2 * count + DENSE_SLACK
+}
+
+/// Whether an ordered map of `count` items spanning `span` slots should
+/// become dense (the enter rule). Tighter than [`dense_fits`], so a store
+/// that just became dense is not one item from leaving again.
+#[inline]
+const fn dense_wanted(span: u64, count: u64) -> bool {
+    2 * span <= 3 * count + 2 * DENSE_SLACK
+}
+
+/// The ordered `index -> item` store of an array or index-property row.
+///
+/// It behaves exactly as the `BTreeMap<u32, Slot>` it replaced: the same
+/// entries, the same ascending iteration order, the same `len`. Only the
+/// host representation differs, and nothing observable depends on it:
+///
+/// - **Dense**: `slots[i]` is the item at index `i` (`None` is a hole), and
+///   the last slot is always present, so `slots.len()` is the span (highest
+///   index + 1). Reads and writes inside the span are O(1); appends are
+///   amortized O(1).
+/// - **Sparse**: the ordered map, for stores whose indices are too spread
+///   out for a vector.
+///
+/// **Transition rules.** They are functions of the store's own mutation
+/// sequence, never of host memory, capacity or time. A dense store leaves
+/// for the map as soon as a mutation leaves its span above `2 * count + 4`
+/// ([`dense_fits`]). A map becomes dense after an insert of a new index
+/// when `span <= 1.5 * count + 4` ([`dense_wanted`]), but only once it has
+/// absorbed as many mutations as it held items when it last left the dense
+/// form (`debt`): each O(n) conversion is paid for by n earlier operations,
+/// so a guest cannot make a store oscillate at O(n) per operation. `skip`
+/// only defers the span check while the count provably cannot satisfy it.
+///
+/// **Host memory.** A dense store's span is at most `2 * count + 4`, and its
+/// capacity at most `2 * span + 4`: amortized growth reallocates only a
+/// full vector and at most doubles it, and a removal that leaves the
+/// capacity above that bound shrinks it. So a dense store holds at most
+/// `24 * (4 * count + 12)` bytes (`Option<Slot>` is 24 bytes), and
+/// `a[4294967294] = 1`, or any array with large gaps, stays in the map.
+#[derive(Debug, Clone)]
+pub(crate) struct ArrayItems {
+    repr: ItemsRepr,
+}
+
+#[derive(Debug, Clone)]
+enum ItemsRepr {
+    Dense {
+        slots: Vec<Option<Slot>>,
+        count: usize,
+    },
+    Sparse {
+        map: std::collections::BTreeMap<u32, Slot>,
+        /// Mutations still owed for the last dense-to-map conversion.
+        debt: u32,
+        /// Inserts before the span check can next succeed.
+        skip: u32,
+    },
+}
+
+impl Default for ArrayItems {
+    fn default() -> Self {
+        ArrayItems {
+            repr: ItemsRepr::Sparse {
+                map: std::collections::BTreeMap::new(),
+                debt: 0,
+                skip: 0,
+            },
+        }
+    }
+}
+
+impl std::ops::Index<&u32> for ArrayItems {
+    type Output = Slot;
+
+    fn index(&self, index: &u32) -> &Slot {
+        self.get(index).expect("no entry found for key")
+    }
+}
+
+/// Reserve `additional` more slots in a dense store, or halt the run with
+/// `HostAllocationFailed` if the host allocator refuses. The vector's
+/// amortized growth reallocates only when it is full, to at most twice the
+/// needed length.
+fn reserve_dense(slots: &mut Vec<Option<Slot>>, additional: usize) {
+    if slots.try_reserve(additional).is_err() {
+        crate::value::host_allocation_failed();
+    }
+}
+
+impl ArrayItems {
+    /// How many items are present.
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        match &self.repr {
+            ItemsRepr::Dense { count, .. } => *count,
+            ItemsRepr::Sparse { map, .. } => map.len(),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The item at `index`, if present.
+    #[inline]
+    pub(crate) fn get(&self, index: &u32) -> Option<&Slot> {
+        match &self.repr {
+            ItemsRepr::Dense { slots, .. } => slots.get(*index as usize).and_then(Option::as_ref),
+            ItemsRepr::Sparse { map, .. } => map.get(index),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn contains_key(&self, index: &u32) -> bool {
+        self.get(index).is_some()
+    }
+
+    /// The present items ascending by index.
+    pub(crate) fn iter(&self) -> ItemsIter<'_> {
+        let inner = match &self.repr {
+            ItemsRepr::Dense { slots, count } => ItemsIterInner::Dense {
+                slots: slots.iter(),
+                next: 0,
+                remaining: *count,
+            },
+            ItemsRepr::Sparse { map, .. } => ItemsIterInner::Sparse(map.iter()),
+        };
+        ItemsIter { inner }
+    }
+
+    /// The present items at or above `start`, ascending by index.
+    pub(crate) fn iter_from(&self, start: u32) -> ItemsFrom<'_> {
+        match &self.repr {
+            ItemsRepr::Dense { slots, .. } => {
+                let start = (start as usize).min(slots.len());
+                ItemsFrom::Dense {
+                    slots: slots[start..].iter(),
+                    next: start as u64,
+                }
+            }
+            ItemsRepr::Sparse { map, .. } => ItemsFrom::Sparse(map.range(start..)),
+        }
+    }
+
+    /// The present items ascending by index.
+    pub(crate) fn values(&self) -> impl ExactSizeIterator<Item = &Slot> + '_ {
+        self.iter().map(|(_, value)| value)
+    }
+
+    /// The present indices, ascending.
+    pub(crate) fn keys(&self) -> impl ExactSizeIterator<Item = u32> + '_ {
+        self.iter().map(|(index, _)| index)
+    }
+
+    /// The highest present index.
+    pub(crate) fn last_key(&self) -> Option<u32> {
+        match &self.repr {
+            // The last dense slot is always present.
+            ItemsRepr::Dense { slots, .. } => slots.len().checked_sub(1).map(|i| i as u32),
+            ItemsRepr::Sparse { map, .. } => map.last_key_value().map(|(&index, _)| index),
+        }
+    }
+
+    /// The lowest present index at or above `start`.
+    pub(crate) fn first_key_from(&self, start: u32) -> Option<u32> {
+        self.iter_from(start).next().map(|(index, _)| index)
+    }
+
+    /// The highest present index at or below `upper`.
+    pub(crate) fn last_key_through(&self, upper: u32) -> Option<u32> {
+        match &self.repr {
+            ItemsRepr::Dense { slots, .. } => {
+                let end = (upper as usize).saturating_add(1).min(slots.len());
+                slots[..end]
+                    .iter()
+                    .rposition(Option::is_some)
+                    .map(|i| i as u32)
+            }
+            ItemsRepr::Sparse { map, .. } => {
+                map.range(..=upper).next_back().map(|(&index, _)| index)
+            }
+        }
+    }
+
+    /// Whether the store is in the dense representation (diagnostics).
+    pub(crate) fn is_dense(&self) -> bool {
+        matches!(self.repr, ItemsRepr::Dense { .. })
+    }
+
+    fn get_mut(&mut self, index: u32) -> Option<&mut Slot> {
+        match &mut self.repr {
+            ItemsRepr::Dense { slots, .. } => {
+                slots.get_mut(index as usize).and_then(Option::as_mut)
+            }
+            ItemsRepr::Sparse { map, .. } => map.get_mut(&index),
+        }
+    }
+
+    fn for_each_mut(&mut self, f: impl FnMut(&mut Slot)) {
+        match &mut self.repr {
+            ItemsRepr::Dense { slots, .. } => slots.iter_mut().flatten().for_each(f),
+            ItemsRepr::Sparse { map, .. } => map.values_mut().for_each(f),
+        }
+    }
+
+    /// Store `value` at `index`, returning the item it displaced. Every
+    /// allocation it makes is admitted (a fallible reservation, or the map's
+    /// pre-flight) before the store changes.
+    #[inline]
+    fn insert(&mut self, index: u32, value: Slot) -> Option<Slot> {
+        if let ItemsRepr::Dense { slots, count } = &mut self.repr {
+            let at = index as usize;
+            if let Some(cell) = slots.get_mut(at) {
+                let displaced = cell.replace(value);
+                if displaced.is_none() {
+                    *count += 1;
+                }
+                return displaced;
+            }
+            if dense_fits(u64::from(index) + 1, *count as u64 + 1) {
+                // `at >= slots.len()`, and the span bound keeps `at + 1`
+                // proportional to the count, so it fits `usize`.
+                reserve_dense(slots, at + 1 - slots.len());
+                slots.resize(at, None);
+                slots.push(Some(value));
+                *count += 1;
+                return None;
+            }
+            self.make_sparse();
+        }
+        self.insert_sparse(index, value)
+    }
+
+    #[inline(never)]
+    fn insert_sparse(&mut self, index: u32, value: Slot) -> Option<Slot> {
+        let ItemsRepr::Sparse { map, debt, skip } = &mut self.repr else {
+            unreachable!("insert_sparse on a dense store")
+        };
+        // A `BTreeMap` insert allocates nodes infallibly, so pre-flight the
+        // host allocator instead, before any mutation of the map.
+        crate::value::preflight_host_growth(ITEM_GROWTH_BOUND);
+        let displaced = map.insert(index, value);
+        *debt = debt.saturating_sub(1);
+        *skip = skip.saturating_sub(1);
+        if displaced.is_none() && *debt == 0 && *skip == 0 {
+            self.consider_dense();
+        }
+        displaced
+    }
+
+    /// Remove the item at `index`, returning it.
+    fn remove(&mut self, index: u32) -> Option<Slot> {
+        match &mut self.repr {
+            ItemsRepr::Dense { slots, count } => {
+                let at = index as usize;
+                let removed = slots.get_mut(at)?.take()?;
+                *count -= 1;
+                if at + 1 == slots.len() {
+                    while let Some(None) = slots.last() {
+                        slots.pop();
+                    }
+                    if slots.capacity() > 2 * slots.len() + DENSE_SLACK as usize {
+                        slots.shrink_to(slots.len());
+                    }
+                }
+                if !dense_fits(slots.len() as u64, *count as u64) {
+                    self.make_sparse();
+                }
+                Some(removed)
+            }
+            ItemsRepr::Sparse { map, debt, skip } => {
+                let removed = map.remove(&index)?;
+                *debt = debt.saturating_sub(1);
+                // Removing the highest index shrinks the span, which can
+                // let the span check succeed sooner than `skip` assumed.
+                if map.range(index..).next().is_none() {
+                    *skip = 0;
+                }
+                Some(removed)
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        *self = ArrayItems::default();
+    }
+
+    /// A store holding `map`'s entries, dense if they qualify.
+    fn from_map(map: std::collections::BTreeMap<u32, Slot>) -> ArrayItems {
+        let mut items = ArrayItems {
+            repr: ItemsRepr::Sparse {
+                map,
+                debt: 0,
+                skip: 0,
+            },
+        };
+        items.consider_dense();
+        items
+    }
+
+    /// The map-to-dense check: convert when the enter rule holds, else
+    /// record how many inserts must pass before it can.
+    #[cold]
+    #[inline(never)]
+    fn consider_dense(&mut self) {
+        let ItemsRepr::Sparse { map, skip, .. } = &mut self.repr else {
+            return;
+        };
+        let count = map.len() as u64;
+        let span = map
+            .last_key_value()
+            .map_or(0, |(&index, _)| u64::from(index) + 1);
+        if !dense_wanted(span, count) {
+            // Each insert raises the count by at most one, so the rule
+            // cannot hold before `needed - count` more inserts.
+            let needed = (2 * span).saturating_sub(2 * DENSE_SLACK).div_ceil(3);
+            *skip = u32::try_from(needed.saturating_sub(count).max(1)).unwrap_or(u32::MAX);
+            return;
+        }
+        if FORCE_SPARSE.get() {
+            *skip = u32::MAX;
+            return;
+        }
+        // `dense_wanted` bounds the span by the count, so it fits `usize`.
+        let mut slots: Vec<Option<Slot>> = Vec::new();
+        if slots.try_reserve_exact(span as usize).is_err() {
+            crate::value::host_allocation_failed();
+        }
+        for (&index, value) in map.iter() {
+            slots.resize(index as usize, None);
+            slots.push(Some(*value));
+        }
+        count_conversion_work(map.len());
+        self.repr = ItemsRepr::Dense {
+            slots,
+            count: count as usize,
+        };
+    }
+
+    /// The dense-to-map conversion, owing one mutation per item moved.
+    #[cold]
+    #[inline(never)]
+    fn make_sparse(&mut self) {
+        let ItemsRepr::Dense { slots, count } = &mut self.repr else {
+            return;
+        };
+        let mut map = std::collections::BTreeMap::new();
+        for (index, value) in slots.iter().enumerate() {
+            if let Some(value) = value {
+                crate::value::preflight_host_growth(ITEM_GROWTH_BOUND);
+                map.insert(index as u32, *value);
+            }
+        }
+        count_conversion_work(*count);
+        let debt = u32::try_from(*count).unwrap_or(u32::MAX);
+        self.repr = ItemsRepr::Sparse { map, debt, skip: 0 };
+    }
+}
+
+/// [`ArrayItems::iter`]: `(index, item)` ascending.
+pub(crate) struct ItemsIter<'a> {
+    inner: ItemsIterInner<'a>,
+}
+
+enum ItemsIterInner<'a> {
+    Dense {
+        slots: std::slice::Iter<'a, Option<Slot>>,
+        next: u64,
+        remaining: usize,
+    },
+    Sparse(std::collections::btree_map::Iter<'a, u32, Slot>),
+}
+
+impl<'a> Iterator for ItemsIter<'a> {
+    type Item = (u32, &'a Slot);
+
+    #[inline]
+    fn next(&mut self) -> Option<(u32, &'a Slot)> {
+        match &mut self.inner {
+            ItemsIterInner::Dense {
+                slots,
+                next,
+                remaining,
+            } => {
+                for cell in slots.by_ref() {
+                    let index = *next as u32;
+                    *next += 1;
+                    if let Some(value) = cell {
+                        *remaining -= 1;
+                        return Some((index, value));
+                    }
+                }
+                None
+            }
+            ItemsIterInner::Sparse(iter) => iter.next().map(|(&index, value)| (index, value)),
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = match &self.inner {
+            ItemsIterInner::Dense { remaining, .. } => *remaining,
+            ItemsIterInner::Sparse(iter) => iter.len(),
+        };
+        (n, Some(n))
+    }
+}
+
+impl ExactSizeIterator for ItemsIter<'_> {}
+
+/// [`ArrayItems::iter_from`]: `(index, item)` ascending from a start index.
+pub(crate) enum ItemsFrom<'a> {
+    Dense {
+        slots: std::slice::Iter<'a, Option<Slot>>,
+        next: u64,
+    },
+    Sparse(std::collections::btree_map::Range<'a, u32, Slot>),
+}
+
+impl<'a> Iterator for ItemsFrom<'a> {
+    type Item = (u32, &'a Slot);
+
+    #[inline]
+    fn next(&mut self) -> Option<(u32, &'a Slot)> {
+        match self {
+            ItemsFrom::Dense { slots, next } => {
+                for cell in slots.by_ref() {
+                    let index = *next as u32;
+                    *next += 1;
+                    if let Some(value) = cell {
+                        return Some((index, value));
+                    }
+                }
+                None
+            }
+            ItemsFrom::Sparse(range) => range.next().map(|(&index, value)| (index, value)),
+        }
+    }
+}
+
 /// An Array instance's internal state (kept in `Interp::arrays`): the
-/// spec `length` and the sparse item map. Item indices are u32 (a
-/// hole). A `BTreeMap` keeps the indices ordered so `for-in`
-/// enumeration and `Array.prototype` iteration visit them in
-/// ascending index order, matching XS's item-chunk order. The map is
-/// private: mutate through the counted methods.
+/// spec `length` and the item store. Item indices are u32 (a missing
+/// index is a hole). The [`ArrayItems`] store keeps the indices ordered so
+/// `for-in` enumeration and `Array.prototype` iteration visit them in
+/// ascending index order, matching XS's item-chunk order, whether it holds
+/// them densely or in a map. The store is private: mutate through the
+/// counted methods.
 ///
 /// The present items are charged against the chunk ceiling at
 /// [`crate::side_storage::ARRAY_ITEM_BYTES`] each, by capacity class of
@@ -172,7 +655,7 @@ const ITEM_GROWTH_BOUND: usize = 512;
 #[derive(Debug, Default)]
 pub(crate) struct ArrayData {
     pub(crate) length: u32,
-    items: std::collections::BTreeMap<u32, Slot>,
+    items: ArrayItems,
     /// How many items carry a non-default descriptor flag — a sealed,
     /// frozen, non-enumerable or non-writable element.
     ///
@@ -185,8 +668,8 @@ pub(crate) struct ArrayData {
 }
 
 impl ArrayData {
-    /// Read-only view of the item map.
-    pub(crate) fn items(&self) -> &std::collections::BTreeMap<u32, Slot> {
+    /// Read-only view of the item store.
+    pub(crate) fn items(&self) -> &ArrayItems {
         &self.items
     }
 
@@ -225,7 +708,7 @@ impl ArrayData {
     /// Set one item's descriptor flags, keeping the attributed count in step.
     /// Returns false when there is no item at `index`.
     pub(crate) fn set_item_flag(&mut self, index: u32, flag: u8) -> bool {
-        let Some(item) = self.items.get_mut(&index) else {
+        let Some(item) = self.items.get_mut(index) else {
             return false;
         };
         let was = item.flag;
@@ -244,12 +727,14 @@ impl ArrayData {
         if mask == 0 {
             return;
         }
-        for item in self.items.values_mut() {
+        let mut attributed = 0;
+        self.items.for_each_mut(|item| {
             if item.flag == 0 {
-                self.attributed += 1;
+                attributed += 1;
             }
             item.flag |= mask;
-        }
+        });
+        self.attributed += attributed;
     }
 
     /// Store `value` at `index`. A new index that crosses into the next
@@ -284,13 +769,14 @@ impl ArrayData {
         self.store_item(index, value, refs)
     }
 
+    #[inline]
     fn store_item(&mut self, index: u32, value: Slot, refs: &mut SideRefCounts) -> Option<Slot> {
-        // A `BTreeMap` insert allocates nodes infallibly, so pre-flight the
-        // host allocator instead, before any mutation of the map.
-        crate::value::preflight_host_growth(ITEM_GROWTH_BOUND);
+        // The store admits its own growth (a fallible reservation, or the
+        // map's host pre-flight) before it changes, so a refusal leaves the
+        // counts untouched.
+        let displaced = self.items.insert(index, value);
         refs.add_slot(&value);
         self.count_added(&value);
-        let displaced = self.items.insert(index, value);
         if let Some(old) = &displaced {
             refs.remove_slot(old);
             let old = *old;
@@ -305,7 +791,7 @@ impl ArrayData {
         refs: &mut SideRefCounts,
         chunks: &mut ChunkArena,
     ) -> Option<Slot> {
-        let removed = self.items.remove(index);
+        let removed = self.items.remove(*index);
         if let Some(old) = &removed {
             refs.remove_slot(old);
             let old = *old;
@@ -348,6 +834,7 @@ impl ArrayData {
         refs: &mut SideRefCounts,
         chunks: &mut ChunkArena,
     ) {
+        let new_items = ArrayItems::from_map(new_items);
         let before = self.side_charge();
         let after = side_storage::array_items_charge(new_items.len() as u64);
         if after > before {
@@ -375,10 +862,8 @@ impl ArrayData {
     /// parity check in the page projection is watching, and the
     /// attributed count is not maintained here, so the callback must not
     /// change any item's `flag`.
-    pub(crate) fn for_each_value_mut_chunk_remap(&mut self, mut f: impl FnMut(&mut Slot)) {
-        for s in self.items.values_mut() {
-            f(s);
-        }
+    pub(crate) fn for_each_value_mut_chunk_remap(&mut self, f: impl FnMut(&mut Slot)) {
+        self.items.for_each_mut(f);
     }
 }
 
@@ -1256,7 +1741,9 @@ mod tests {
         for n in 0..4u32 {
             a.insert_item(n, Slot::integer(0), &mut refs, &mut chunks);
         }
-        chunks.set_ceiling(chunks.byte_size() + chunks.side_reserved() as usize);
+        chunks
+            .set_ceiling(chunks.byte_size() + chunks.side_reserved() as usize)
+            .expect("a ceiling of the current size is admissible");
         let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             a.insert_item(4, Slot::integer(0), &mut refs, &mut chunks);
         }));
@@ -1293,5 +1780,165 @@ mod tests {
         c.push_entry(refslot(5), refslot(700), &mut refs, &mut chunks);
         c.drop_refs(&mut refs);
         assert_eq!(refs.pages_sorted(), Vec::<u32>::new());
+    }
+
+    /// The dense representation's bounds, checked after every mutation.
+    fn assert_item_bounds(items: &ArrayItems) {
+        if let ItemsRepr::Dense { slots, count } = &items.repr {
+            assert_eq!(slots.iter().filter(|s| s.is_some()).count(), *count);
+            assert!(slots.last().is_none_or(Option::is_some), "trailing hole");
+            assert!(dense_fits(slots.len() as u64, *count as u64), "span bound");
+            assert!(
+                slots.capacity() <= 2 * slots.len() + DENSE_SLACK as usize,
+                "capacity {} for span {}",
+                slots.capacity(),
+                slots.len()
+            );
+        }
+    }
+
+    fn assert_items_match(items: &ArrayItems, model: &std::collections::BTreeMap<u32, Slot>) {
+        assert_eq!(items.len(), model.len());
+        let got: Vec<(u32, Slot)> = items.iter().map(|(i, s)| (i, *s)).collect();
+        let want: Vec<(u32, Slot)> = model.iter().map(|(i, s)| (*i, *s)).collect();
+        assert_eq!(got, want);
+        assert_eq!(items.iter().len(), model.len());
+        assert_eq!(items.last_key(), model.keys().next_back().copied());
+        assert_item_bounds(items);
+    }
+
+    #[test]
+    fn option_slot_keeps_the_slot_width() {
+        assert_eq!(std::mem::size_of::<Option<Slot>>(), 24);
+    }
+
+    /// The hybrid store against the ordered map it replaced, over a seeded
+    /// mix of appends, overwrites, near and far inserts, removals and range
+    /// queries, including indices near `u32::MAX`.
+    #[test]
+    fn array_items_agree_with_an_ordered_map() {
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut dense_seen = 0;
+        let mut sparse_seen = 0;
+        for round in 0..40u32 {
+            let mut items = ArrayItems::default();
+            let mut model = std::collections::BTreeMap::new();
+            for step in 0..600u32 {
+                let r = next();
+                let top = model
+                    .keys()
+                    .next_back()
+                    .map_or(0, |&k: &u32| k.saturating_add(1));
+                let wide = (r >> 8) as u32;
+                let index = match r % 10 {
+                    0..=3 => top,
+                    4 | 5 => wide % top.saturating_add(1),
+                    6 => top.saturating_add(wide % 6),
+                    7 if round % 4 == 0 => u32::MAX - wide % 3,
+                    7 if round % 4 == 1 => top.saturating_add(wide % 5000),
+                    7 => top,
+                    _ => wide % top.saturating_add(2),
+                };
+                let value = Slot::integer(step as i32);
+                if r % 10 >= 8 || (round % 3 == 1 && r % 7 == 0) {
+                    assert_eq!(items.remove(index), model.remove(&index));
+                } else {
+                    assert_eq!(items.insert(index, value), model.insert(index, value));
+                }
+                assert_items_match(&items, &model);
+                let probe = (next() >> 8) as u32 % top.saturating_add(3);
+                assert_eq!(items.get(&probe), model.get(&probe));
+                assert_eq!(
+                    items.first_key_from(probe),
+                    model.range(probe..).next().map(|(&k, _)| k)
+                );
+                assert_eq!(
+                    items.last_key_through(probe),
+                    model.range(..=probe).next_back().map(|(&k, _)| k)
+                );
+                let from: Vec<u32> = items.iter_from(probe).map(|(k, _)| k).collect();
+                let want: Vec<u32> = model.range(probe..).map(|(&k, _)| k).collect();
+                assert_eq!(from, want);
+                if items.is_dense() {
+                    dense_seen += 1;
+                } else {
+                    sparse_seen += 1;
+                }
+            }
+            let rebuilt = ArrayItems::from_map(model.clone());
+            assert_items_match(&rebuilt, &model);
+        }
+        assert!(
+            dense_seen > 1000 && sparse_seen > 1000,
+            "{dense_seen} {sparse_seen}"
+        );
+    }
+
+    #[test]
+    fn far_indices_never_allocate_a_dense_span() {
+        let mut items = ArrayItems::default();
+        items.insert(0, Slot::integer(0));
+        assert!(items.is_dense());
+        items.insert(u32::MAX - 1, Slot::integer(1));
+        assert!(!items.is_dense());
+        items.remove(u32::MAX - 1);
+        // It owed one mutation per item it held when it left the dense
+        // form; the insert and the removal paid that.
+        items.insert(1, Slot::integer(1));
+        assert!(items.is_dense());
+        let mut gaps = ArrayItems::default();
+        for n in 0..1000u32 {
+            gaps.insert(n * 3, Slot::integer(0));
+            // Span 3n + 1 fits 2(n + 1) + 4 only while n <= 5.
+            assert_eq!(gaps.is_dense(), n <= 5, "{n}");
+        }
+    }
+
+    #[test]
+    fn a_store_cannot_be_made_to_oscillate() {
+        let mut items = ArrayItems::default();
+        for n in 0..1000u32 {
+            items.insert(n, Slot::integer(0));
+        }
+        assert!(items.is_dense());
+        let mut conversions = 0;
+        let mut dense = true;
+        for _ in 0..100 {
+            items.insert(5000, Slot::integer(0));
+            items.remove(5000);
+            items.insert(0, Slot::integer(1));
+            if items.is_dense() != dense {
+                conversions += 1;
+                dense = items.is_dense();
+            }
+        }
+        // One far insert leaves the dense form; returning owes 1,000
+        // mutations, which 100 rounds of three do not pay.
+        assert_eq!(conversions, 1);
+    }
+
+    #[test]
+    fn the_sparse_switch_keeps_stores_in_the_map() {
+        force_sparse_array_items(true);
+        let mut items = ArrayItems::default();
+        for n in 0..100u32 {
+            items.insert(n, Slot::integer(0));
+        }
+        force_sparse_array_items(false);
+        assert!(!items.is_dense());
+        items.insert(100, Slot::integer(0));
+        assert!(
+            !items.is_dense(),
+            "the refused check is not retried at once"
+        );
+        let copy: std::collections::BTreeMap<u32, Slot> =
+            items.iter().map(|(i, s)| (i, *s)).collect();
+        assert!(ArrayItems::from_map(copy).is_dense());
     }
 }

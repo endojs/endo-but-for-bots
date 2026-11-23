@@ -1108,7 +1108,7 @@ impl Interp {
         // guest code, so nothing can mutate it between reads. A
         // hole reads `undefined` (-> NaN -> 0 for an integer
         // view), matching the default-iterator result.
-        let snapshot: Option<std::collections::BTreeMap<u32, Slot>> = source_ta.map_or_else(
+        let snapshot: Option<crate::bulk::ArrayItems> = source_ta.map_or_else(
             || self.arrays.get(&r).map(|src| src.items().clone()),
             |_| None,
         );
@@ -4687,7 +4687,7 @@ impl Interp {
                             .remove_item(&0, &mut self.side_refs, &mut self.chunks)
                             .unwrap_or_else(Slot::undefined);
                         let mut shifted = std::collections::BTreeMap::new();
-                        for (&k, &v) in a.items().iter() {
+                        for (k, &v) in a.items().iter() {
                             shifted.insert(k - 1, v);
                         }
                         a.replace_items(shifted, &mut self.side_refs, &mut self.chunks);
@@ -4739,7 +4739,7 @@ impl Interp {
                     self.charge_builtin_work(c as u64 * 4)?;
                     let a = self.arrays.get_mut(&inst).unwrap();
                     let mut shifted = std::collections::BTreeMap::new();
-                    for (&k, &v) in a.items().iter() {
+                    for (k, &v) in a.items().iter() {
                         shifted.insert(k + c, v);
                     }
                     for (i, mut v) in args.into_iter().enumerate() {

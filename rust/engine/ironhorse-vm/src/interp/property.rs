@@ -10,6 +10,37 @@ mod ordinary;
 mod proxy;
 mod read_index;
 
+/// [`fast_path_on`]'s bit for `Interp::overwrite_own_data_property`.
+pub(in crate::interp) const FAST_OWN_OVERWRITE: u8 = 1;
+/// [`fast_path_on`]'s bit for the creation shortcuts: the receiver lookup
+/// `ordinary_set_on_receiver` skips after its walk saw the receiver miss, and
+/// the index-name text `ordinary_define_own_property` skips for an id never
+/// bound to a decimal name.
+pub(in crate::interp) const FAST_SET_ABSENT: u8 = 2;
+
+/// Test-only: the fast-path bits switched off on this thread, so a
+/// differential test can run a program with and without them.
+#[cfg(test)]
+pub(in crate::interp) mod fast_path_switch {
+    thread_local! {
+        pub(in crate::interp) static OFF: std::cell::Cell<u8> =
+            const { std::cell::Cell::new(0) };
+    }
+}
+
+/// Whether the fast path `bit` is enabled: always, outside unit tests.
+#[cfg(test)]
+pub(in crate::interp) fn fast_path_on(bit: u8) -> bool {
+    fast_path_switch::OFF.with(|off| off.get() & bit == 0)
+}
+
+/// Whether the fast path `bit` is enabled: always, outside unit tests.
+#[cfg(not(test))]
+#[inline(always)]
+pub(in crate::interp) fn fast_path_on(_bit: u8) -> bool {
+    true
+}
+
 /// Where the ordinary levels of a `[[HasProperty]]` walk end: an answer and
 /// its `fxOrdinaryHasProperty` frame count, or a Proxy (and the frames
 /// counted before it), whose own internal method takes over.
@@ -640,7 +671,7 @@ impl Interp {
                 // Compact writes do not materialize a property name in XS.
                 // Look up an existing name only: interning every literal index
                 // charged a name-slot allocation and shifted exact metering.
-                let key_id = self.symbol_ids.get(index.to_string()).copied();
+                let key_id = self.index_read_key_id(index);
                 if let Some(key_id) = key_id.filter(|id| self.find_property(inst, *id).is_some()) {
                     if define {
                         let descriptor = OrdinaryDescriptor {
@@ -2172,7 +2203,7 @@ impl Interp {
             let is_arguments = self.arguments_objects.contains(&inst);
             let count = self.arrays[&inst].items().len();
             let buffer = self.reserve_work_scratch(count)?;
-            let mut idxs = Self::fill_scratch(buffer, self.arrays[&inst].items().keys().copied());
+            let mut idxs = Self::fill_scratch(buffer, self.arrays[&inst].items().keys());
             let ordinary_ids = self.ordered_own_key_ids(inst);
             self.admit_scratch::<u32>(idxs.len() + ordinary_ids.len())?;
             idxs.try_reserve(ordinary_ids.len())

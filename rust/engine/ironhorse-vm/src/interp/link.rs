@@ -66,7 +66,7 @@ impl Interp {
         // compiler assigned it in this program.
         for (k, name) in names.iter().enumerate() {
             let id = (k + 1) as u16;
-            self.symbol_ids.entry(name.clone()).or_insert(id);
+            self.symbol_ids.insert_if_absent(name.clone(), id);
         }
     }
 
@@ -310,7 +310,7 @@ impl Interp {
     /// This roster is engine-bounded. Do not scan or clone the guest-growing
     /// `symbol_names` table here: computed property operations invoke catch-up,
     /// and a full scan per novel ordinary key would make that path quadratic.
-    fn missing_environment_global_bindings(&self) -> Vec<(u16, SymbolName)> {
+    pub(super) fn missing_environment_global_bindings(&self) -> Vec<(u16, SymbolName)> {
         let mut missing: Vec<_> = self
             .intrinsics
             .keys()
@@ -1519,8 +1519,25 @@ impl Interp {
             }
         }
 
+        // The roster below is a pure function of the name table, the boot
+        // intrinsic names and this environment's binding history, and an empty
+        // roster stays empty until one of them changes in a way that can add
+        // an entry:
+        // - a name interned or rebound takes a new `symbol_ids` stamp;
+        // - the intrinsic names are fixed once boot ends;
+        // - `binding_names` only grows in place (which can only shrink the
+        //   roster), and its wholesale rebuilds, a restore's fresh environment
+        //   and `rebuild_binding_history`, start with no stamp recorded.
+        // So an unchanged stamp proves the roster still empty. Building it
+        // costs a `SymbolName` and a hash per intrinsic, and this runs for
+        // every string key a native reads (each `JSON.stringify` property).
+        let stamp = self.symbol_ids.stamp();
+        if self.environment.globals_caught_up_at == stamp {
+            return;
+        }
         let missing = self.missing_environment_global_bindings();
         if missing.is_empty() {
+            self.environment.globals_caught_up_at = stamp;
             return;
         }
         let installing = self.installing_intrinsics;
@@ -1542,8 +1559,8 @@ impl Interp {
     /// [`Self::pending_surfaces`].
     pub(super) fn intrinsic_surface_holders(
         &self,
-    ) -> std::collections::HashSet<crate::value::SlotIndex> {
-        let mut holders: std::collections::HashSet<_> = self
+    ) -> crate::int_hash::IntSet<crate::value::SlotIndex> {
+        let mut holders: crate::int_hash::IntSet<_> = self
             .proto_methods
             .iter()
             .map(|(owner, _, _)| *owner)

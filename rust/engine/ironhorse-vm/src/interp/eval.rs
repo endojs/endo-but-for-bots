@@ -152,6 +152,7 @@ impl Interp {
         let segment = self.code_segments.len();
         let buf: std::rc::Rc<[u8]> = code.into();
         self.code_segments.push(buf.clone());
+        self.install_dispatch_buffer(&buf);
 
         // Save the caller's activation and install a clean program frame for
         // the nested unit (indirect / top-level-direct eval runs in the realm

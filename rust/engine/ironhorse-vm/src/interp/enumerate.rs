@@ -115,10 +115,10 @@ impl Interp {
             indices.extend(0..self.ta_length_or_zero(ta));
         }
         if let Some(props) = self.index_props.get(&cur) {
-            indices.extend(props.items().keys().copied());
+            indices.extend(props.items().keys());
         }
         if let Some(a) = self.arrays.get(&cur) {
-            indices.extend(a.items().keys().copied());
+            indices.extend(a.items().keys());
         }
         // Own string-named properties, in insertion order. The property list
         // is prepend-ordered (newest first), so collect and reverse. Symbol

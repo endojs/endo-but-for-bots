@@ -1,7 +1,21 @@
 //! Property ordinary operations.
+use super::{fast_path_on, FAST_OWN_OVERWRITE, FAST_SET_ABSENT};
 use crate::interp::*;
 
 impl Interp {
+    /// Whether no exotic side table holds `inst`, by its superset word
+    /// (`crate::exotic_bits`): `true` proves that `arrays`, `index_props`,
+    /// `wrapper_data`, the four Temporal tables, `disposable_stacks`,
+    /// `array_buffers`, `typed_arrays`, `data_views`, `regexps`, `locales`,
+    /// `collators`, `functions` and `proxies` would each answer "absent", so a
+    /// caller may skip those probes; `false` proves nothing and the caller
+    /// probes as it always did. Every probe skipped is a pure read that would
+    /// have missed, so skipping is unobservable.
+    #[inline]
+    pub(in crate::interp) fn outside_exotic_tables(&self, inst: crate::value::SlotIndex) -> bool {
+        crate::exotic_bits::enabled() && self.snapshot_dirt.exotic().word(inst) == 0
+    }
+
     pub(in crate::interp) fn new_object(&mut self) -> crate::value::SlotIndex {
         self.meter.tick_builtin();
         self.meter.tick_slot_alloc();
@@ -150,7 +164,9 @@ impl Interp {
             // store instead of the named chain, and most callers arrive here
             // having interned its name (`getOwnPropertyDescriptor(o, '0')`),
             // so the two storages are bridged here rather than at every
-            // caller.
+            // caller. Both are side tables, so an instance outside every
+            // exotic table has neither.
+            None if self.outside_exotic_tables(inst) => return None,
             None => {
                 return self
                     .index_prop_descriptor_by_id(inst, id)
@@ -223,7 +239,13 @@ impl Interp {
         // keeps indexes by index and has no named slot under this name — so a
         // `defineProperty` spelled by name lands in the same place a plain
         // write does, rather than creating a second, shadowing storage.
-        if self.find_property(inst, id).is_none() {
+        //
+        // `scalar_key_text` answers only for a name the table binds to `id`,
+        // and an index name is a decimal-`u32` one, so an id never bound to
+        // one has no index to route: skip building its text.
+        if self.find_property(inst, id).is_none()
+            && (self.symbol_ids.may_bind_index_name(id) || !fast_path_on(FAST_SET_ABSENT))
+        {
             if let Some(index) = self
                 .scalar_key_text(id)
                 .as_deref()
@@ -667,7 +689,9 @@ impl Interp {
         receiver: Slot,
     ) -> Result<GetInPlace, Step> {
         // A read `mop_get` meters or forwards apart takes `mop_get`.
-        if self.array_iterator_proxy_get_context.is_some() || self.proxies.contains_key(&inst) {
+        if self.array_iterator_proxy_get_context.is_some()
+            || (!self.outside_exotic_tables(inst) && self.proxies.contains_key(&inst))
+        {
             return self
                 .mop_get(code, inst, id, receiver)
                 .map(GetInPlace::Value);
@@ -688,9 +712,19 @@ impl Interp {
         id: u16,
         receiver: Slot,
     ) -> Result<GetInPlace, Step> {
+        // Each level's own slot is looked up once: `found` is
+        // `find_property(current, id)`, which both the exotic-surface test
+        // and `ordinary_get_own_descriptor` start from (property lookups are
+        // pure reads, so asking once is the same answer).
+        let mut found = self.find_property(inst, id);
+        // Whether `current` is outside every exotic side table, so that its
+        // exotic own surface, index store and synthesized function properties
+        // are all absent and their probes can be skipped. Only read while
+        // `found` is `None` (an own slot ends the walk at once).
+        let mut plain = found.is_none() && self.outside_exotic_tables(inst);
         // `mop_get_with_proxy_metering_inner`'s exotic own surface, which it
         // reads with no metering flags for an id key.
-        if self.find_property(inst, id).is_none() {
+        if found.is_none() && !plain {
             if let Some(&typed_array) = self.typed_arrays.get(&inst) {
                 if let Some(index) = self.ta_numeric_index_at(id, 0) {
                     return Ok(GetInPlace::Value(
@@ -709,7 +743,34 @@ impl Interp {
         // set it), so only a Proxy parent leaves the walk for `mop_get`.
         let mut current = inst;
         let getter = loop {
-            if let Some(descriptor) = self.ordinary_get_own_descriptor(current, id) {
+            // `ordinary_get_own_descriptor(current, id)`, read straight from
+            // the slot `found` names when there is one: a data slot's value,
+            // or the getter of an accessor (an absent getter is `undefined`,
+            // as the descriptor's `get` would be).
+            if let Some(property) = found {
+                let slot = self.slots.get(property);
+                if slot.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+                    let getter = self
+                        .accessors
+                        .get(&(current, id))
+                        .and_then(|accessor| accessor.get)
+                        .unwrap_or_else(Slot::undefined);
+                    if getter.kind == Kind::Undefined {
+                        return Ok(GetInPlace::Value(Slot::undefined()));
+                    }
+                    break getter;
+                }
+                return Ok(GetInPlace::Value(Slot::of(slot.kind, slot.value)));
+            }
+            // No ordinary slot: the descriptor's remaining sources, the index
+            // store and a function's synthesized `length`/`name`.
+            if let Some(descriptor) = (!plain)
+                .then(|| {
+                    self.index_prop_descriptor_by_id(current, id)
+                        .or_else(|| self.function_meta_own_descriptor(current, id))
+                })
+                .flatten()
+            {
                 if descriptor.is_accessor() {
                     let getter = descriptor.get.unwrap_or_else(Slot::undefined);
                     if getter.kind == Kind::Undefined {
@@ -725,12 +786,14 @@ impl Interp {
             if parent.is_null() {
                 return Ok(GetInPlace::Value(Slot::undefined()));
             }
-            if self.proxies.contains_key(&parent) {
+            plain = self.outside_exotic_tables(parent);
+            if !plain && self.proxies.contains_key(&parent) {
                 return self
                     .mop_get(code, parent, id, receiver)
                     .map(GetInPlace::Value);
             }
-            if self.find_property(parent, id).is_none() {
+            found = self.find_property(parent, id);
+            if found.is_none() && !plain {
                 if let Some(&typed_array) = self.typed_arrays.get(&parent) {
                     if let Some(index) = self.ta_numeric_index_at(id, 0) {
                         return Ok(GetInPlace::Value(
@@ -799,13 +862,24 @@ impl Interp {
         value: Slot,
         receiver: Slot,
     ) -> Result<SetInPlace, Step> {
+        if self.overwrite_own_data_property(inst, id, value, receiver) {
+            return Ok(SetInPlace::Done(true));
+        }
         // `ordinary_set`'s walk: `mop_set_inner` differs from it only for a
         // Proxy or a typed array, which `dispatch_set_property` sent apart.
         let mut current = inst;
+        let mut absent_on = None;
         loop {
-            let own = self
-                .ordinary_get_own_descriptor(current, id)
-                .or_else(|| self.exotic_own_descriptor(current, id));
+            let own = self.ordinary_get_own_descriptor(current, id).or_else(|| {
+                if self.outside_exotic_tables(current) {
+                    None
+                } else {
+                    self.exotic_own_descriptor(current, id)
+                }
+            });
+            if own.is_none() && current == inst {
+                absent_on = Some(inst);
+            }
             if let Some(descriptor) = own {
                 if descriptor.is_accessor() {
                     let setter = descriptor.set.unwrap_or_else(Slot::undefined);
@@ -836,21 +910,71 @@ impl Interp {
             if parent.is_null() {
                 break;
             }
-            let typed_array_element = self.typed_arrays.contains_key(&parent)
-                && !self.is_symbol_key_id(id)
-                && self
-                    .scalar_key_text(id)
-                    .and_then(|name| canonical_numeric_index_string(&name))
-                    .is_some();
-            if self.proxies.contains_key(&parent) || typed_array_element {
-                return self
-                    .mop_set(code, parent, id, value, receiver)
-                    .map(SetInPlace::Done);
+            if !self.outside_exotic_tables(parent) {
+                let typed_array_element = self.typed_arrays.contains_key(&parent)
+                    && !self.is_symbol_key_id(id)
+                    && self
+                        .scalar_key_text(id)
+                        .and_then(|name| canonical_numeric_index_string(&name))
+                        .is_some();
+                if self.proxies.contains_key(&parent) || typed_array_element {
+                    return self
+                        .mop_set(code, parent, id, value, receiver)
+                        .map(SetInPlace::Done);
+                }
             }
             current = parent;
         }
-        self.ordinary_set_on_receiver(code, id, value, receiver)
+        self.ordinary_set_on_receiver(code, id, value, receiver, absent_on)
             .map(SetInPlace::Done)
+    }
+
+    /// `[[Set]]`'s commonest case done directly: the receiver is `inst`
+    /// itself, an ordinary object (no Proxy, array or typed array, whose
+    /// `[[Set]]`/`[[DefineOwnProperty]]` differ), and its own property `id`
+    /// is a writable data slot. Returns whether it wrote.
+    ///
+    /// The general path would find that slot first in its walk, stop, find it
+    /// again in `ordinary_set_on_receiver` and run
+    /// `mop_define_own_property(inst, id, { value })`, whose
+    /// `ordinary_define_own_property` validates nothing that can fail for a
+    /// writable data property and ends by removing any accessor record for
+    /// the pair and storing the value with the flags it already had. This is
+    /// exactly that end. Nothing on either path meters or allocates; the
+    /// accessor-table removal and the slot's `get_mut` are kept because they
+    /// mark snapshot dirt. The general path's define enters one more light
+    /// native frame, so a depth at which that would refuse takes it instead,
+    /// to refuse in the same place.
+    #[inline]
+    fn overwrite_own_data_property(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> bool {
+        if !fast_path_on(FAST_OWN_OVERWRITE)
+            || !matches!(receiver.value, Payload::Reference(r) if r == inst && receiver.kind == Kind::Reference)
+        {
+            return false;
+        }
+        let Some(property) = self.find_property(inst, id) else {
+            return false;
+        };
+        if self.slots.get(property).flag & (XS_GETTER_FLAG | XS_SETTER_FLAG | XS_DONT_SET_FLAG) != 0
+            || self.native_depth + LIGHT_FRAME_COST > NATIVE_DEPTH_LIMIT
+            || (!self.outside_exotic_tables(inst)
+                && (self.proxies.contains_key(&inst)
+                    || self.arrays.contains_key(&inst)
+                    || self.typed_arrays.contains_key(&inst)))
+        {
+            return false;
+        }
+        self.accessors.remove(&(inst, id));
+        let slot = self.slots.get_mut(property);
+        slot.kind = value.kind;
+        slot.value = value.value;
+        true
     }
 
     pub(in crate::interp::property) fn ordinary_set(
@@ -861,7 +985,15 @@ impl Interp {
         value: Slot,
         receiver: Slot,
     ) -> Result<bool, Step> {
+        if self.overwrite_own_data_property(inst, id, value, receiver) {
+            return Ok(true);
+        }
         let mut current = inst;
+        // A flag rather than the other walks' `Option<SlotIndex>`: this frame
+        // recurs once per level of a setter that assigns through `[[Set]]`
+        // again (the stack-height gate's `iter-setter`), and the wider live
+        // value grew it by 16 B.
+        let mut inst_absent = false;
         loop {
             // Functions keep their `length`, `name`, and (when constructable)
             // `prototype` own properties in side tables.  They participate in
@@ -870,6 +1002,9 @@ impl Interp {
             let own = self
                 .ordinary_get_own_descriptor(current, id)
                 .or_else(|| self.exotic_own_descriptor(current, id));
+            if own.is_none() && current == inst {
+                inst_absent = true;
+            }
             if let Some(descriptor) = own {
                 if descriptor.is_accessor() {
                     let setter = descriptor.set.unwrap_or_else(Slot::undefined);
@@ -909,7 +1044,7 @@ impl Interp {
             // does.
             current = parent;
         }
-        self.ordinary_set_on_receiver(code, id, value, receiver)
+        self.ordinary_set_on_receiver(code, id, value, receiver, inst_absent.then_some(inst))
     }
 
     /// [`Self::ordinary_set`] as one leg of [`Interp::set_legs`]
@@ -928,10 +1063,14 @@ impl Interp {
         receiver: Slot,
     ) -> Result<SetLeg, Step> {
         let mut current = inst;
+        let mut absent_on = None;
         loop {
             let own = self
                 .ordinary_get_own_descriptor(current, id)
                 .or_else(|| self.exotic_own_descriptor(current, id));
+            if own.is_none() && current == inst {
+                absent_on = Some(inst);
+            }
             if let Some(descriptor) = own {
                 if descriptor.is_accessor() {
                     let setter = descriptor.set.unwrap_or_else(Slot::undefined);
@@ -961,7 +1100,7 @@ impl Interp {
             }
             current = parent;
         }
-        self.ordinary_set_on_receiver(code, id, value, receiver)
+        self.ordinary_set_on_receiver(code, id, value, receiver, absent_on)
             .map(SetLeg::Done)
     }
 
@@ -970,6 +1109,12 @@ impl Interp {
     /// property of the receiver. Expanded in its callers, `ordinary_set`, its
     /// leg [`Self::ordinary_set_walk`] and `SET_PROPERTY`'s in-place
     /// assignment, as it was written inline in the first.
+    ///
+    /// `absent_on` names an object the caller's walk has just found to have
+    /// no own property `id` (its first level, when that missed): the walk
+    /// since only read the levels above it, so the receiver's own lookup
+    /// below would find nothing again and is skipped when the receiver is
+    /// that object.
     #[inline(always)]
     fn ordinary_set_on_receiver(
         &mut self,
@@ -977,6 +1122,7 @@ impl Interp {
         id: u16,
         value: Slot,
         receiver: Slot,
+        absent_on: Option<crate::value::SlotIndex>,
     ) -> Result<bool, Step> {
         let receiver_inst = match receiver.value {
             Payload::Reference(receiver_inst) if receiver.kind == Kind::Reference => receiver_inst,
@@ -1015,9 +1161,12 @@ impl Interp {
                 },
             );
         }
-        let receiver_own = self
-            .ordinary_get_own_descriptor(receiver_inst, id)
-            .or_else(|| self.exotic_own_descriptor(receiver_inst, id));
+        let receiver_own = if absent_on == Some(receiver_inst) && fast_path_on(FAST_SET_ABSENT) {
+            None
+        } else {
+            self.ordinary_get_own_descriptor(receiver_inst, id)
+                .or_else(|| self.exotic_own_descriptor(receiver_inst, id))
+        };
         if let Some(existing) = receiver_own {
             if existing.is_accessor() || existing.writable == Some(false) {
                 return Ok(false);

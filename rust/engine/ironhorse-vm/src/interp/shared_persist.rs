@@ -468,7 +468,7 @@ impl Interp {
             let lease = self.pin_identity(index);
             self.restored_leases.insert(index, lease);
         }
-        let mut environments = std::collections::HashMap::new();
+        let mut environments = crate::int_hash::IntMap::default();
         for row in state.environments {
             let global = crate::SlotIndex(row.global);
             if row.binding_names.windows(2).any(|r| r[0] >= r[1])

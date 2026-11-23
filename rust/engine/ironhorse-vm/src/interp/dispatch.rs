@@ -162,6 +162,26 @@ fn operand_id(code: &[u8], pc: usize, off: usize) -> u16 {
     u16::from_le_bytes([code[pc + off], code[pc + off + 1]])
 }
 
+/// In the arm of an opcode that can head a fused sequence (`fuse.rs`):
+/// when the dispatch buffer carries a tag at `pc`, run the rest of the
+/// sequence as one step and continue after it, or leave on a closing
+/// branch's meter refusal; otherwise fall through to the arm's own body.
+/// The loop has already checked, charged and counted the head.
+macro_rules! fused_head {
+    ($machine:expr, $code:expr, $program_counter:ident) => {
+        if let Some(tag) = $machine.fused_tag($code, $program_counter) {
+            match $machine.run_fused($code, $program_counter, tag) {
+                super::fuse::Fused::Next(next) => {
+                    $program_counter = next;
+                    continue;
+                }
+                super::fuse::Fused::MeterAbort => return Step::Host(Halt::MeterAbort),
+                super::fuse::Fused::Plain => {}
+            }
+        }
+    };
+}
+
 mod environment;
 mod iteration;
 mod operators;
@@ -314,7 +334,17 @@ impl Interp {
             // opcodes). ID-operand opcodes have `size == 0`, so they
             // must advance by `ilen`, never by `size` (a zero-advance
             // infinite loop).
-            let ilen = match crate::opcode::encoded_instruction_len(code, pc) {
+            //
+            // A fixed-size opcode's length is its size, which
+            // `encoded_instruction_len` would re-derive from the same byte
+            // (re-reading and re-decoding it); only the ID-operand and
+            // length-prefixed classes need the stream.
+            let resolved = if size > 0 {
+                Some(size as usize)
+            } else {
+                crate::opcode::encoded_instruction_len(code, pc)
+            };
+            let ilen = match resolved {
                 Some(l) if l > 0 => l,
                 _ => {
                     return Step::Host(Halt::Decode(DecodeError::UnresolvableInstructionLength {
@@ -332,6 +362,8 @@ impl Interp {
                     remaining: len - pc,
                 }));
             }
+            // The `dispatch-census` n-gram count; compiles away otherwise.
+            self.cost.on_sequence(pc, ilen);
 
             use Opcode::*;
             match op {
@@ -415,6 +447,10 @@ impl Interp {
                     }
                 }
                 XS_CODE_GET_LOCAL_1 | XS_CODE_GET_LOCAL_2 => {
+                    // The head of a fused sequence (`fuse.rs`): this
+                    // dispatch has been charged and counted; the rest of
+                    // the sequence runs as one step, or declines.
+                    fused_head!(self, code, pc);
                     let k = self.local_operand(op, code, pc);
                     match self.get_local(k) {
                         Some(s) => {
@@ -698,15 +734,18 @@ impl Interp {
                 XS_CODE_STORE_ARROW => dispatch_flow!(self.exec_store_arrow(pc, size), pc),
                 // ---- literals ---------------------------------------
                 XS_CODE_INTEGER_1 => {
+                    fused_head!(self, code, pc);
                     self.push(Slot::integer(operand_s1(code, pc, 1)));
                     pc += size as usize;
                 }
                 XS_CODE_INTEGER_2 => {
+                    fused_head!(self, code, pc);
                     let v = i16::from_le_bytes([code[pc + 1], code[pc + 2]]) as i32;
                     self.push(Slot::integer(v));
                     pc += size as usize;
                 }
                 XS_CODE_INTEGER_4 => {
+                    fused_head!(self, code, pc);
                     let v = i32::from_le_bytes([
                         code[pc + 1],
                         code[pc + 2],
@@ -820,6 +859,7 @@ impl Interp {
                 }
                 // ---- comparison -------------------------------------
                 XS_CODE_LESS => {
+                    fused_head!(self, code, pc);
                     dispatch_result!(
                         self.relational(code, RelOp::Less),
                         pc,
@@ -830,6 +870,7 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_LESS_EQUAL => {
+                    fused_head!(self, code, pc);
                     dispatch_result!(
                         self.relational(code, RelOp::LessEqual),
                         pc,
@@ -840,6 +881,7 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_MORE => {
+                    fused_head!(self, code, pc);
                     dispatch_result!(
                         self.relational(code, RelOp::More),
                         pc,
@@ -850,6 +892,7 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_MORE_EQUAL => {
+                    fused_head!(self, code, pc);
                     dispatch_result!(
                         self.relational(code, RelOp::MoreEqual),
                         pc,
@@ -950,7 +993,11 @@ impl Interp {
                     dispatch_flow!(self.exec_to_string(code, pc, return_depth, size), pc)
                 }
                 XS_CODE_INCREMENT | XS_CODE_DECREMENT => {
-                    dispatch_flow!(self.exec_increment(code, pc, return_depth, op, size), pc)
+                    if self.step_integer_in_place(op == XS_CODE_INCREMENT) {
+                        pc += size as usize;
+                    } else {
+                        dispatch_flow!(self.exec_increment(code, pc, return_depth, op, size), pc)
+                    }
                 }
                 XS_CODE_EXPONENTIATION => {
                     dispatch_flow!(self.exec_exponentiation(code, pc, return_depth, size), pc)
@@ -3715,7 +3762,7 @@ impl Interp {
     /// Whether a write to frame local `k` needs [`Self::exec_guarded_local_write`]:
     /// the binding is immutable or still in its temporal dead zone.
     #[inline]
-    fn local_write_is_guarded(&self, k: usize) -> bool {
+    pub(super) fn local_write_is_guarded(&self, k: usize) -> bool {
         self.local_index(k).is_some_and(|index| {
             let local = self.locals[index];
             local.flag & XS_DONT_SET_FLAG != 0 || local.kind == Kind::Uninitialized
@@ -3869,6 +3916,38 @@ impl Interp {
     // inside this opcode. A postfix expression that preserves its
     // old value also emits `TO_NUMERIC` first. BigInt uses XS's
     // `_inc`/`_dec`, which add/subtract the static BigInt one.
+    /// The `INCREMENT`/`DECREMENT` arm's inline half: an Integer top that
+    /// stays an Integer steps in place and answers `true`; anything else
+    /// (a Number, the int boundary, BigInt, a value needing `ToNumeric`, an
+    /// empty stack) answers `false` and runs [`Self::exec_increment`]. For
+    /// such a top that function's `ToNumeric` is the identity and its
+    /// rewrite of the top with itself changes nothing, so both leave the
+    /// same slot (kind, payload, and the untouched link/id/flag); neither
+    /// meters anything beyond the dispatch.
+    #[inline(always)]
+    pub(in crate::interp) fn step_integer_in_place(&mut self, inc: bool) -> bool {
+        let Some(top) = self.stack.last_mut() else {
+            return false;
+        };
+        let (Kind::Integer, Payload::Integer(v)) = (top.kind, top.value) else {
+            return false;
+        };
+        let stepped = if inc {
+            v.checked_add(1)
+        } else {
+            v.checked_sub(1)
+        };
+        // XS promotes at INT_MAX for increment and at -INT_MAX (not
+        // INT_MIN) for decrement; both promotions are the slow half's.
+        match stepped {
+            Some(n) if n != i32::MIN => {
+                top.value = Payload::Integer(n);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// The dispatch loop's `INCREMENT` arm, which also runs `DECREMENT`.
     #[inline(never)]
     fn exec_increment(
@@ -3879,36 +3958,39 @@ impl Interp {
         op: Opcode,
         size: i8,
     ) -> Flow {
-        use Opcode::*;
-        let inc = op == XS_CODE_INCREMENT;
-        let current = dispatch_result_flow!(self.peek_checked(), self, return_depth, code);
+        let inc = op == Opcode::XS_CODE_INCREMENT;
+        dispatch_result_flow!(self.increment_generic(code, inc), self, return_depth, code);
+        pc += size as usize;
+        Flow::Next(pc)
+    }
+
+    /// The generic body of [`Self::exec_increment`]: `ToNumeric` on the
+    /// stack top, then the step, with XS's int-boundary promotion. Split
+    /// out so the inline Integer half can be checked against it.
+    pub(in crate::interp) fn increment_generic(
+        &mut self,
+        code: &[u8],
+        inc: bool,
+    ) -> Result<(), Step> {
+        let current = self.peek_checked()?;
         let numeric = match current.kind {
             Kind::Integer | Kind::Number | Kind::BigInt => current,
-            _ => dispatch_result_flow!(
-                self.to_number_value(code, current),
-                self,
-                return_depth,
-                code
-            ),
+            _ => self.to_number_value(code, current)?,
         };
         if let Payload::BigInt(off) = numeric.value {
             let result = self.bigint_update(off, inc);
             if let Some(top) = self.stack.last_mut() {
                 *top = result;
             }
-            pc += size as usize;
-            return Flow::Next(pc);
+            return Ok(());
         }
         if let Some(top) = self.stack.last_mut() {
             *top = numeric;
         }
-        let top = match self.stack.last_mut() {
-            Some(s) => s,
-            None => {
-                return Flow::Exit(Step::Host(Halt::EngineInvariant(
-                    "increment:stack-underflow",
-                )))
-            }
+        let Some(top) = self.stack.last_mut() else {
+            return Err(Step::Host(Halt::EngineInvariant(
+                "increment:stack-underflow",
+            )));
         };
         match (top.kind, top.value) {
             (Kind::Integer, Payload::Integer(v)) => {
@@ -3927,13 +4009,12 @@ impl Interp {
             // BigInt (handled before); anything else is the
             // engine's own coercion result being malformed.
             _ => {
-                return Flow::Exit(Step::Host(Halt::EngineInvariant(
+                return Err(Step::Host(Halt::EngineInvariant(
                     "increment:non-numeric-result",
                 )))
             }
         }
-        pc += size as usize;
-        Flow::Next(pc)
+        Ok(())
     }
 
     // `exponentiation` (XS_CODE_EXPONENTIATION, xsRun.c:3574):

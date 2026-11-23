@@ -234,8 +234,8 @@ impl Interp {
             indices.extend(
                 self.arrays[&inst]
                     .items()
-                    .range(new_len..)
-                    .map(|(&index, _)| (index, None)),
+                    .iter_from(new_len)
+                    .map(|(index, _)| (index, None)),
             );
             indices.sort_unstable_by_key(|(index, _)| std::cmp::Reverse(*index));
             for (index, ordinary_id) in indices {
@@ -718,7 +718,7 @@ impl Interp {
     pub(in crate::interp) fn index_prop_indices(&self, inst: crate::value::SlotIndex) -> Vec<u32> {
         self.index_props
             .get(&inst)
-            .map(|props| props.items().keys().copied().collect())
+            .map(|props| props.items().keys().collect())
             .unwrap_or_default()
     }
 
@@ -1080,15 +1080,42 @@ impl Interp {
     /// The exotic-array own descriptor for `id` (`length` or an in-range index),
     /// or `None` when the id is neither — so `mop_get_own_property` /
     /// `mop_own_keys` see an array target's exotic own properties.
+    #[inline]
     pub(in crate::interp) fn array_own_descriptor(
         &self,
         inst: crate::value::SlotIndex,
         id: u16,
     ) -> Option<OrdinaryDescriptor> {
         let a = self.arrays.get(&inst)?;
-        if self.scalar_key_text(id).as_deref() == Some("length")
-            && !self.arguments_objects.contains(&inst)
-        {
+        self.array_row_own_descriptor(inst, a, id)
+    }
+
+    /// [`Self::array_own_descriptor`] once `inst` is known to be an array.
+    /// Kept out of line: inlined into `exotic_own_descriptor`, its locals
+    /// grew that frame on the native re-entry paths the stack gate measures.
+    #[inline(never)]
+    fn array_row_own_descriptor(
+        &self,
+        inst: crate::value::SlotIndex,
+        a: &crate::bulk::ArrayData,
+        id: u16,
+    ) -> Option<OrdinaryDescriptor> {
+        // `scalar_key_text(id)` decides both tests below, but building that
+        // text allocated twice per named read of an array (`a.push`). The
+        // name's stored bytes answer the same questions: an index name is
+        // ASCII digits, whose CESU-8 bytes are its text, and an id never
+        // bound to a decimal name cannot name an index at all.
+        let name = self.symbol_names.get((id as usize).checked_sub(1)?)?;
+        let is_length = name.as_bytes() == b"length";
+        if !is_length && !self.symbol_ids.may_bind_index_name(id) {
+            return None;
+        }
+        // The two tables must agree before this is the name, exactly as
+        // `scalar_key_text` requires.
+        if self.symbol_ids.get(name) != Some(&id) {
+            return None;
+        }
+        if is_length && !self.arguments_objects.contains(&inst) {
             return Some(OrdinaryDescriptor {
                 value: Some(Self::array_index_number(u64::from(a.length))),
                 writable: Some(self.array_length_writable(inst)),
@@ -1097,7 +1124,9 @@ impl Interp {
                 ..OrdinaryDescriptor::default()
             });
         }
-        let idx = self.scalar_key_text(id).and_then(|n| string_to_index(&n))?;
+        let idx = std::str::from_utf8(name.as_bytes())
+            .ok()
+            .and_then(string_to_index)?;
         let s = a.items().get(&idx).copied()?;
         let value = self.array_item_value(inst, s);
         Some(OrdinaryDescriptor {

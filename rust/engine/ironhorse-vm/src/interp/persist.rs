@@ -435,7 +435,7 @@ impl Interp {
                 (
                     owner.0,
                     a.length,
-                    a.items().iter().map(|(i, s)| (*i, *s)).collect(),
+                    a.items().iter().map(|(i, s)| (i, *s)).collect(),
                 )
             })
             .collect();
@@ -1832,6 +1832,12 @@ impl Interp {
             return Err(refuse("invalid native name rows"));
         }
         *self.code_segments = state.segments.into_iter().map(std::rc::Rc::from).collect();
+        // Rebuild the derived dispatch buffers (`fuse.rs`), which are never
+        // persisted.
+        for segment in 0..self.code_segments.len() {
+            let buffer = self.code_segments[segment].clone();
+            self.install_dispatch_buffer(&buffer);
+        }
         self.func_segments.clear();
         for row in state.functions {
             let owner = crate::value::SlotIndex(row.owner);
@@ -2448,7 +2454,7 @@ impl Interp {
         frame: &SavedFrame,
         segment_remap: &std::collections::BTreeMap<usize, u32>,
     ) -> SavedFrameRow {
-        let sorted_map = |map: &std::collections::HashMap<u16, usize>| {
+        let sorted_map = |map: &crate::int_hash::IntMap<u16, usize>| {
             let mut rows: Vec<(u16, u64)> =
                 map.iter().map(|(id, index)| (*id, *index as u64)).collect();
             rows.sort_unstable();
@@ -2628,7 +2634,7 @@ impl Interp {
     ) -> Result<SavedFrame, RestoreError> {
         self.validate_restore_frame(&row)?;
         let convert = || {
-            let map = |rows: Vec<(u16, u64)>| -> Option<std::collections::HashMap<u16, usize>> {
+            let map = |rows: Vec<(u16, u64)>| -> Option<crate::int_hash::IntMap<u16, usize>> {
                 rows.into_iter()
                     .map(|(id, index)| Some((id, usize::try_from(index).ok()?)))
                     .collect()
@@ -3871,7 +3877,7 @@ impl Interp {
     /// emitted at all (see [`IntlTables`]).
     pub fn intl_snapshot(&self) -> IntlTables {
         fn sorted<T: Clone>(
-            m: &std::collections::HashMap<crate::value::SlotIndex, T>,
+            m: &crate::int_hash::IntMap<crate::value::SlotIndex, T>,
         ) -> Vec<(u32, T)> {
             let mut v: Vec<(u32, T)> = m.iter().map(|(o, r)| (o.0, r.clone())).collect();
             v.sort_unstable_by_key(|(o, _)| *o);
@@ -3956,7 +3962,7 @@ impl Interp {
             }
         }
         fn install<T>(
-            m: &mut std::collections::HashMap<crate::value::SlotIndex, T>,
+            m: &mut crate::int_hash::IntMap<crate::value::SlotIndex, T>,
             rows: Vec<(u32, T)>,
         ) {
             for (owner, r) in rows {
@@ -4309,7 +4315,7 @@ impl Interp {
                     props
                         .items()
                         .iter()
-                        .map(|(index, value)| (*index, *value))
+                        .map(|(index, value)| (index, *value))
                         .collect::<Vec<(u32, Slot)>>(),
                 )
             })
@@ -4501,7 +4507,8 @@ impl Interp {
     /// image instead carries the historical numeric name floor. Treating ids
     /// below that floor as bound is the conservative legacy rule that preserves
     /// deletion markers; surviving global-property ids cover later bindings.
-    fn rebuild_binding_history(&mut self) {
+    pub(super) fn rebuild_binding_history(&mut self) {
+        self.environment.globals_caught_up_at = 0;
         self.environment.binding_names.clear();
         self.environment
             .binding_names

@@ -13,6 +13,18 @@ impl Interp {
     ) -> Result<Option<usize>, Step> {
         let obj = self.pop_checked()?;
         let v = match obj.value {
+            // Every guarded arm below that takes a `Kind::Reference` needs
+            // `inst` in one of the exotic side tables, so when its superset
+            // word is clear (`crate::exotic_bits`) each would decline and the
+            // read would reach the ordinary arm at the end; go there directly.
+            Payload::Reference(inst)
+                if obj.kind == Kind::Reference && self.outside_exotic_tables(inst) =>
+            {
+                match (self.get_property_in_place(code, inst, id, obj))? {
+                    GetInPlace::Value(value) => value,
+                    GetInPlace::Entered(body_start) => return Ok(Some(body_start)),
+                }
+            }
             Payload::Reference(inst)
                 if (obj.kind == Kind::Reference && self.arrays.contains_key(&inst))
                     && !self.arguments_objects.contains(&inst)
@@ -194,10 +206,13 @@ impl Interp {
                     _ => self.mop_get(code, inst, id, obj)?,
                 }
             }
+            // The receiver test comes first: it is one probe of a table that
+            // is usually empty, while the name lookup builds a `SymbolName`
+            // and hashes it. Both are pure, so the order is unobservable.
             Payload::Reference(inst)
-                if self.symbol_ids.get("disposed") == Some(&id)
-                    && (obj.kind == Kind::Reference
-                        && self.disposable_stacks.contains_key(&inst)) =>
+                if obj.kind == Kind::Reference
+                    && self.disposable_stacks.contains_key(&inst)
+                    && self.symbol_ids.get("disposed") == Some(&id) =>
             {
                 Slot::boolean(self.disposable_stacks[&inst].disposed)
             }
