@@ -345,6 +345,63 @@ int fxEvalGuarded(txMachine* the, txString source, txSlot* result)
 	return status;
 }
 
+/* ---- Guarded drains for Machine::run_promise_jobs / quiesce / run_loop ---- */
+
+/*
+ * Run `run` with this C frame as the outermost jump record.
+ *
+ * fxRunPromiseJobs runs each job under its own mxTry, and its catch
+ * calls fxAbort(XS_UNHANDLED_EXCEPTION_EXIT); fxRunLoop does the same for
+ * a timer callback.  A recoverable abort inside a job (stack or memory
+ * exhaustion, metering) longjmps to the outermost jump record, which is
+ * that job's own try when Rust calls the drain at top level; its catch
+ * then aborts again with `the->firstJump` NULL, and fxExitToHost
+ * dereferences it.  Installing an outermost record here makes every such
+ * abort land in this frame.
+ *
+ * Returns 0 if `run` returned, or the exit status of the abort that
+ * landed here, with the stack, scope, frame and code restored.  (Called
+ * inside a host callback, an abort still longjmps to the outermost record
+ * below the callback's frames, as for fxEvalGuarded.)
+ */
+static int fxRunGuarded(txMachine* the, void (*run)(txMachine*))
+{
+	txJump aJump;
+	aJump.nextJump = the->firstJump;
+	aJump.stack = the->stack;
+	aJump.scope = the->scope;
+	aJump.frame = the->frame;
+	aJump.code = the->code;
+	aJump.flag = 0;
+	the->firstJump = &aJump;
+	the->exitStatus = 0;
+	if (c_setjmp(aJump.buffer) == 0) {
+		(*run)(the);
+		the->firstJump = aJump.nextJump;
+		return 0;
+	}
+	else {
+		int status = the->exitStatus ? the->exitStatus : -1;
+		the->stack = aJump.stack;
+		the->scope = aJump.scope;
+		the->frame = aJump.frame;
+		the->code = aJump.code;
+		the->firstJump = aJump.nextJump;
+		the->exitStatus = 0;
+		return status;
+	}
+}
+
+int fxRunPromiseJobsGuarded(txMachine* the)
+{
+	return fxRunGuarded(the, fxRunPromiseJobs);
+}
+
+int fxRunLoopGuarded(txMachine* the)
+{
+	return fxRunGuarded(the, fxRunLoop);
+}
+
 /* ---- Metering helpers ---- */
 
 #ifdef mxMetering

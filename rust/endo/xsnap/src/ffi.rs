@@ -242,6 +242,11 @@ extern "C" {
     /// Safe wrapper: runs fxRunPromiseJobs inside mxTry/mxCatch.
     /// Returns 0 on success, or the XS abort status on abort.
     pub fn fxRunPromiseJobsMetered(the: *mut XsMachine) -> c_int;
+    /// xsnap-platform.c: `fxRunPromiseJobs` / `fxRunLoop` with an
+    /// outermost jump record installed. Returns 0, or the exit status of a
+    /// recoverable abort that landed there.
+    pub fn fxRunPromiseJobsGuarded(the: *mut XsMachine) -> c_int;
+    pub fn fxRunLoopGuarded(the: *mut XsMachine) -> c_int;
     /// xsnap-platform.c: the global `eval` of `source` under an XS try
     /// frame, with a non-primitive completion value converted to a string
     /// inside it. Returns 0 with the value in `*result`, -1 if it threw, or

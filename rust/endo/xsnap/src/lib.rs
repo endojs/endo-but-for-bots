@@ -323,14 +323,24 @@ impl Machine {
     /// essential for the Rust-driven main loop pattern where Rust
     /// reads messages, dispatches them to JS, then processes all
     /// resulting async work before reading the next message.
-    pub fn run_promise_jobs(&self) {
-        // SAFETY: UNVERIFIED — a promise job that exhausts the meter
-        // `fxAbort`s, which longjmps across this Rust frame when metering is
-        // on; `run_promise_jobs_metered` exists to keep that jump in C, and
-        // nothing stops a caller using this one on a metered machine.
-        // Otherwise `self.raw` is the live machine this `Machine` owns, and
-        // XS runs each job under its own `try`.
-        unsafe { fxRunPromiseJobs(self.raw) }
+    ///
+    /// Returns `Err(status)` with the XS exit status (for example
+    /// `XS_JAVASCRIPT_STACK_OVERFLOW_EXIT`, or `XS_TOO_MUCH_COMPUTATION_EXIT`
+    /// on a metered machine) if a job aborted the machine. XS treats an
+    /// abort as fatal for the machine: the caller should stop running it.
+    pub fn run_promise_jobs(&self) -> Result<(), i32> {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns, used
+        // on its own thread. `fxRunPromiseJobsGuarded` installs an outermost
+        // jump record in C, so a recoverable abort in a job (which
+        // `fxRunPromiseJobs`'s per-job catch turns into a second abort)
+        // lands in that C frame rather than crossing this one or
+        // dereferencing a NULL `firstJump`. Called from inside a host
+        // callback the abort still reaches past it; see `worker_io`'s "What
+        // XS does NOT establish".
+        match unsafe { ffi::fxRunPromiseJobsGuarded(self.raw) } {
+            0 => Ok(()),
+            status => Err(status),
+        }
     }
 
     /// Drain the microtask queue completely.
@@ -342,15 +352,24 @@ impl Machine {
     /// The pending check is per-machine so concurrent machines on
     /// other threads cannot steal this machine's pending signal and
     /// leave its queue undrained.
+    ///
+    /// An abort ends the drain, as in [`Machine::run_promise_jobs`], but is
+    /// not reported; [`Machine::try_quiesce`] reports it. (This signature is
+    /// kept for callers outside this crate, such as thixotrope-xs-worker.)
     pub fn quiesce(&self) {
-        // SAFETY: as `run_promise_jobs` (UNVERIFIED on a metered machine);
-        // `fxMachineHasPendingJobs` only reads the machine's queue.
-        unsafe {
-            loop {
-                fxRunPromiseJobs(self.raw);
-                if ffi::fxMachineHasPendingJobs(self.raw) == 0 {
-                    break;
-                }
+        // The machine is dead after an abort; there is nothing more to drain.
+        let _ = self.try_quiesce();
+    }
+
+    /// [`Machine::quiesce`], returning `Err(status)` with the XS exit status
+    /// if a job aborted the machine.
+    pub fn try_quiesce(&self) -> Result<(), i32> {
+        loop {
+            self.run_promise_jobs()?;
+            // SAFETY: `fxMachineHasPendingJobs` only reads this live
+            // machine's queue flag.
+            if unsafe { ffi::fxMachineHasPendingJobs(self.raw) } == 0 {
+                return Ok(());
             }
         }
     }
@@ -363,10 +382,17 @@ impl Machine {
     /// programs with no async work exit immediately, programs with
     /// promises drain to completion, and programs with setTimeout run
     /// until all timers fire.
-    pub fn run_loop(&self) {
-        // SAFETY: as `run_promise_jobs` (UNVERIFIED on a metered machine);
-        // `self.raw` is the live machine this `Machine` owns.
-        unsafe { ffi::fxRunLoop(self.raw) }
+    ///
+    /// Returns `Err(status)` if a job or timer callback aborted the
+    /// machine, as [`Machine::run_promise_jobs`].
+    pub fn run_loop(&self) -> Result<(), i32> {
+        // SAFETY: as `run_promise_jobs`: `fxRunLoopGuarded` keeps an abort
+        // from a job, or the abort `fxRunLoop` raises for a throwing timer
+        // callback, in its own C frame.
+        match unsafe { ffi::fxRunLoopGuarded(self.raw) } {
+            0 => Ok(()),
+            status => Err(status),
+        }
     }
 
     /// Run garbage collection.
@@ -1137,6 +1163,10 @@ pub enum XsnapError {
     Io(String),
     Archive(String),
     Bootstrap(String),
+    /// XS aborted the machine (`fxAbort`: stack or memory exhaustion, or a
+    /// metering refusal) while draining promise jobs or running the event
+    /// loop. Carries where, and the XS exit status.
+    Aborted(String),
     /// A Rust panic was caught and converted into this worker's death instead
     /// of aborting the whole daemon process (design
     /// `designs/ironhorse-panic.md` § Scope: "The already-live FFI abort
@@ -1168,6 +1198,7 @@ impl std::fmt::Display for XsnapError {
             XsnapError::Io(s) => write!(f, "io: {s}"),
             XsnapError::Archive(s) => write!(f, "archive: {s}"),
             XsnapError::Bootstrap(s) => write!(f, "bootstrap: {s}"),
+            XsnapError::Aborted(s) => write!(f, "aborted: {s}"),
             // No "(FFI-guarded)" qualifier: this variant also carries a panic
             // caught by the non-FFI machine-thread run-entry net (`inproc.rs`),
             // which never crossed an `extern "C"` frame. The `message` names the
@@ -1389,7 +1420,9 @@ fn bootstrap_ses(machine: &Machine, label: &str) {
     if !eval_wrapped(machine, SES_BOOT, "ses-boot") {
         eprintln!("{label}: SES boot failed");
     }
-    machine.run_promise_jobs();
+    if let Err(status) = machine.run_promise_jobs() {
+        eprintln!("{label}: SES boot jobs aborted the machine (exit status {status})");
+    }
 }
 
 /// Register host powers (fs, crypto, modules, process) on the machine.
@@ -1942,7 +1975,9 @@ pub fn run_xs_program(
                     return Err(XsnapError::Bootstrap(format!("{label}: bundle eval threw")));
                 }
                 eprintln!("{label}: bundle eval returned, quiescing");
-                machine.quiesce();
+                machine.try_quiesce().map_err(|status| {
+                    XsnapError::Aborted(format!("{label}: bundle jobs (exit status {status})"))
+                })?;
                 eprintln!("{label}: quiesce complete");
             }
             XsProgram::Archive(bytes) => {
@@ -1965,7 +2000,9 @@ pub fn run_xs_program(
                         "archive installation failed".to_string(),
                     ));
                 }
-                machine.quiesce();
+                machine.try_quiesce().map_err(|status| {
+                    XsnapError::Aborted(format!("{label}: archive jobs (exit status {status})"))
+                })?;
                 archive::entry_import_result(&machine)?;
             }
         }
@@ -2002,6 +2039,7 @@ pub fn run_xs_program(
     // panic-injection harness (tracked follow-on; the `guard_ffi` unit suite
     // pins the poison/short-circuit mechanics these checkpoints consume).
     let mut ffi_death: Option<worker_io::FfiPanic> = None;
+    let mut loop_abort: Option<i32> = None;
 
     // A guarded `extern "C"` callback can panic during *bootstrap eval*
     // above — the bundle's own guest JS calls `hostBase64Decode`,
@@ -2247,7 +2285,10 @@ pub fn run_xs_program(
     } else if ffi_death.is_none() {
         // Run until idle: drain promise jobs and fire timers until
         // both queues are empty.
-        machine.run_loop();
+        if let Err(status) = machine.run_loop() {
+            eprintln!("{label}: event loop aborted the machine (exit status {status})");
+            loop_abort = Some(status);
+        }
         // Heal a `CAPTURING` flag stranded by an `fxAbort`->`longjmp` during
         // this non-metered run before the poison drain and teardown below.
         worker_io::reset_capturing();
@@ -2270,6 +2311,11 @@ pub fn run_xs_program(
             message: ffi_panic.message,
             location: ffi_panic.location,
         });
+    }
+    if let Some(status) = loop_abort {
+        return Err(XsnapError::Aborted(format!(
+            "{label}: event loop (exit status {status})"
+        )));
     }
     Ok(())
 }
@@ -2383,7 +2429,9 @@ pub fn run_xs_archive_loaded(loaded: &archive::LoadedArchive) -> Result<(), Xsna
             "archive installation failed".to_string(),
         ));
     }
-    machine.quiesce();
+    machine.try_quiesce().map_err(|status| {
+        XsnapError::Aborted(format!("endor[run]: archive jobs (exit status {status})"))
+    })?;
     archive::entry_import_result(&machine)
 }
 
@@ -2401,6 +2449,37 @@ mod tests {
     fn new_machine() -> Machine {
         setup();
         Machine::new(&DEFAULT_CREATION, "test").expect("failed to create machine")
+    }
+
+    /// A promise job that overflows the JS stack makes XS `fxAbort`. With no
+    /// jump record outside `fxRunPromiseJobs`, its own catch re-aborts with
+    /// `firstJump` NULL and `fxExitToHost` dereferences it. The drains now
+    /// run under an outermost C jump record and report the abort.
+    #[test]
+    fn a_promise_job_abort_is_reported_by_every_drain() {
+        let machine = new_machine();
+        let queue = "Promise.resolve().then(function f() { return f(); }); 'queued'";
+        machine.eval(queue).unwrap();
+        assert_eq!(
+            machine.run_promise_jobs(),
+            Err(XS_JAVASCRIPT_STACK_OVERFLOW_EXIT)
+        );
+        machine.eval(queue).unwrap();
+        assert_eq!(
+            machine.try_quiesce(),
+            Err(XS_JAVASCRIPT_STACK_OVERFLOW_EXIT)
+        );
+        machine.eval(queue).unwrap();
+        assert_eq!(machine.run_loop(), Err(XS_JAVASCRIPT_STACK_OVERFLOW_EXIT));
+        // A drain with nothing to abort still succeeds.
+        machine
+            .eval("var settled = false; Promise.resolve().then(function () { settled = true; }); 0")
+            .unwrap();
+        assert_eq!(machine.try_quiesce(), Ok(()));
+        assert!(matches!(
+            machine.eval("settled"),
+            Some(JsValue::Boolean(true))
+        ));
     }
 
     #[test]
@@ -2428,7 +2507,7 @@ mod tests {
                function (e) { __r = 'err:' + e.message; }); \
              undefined",
         );
-        machine.quiesce();
+        machine.try_quiesce().unwrap();
         match machine.eval("__r") {
             Some(JsValue::String(s)) => assert_eq!(s, "ok:42"),
             other => panic!(
@@ -2469,7 +2548,7 @@ mod tests {
                function (e) { __r = 'err:' + e.message; }); \
              undefined",
         );
-        machine.quiesce();
+        machine.try_quiesce().unwrap();
         match machine.eval("__r") {
             Some(JsValue::String(s)) => assert_eq!(s, "ok:8"),
             other => panic!(
@@ -4131,7 +4210,7 @@ mod tests {
             Some(v) => eprintln!("ses_boot result: {}", js_value_debug(&v)),
             None => panic!("ses_boot returned None"),
         }
-        machine.run_promise_jobs();
+        machine.run_promise_jobs().unwrap();
 
         // Step 2: Evaluate the worker bootstrap
         eprintln!("executing worker bootstrap...");
@@ -4147,7 +4226,7 @@ mod tests {
                 }
             }
         }
-        machine.run_promise_jobs();
+        machine.run_promise_jobs().unwrap();
         match &result {
             Some(v) => eprintln!("eval result: {}", js_value_debug(v)),
             None => eprintln!("eval returned None (threw)"),

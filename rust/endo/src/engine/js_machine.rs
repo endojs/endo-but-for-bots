@@ -271,8 +271,12 @@ impl JsMachine for xsnap::Machine {
     }
 
     fn drain_jobs(&mut self) -> Result<(), JsMachineError> {
-        xsnap::Machine::run_promise_jobs(self);
-        Ok(())
+        xsnap::Machine::run_promise_jobs(self).map_err(|status| {
+            JsMachineError::new(
+                JsMachineErrorKind::Halt,
+                format!("xsnap: a promise job aborted the machine (exit status {status})"),
+            )
+        })
     }
 
     fn collect_garbage(&mut self) -> Result<(), JsMachineError> {

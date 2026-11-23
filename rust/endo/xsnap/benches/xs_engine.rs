@@ -112,7 +112,7 @@ fn bench_promise_jobs(c: &mut Criterion) {
     c.bench_function("promise_chain_10_drain", |b| {
         b.iter(|| {
             m.eval("chainPromises(10)").unwrap();
-            m.run_promise_jobs();
+            m.run_promise_jobs().unwrap();
         })
     });
 }
