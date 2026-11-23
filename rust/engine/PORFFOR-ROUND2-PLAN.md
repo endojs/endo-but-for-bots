@@ -7,6 +7,9 @@ Round 1 is recorded in [PORFFOR-FINDINGS.md](PORFFOR-FINDINGS.md),
 The security properties this plan relies on are drafted separately in
 [SECURITY-SEAMS.md](SECURITY-SEAMS.md).
 This is a design document: nothing in it has been built or measured beyond round 1's data.
+**Status (2026-11-23):** round 2 is done; each item below carries a one-line status, and
+[PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), "Round 2", records what shipped, what was measured and
+what was deferred.
 
 ## The changed ground rules
 
@@ -28,6 +31,11 @@ This plan therefore prefers designs that leave computron totals and meter-check 
 unchanged.
 Where a real win needs different counts, it is written up as an explicit meter-version bump
 proposal (section C, item 9) and is not assumed approved.
+
+**Superseded (owner direction, 2026-11-23):** determinism, lockdown and compartment sandboxing
+are mandatory, computrons must approximate actual work, and computron identity with earlier
+versions is no longer required; see [SECURITY-SEAMS.md](SECURITY-SEAMS.md), section 1.
+Every round-2 commit turned out computron-identical anyway.
 
 ## Provenance
 
@@ -273,6 +281,9 @@ Every item adds to the round-1 gates (`PORFFOR-PLAN.md:47-60`) the new different
 
 ### The new differential gate (D)
 
+**Status:** built (`2ef6265e2`, `4e6a5278e`); since `c3e9e775a` it runs every accelerator on
+against all off; see [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), "Round 2".
+
 A switch on `Interp` (test-visible, default on once item 2 lands) turns all derived accelerators
 of this round off: the dispatch buffer, exotic bits and caches.
 A new integration test, `ironhorse-vm/tests/optimised_differential.rs`, runs each program twice on
@@ -293,6 +304,8 @@ Any difference fails, regardless of timing.
 
 ### 1. Instruments: pair census, line profile, the switch (small; prerequisite)
 
+**Status:** shipped as `2ef6265e2`; see [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), "Round 2".
+
 - Extend the `cost-calibration` histogram (`rust/engine/ironhorse-vm/src/cost.rs:101-108`) with
   dynamic opcode pair and triple counts keyed by the previous opcode, compiled away without the
   feature, and print them from the roster (`ironhorse-vm/tests/porffor_micro_bench.rs`), the
@@ -307,6 +320,9 @@ Any difference fails, regardless of timing.
 - Output: the ranked list of fusion candidates that item 2 implements, recorded in a results file.
 
 ### 2. Layout-preserving superinstructions (medium; the breakthrough candidate)
+
+**Status:** shipped as `4e6a5278e` (`empty_loop_fn` 0.487, `int_loop_fn` 0.720 in Ir); see
+[PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), "Round 2".
 
 - **Design:** A.4 and B.4.
   A pure builder (`ironhorse-vm/src/interp/fuse.rs`, new) walks a verified buffer and returns the
@@ -354,6 +370,9 @@ Any difference fails, regardless of timing.
 
 ### 3. Exotic-membership superset bits (medium)
 
+**Status:** shipped as `5d71c8b91` (`proto_method_fn` 1.18x, `prop_getset_fn` 1.14x in Ir); see
+[PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), "Round 2".
+
 - **Problem:** every `o.x` on an ordinary object probes up to 16 side tables (`arrays`,
   `wrapper_data`, four Temporal tables, `disposable_stacks`, `array_buffers`, `typed_arrays`,
   `data_views`, `regexps`, `locales`, `collators`, `functions`, `proxies`) before the ordinary path
@@ -392,6 +411,9 @@ Any difference fails, regardless of timing.
 
 ### 4. Dense array element storage (medium)
 
+**Status:** shipped as `33ac5a288` and `643d2967b` (`array_rw_fn` 1.45x in Ir), with the
+conversion-work test `aa5eb8b8e`; see [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), "Round 2".
+
 - **Design:** replace the `BTreeMap<u32, Slot>` item store
   (`rust/engine/ironhorse-vm/src/bulk.rs:173-185`)
   with a dense `Vec<Option<Slot>>` while the array is dense enough (a count-based policy, never a
@@ -411,6 +433,9 @@ Any difference fails, regardless of timing.
 - **Keep if:** `array_rw_fn` improves by at least 10% in Ir.
 
 ### 5. Verified install and a slimmer loop header (small; after item 2, same worktree)
+
+**Status:** not built: its measured upper bound (0.956 on `empty_loop_fn`) is below the keep bar;
+see [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), "Round 2".
 
 - **Design:** verify each buffer once at install: every instruction decodes, no instruction crosses
   its function body, and every branch and catch target is an instruction start of the same body
@@ -434,6 +459,9 @@ Any difference fails, regardless of timing.
 
 ### 6. Global binding cache (medium; after item 3)
 
+**Status:** not started; first round-3 candidate (global reads are 26% of `array_hole_fn` at the
+round-2 tip); see [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), "Round 2".
+
 - **Design:** a per-site cache keyed by `(segment, pc)` in a bounded, lazily allocated table (T23),
   holding the global object's property slot for a data property, validated by an epoch on the
   global object(s) bumped by any define, delete, flag or prototype change on them, and bypassed for
@@ -449,6 +477,9 @@ Any difference fails, regardless of timing.
 
 ### 7. Property inline and prototype caches (large; after item 3)
 
+**Status:** not started; blocked on a value-write/structural-write split of `SlotArena::get_mut`;
+see [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), "Round 2".
+
 - Round 1's recorded design (`PORFFOR-RESULTS.md:224-231`), with item 3's bits in place of the
   membership proof and item 6's epoch mechanism.
 - Must preserve getter calls, Proxy traps and SES integrity exactly; a hit returns the slot the walk
@@ -457,6 +488,9 @@ Any difference fails, regardless of timing.
   property workloads.
 
 ### 8. Call path: pooled argument and local vectors, lazy `id_map` (medium)
+
+**Status:** not started; see [PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), "Round 2", round-3
+candidates.
 
 - Pool the two host-only `Vec`s; make the `id_map` lazy for functions with no direct eval, `with`,
   or other dynamic name lookup.
@@ -468,6 +502,10 @@ Any difference fails, regardless of timing.
   `func_calls_fn`.
 
 ### 9. Meter-version-bump proposals (document only; needs owner approval)
+
+**Status:** no meter change shipped; the calibration measurements that would inform one are in
+[PORFFOR-RESULTS.md](PORFFOR-RESULTS.md), "Round 2", "Metering calibration: host work per
+computron".
 
 None of these is in the implement-now set.
 

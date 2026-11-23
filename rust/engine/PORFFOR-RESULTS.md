@@ -440,3 +440,389 @@ Not run, and open verification before merge:
 - **Concatenation remains under-metered relative to its time** (FINDINGS section G):
   `string_concat` gained 5.2x in Ir but 2.05x in time, because the remaining cost is the
   quadratic copying of a growing string, which the meter charges linearly per `+`.
+
+# Round 2
+
+Round 2 followed [PORFFOR-ROUND2-PLAN.md](PORFFOR-ROUND2-PLAN.md) under ground rules the owner
+changed between the rounds.
+Everything above this heading is round 1 and is unchanged.
+The security reading of the same rules is [SECURITY-SEAMS.md](SECURITY-SEAMS.md).
+
+## The changed ground rules
+
+Project owner direction, 2026-11-22 and 2026-11-23, quoted:
+
+1. "XS is just a guide; the real spec is JavaScript and SES."
+2. The threat model is malicious guest code, not a malicious Ironhorse operator or a malicious
+   snapshot, "though we need to document this seam's security properties in detail".
+3. "If the hash is a perf optimization technique that's not a security issue."
+4. "Determinism, lockdown, and compartment sandboxing are mandatory. Computrons must approximate
+   actual work done for the sake of preserving DoS resistance. This can be tightened later but
+   should be set to realistic patterns."
+5. Computron identity with earlier versions is no longer required: "the current gates are a
+   too-strict version of our initial guard rails".
+
+What changed in practice: a derived dispatch buffer that departs from XS's bytes became
+admissible (rule 1), and a commit could have changed computrons under a new meter version
+(rule 5).
+None needed to: every round-2 commit is computron-identical to the round-1 tip on the roster
+(computrons, dispatch count and raw meter index, 25 of 25, fusion on and off), and no
+`ironhorse-meter` version was added.
+
+## Provenance
+
+- Base `03687677`; round-1 tip `0d286eef`; round-2 code tip `d5871aac0` (branch
+  `ccr-e08fb75d-kdywjp`); this document is the commit after it and changes no code.
+- Three tracks were built in parallel from `1122b115` (code-identical to `0d286eef`): A, the
+  dispatch census and superinstructions (on the main line); B, the exotic-membership bits; C, dense
+  array storage.
+  C and then B were cherry-picked onto A.
+- Host, toolchains and method as in round 1 (Provenance and Method above), with nothing else
+  running for every number in the final tables.
+  Ir is whole-process callgrind, one roster process per workload, except the calibration section,
+  which counts only `Interp::run` (`--toggle-collect`).
+  Time: 8 interleaved rounds of the three binaries, rotating which runs first, each roster process
+  reporting the median of five samples after a warm-up; the tables give the median of the eight
+  per-process medians.
+- Binaries: base and round-1 tip are round 1's (`03687677` with the tip's roster file copied in,
+  and `0d286eef`); the roster's workloads are unchanged since (round 2 only added the
+  `MICRO_PLAIN` switch and `CENSUS` output).
+  Round-1 Ir figures are round 1's runs (`raw-final/cg-base/`, `raw-final/cg-tipfix/`, with
+  `proto_method_fn` at the tip the median of four reruns as in round 1); round-2 Ir and all times
+  are new (`raw-r2final/`).
+
+## Kept commits
+
+The "Ir when made" column is the target workload's ratio against the commit's own predecessor in
+its track; "Ir integrated" is the same workload against the previous commit on the integrated line
+(`raw-r2final/cg-g-*`).
+Sites are cited at `d5871aac0`.
+
+| Commit | Change | Technique | Target workload | Ir when made | Ir integrated | Changed site |
+|---|---|---|---|---|---|---|
+| `2ef6265e2` | dispatch n-gram census, fusion switch, gate D skeleton | instruments (plan item 1) | - | - | - | `ironhorse-vm/src/cost.rs:123`, `:177`, `ironhorse-vm/src/interp/dispatch.rs:366`, `ironhorse-vm/src/interp/fuse.rs:147` |
+| `4e6a5278e` | layout-preserving superinstructions over a derived dispatch buffer | superinstructions (plan item 2, A.4, B.4) | `empty_loop_fn`; `int_loop_fn` | 0.487; 0.720 | same (track A is the main line) | `ironhorse-vm/src/interp/fuse.rs:706` (`derive`), `:210` (`run_fused`), `:239` (`fusion_admits`), `ironhorse-vm/src/interp/dispatch.rs:170` (`fused_head!`) |
+| `33ac5a288` | hold dense array items in a vector | dense element storage (plan item 4) | `array_fill_sum_fn`; `array_rw_fn` | 0.718; 0.767 | 0.671; 0.756 | `ironhorse-vm/src/bulk.rs:240` (`ArrayItems`), `:198-206` (transition rules) |
+| `643d2967b` | decide an array's exotic own keys from the name bytes | profile finding (two `String`s per `array_own_descriptor` call) | `array_rw_fn`; `json` | 0.897; 0.963 | 0.891; 0.962 | `ironhorse-vm/src/interp/property/indexed.rs:1084`, `:1097` |
+| `aa5eb8b8e` | bound array storage conversions per computron | test and diagnostics counter | - | - | 0.998-1.002 on all | `ironhorse-vm/tests/array_storage_work.rs:70`, `ironhorse-vm/src/bulk.rs:181` |
+| `5d71c8b91` | skip exotic side-table probes on ordinary objects | exotic-membership superset bits (plan item 3) | `proto_method_fn`; `prop_getset_fn`; `ctor_fn`; `method_calls_fn` | 0.849; 0.876; 0.892; 0.924 | 0.833; 0.864; 0.892; 0.920 | `ironhorse-vm/src/exotic_bits.rs:197` (`ExoticTable`), `ironhorse-vm/src/interp/property/ordinary.rs:15`, `ironhorse-vm/src/interp/dispatch/property_read.rs:21`, `ironhorse-vm/src/interp/gc.rs:12` |
+| `c3e9e775a` | compare every round-2 accelerator on against all off | differential gate | - | - | - | `ironhorse-snapshot/tests/optimised_differential.rs:192`, `ironhorse-snapshot/tests/exotic_bits_differential.rs:289`, `ironhorse-snapshot/tests/array_storage_differential.rs:451` |
+| `d5871aac0` | state what a guest can and cannot do to the integer hasher | documentation (comment only) | - | - | - | `ironhorse-vm/src/int_hash.rs:16` |
+
+Each track's write-up measured its commit against `1122b115` with the other tracks absent.
+The gains compose: on the integrated line every target improved at least as much as in its own
+track, because the earlier commits had already removed other work from the same workloads.
+
+## Integration notes
+
+- Order: C (`5ef3c75c`, `17c1b1e0`, `d6d488db`) then B (`4466be2e`), onto A's `4e6a5278e`.
+  All four are separate commits with their original messages and trailers.
+- C applied cleanly.
+  Its first commit gained one sentence and one change: the store's unit test did not use
+  `set_ceiling`'s `Result`, which the test build warned about; it now `expect`s it.
+- B conflicted only in `ironhorse-vm/src/diagnostics.rs`, where C and B each added a re-export;
+  both are kept.
+  The hazards the write-ups listed did not materialise: C's code calls no `DerefMut`-only map method
+  on the 16 retyped tables (`iter_mut`, `extend`, `drain`), C added no exotic table, A's new
+  `state.rs` fields and `sidetable.rs` classifications sit in separate hunks from B's retyping, and
+  `gc_visitation_registry` already knew `ExoticTable` from B's own commit.
+- **Every integrated commit passed the per-commit gates on its own before the next was applied**:
+  fmt, clippy 1.88 (`-D warnings`, also with `dispatch-census`), the release roster's costs
+  against the round-1 tip (fusion on and off, 25 of 25), `benches/stack_height.py --check` (430
+  cases), the debug vm and snapshot suites with `store-integrity` (2,109, 2,109, 2,110 and 2,115
+  passing, 0 failing, 47 ignored at the four commits), and `golden_computrons` plain,
+  `cost-calibration` and `consensus` (`raw-r2final/gate-{c1,c2,c3,b}/`).
+  So the round-2 history is bisectable with these gates; the round-1 bisect hazard above still
+  applies to the round-1 commits.
+- The stack gate composed this time: per-track margins did not add up to a failure.
+  The tightest cases on the integrated tip are `json-parse-arr-10k.run` and `jparse-arr-2017.run`
+  at 6,871 B against a baseline of 6,615 B, exactly the 256 B slack, so the next frame growth on the
+  JSON parse path fails the gate.
+
+### Cross-track follow-ups done at integration
+
+- **All accelerators together (`c3e9e775a`).**
+  Gate D's plain side now switches all three accelerators off, and the other two differential
+  tests each gained an all-off-versus-all-on case.
+  Sensitivity, checked: an `ExoticTable::insert` that skips the `arrays` bit fails gate D's corpus
+  test, whose two sides both had the bits on before, as well as the two differentials.
+- **The `json` Ir blip.**
+  Still present on the integrated tree: `ChunkArena::free_chunk_for` is 22.7M Ir self plus 5.2M in
+  an out-of-line `LeafRange::perform_next_checked`, against 19.1M with the iterator inlined at the
+  round-1 tip, about 1.4% of the workload.
+  An `#[inline]` hint on `free_chunk_for` changed nothing (609.0M against 608.7M); no fix was
+  committed.
+  `json` is still 0.971 of the round-1 tip in Ir because `643d2967b` and the bits more than pay for
+  it.
+- **T19 with the bits.**
+  Probing on each level of the index-keyed walk (`uninterned_index_get_levels`,
+  `ironhorse-vm/src/interp/property/read_index.rs:60`) only the tables whose bit is set is safe by
+  B's superset invariant alone, and was measured: `array_hole_fn` 915.6M to 895.9M (0.978).
+  Below the keep bar; not committed.
+  The profile shows why the full T19 would not do much better: the whole walk is 64.7M inclusive
+  (7.1%), while the global read of `undefined` in `a[i & 7] === undefined` is 235.2M
+  (`exec_get_variable`, 25.7%).
+  Design recorded under round-3 candidates.
+
+## Final per-workload results: base, round-1 tip, round-2 tip
+
+Ir: whole process, one callgrind run per workload per build.
+Time: 8 interleaved rounds (`raw-r2final/ab3/`).
+Ratios below 1 are faster.
+
+| workload | Ir base | Ir r1 | Ir r2 | r2/r1 | r2/base | ms base | ms r1 | ms r2 | time r2/r1 | time r2/base |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| array_fill_sum_fn | 1,960M | 1,158M | 663.0M | 0.573 | 0.338 | 168.1 | 106.1 | 42.1 | 0.397 | 0.250 |
+| array_hole_fn | 1,938M | 1,089M | 915.7M | 0.841 | 0.472 | 143.1 | 78.0 | 63.2 | 0.810 | 0.442 |
+| array_rw_fn | 4,065M | 2,379M | 1,543.2M | 0.649 | 0.380 | 359.5 | 218.2 | 106.6 | 0.488 | 0.296 |
+| array_rw_push | 8,309M | 5,180M | 4,394.3M | 0.848 | 0.529 | 694.6 | 438.1 | 303.7 | 0.693 | 0.437 |
+| closures | 4,726M | 2,849M | 2,782.9M | 0.977 | 0.589 | 320.1 | 180.3 | 187.9 | 1.042 | 0.587 |
+| ctor_fn | 2,790M | 1,424M | 1,231.6M | 0.865 | 0.441 | 203.7 | 100.0 | 81.9 | 0.819 | 0.402 |
+| empty_loop_fn | 1,371M | 853M | 415.5M | 0.487 | 0.303 | 86.2 | 48.3 | 24.0 | 0.497 | 0.278 |
+| float_arith | 4,478M | 2,393M | 2,318.6M | 0.969 | 0.518 | 318.7 | 155.3 | 140.0 | 0.901 | 0.439 |
+| func_calls | 4,898M | 3,064M | 2,985.3M | 0.974 | 0.609 | 336.5 | 204.4 | 198.9 | 0.973 | 0.591 |
+| func_calls_fn | 2,308M | 1,571M | 1,424.9M | 0.907 | 0.617 | 160.0 | 92.4 | 88.4 | 0.956 | 0.552 |
+| int_loop | 12,943M | 7,074M | 6,765.4M | 0.956 | 0.523 | 889.7 | 485.7 | 455.1 | 0.937 | 0.512 |
+| int_loop_fn | 4,615M | 2,233M | 1,607.9M | 0.720 | 0.348 | 326.0 | 138.7 | 88.9 | 0.641 | 0.273 |
+| json | 3,788M | 626M | 608.5M | 0.971 | 0.161 | 280.2 | 52.7 | 50.7 | 0.963 | 0.181 |
+| map_set | 1,903M | 1,073M | 1,008.9M | 0.940 | 0.530 | 155.7 | 82.7 | 77.6 | 0.939 | 0.498 |
+| method_calls | 5,454M | 2,789M | 2,592.4M | 0.930 | 0.475 | 425.3 | 180.4 | 180.2 | 0.999 | 0.424 |
+| method_calls_fn | 4,033M | 1,944M | 1,675.1M | 0.862 | 0.415 | 309.7 | 136.0 | 113.9 | 0.838 | 0.368 |
+| prop_getset | 7,479M | 3,478M | 3,211.0M | 0.923 | 0.429 | 598.5 | 270.2 | 248.1 | 0.918 | 0.415 |
+| prop_getset_fn | 4,990M | 1,683M | 1,353.0M | 0.804 | 0.271 | 404.6 | 127.6 | 103.1 | 0.808 | 0.255 |
+| proto_method_fn | 3,325M | 1,482M | 1,127.1M | 0.760 | 0.339 | 233.8 | 98.5 | 73.1 | 0.742 | 0.313 |
+| string_charcode | 2,874M | 1,854M | 1,810.9M | 0.977 | 0.630 | 218.9 | 130.0 | 128.7 | 0.990 | 0.588 |
+| string_charcode_fn | 950M | 684M | 586.4M | 0.857 | 0.617 | 78.5 | 42.8 | 42.6 | 0.996 | 0.543 |
+| string_concat | 652M | 125M | 124.8M | 0.996 | 0.192 | 54.4 | 26.4 | 23.4 | 0.888 | 0.431 |
+| string_index | 2,089M | 1,489M | 1,465.1M | 0.984 | 0.701 | 142.7 | 102.4 | 98.5 | 0.962 | 0.690 |
+| typed_array | 4,265M | 2,753M | 2,688.5M | 0.976 | 0.630 | 317.2 | 189.6 | 190.1 | 1.003 | 0.599 |
+| typed_array_fn | 1,508M | 971M | 885.4M | 0.912 | 0.587 | 105.5 | 67.4 | 52.3 | 0.776 | 0.496 |
+| geomean (25) | | | | 0.854 | 0.439 | | | | 0.817 | 0.413 |
+
+Round 2 over round 1: 0.854 in Ir geomean (1.17x), 0.817 in time (1.22x).
+Base to round-2 tip: 0.439 in Ir (2.28x), 0.413 in time (2.42x); round 1 alone was 0.514
+in Ir and 0.505 in time on this run.
+No workload has more Ir than at the round-1 tip.
+Most improved over round 1 in Ir: `empty_loop_fn` (0.487), `array_fill_sum_fn` (0.573),
+`array_rw_fn` (0.649), `int_loop_fn` (0.720), `proto_method_fn` (0.760).
+Least improved: `string_concat` (0.996), `string_index` (0.984), and `string_charcode`,
+`closures` and `typed_array` (0.976-0.977), whose time is in property, call and string code that
+round 2 did not target.
+In time, `closures` reads 1.042 against an Ir ratio of 0.977, inside the per-process spread round 1
+measured (12-85%); no workload is slower in Ir.
+
+The gated fixtures (`ironhorse-snapshot` `dispatch_bench` and `reentry_bench`), same 8 rounds:
+
+| fixture metric | ms base | ms r1 | ms r2 | r2/r1 | r2/base |
+|---|---:|---:|---:|---:|---:|
+| dispatch_ms | 1534.0 | 780.4 | 749.2 | 0.960 | 0.488 |
+| slots_ms | 729.3 | 321.7 | 295.1 | 0.917 | 0.405 |
+| chunks_ms | 42.1 | 23.9 | 22.2 | 0.928 | 0.527 |
+| calls_ms | 987.6 | 562.8 | 541.6 | 0.962 | 0.548 |
+| recursion_ms | 327.6 | 229.7 | 187.3 | 0.816 | 0.572 |
+| callbacks_ms | 668.7 | 385.4 | 347.8 | 0.902 | 0.520 |
+| getter_ms | 1044.8 | 520.7 | 474.9 | 0.912 | 0.455 |
+
+Geomeans: `dispatch_bench` 0.935 of the round-1 tip and 0.471 of the base; `reentry_bench` 0.897
+and 0.522.
+
+## Losses and deferrals
+
+Each was built or measured far enough to know why it did not ship.
+
+- **Verify once at install (plan item 5).**
+  Upper bound, measured with every per-op decode refusal deleted outright: `empty_loop_fn` 0.956
+  of the superinstruction build, `int_loop_fn` 0.930; the keep bar was 5% on `empty_loop_fn`, and
+  a sound version must also pay for a verified/unverified split and an audit of every pc producer.
+  Fusion had already removed most of the dispatches whose headers it would have slimmed.
+- **Meter loosening (charging fused code less, relaxing the cadence).**
+  Charging less saves no host work: what a handler charges does not change what it executes.
+  The only host work a loosened meter could remove is the near-boundary admission test; deleting
+  it outright gave 0.941 (`empty_loop_fn`) and 0.955 (`int_loop_fn`), and it would widen the
+  worst-case unchecked stretch, which a compliant version may not do, so a compliant version keeps
+  the same test and saves about nothing.
+- **T19, "no index keys on prototypes".**
+  With the bits alone about 2% (0.978 measured above); the full skip is bounded by the 7.1% the
+  walk costs.
+- **GET_PROPERTY inline cache.**
+  Validation needs a structure epoch, and every slot record write, value writes included, goes
+  through `SlotArena::get_mut` (`ironhorse-vm/src/value.rs:1305`, 121 `slots.get_mut` call sites in
+  28 files at the round-2 tip), so
+  an epoch there is bumped by the very `this.x = ...` writes of the target loops and the cache
+  would never hit.
+  It needs a `set_value` (no epoch) versus structural-write split first.
+- **In-place overwrite in `array_item_set` plus reading `push` arguments from the stack.**
+  `array_rw_fn` 0.959 (1.043x), below the 1.05x bar; dropped.
+- **The first superinstruction design**, which read every opcode from the derived buffer, cost
+  about 7 Ir on every unfused op (an extra live slice and spills): 11 workloads regressed by
+  0.5-1.8% while `empty_loop_fn` reached 0.513.
+  The shipped design leaves the loop untouched and only head arms consult the derived byte.
+- **Greedy pair fusion** fused `a; b` before seeing that `b; 3; *` was available, which cost
+  `int_loop_fn` (0.750 against 0.720 with the pair yielding to the longer sequence).
+  A statement-`n++` fusion (`get_local; inc; pull_local`) made the step handler slower (0.514
+  against 0.487 on `empty_loop_fn`) and was reverted.
+- **The `json` blip**: above, unresolved, about 1.4% of that workload.
+
+## Metering calibration: host work per computron
+
+Input for a future `ironhorse-meter` version, which the owner's rule 4 asks to approximate actual
+work for realistic patterns.
+**No meter change ships in this PR.**
+Fusion only lowers host work per computron on the loops it fuses, so fused loops are
+over-charged relative to other code, never under-charged; the same holds for every round-2 change,
+since none changed a charge.
+
+### The roster
+
+Ir counts only `Interp::run` (`raw-r2final/cgrun-*`), so compile and boot are excluded; ns per
+computron is the median roster sample time over the run's computrons, from the 8-round run.
+Sorted by Ir per computron at the round-2 tip.
+
+| workload | computrons | Ir/c base | Ir/c r1 | Ir/c r2 | ns/c base | ns/c r2 |
+|---|---:|---:|---:|---:|---:|---:|
+| json | 404,324 | 9361 | 1527 | 1488 | 693.0 | 125.4 |
+| string_concat | 97,920 | 6579 | 1220 | 1212 | 555.4 | 239.4 |
+| map_set | 3,188,714 | 593 | 335 | 314 | 48.8 | 24.3 |
+| typed_array | 8,650,525 | 492 | 317 | 310 | 36.7 | 22.0 |
+| string_charcode | 6,100,057 | 471 | 303 | 296 | 35.9 | 21.1 |
+| prop_getset | 10,875,058 | 687 | 319 | 295 | 55.0 | 22.8 |
+| string_index | 5,123,820 | 406 | 289 | 285 | 27.8 | 19.2 |
+| ctor_fn | 4,802,901 | 582 | 296 | 255 | 42.4 | 17.0 |
+| array_rw_push | 17,291,597 | 480 | 299 | 254 | 40.2 | 17.6 |
+| closures | 10,950,081 | 431 | 260 | 254 | 29.2 | 17.2 |
+| float_arith | 9,525,048 | 469 | 251 | 243 | 33.5 | 14.7 |
+| func_calls | 12,450,050 | 393 | 246 | 239 | 27.0 | 16.0 |
+| method_calls | 10,875,082 | 501 | 257 | 238 | 39.1 | 16.6 |
+| int_loop | 29,500,034 | 438 | 240 | 229 | 30.2 | 15.4 |
+| method_calls_fn | 9,600,082 | 421 | 202 | 174 | 32.3 | 11.9 |
+| proto_method_fn | 6,600,204 | 503 | 223 | 170 | 35.4 | 11.1 |
+| prop_getset_fn | 8,100,065 | 615 | 207 | 166 | 50.0 | 12.7 |
+| typed_array_fn | 5,950,381 | 252 | 162 | 148 | 17.7 | 8.8 |
+| array_hole_fn | 6,262,571 | 308 | 173 | 145 | 22.8 | 10.1 |
+| string_charcode_fn | 4,000,056 | 236 | 169 | 145 | 19.6 | 10.7 |
+| func_calls_fn | 9,900,053 | 232 | 158 | 143 | 16.2 | 8.9 |
+| array_rw_fn | 12,716,576 | 319 | 186 | 121 | 28.3 | 8.4 |
+| int_loop_fn | 21,000,041 | 219 | 106 | 76 | 15.5 | 4.2 |
+| array_fill_sum_fn | 8,741,573 | 223 | 131 | 75 | 19.2 | 4.8 |
+| empty_loop_fn | 9,000,036 | 152 | 94 | 46 | 9.6 | 2.7 |
+
+Spread, round-2 tip: Ir per computron min 45.5, median 237.8, max 1488.2, max/median 6.26; ns per
+computron min 2.7, median 15.4, max 239.4, max/median 15.51.
+At the base: Ir per computron min 151.6, median 438.5, max 9360.8, max/median 21.35; ns per
+computron min 9.6, median 32.3, max 693.0, max/median 21.48.
+Round 1 and round 2 both narrowed the spread at the top (`json`, `string_concat`) and widened it
+at the bottom (tight loops), because the cheapest code got cheaper fastest.
+
+### Targeted patterns and the ranked under-charged list
+
+Measured with a scratch harness (not committed) on the round-2 tip, release build: run-only Ir
+(callgrind) and the median of five timed runs (`raw-r2final/cg-calib/`,
+`raw-r2final/calib-time.txt`).
+"x median" is against the roster median at the round-2 tip (238 Ir and 15.4 ns per
+computron).
+
+| Pattern | Computrons | Ir per computron | ns per computron | x median (Ir; ns) |
+|---|---:|---:|---:|---|
+| plain integer loop (reference) | 3,000,041 | 65 | 3.7 | 0.3; 0.2 |
+| `push`/`pop` on a dense array | 11,324,472 | 81 | 6.2 | 0.3; 0.4 |
+| `push`/`pop` on a holey array | 2,400,882 | 1,101 | 83.5 | 4.6; 5.4 |
+| string grown by 5,000 appends of 8 characters | 66,573 | 6,198 | 1,280.6 | 26.1; 83.2 |
+| `eval` of 3,000 distinct one-function sources | 465,013 | 6,705 | 526.8 | 28.2; 34.2 |
+| `eval` of one source 3,000 times | 417,271 | 3,233 | 331.3 | 13.6; 21.5 |
+| `a.length = 3` shrink, 0 named properties | 555,131 | 268 | 29.8 | 1.1; 1.9 |
+| the same, 100 named properties | 556,858 | 4,048 | 279.9 | 17.0; 18.2 |
+| the same, 1,000 named properties | 572,394 | 37,593 | 2,439.2 | 158.1; 158.4 |
+| the same, 4,000 named properties | 624,184 | 157,834 | 11,446.6 | 663.7; 743.3 |
+
+Ranked by host work per computron, highest first:
+
+1. **`length` shrink on an array with many named properties.**
+   `array_set_length` (`ironhorse-vm/src/interp/property/indexed.rs:209`) charges a constant
+   `ARRAY_LENGTH_SET_METERING`, then on every shrink walks all own property slots and builds each
+   one's key text to test for an index name (`:222-233`).
+   With K named properties the host work per shrink is O(K) with an allocation per property:
+   157,834 Ir per computron at K = 4,000, linear in K from 268 at K = 0.
+   This is the largest gap found and is reachable with ordinary code.
+2. **`eval` of source.**
+   6,705 Ir per computron for distinct one-function sources, 3,233 for the same source repeated;
+   every unit's bytecode (about 44 B per unit here) is retained for the realm's lifetime with no
+   footprint charge,
+   3,000 segments after 3,000 calls in both cases, plus a same-size dispatch buffer when it fuses
+   (SECURITY-SEAMS Q1).
+3. **Growing a string by concatenation.**
+   6,198 Ir per computron for 5,000 appends of 8 characters; each `+` charges linearly while
+   copying the whole string.
+   The chunk ceiling bounds it per crank, because nothing collects within a crank: 20,000 appends
+   halt with `HeapExhausted`.
+4. **`JSON.stringify`/`parse`** (`json`): 1,488 Ir per computron, 6.3x the median.
+5. **Generic `push`/`pop` on a holey array**: 1,101 Ir per computron against 81 for the
+   same calls on a dense array (`dense_array_this` declines when `items.len() != length`).
+6. **The integer hasher if its seed leaked.**
+   Unmetered and not reachable without a leak (SECURITY-SEAMS 4.4).
+   Measured with a std map whose keys all share one hash: a lookup costs 414 ns at 1,024 keys and
+   39.5 us at 65,536 (199x and 8,053x a spread lookup), so a table of n keys costs O(n) per probe.
+
+## Gates
+
+Run on the integrated code tip `d5871aac0`, from `rust/engine` with `CARGO_INCREMENTAL=0` and
+`RUST_MIN_STACK=33554432` (debug builds with `CARGO_PROFILE_DEV_DEBUG=line-tables-only`; logs
+`raw-r2final/tip-*.txt`, `root-*.txt`):
+
+| Gate | Result |
+|---|---|
+| CI `format-ironhorse`: comparison-resolution test, math-vector, lockfile-agreement, intl-profile, row-schema (`--base 03687677`), crate-graph and compiler-opcode scripts; `cargo +1.88.0 fmt --all -- --check`; standalone-root `rustfmt`; `ironhorse-store-sqlite` fmt | pass |
+| `cargo +1.88.0 clippy --locked --workspace --exclude xs-oracle --exclude ironhorse-262 --exclude ironhorse-fuzz --no-deps -- -D warnings`, the same with `-p ironhorse-vm --features dispatch-census`, and `cargo +1.88.0 build` of those members with `RUSTFLAGS=-D warnings` | pass |
+| CI `test-ironhorse` (debug): runtime, meter, unicode, vm, snapshot, compile, regexp with `ironhorse-vm/store-integrity` | pass: 2,435 passed, 0 failed, 52 ignored |
+| `cargo test -p ironhorse-text` | pass (4) |
+| deterministic-Math configuration (vm, snapshot); platform, provider and libm Math vector exports | pass (2,118 / 0 / 46; 1, 1, 1) |
+| CI `test-ironhorse-calibration`: `cost-calibration` lib (365 / 0) and `golden_computrons`; `consensus` `golden_computrons` + `consensus_ceiling_caps` (3 / 0); the consensus/cost-calibration conflict check; `dispatch-census` cost unit tests (5 / 0) | pass |
+| plain `golden_computrons` | pass |
+| round-2 differentials: `optimised_differential` (gate D, 5), `exotic_bits_differential` (2), `array_storage_differential` (4) | pass (11 / 0) |
+| lockdown, compartment and SES suites (inside the vm and snapshot runs above): `native_lockdown` 35, `guest_compartment` 24, `realms` 30, `hardened_js_boundary` 21, `ses_boot_intrinsics` 14, `ses_prelude_reach` 3, `lockdown_carry` 5 | pass, 132 / 0 |
+| `python3 benches/stack_height.py --check` | pass (430 cases; tightest `json-parse-arr-10k.run` 1.039x, at the 256 B slack) |
+| roster computrons, dispatch counts, raw meter index against `03687677` | identical, 25 of 25, fusion on and off |
+| determinism: the roster twice in separate processes; each workload on a continuous machine and on one restored from a snapshot taken after a setup crank (scratch harness) | identical (25 of 25 each); computrons per run, dispatch count and raw meter equal across the restore |
+| repo root: `cargo build --locked --release -p thixotrope-ironhorse-worker`, its tests, `ironhorse-store-sqlite` tests with `store-integrity` (release) | pass (17 / 0; 128 / 0 / 4) |
+
+The vm crate's `ses_*` tests are self-contained probes; the real SES bundle boot
+(`ironhorse-262/tests/stage4_ses_boot.rs`) needs the oracle crate and was not run.
+
+Not run, and open verification before merge:
+
+- test262 (committed expectation slices and the full lane), the XS-oracle differential lanes and
+  everything else that needs the `c/moddable` submodule (workspace clippy and build of
+  `xs-oracle`, `ironhorse-262`, `ironhorse-fuzz`; the `parity` tests; the SES bundle boot; the
+  `endo` crate's ironhorse tests).
+- Gate D over the `ironhorse-262` corpus programs, and a fuzz variant of `differential_source`
+  (both need the oracle crate).
+- Fuzz lanes, sanitizer lanes, the wasm32 builds and the cross-target stack lanes, the macOS and
+  release matrix legs, the cross-platform Math vector comparison, the yarn-driven thixotrope bundle
+  tests, and `benches/run.py --check-baseline`.
+
+## Round-3 candidates, in priority order
+
+1. **A meter-version proposal from the calibration table** (`ironhorse-meter-N`, owner approval):
+   charge `length` shrinks by the named properties scanned (or index the decimal names so the scan
+   disappears), a footprint charge for retained `eval` bytecode and its dispatch buffer, a
+   length-proportional charge for concatenation, and the holey push/pop slow path.
+   The first is also a plain host-work fix that needs no meter change if the scan goes.
+2. **Global binding cache (plan item 6).**
+   The largest remaining cost on the hole and global-loop workloads: `exec_get_variable` is 25.7%
+   of `array_hole_fn` at the round-2 tip, and global access dominated `int_loop` in round 1.
+   The exotic bits already make "the global object is ordinary" one word test.
+3. **Split `SlotArena::get_mut` into value writes and structural writes**, then the monomorphic
+   inline cache (plan item 7) with a structure epoch bumped only by structural writes, allocation,
+   free, sweep and restore.
+   The same split unblocks round 1's T10 bitset.
+4. **T19, full.**
+   Design: a derived per-array "ever held an item" bit set inside the item store's insert (the
+   `ExoticTable::insert` pattern, so it is structural), and a hole read whose chain is the
+   receiver array plus levels that are either clear-word ordinary objects or never-filled arrays,
+   and whose index has no bound decimal id (`may_bind_index_name`), answers `undefined` without the
+   walk.
+   Bounded by the walk's 7.1% of `array_hole_fn`; worth doing after item 2 removes the global read
+   that dominates it.
+5. **Call path (plan item 8)**: pooled argument and local vectors and a lazy `id_map`.
+6. **Stack headroom on the JSON parse path**, now at exactly the gate's slack.
+7. **The `json` codegen blip** in `ChunkArena::free_chunk_for` (1.4%): restructure the free-list
+   search so it does not depend on an inlined B-tree range iterator.
