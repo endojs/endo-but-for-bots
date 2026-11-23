@@ -4753,7 +4753,8 @@ mod tests {
         }));
         // Queue real debugger output before a callback fails, so suppressing
         // only the ack (or draining the torn buffer) does not pass this test.
-        debug::rust_debug_send(c"partial reply".as_ptr(), 13);
+        // SAFETY: the literal holds 13 readable bytes plus its NUL.
+        unsafe { debug::rust_debug_send(c"partial reply".as_ptr(), 13) };
         assert!(debug::debug_has_outbound());
         worker_io::guard_ffi(|| panic!("debug callback failed"));
         flush_debug_outbound();
