@@ -545,11 +545,19 @@ impl Machine {
         };
         let cluster = cluster_lock();
         // SAFETY: UNVERIFIED — `fxReadSnapshot` rebuilds the heap from the
-        // bytes it is given and is not hardened against a crafted snapshot;
-        // this safe fn accepts any bytes, so its soundness rests on them being
-        // a snapshot this host wrote (the daemon's own CAS). The call itself:
-        // `snapshot`, its `MemReadStream` stream, `signature`, `callbacks` and `c_name`
-        // are live for the call and only read through `mem_read`.
+        // bytes it is given and is not hardened against a crafted snapshot:
+        // xsSnapshot.c checks the version, architecture, signature and
+        // callback indices (`fxUnprojectCallback`), but `fxUnprojectSlot`
+        // turns every stored slot index into `firstSlot + index` with no
+        // bound, and chunk offsets are trusted the same way, so a crafted
+        // snapshot yields out-of-bounds heap pointers. This safe fn accepts
+        // any bytes, so its soundness rests on them being a snapshot this
+        // host wrote (`resume_from_cas` does not re-check the file's SHA-256
+        // against its name either). The fix is either an `unsafe fn` with
+        // that provenance contract (which changes thixotrope-xs-worker's
+        // `resume_from_cas` call) or bounds checks in xsSnapshot.c. The call
+        // itself: `snapshot`, its `MemReadStream` stream, `signature`, `callbacks`
+        // and `c_name` are live for the call and only read through `mem_read`.
         // `cluster` serialises the shared-cluster usage count that
         // `fxReadSnapshot` increments (and decrements again on failure).
         let raw = unsafe { ffi::fxReadSnapshot(&mut snapshot, c_name.as_ptr(), ptr::null_mut()) };
@@ -851,11 +859,19 @@ impl Machine {
         };
         let cluster = cluster_lock();
         // SAFETY: UNVERIFIED — `fxReadSnapshot` rebuilds the heap from the
-        // bytes it is given and is not hardened against a crafted snapshot;
-        // this safe fn accepts any bytes, so its soundness rests on them being
-        // a snapshot this host wrote (the daemon's own CAS). The call itself:
-        // `snapshot`, its `FileReadStream` stream, `signature`, `callbacks` and `c_name`
-        // are live for the call and only read through `file_read`.
+        // bytes it is given and is not hardened against a crafted snapshot:
+        // xsSnapshot.c checks the version, architecture, signature and
+        // callback indices (`fxUnprojectCallback`), but `fxUnprojectSlot`
+        // turns every stored slot index into `firstSlot + index` with no
+        // bound, and chunk offsets are trusted the same way, so a crafted
+        // snapshot yields out-of-bounds heap pointers. This safe fn accepts
+        // any bytes, so its soundness rests on them being a snapshot this
+        // host wrote (`resume_from_cas` does not re-check the file's SHA-256
+        // against its name either). The fix is either an `unsafe fn` with
+        // that provenance contract (which changes thixotrope-xs-worker's
+        // `resume_from_cas` call) or bounds checks in xsSnapshot.c. The call
+        // itself: `snapshot`, its `FileReadStream` stream, `signature`, `callbacks`
+        // and `c_name` are live for the call and only read through `file_read`.
         // `cluster` serialises the shared-cluster usage count that
         // `fxReadSnapshot` increments (and decrements again on failure).
         let raw = unsafe { ffi::fxReadSnapshot(&mut snapshot, c_name.as_ptr(), ptr::null_mut()) };
