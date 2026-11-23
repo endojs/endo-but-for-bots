@@ -1,0 +1,12 @@
+Mutant STR-1c-d: acknowledge keeps the old low-water mark.
+--- a/ironhorse-vm/src/value/free_list.rs
++++ b/ironhorse-vm/src/value/free_list.rs
+@@ -165,7 +165,7 @@
+ 
+     /// Restart the low-water mark at the list's length.
+     pub(super) fn acknowledge(&mut self) {
+-        self.free_low = self.free.len();
++        self.free_low = self.free_low.min(self.free.len());
+     }
+ }
+ 

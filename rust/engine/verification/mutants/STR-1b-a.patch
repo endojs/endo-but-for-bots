@@ -1,0 +1,11 @@
+Mutant STR-1b-a: release forgets to set free_marks.
+--- a/ironhorse-vm/src/value/free_list.rs
++++ b/ironhorse-vm/src/value/free_list.rs
+@@ -113,7 +113,6 @@
+         let live = self.live.checked_sub(1).expect("slot live count underflow");
+         before();
+         self.free.push(i);
+-        self.free_marks[i as usize] = true;
+         self.live = live;
+     }
+ 

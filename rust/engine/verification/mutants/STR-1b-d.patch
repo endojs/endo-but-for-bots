@@ -1,0 +1,12 @@
+Mutant STR-1b-d: mark reports an already-marked slot as freshly marked.
+--- a/ironhorse-vm/src/value/free_list.rs
++++ b/ironhorse-vm/src/value/free_list.rs
+@@ -131,7 +131,7 @@
+     pub(super) fn mark(&mut self, i: u32) -> bool {
+         assert!(!self.is_free(i), "mark of free slot");
+         let i = i as usize;
+-        if self.marks[i] {
++        if self.marks[i] && i == usize::MAX {
+             false
+         } else {
+             self.marks[i] = true;
