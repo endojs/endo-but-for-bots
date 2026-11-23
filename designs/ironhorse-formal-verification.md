@@ -3,13 +3,13 @@
 | | |
 |---|---|
 | **Created** | 2026-11-19 |
-| **Updated** | 2026-11-22 |
+| **Updated** | 2026-11-23 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 
 ## Status
 
-As of 2026-11-22, Phase 0 to Phase 2 have landed, Phase 3 in part, Phase 4 in part.
+As of 2026-11-23, Phase 0 to Phase 2 have landed, Phase 3 in part, Phase 4 in part.
 The ledger, [`rust/engine/VERIFICATION.md`](../rust/engine/VERIFICATION.md), states every
 proved claim with its exact domain and is generated from the manifest
 (`rust/engine/verification/proofs.toml` and `proofs.d/*.toml`).
@@ -18,12 +18,14 @@ the catalogue entries carry an **As landed** note where the difference matters.
 
 **Proved (Kani 0.68.0, bounded where stated).**
 MTR-1 to MTR-6, NUM-1 to NUM-9 (NUM-3 and NUM-9 in part), SNAP-1 to SNAP-4, TXT-1 (the
-per-unit kernels), STR-1 (`image_free_marks` only), STR-2 and STR-3, plus the canaries KANI-1
-and KANI-2.
+per-unit kernels), STR-1 (`image_free_marks`), STR-1b and STR-1c (the extracted `FreeList`
+kernel, capacity at most 4), STR-2 and STR-3, plus the canaries KANI-1 and KANI-2.
 The runner reports 114 harnesses over 25 guarantee IDs: 90 in the `pr` tier (252 s wall on a
 4-core development host) and 24 `nightly` (2190 s, peak 6.05 GB for the 48-byte atom parse).
 `verify.py mutants` kills all 73 seeded mutants (2403 s), and `verify.py selftest` rejects every
 deliberately bad harness.
+STR-1b and STR-1c (2026-11-23) add 11 nightly harnesses and 9 mutants, measured on their own
+(the ledger's Run times table); the totals above predate them.
 
 **Tested, not proved.**
 `Math.imul` (timed out at 600 s); the integer Mod fast path against Number::remainder (900 s)
@@ -31,13 +33,12 @@ and the Number paths of Mul and Mod; `days_from_civil` against the spec day mode
 years -10000 to 10000 (600 s); NUM-10 array-index recognition (900 s); `civil_fields`' float
 floor division, `time_clip` and `date_from_components_exact`; `MeterImage::decode_fields` and
 `Signature::decode`; the `BTreeSet` duplicate-tag shape above 64 atoms; the `Vec`-building
-transcoders; `SlotArena::try_from_image`.
+transcoders; `SlotArena::try_from_image`; `SlotArena`'s calls into its `FreeList` kernel.
 Float32 typed-array elements are neither proved nor model-tested by this work.
 The ledger's "Tested, not proved" section names the covering test for each.
 
 **Not attempted.**
-NUM-11 (BigInt), STR-1(b) and (c) (the `FreeList` extraction was judged too risky for the
-serialised LIFO reuse order), the NUM-6 `lastIndexOf` variant, contract-based proofs, and Bolero
+NUM-11 (BigInt), the NUM-6 `lastIndexOf` variant, contract-based proofs, and Bolero
 companions (the companions are ordinary seeded and exhaustive tests instead).
 
 **Defects fixed** (each with a regression test):
@@ -1080,9 +1081,34 @@ found.
 - Refactor: the `FreeList` extraction for (b) and (c).
 - Cost: (a) is estimated easy now, tier `pr`; (b) and (c) are `nightly`.
 - Mutant: `free` forgets to set `free_marks`.
-- **As landed:** only (a), for slot counts 0 to 4 and free lists of up to five entries (nightly).
-  (b) and (c) were not attempted: the `FreeList` extraction was judged too risky for the
-  serialised LIFO reuse order.
+- **As landed:** (a) as STR-1, for slot counts 0 to 4 and free lists of up to five entries
+  (nightly).
+  (b) and (c) as STR-1b and STR-1c (2026-11-23, 11 nightly harnesses, 9 mutants), on a
+  `FreeList { free, free_low, free_marks, marks, live }` kernel in
+  `ironhorse-vm/src/value/free_list.rs` that `SlotArena` now routes every write of those fields
+  through, each in its original order relative to the arena's own effects.
+  The LIFO order was the stated risk; the extraction keeps it by construction (the kernel's
+  `take` is the same `Vec::pop`), and STR-1c proves it.
+  Each harness starts from every state satisfying I at capacity 0 to 4 (concrete capacity and
+  free-list length, symbolic entries, marks and low-water mark) and applies one operation, so
+  I holds after any number of operations while the capacity stays within 4.
+  STR-1c also proves the low-water mark the incremental checkpoint relies on: every free-list
+  entry below it is unchanged since the last acknowledgement.
+  `mark` and `try_from_image` are covered; the ceiling refusal, the deliberate double-free and
+  mark-of-free-slot panics, and vector reallocation are not.
+  Two deviations from the plan.
+  A whole-`SlotArena` harness was tried first and cannot run: its property index's `HashMap`
+  needs `RandomState`, which reaches a futex syscall Kani 0.68 does not support; so that
+  `SlotArena` calls the kernel as the harnesses assume is reviewed and tested, not proved.
+  And I's clause "no slot is both marked and free" is not an invariant: `free` after a sweep
+  leaves the freed slot's mark set until the next `clear_marks` or its reuse.
+  Nothing reads a free slot's mark (every collection starts with `clear_marks`, and `mark`
+  refuses free slots), so this is a documentation error, not a defect; `marks`'s comment now says
+  so, and STR-1b proves the clause in its true form, as a property of the collection phase
+  (`clear_marks` establishes it, and `alloc`, `mark` and `sweep` preserve it).
+  Symbolic-length vectors (`to_vec`, `clone`, a symbolic number of pushes before repeated
+  indexing) ran CBMC out of memory even at capacity 4, so the harnesses enumerate the shapes and
+  compare states through fixed-size copies.
 
 **STR-2. Chunk-chain parser progress.**
 - Kernel: `value.rs` `ChunkReader::checked_block_at` and `chunk_allocation_fits`.
@@ -1528,7 +1554,10 @@ A phase is done when the runner is green on it, not when its harnesses exist.
       (900 s), NUM-10 (900 s), `days_from_civil` against the model beyond years -10000 to 10000
       (600 s); and `MeterImage::decode_fields` and `Signature::decode`, which have no harness.
 - [ ] Float32 typed-array elements have neither a proof nor a model-based test.
-- [ ] NUM-11, STR-1(b) and (c), and the NUM-6 `lastIndexOf` variant were not attempted.
+- [ ] NUM-11 and the NUM-6 `lastIndexOf` variant were not attempted.
+- [ ] STR-1b and STR-1c prove the `FreeList` kernel, not `SlotArena`'s calls into it; a
+      whole-arena proof needs `RandomState` support in Kani (or a hasher the property index can
+      take under proof), and capacities above 4 need less solver memory than the sweep's 4.6 GB.
 - [ ] Dispatcher operand-bound safety (the bridge from SNAP-4 to `operand_*`) needs a
       `fetch(code, pc)` refactor before it can be proved.
 - [ ] Atom totality beyond 48 bytes, and multi-unit `SymbolName` round trips, are beyond the

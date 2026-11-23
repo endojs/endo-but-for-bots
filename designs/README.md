@@ -487,7 +487,7 @@ LLM-agent stack).*
 | [ironhorse-native-lockdown](ironhorse-native-lockdown.md) | 2026-09-16 | 2026-09-18 | **Complete** |
 | [ironhorse-guest-compartment](ironhorse-guest-compartment.md) | 2026-09-18 | 2026-09-19 | In Progress |
 | [ironhorse-intrinsic-fault-in](ironhorse-intrinsic-fault-in.md) | 2026-10-16 | 2026-10-16 | Proposed |
-| [ironhorse-formal-verification](ironhorse-formal-verification.md) | 2026-11-19 | 2026-11-22 | In Progress |
+| [ironhorse-formal-verification](ironhorse-formal-verification.md) | 2026-11-19 | 2026-11-23 | In Progress |
 | [ironhorse-quiescent-gc](ironhorse-quiescent-gc.md) | 2026-09-10 | 2026-09-10 | **Complete** |
 | [ironhorse-engine](ironhorse-engine.md) | 2026-07-02 | 2026-11-22 | Approved |
 | [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md) | 2026-07-05 | 2026-09-09 | In Progress |
