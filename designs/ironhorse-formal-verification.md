@@ -9,7 +9,8 @@
 
 ## Status
 
-As of 2026-11-23, Phase 0 to Phase 2 have landed, Phase 3 in part, Phase 4 in part.
+As of 2026-11-23, Phase 0 to Phase 2 have landed, Phase 3 in part (BigInt bounded and in part),
+Phase 4 in part.
 The ledger, [`rust/engine/VERIFICATION.md`](../rust/engine/VERIFICATION.md), states every
 proved claim with its exact domain and is generated from the manifest
 (`rust/engine/verification/proofs.toml` and `proofs.d/*.toml`).
@@ -17,15 +18,21 @@ Where a claim below differs from the catalogue, the ledger and the manifest are 
 the catalogue entries carry an **As landed** note where the difference matters.
 
 **Proved (Kani 0.68.0, bounded where stated).**
-MTR-1 to MTR-6, NUM-1 to NUM-9 (NUM-3 and NUM-9 in part), SNAP-1 to SNAP-4, TXT-1 (the
-per-unit kernels), STR-1 (`image_free_marks`), STR-1b and STR-1c (the extracted `FreeList`
-kernel, capacity at most 4), STR-2 and STR-3, plus the canaries KANI-1 and KANI-2.
-The runner reports 114 harnesses over 25 guarantee IDs: 90 in the `pr` tier (252 s wall on a
-4-core development host) and 24 `nightly` (2190 s, peak 6.05 GB for the 48-byte atom parse).
-`verify.py mutants` kills all 73 seeded mutants (2403 s), and `verify.py selftest` rejects every
-deliberately bad harness.
-STR-1b and STR-1c (2026-11-23) add 11 nightly harnesses and 9 mutants, measured on their own
-(the ledger's Run times table); the totals above predate them.
+MTR-1 to MTR-6, NUM-1 to NUM-9 (NUM-3 and NUM-9 in part), NUM-11a to NUM-11c (BigInt, in
+part: at most two or three limbs, and asIntN / asUintN at nine widths), SNAP-1 to SNAP-4, TXT-1
+(the per-unit kernels), STR-1 (`image_free_marks`), STR-1b and STR-1c (the extracted `FreeList`
+kernel, capacity at most 4), STR-2 and STR-3, plus the canaries KANI-1 to KANI-3.
+NUM-6 now includes the dense `lastIndexOf` start, and NUM-8 the Float32 element.
+`verify.py check` (2026-11-23) reports 165 harnesses over 31 guarantee IDs and 96 mutants:
+108 harnesses in the `pr` tier (298 s wall on a 4-core development host; no `pr` harness over
+10 s) and 57 `nightly`.
+The `nightly` tier was last run whole on 2026-11-22 (24 harnesses, 2190 s, peak 6.05 GB for the
+48-byte atom parse); the 33 nightly harnesses added since were measured by guarantee (STR-1b and
+STR-1c 664 s; NUM-11 480 s of verification; NUM-6's `lastIndexOf` start 14 s).
+`verify.py mutants` has killed every one of the 96 mutants, measured in parts: 73 on 2026-11-22
+(2403 s), the 9 STR-1b and STR-1c mutants and the 14 new NUM-6, NUM-8 and NUM-11 mutants on
+2026-11-23; `verify.py selftest` rejects every deliberately bad harness.
+The ledger's Run times table has each measurement.
 
 **Tested, not proved.**
 `Math.imul` (timed out at 600 s); the integer Mod fast path against Number::remainder (900 s)
@@ -33,13 +40,22 @@ and the Number paths of Mul and Mod; `days_from_civil` against the spec day mode
 years -10000 to 10000 (600 s); NUM-10 array-index recognition (900 s); `civil_fields`' float
 floor division, `time_clip` and `date_from_components_exact`; `MeterImage::decode_fields` and
 `Signature::decode`; the `BTreeSet` duplicate-tag shape above 64 atoms; the `Vec`-building
-transcoders; `SlotArena::try_from_image`; `SlotArena`'s calls into its `FreeList` kernel.
-Float32 typed-array elements are neither proved nor model-tested by this work.
+transcoders; `SlotArena::try_from_image`; `SlotArena`'s calls into its `FreeList` kernel;
+`BigInt.asIntN` / `asUintN` at the other widths up to 126 and BigInt operands above the proved
+limb counts (symbolic widths and limb counts make allocation sizes symbolic, which exhausted
+10 to 13 GB).
 The ledger's "Tested, not proved" section names the covering test for each.
 
 **Not attempted.**
-NUM-11 (BigInt), the NUM-6 `lastIndexOf` variant, contract-based proofs, and Bolero
-companions (the companions are ordinary seeded and exhaustive tests instead).
+The rest of NUM-11 (`bi_mul_mag`, `bi_div_rem_mag`, the shifts, `number_to_bigint` and its
+integer rewrite, the string conversions, the loop-contract stretch goal), the %TypedArray%,
+generic Array and String `lastIndexOf` starts, contract-based proofs, and Bolero companions (the
+companions are ordinary seeded and exhaustive tests instead).
+
+**Found, not a defect** (2026-11-23): Kani refuted an over-strong NUM-6 bound, that
+`last_relative_index` stays in range for every `f64`; a non-integral `fromIndex` just below zero
+rounds `len + n` to `len`.
+The only caller truncates first, so the precondition is now stated on the kernel.
 
 **Defects fixed** (each with a regression test):
 meter accumulation overflow from restored states (`5714b2e8`);
@@ -495,6 +511,7 @@ The catalogue lists each as **tested, not proved**.
 | Float `%` | Miscomputed (R1); Mod cannot be stubbed because it is an operator | Integer path proved directly against the spec model; Number path Bolero-tested against the model (NUM-3) |
 | `Vec`-heavy text round trips | `SymbolName` full round trip: `[u16; 1]` verified in 109 s at 4.3 GB; `[u16; 2]` died near a 9.5 GB cap; `[u16; 3]` and `from_cesu8` on 4 or 8 bytes failed with solver `ERROR` (OOM) | Exhaustive over single units and code points; Bolero over sequences (TXT-1) |
 | Symbolic allocation sizes | Atom writer round trip with symbolic payload lengths used 11 GB at one atom | Concrete lengths, symbolic contents (SNAP-1) |
+| Symbolic BigInt limb counts and widths | A two-limb `bi_add` with a symbolic used length exhausted 13 GB in seconds; `bi_as_n` with a symbolic width 33..=64 exhausted a 10 GB cap; one concrete width takes up to 45 s and four in one harness 155 s | One harness per concrete limb count and width (NUM-11); the other widths tested |
 | Number↔string conversion | Uses `format!("{:e}")`, `String` and dtoa (survey); not attempted | Bolero round trip `ToNumber(ToString(x)) == x` (out of catalogue scope; see [§ Examined and rejected](#examined-and-rejected)) |
 | Atom parse above 48 bytes | N=64 was inconclusive at a 7 GB cap | Bounded claim at N=48; cargo-fuzz beyond |
 
@@ -680,6 +697,16 @@ Each entry gives:
   structure but a narrower domain, so the real figure is unknown until Phase 1.
   Tier `pr` if under budget, else `nightly`.
 - Mutant: clamp `n ≥ 0` to `len - 1`.
+- **As landed (2026-11-23, the `lastIndexOf` variant):** the start computation of the dense
+  `Array.prototype.lastIndexOf` path was extracted unchanged from `Interp::arg_to_last_index`
+  into `numeric_kernel::last_relative_index` (it keeps its float `len + n`) and proved, for every
+  integral or infinite `n` and every `u32` length, equal to a §23.1.3.20 steps 3 to 7 model
+  (`ironhorse_spec::last_index_start`); nightly, about 15 s.
+  Kani refuted the stronger "in range for every `f64`" bound: a non-integral `n` just below zero
+  (e.g. `-1e-20`) rounds `len + n` to `len`.
+  The caller truncates first, so this is a stated precondition, not a defect.
+  The %TypedArray%, generic Array and String `lastIndexOf` starts keep their own forms and are
+  not proved.
 
 **NUM-7. binary64 → binary16 rounding and its round trip.**
 - Kernel: `ironhorse-vm/src/interp.rs` `f64_to_f16_bits` and `f16_bits_to_f64`.
@@ -720,7 +747,13 @@ Each entry gives:
   If it is expensive it moves to `nightly`.
 - Mutant: Uint8Clamped truncates instead of rounding.
 - **As landed:** proved for the seven integer kinds, Float64 (NaN stored canonically) and
-  Float16; Float32 is not covered.
+  Float16.
+  Float32 (2026-11-23): a canary (KANI-3) first measured Kani's `f64 as f32` and `f32 as f64`
+  casts at their tie, subnormal and overflow boundaries and found them right, so the element is
+  proved against a new integer-only binary32 roundTiesToEven model
+  (`ironhorse_spec::binary64_to_binary32`, tested against rustc's cast) for every `u64` bit
+  pattern and every 4-byte pattern, in about 3 s (`pr`).
+  The claim rests on Kani's cast encoding, which KANI-3 pins.
 
 **NUM-9. Date day and civil arithmetic.**
 - Kernel:
@@ -811,7 +844,28 @@ Each entry gives:
   The harnesses assume trimmed inputs, and the ledger lists "snapshot-decoded BigInt chunks are
   trimmed" as an unproved obligation of the restore path.
 - Mutant: drop the final carry limb in `bi_add_mag`.
-- **As landed:** not attempted.
+- **As landed (2026-11-23), in part and bounded, as NUM-11a, NUM-11b and NUM-11c:**
+  - The arithmetic bodies of `Interp::bigint_as_n`, `bigint_to_f64`, `slot_to_bigint_u64`,
+    `bigint_bitwise` and `store_bigint`'s normalisation were extracted into pure kernels in
+    `interp/bigint.rs`; metering and allocation stay in the callers, unchanged.
+  - Every harness fixes its limb counts: with a symbolic count, the result `Vec`'s allocation
+    size is symbolic, and CBMC exhausted 13 GB within seconds on a two-limb add.
+  - (a) NUM-11a: `bi_add` (add, and subtract as `bigint_arith` calls it), `bi_cmp`,
+    `bi_bitwise` and `bi_canonical` (canonical form and negation) equal i128 models of
+    §6.1.6.2 on canonical operands of one or two limbs, with canonical results; 15 harnesses,
+    14 `pr` (2 to 8 s each), `sub_2_2` nightly.
+    `bi_mul_mag`, `bi_div_rem_mag` and the shifts were not attempted.
+  - NUM-11b: `bi_as_n` equals BigInt.asIntN / asUintN (§21.2.2.1, §21.2.2.2) for values of one
+    or two limbs at the widths 0, 1, 2, 31, 32, 33, 34, 63 and 64 only: a symbolic width makes the
+    result allocation symbolic-size (out of memory), one concrete width costs up to 45 s, and four
+    widths in one harness 155 s.
+    18 nightly harnesses; every width up to 126 is tested.
+  - NUM-11c: `bi_to_f64` equals 𝔽(ℝ(x)) bit for bit for values of up to three limbs (about 120 s
+    each, nightly; the kernel is integer-only, so no float operation is trusted), `bi_low_u64`
+    equals ToBigInt64 / ToBigUint64, and `u64_to_signed_limbs` equals the BigInt cases of
+    RawBytesToNumeric and round-trips through `bi_low_u64` (`pr`).
+  - (b) `number_to_bigint` was not attempted: the shifting rewrite has not been done.
+  - (c) The loop-contract stretch goal was not attempted.
 
 ### The meter
 
@@ -1544,8 +1598,8 @@ A phase is done when the runner is green on it, not when its harnesses exist.
       unused byte: every snapshot, store and fixture suite passes unchanged after `086ed0bf`.
 - [ ] Kind/payload pairing well-formedness of slot records is unproved.
       Decide whether it belongs to the codec or to the image layer.
-- [ ] "Snapshot-decoded BigInt chunks are trimmed" is an unproved restore-path obligation that
-      NUM-11 assumes.
+- [ ] "Snapshot-decoded BigInt chunks are canonical" is an unproved restore-path obligation that
+      NUM-11 assumes: `read_bigint` trims, but keeps a stored sign byte on a zero magnitude.
 - [x] The NUM-3(b) product lemma: subsumed, since the Mul fast path is proved against the model
       directly.
 - [ ] NUM-9's f64 floor division in `civil_fields`, `time_clip` and `date_from_components_exact`
@@ -1553,8 +1607,14 @@ A phase is done when the runner is green on it, not when its harnesses exist.
 - [ ] Proofs that timed out and now rest on tests: `Math.imul` (600 s), the Mod fast path
       (900 s), NUM-10 (900 s), `days_from_civil` against the model beyond years -10000 to 10000
       (600 s); and `MeterImage::decode_fields` and `Signature::decode`, which have no harness.
-- [ ] Float32 typed-array elements have neither a proof nor a model-based test.
-- [ ] NUM-11 and the NUM-6 `lastIndexOf` variant were not attempted.
+- [x] Float32 typed-array elements: proved against a binary32 model (NUM-8), resting on Kani's
+      cast encoding, which the KANI-3 canary pins.
+- [x] The NUM-6 `lastIndexOf` variant: the dense Array path's start index is proved; the
+      %TypedArray%, generic Array and String starts are not consolidated or proved.
+- [ ] NUM-11 is bounded and partial: add, subtract, compare and bitwise at two limbs, asIntN /
+      asUintN at nine widths, conversions at three limbs.
+      `bi_mul_mag`, `bi_div_rem_mag`, the shifts, `number_to_bigint` (and its integer rewrite),
+      the string conversions and the loop-contract stretch goal remain.
 - [ ] STR-1b and STR-1c prove the `FreeList` kernel, not `SlotArena`'s calls into it; a
       whole-arena proof needs `RandomState` support in Kani (or a hasher the property index can
       take under proof), and capacities above 4 need less solver memory than the sweep's 4.6 GB.
