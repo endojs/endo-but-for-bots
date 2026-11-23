@@ -1,0 +1,12 @@
+Mutant NUM-8-b: Uint32 decodes i32::MAX as a Number instead of an Integer.
+--- a/ironhorse-vm/src/interp.rs
++++ b/ironhorse-vm/src/interp.rs
+@@ -3322,7 +3322,7 @@
+         // Uint32
+         9 => {
+             let u = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+-            if u <= 0x7FFF_FFFF {
++            if u < 0x7FFF_FFFF {
+                 Slot::integer(u as i32)
+             } else {
+                 Slot::number(u as f64)

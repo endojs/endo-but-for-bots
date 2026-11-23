@@ -1,0 +1,12 @@
+Mutant NUM-1-b: the 2^64 core drops the two's complement of a negative Number.
+--- a/ironhorse-vm/src/numeric_kernel.rs
++++ b/ironhorse-vm/src/numeric_kernel.rs
+@@ -46,7 +46,7 @@
+     if bits >> 63 == 0 {
+         magnitude
+     } else {
+-        magnitude.wrapping_neg()
++        magnitude
+     }
+ }
+ 

@@ -1,0 +1,12 @@
+Mutant NUM-9-a: days_from_civil computes its 400-year era with truncating division.
+--- a/ironhorse-vm/src/interp/temporal.rs
++++ b/ironhorse-vm/src/interp/temporal.rs
+@@ -937,7 +937,7 @@
+     // range, and the i64 boundary values admitted above must become an invalid
+     // TimeClip result rather than overflowing debug arithmetic here.
+     let y = i128::from(year) - i128::from(month <= 2);
+-    let era = if y >= 0 { y } else { y - 399 } / 400;
++    let era = y / 400;
+     let yoe = y - era * 400;
+     let mp = i128::from(month) + if month > 2 { -3 } else { 9 };
+     let doy = (153 * mp + 2) / 5 + i128::from(day) - 1;

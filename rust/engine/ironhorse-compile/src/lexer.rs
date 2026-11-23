@@ -1142,17 +1142,15 @@ impl<'a> Lexer<'a> {
                     '0'..='7' => {
                         let first = chars[i] as u32 - '0' as u32;
                         i += 1;
-                        let next_is_digit = i < chars.len() && ('0'..='9').contains(&chars[i]);
+                        let next_is_digit = i < chars.len() && chars[i].is_ascii_digit();
                         if first == 0 && !next_is_digit {
                             out.push(0);
                         } else {
                             legacy = true;
                             let mut value = first;
-                            if first <= 3 {
-                                if i < chars.len() && ('0'..='7').contains(&chars[i]) {
-                                    value = value * 8 + (chars[i] as u32 - '0' as u32);
-                                    i += 1;
-                                }
+                            if first <= 3 && i < chars.len() && ('0'..='7').contains(&chars[i]) {
+                                value = value * 8 + (chars[i] as u32 - '0' as u32);
+                                i += 1;
                             }
                             if i < chars.len() && ('0'..='7').contains(&chars[i]) {
                                 value = value * 8 + (chars[i] as u32 - '0' as u32);

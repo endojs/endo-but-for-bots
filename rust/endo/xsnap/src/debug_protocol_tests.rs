@@ -59,12 +59,12 @@ static INIT: Once = Once::new();
 /// Create a debug-enabled XS machine.  Returns `None` if the
 /// binary was built without `mxDebug` (prebuilt libxs.a).
 fn debug_machine(ps: &mut powers::HostPowers) -> Option<Machine> {
-    INIT.call_once(|| initialize_shared_cluster());
+    INIT.call_once(initialize_shared_cluster);
     debug::debug_reset();
     debug::debug_enable();
-    let machine =
-        Machine::new(&DEFAULT_CREATION, "debug-test").expect("machine creation failed");
-    machine.register_powers(ps as *mut powers::HostPowers);
+    let machine = Machine::new(&DEFAULT_CREATION, "debug-test").expect("machine creation failed");
+    // SAFETY: each test keeps `ps` alive, untouched, past its machine.
+    unsafe { machine.register_powers(ps as *mut powers::HostPowers) };
     if !debug::debug_is_active() {
         eprintln!("debug not compiled in — skipping test");
         debug::debug_reset();
@@ -143,11 +143,7 @@ fn all_attrs<'a>(xml: &'a str, element: &str, name: &str) -> Vec<&'a str> {
     let key = format!("{name}=\"");
     let mut results = Vec::new();
     let mut search = xml;
-    loop {
-        let pos = match search.find(&tag) {
-            Some(p) => p,
-            None => break,
-        };
+    while let Some(pos) = search.find(&tag) {
         let rest = &search[pos..];
         if let Some(kpos) = rest.find(&key) {
             let val_start = kpos + key.len();
@@ -386,9 +382,7 @@ fn manage_line_breakpoints() {
         let break_line = attr(&xml, "break", "line");
         eprintln!("breakpoint hit at line {:?}", break_line);
     } else {
-        eprintln!(
-            "breakpoint did not fire (path may differ between evals)"
-        );
+        eprintln!("breakpoint did not fire (path may differ between evals)");
     }
 
     // Clear all breakpoints and verify code runs uninterrupted.
@@ -429,10 +423,7 @@ fn evaluate_expression_while_stopped() {
     // The <eval> element carries the result of `x * 2`.
     let eval_result = text_content(&xml, "eval");
     eprintln!("eval result: {:?}", eval_result);
-    assert!(
-        eval_result.is_some(),
-        "expected <eval> response in:\n{xml}",
-    );
+    assert!(eval_result.is_some(), "expected <eval> response in:\n{xml}",);
     // x = 21, so x * 2 = 42.
     assert!(
         eval_result.unwrap().contains("42"),
@@ -467,10 +458,7 @@ fn inspect_global_scope() {
         xml.contains("myGlobal"),
         "expected 'myGlobal' in global scope:\n{}",
         &xml[xml.find("<global>").unwrap_or(0)
-            ..xml
-                .find("</global>")
-                .map(|p| p + 9)
-                .unwrap_or(xml.len())],
+            ..xml.find("</global>").map(|p| p + 9).unwrap_or(xml.len())],
     );
 
     debug::debug_reset();
@@ -516,10 +504,7 @@ fn step_advances_one_line() {
 
     // We expect at least one break (the debugger statement).
     // If stepping worked, there should be a second break.
-    assert!(
-        break_count >= 1,
-        "expected at least 1 break event:\n{xml}",
-    );
+    assert!(break_count >= 1, "expected at least 1 break event:\n{xml}",);
     if break_count >= 2 {
         // The second break should be on a later line.
         let lines = all_attrs(&xml, "break", "line");
@@ -591,10 +576,7 @@ fn detach_resumes_normal_execution() {
 
     // Code with a debugger statement should run without pausing.
     let result = machine.eval("var x = 1; debugger; x + 1");
-    assert!(
-        result.is_some(),
-        "eval should complete after detach",
-    );
+    assert!(result.is_some(), "eval should complete after detach",);
 
     // No debug output should be generated.
     let xml = drain_xml();

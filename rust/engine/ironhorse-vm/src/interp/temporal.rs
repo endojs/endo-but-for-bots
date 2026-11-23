@@ -134,7 +134,7 @@ impl TemporalDurationRecord {
     }
 
     /// The pure time part (`hours`…`nanoseconds`) as a single nanosecond count,
-    /// ignoring the calendar/day fields entirely. Unlike [`time_nanoseconds`]
+    /// ignoring the calendar/day fields entirely. Unlike `time_nanoseconds`
     /// this never rejects a duration that also carries date units — the caller
     /// handles those through calendar arithmetic against a `relativeTo` date.
     pub(super) fn time_only_nanoseconds(self) -> Option<i128> {
@@ -560,7 +560,7 @@ pub(super) fn iso_total_calendar_units(
             "month" => iso_date_add(start, 0, k, 0, 0)?,
             _ => return None,
         };
-        Some(iso_days_between(start, d)?.checked_mul(DAY_NS)?)
+        iso_days_between(start, d)?.checked_mul(DAY_NS)
     };
     // Seed `k` near the answer so the adjustment loops are O(1) rather than
     // stepping one unit at a time across a span that can be ~10^8 days.
@@ -703,7 +703,7 @@ pub(super) fn validate_duration_increment(rank: u8, increment: i64) -> Option<()
     let max: i64 = match rank {
         4 => 24,
         5 | 6 => 60,
-        7 | 8 | 9 => 1000,
+        7..=9 => 1000,
         _ => return Some(()),
     };
     if increment >= max || max % increment != 0 {
@@ -1491,4 +1491,127 @@ pub(super) fn resolve_time_zone(raw: &str) -> Option<(String, i32)> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod civil_spec_tests {
+    //! The civil-date kernels against the `ironhorse-spec` Date model
+    //! (NUM-9), without Kani.
+    use super::{civil_from_days, days_from_civil};
+    use ironhorse_spec::date::day_from_civil;
+
+    #[test]
+    fn days_from_civil_matches_the_spec() {
+        let years = (-2000i64..3000)
+            .chain((-300_000..300_000).step_by(997))
+            .chain([
+                i64::MIN,
+                i64::MIN + 1,
+                i64::MAX,
+                i64::MAX - 1,
+                -271_821,
+                275_760,
+            ]);
+        for y in years {
+            for m in 0..=13 {
+                for d in [0, 1, 2, 28, 29, 30, 31, 32] {
+                    assert_eq!(
+                        days_from_civil(y, m, d),
+                        day_from_civil(y, m, d),
+                        "{y}-{m}-{d}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn civil_from_days_inverts_days_from_civil_on_the_time_clip_range() {
+        let mut days: Vec<i128> = (-1_000_000..1_000_000).step_by(37).collect();
+        days.extend(-100_000_010..-99_999_990);
+        days.extend(99_999_990..100_000_010);
+        for day in days {
+            let (y, m, d) = civil_from_days(day);
+            assert_eq!(days_from_civil(y, m, d), Some(day), "{day}");
+        }
+    }
+}
+
+#[cfg(kani)]
+mod proofs {
+    //! NUM-9: the civil-date kernels: a round trip on the whole TimeClip
+    //! day range, and days_from_civil against the `ironhorse-spec` day
+    //! model on the concrete years the harnesses name.
+    use super::{civil_from_days, days_from_civil};
+    use ironhorse_spec::date::day_from_civil;
+
+    /// civil_from_days is a left inverse of days_from_civil on the TimeClip
+    /// day range.
+    #[kani::proof]
+    fn num9_civil_round_trip() {
+        let day: i128 = kani::any();
+        kani::assume((-100_000_000..=100_000_000).contains(&day));
+        let (y, m, d) = civil_from_days(day);
+        assert_eq!(days_from_civil(y, m, d), Some(day));
+        kani::cover!(day == -100_000_000, "the earliest TimeClip day");
+        kani::cover!(m == 2 && d == 29, "a leap day");
+    }
+
+    /// days_from_civil(y, m, d) equals the ironhorse-spec day model
+    /// (DayFromYear plus the MonthFromTime/DateFromTime offsets) for every
+    /// month and day, including the nonexistent ones, in year `y`.
+    fn matches_the_spec_in(y: i64) {
+        let m: u32 = kani::any();
+        let d: u32 = kani::any();
+        let got = days_from_civil(y, m, d);
+        assert_eq!(got, day_from_civil(y, m, d));
+        kani::cover!(m == 2 && d == 29 && got.is_some(), "a leap day exists");
+        kani::cover!(m == 2 && d == 29 && got.is_none(), "a leap day is refused");
+        kani::cover!(m == 12 && d == 31, "the last day of the year");
+    }
+
+    /// The day model against the kernel on years around the epoch and on
+    /// each kind of century and 400-year boundary, both signs.
+    #[kani::proof]
+    #[kani::unwind(6)]
+    fn num9_days_from_civil_matches_spec_epoch_years() {
+        for y in [1968, 1969, 1970, 1971, 1972] {
+            matches_the_spec_in(y);
+        }
+    }
+
+    #[kani::proof]
+    #[kani::unwind(12)]
+    fn num9_days_from_civil_matches_spec_boundary_years() {
+        for y in [-401, -400, -1, 0, 1, 1600, 1601, 1900, 1901, 2000, 2100] {
+            matches_the_spec_in(y);
+        }
+    }
+
+    /// Every year from 1900 to 2100, symbolic: a century that is not a
+    /// 400-year boundary (1900, 2100) and one that is (2000).
+    #[kani::proof]
+    fn num9_days_from_civil_matches_spec_1900_to_2100() {
+        let y: i64 = kani::any();
+        kani::assume((1900..=2100).contains(&y));
+        matches_the_spec_in(y);
+    }
+
+    /// Every year from -10000 to 10000, symbolic (fifty 400-year cycles
+    /// either side of year 0). The whole TimeClip year range
+    /// (-271821..=275760) did not finish in 600 s.
+    #[kani::proof]
+    fn num9_days_from_civil_matches_spec_10000_years() {
+        let y: i64 = kani::any();
+        kani::assume((-10_000..=10_000).contains(&y));
+        matches_the_spec_in(y);
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn num9_days_from_civil_matches_spec_time_clip_ends() {
+        for y in [-271_822, -271_821, 275_759, 275_760] {
+            matches_the_spec_in(y);
+        }
+    }
 }

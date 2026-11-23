@@ -14,8 +14,9 @@
 //! Three invariants cover the three entry points the design names:
 //!
 //! - **[`StoreManifest::decode`] and [`SmallState::decode`] are total**: any
-//!   byte string yields a structured [`StoreError`] or a value, never a panic
-//!   and never an unbounded reservation. Both decoders are *canonical* for
+//!   byte string yields a structured
+//!   [`StoreError`](ironhorse_snapshot::store::StoreError) or a value, never
+//!   a panic and never an unbounded reservation. Both decoders are *canonical* for
 //!   the current schema, so an accepted payload must re-encode to the bytes
 //!   it was decoded from — the same "one encoding" bar the container arm
 //!   holds ([`crate::snapshot::decoder_is_error_free`]). A manifest in an

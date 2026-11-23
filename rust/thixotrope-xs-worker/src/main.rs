@@ -45,14 +45,26 @@ thread_local! {
 
 /// Host function `thixotropeSend(json)`: the worker shell emits one outbound
 /// CapTP message (an ASCII JSON string).
+///
+/// # Safety
+/// An XS host callback; see the host-callback contract in `xsnap::worker_io`.
 unsafe extern "C" fn host_thixotrope_send(the: *mut XsMachine) {
-    let message = arg_str(the, 0);
+    // SAFETY: called by XS as a host function on the machine's thread (the
+    // host-callback contract). `arg_str` reads argument 0 without checking
+    // argc (UNVERIFIED there). Unlike xsnap's callbacks this one is not
+    // wrapped in `guard_ffi`: a panic here (a re-entrant `borrow_mut`)
+    // aborts the process rather than unwinding into C.
+    let message = unsafe { arg_str(the, 0) };
     OUTBOUND.with(|queue| queue.borrow_mut().push(message));
 }
 
 /// Host function `thixotropeTrace(text)`: worker diagnostics to stderr.
+///
+/// # Safety
+/// As `host_thixotrope_send`.
 unsafe extern "C" fn host_thixotrope_trace(the: *mut XsMachine) {
-    let text = arg_str(the, 0);
+    // SAFETY: as in `host_thixotrope_send`.
+    let text = unsafe { arg_str(the, 0) };
     eprintln!("thixotrope-xs-worker: [trace] {text}");
 }
 
@@ -197,7 +209,13 @@ fn main() {
 
     // fd 3: host -> worker; fd 4: worker -> host. The spawning engine
     // adapter provides both as pipes.
+    // SAFETY: the spawning adapter passes the two pipe ends as fds 3 and 4,
+    // and nothing in this process takes ownership of them first; each `File`
+    // becomes the sole owner. If a spawner omitted them, a file opened above
+    // (the restore snapshot) could have been given number 3; that is a
+    // contract on the spawner this process does not check.
     let reader = BufReader::new(unsafe { File::from_raw_fd(3) });
+    // SAFETY: as above, for fd 4.
     let mut writer = BufWriter::new(unsafe { File::from_raw_fd(4) });
 
     let send_line = |writer: &mut BufWriter<File>, line: &str| {

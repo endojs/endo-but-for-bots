@@ -12,9 +12,12 @@
 //! divergence between ironhorse and the oracle points at the interpreter,
 //! not the compiler, during stages 1 through 4.
 
-use std::os::raw::{c_char, c_int};
+// The audited FFI seam: the one library root exempt from the workspace's
+// `unsafe_code = "deny"` (and from the `#![forbid(unsafe_code)]` every other
+// library root carries). Its tests, examples and build script stay denied.
+#![allow(unsafe_code)]
 
-// NOT #![forbid(unsafe_code)] — this crate is the audited FFI seam.
+use std::os::raw::{c_char, c_int};
 
 /// Must stay byte-identical to `ENDOR_RESULT_MAX` in `csrc/xs_shim.c` — the
 /// fixed capacity of the completion-value buffer shared across the FFI.
@@ -444,7 +447,7 @@ pub fn run_cranks(sources: &[&str]) -> Option<Vec<OracleOutcome>> {
         .iter()
         .map(|s| s.as_bytes().as_ptr() as *const c_char)
         .collect();
-    let lens: Vec<u32> = sources.iter().map(|s| s.as_bytes().len() as u32).collect();
+    let lens: Vec<u32> = sources.iter().map(|s| s.len() as u32).collect();
     let mut raws: Vec<XsOracleResultRaw> = (0..sources.len())
         .map(|_| XsOracleResultRaw::default())
         .collect();

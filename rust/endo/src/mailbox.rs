@@ -37,11 +37,8 @@ impl MailboxReceiver {
     /// Returns an empty vec if nothing is buffered.
     pub fn drain(&mut self) -> Vec<Message> {
         let mut msgs = Vec::new();
-        loop {
-            match self.rx.try_recv() {
-                Ok(msg) => msgs.push(msg),
-                Err(_) => break,
-            }
+        while let Ok(msg) = self.rx.try_recv() {
+            msgs.push(msg);
         }
         msgs
     }

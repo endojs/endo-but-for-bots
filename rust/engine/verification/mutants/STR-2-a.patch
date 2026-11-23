@@ -1,0 +1,12 @@
+Mutant STR-2-a: checked_block_at admits a zero-span free chunk (end == header).
+--- a/ironhorse-vm/src/value.rs
++++ b/ironhorse-vm/src/value.rs
+@@ -1840,7 +1840,7 @@
+                 return Err("free chunk header out of range (corrupt heap)");
+             }
+             let span = self.length_at(payload);
+-            if span < FREE_CHUNK_HEADER {
++            if span < FREE_CHUNK_HEADER && span != 0 {
+                 return Err("free chunk span too short (corrupt heap)");
+             }
+             let end = header

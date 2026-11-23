@@ -1,0 +1,12 @@
+Mutant NUM-8-c: Float64 stores keep a NaN's payload instead of the canonical NaN.
+--- a/ironhorse-vm/src/interp.rs
++++ b/ironhorse-vm/src/interp.rs
+@@ -3359,7 +3359,7 @@
+             value.to_le_bytes().to_vec()
+         }
+         // Float64
+-        3 => canonicalize_nan(n).to_le_bytes().to_vec(),
++        3 => n.to_le_bytes().to_vec(),
+         // Int8 (ToInt8), Uint8 (ToUint8)
+         4 => numeric_kernel::to_int8(bits).to_le_bytes().to_vec(),
+         7 => vec![numeric_kernel::to_uint8(bits)],

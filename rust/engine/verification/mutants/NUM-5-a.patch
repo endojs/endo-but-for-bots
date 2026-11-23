@@ -1,0 +1,12 @@
+Mutant NUM-5-a: SameValue says NaN is not the same value as NaN.
+--- a/ironhorse-vm/src/interp/numeric.rs
++++ b/ironhorse-vm/src/interp/numeric.rs
+@@ -533,7 +533,7 @@
+ /// the same value as NaN and `+0` is not `-0`, else [`strict_equals`].
+ pub(super) fn same_value_immediate(a: &Slot, b: &Slot) -> bool {
+     match (numeric_of(a), numeric_of(b)) {
+-        (Some(x), Some(y)) => (x.is_nan() && y.is_nan()) || x.to_bits() == y.to_bits(),
++        (Some(x), Some(y)) => !x.is_nan() && x.to_bits() == y.to_bits(),
+         _ => strict_equals(a, b),
+     }
+ }

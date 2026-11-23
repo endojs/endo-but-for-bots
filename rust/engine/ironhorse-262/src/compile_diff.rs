@@ -154,7 +154,7 @@ fn oracle_compile_module(source: &str) -> Option<(bool, Vec<u8>)> {
 }
 
 /// ironhorse's **Module** compile verdict for `source`, total over panics —
-/// the module counterpart of [`ironhorse_compile`].
+/// the module counterpart of `ironhorse_compile`.
 fn ironhorse_compile_module(source: &str) -> Result<Result<Vec<u8>, String>, String> {
     let caught = panic::catch_unwind(AssertUnwindSafe(|| {
         ironhorse_compile::with_xs_bytes(|| ironhorse_compile::compile_module(source))

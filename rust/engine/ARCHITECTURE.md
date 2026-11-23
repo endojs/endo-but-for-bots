@@ -11,7 +11,7 @@ The architecture review is an independently revised record, not this guide's TOD
 
 ## Workspace and dependency direction
 
-`rust/engine/Cargo.toml` defines an independent workspace with **eleven members**.
+`rust/engine/Cargo.toml` defines an independent workspace with **twelve members**.
 The repository's outer Cargo workspace excludes it but consumes its crates by path.
 A dependency arrow means the source crate imports the target crate.
 The [generated crate diagram](CRATE-GRAPH.md) includes optional and development edges.
@@ -29,6 +29,7 @@ is supplied through a trait owned by the VM.
 | `ironhorse-compile` | Lexer, parser, scoper, coder and budgeted source compilation. |
 | `ironhorse-regexp` | XSRE-derived regexp compiler and backtracking matcher. |
 | `ironhorse-snapshot` | Atom codecs, validated images, side-table ledger, heap stores and checkpoints. |
+| `ironhorse-spec` | Integer-only ECMA-262 reference models for the Kani proofs ([VERIFICATION.md](VERIFICATION.md)); depends on no engine crate. |
 | `ironhorse-262` | Test262 orchestration, compiler comparisons and XS result differential. |
 | `ironhorse-fuzz` | Testable fuzz logic; nested fuzz project provides libFuzzer entry points. |
 | `xs-oracle` | XS C/FFI reference compiler and runtime for development and CI. |

@@ -114,3 +114,9 @@ doc = false
 
 [workspace]
 # Own workspace: cargo-fuzz builds this tree in isolation.
+
+# A standalone cargo root outside the engine workspace, so it does not inherit
+# `[workspace.lints]`; it states the unsafe policy itself (checked by
+# scripts/test-crate-graph.py).
+[lints.rust]
+unsafe_code = "forbid"

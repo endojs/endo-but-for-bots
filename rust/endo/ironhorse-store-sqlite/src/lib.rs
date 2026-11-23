@@ -30,6 +30,7 @@
 //! `forbid(unsafe_code)` and zero-C (design § Crate and dependency
 //! layout); SQLite's C is the same bundled `rusqlite` the daemon
 //! already compiles.
+#![forbid(unsafe_code)]
 
 use std::path::Path;
 
@@ -293,10 +294,7 @@ impl SqliteHeapStore {
         // its first checkpoint. The refusal is a capability the medium
         // lacks, not a transient I/O fault, so a supervisor does not retry
         // it.
-        if conn
-            .is_readonly(rusqlite::DatabaseName::Main)
-            .map_err(sql_err)?
-        {
+        if conn.is_readonly(rusqlite::MAIN_DB).map_err(sql_err)? {
             return Err(StoreError::Unsupported(
                 "open a read-only sqlite database (open locks it for writing)",
             ));

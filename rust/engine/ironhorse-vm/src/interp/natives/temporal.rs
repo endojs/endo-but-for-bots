@@ -1245,7 +1245,7 @@ impl Interp {
                         }
                     }
                 }
-                if !(seen[0] && seen[1] && seen[2]) || !temporal_plain_valid(p) {
+                if !(seen[0] && seen[1] && seen[2] && temporal_plain_valid(p)) {
                     return Err(self.catchable_type_error_msg(
                         "Temporal: missing or invalid required date/time fields".into(),
                     ));

@@ -107,12 +107,10 @@ extern "C" {
     pub fn fxEndHost(the: *mut XsMachine);
 
     // Stack overflow check
-    pub fn fxOverflow(
-        the: *mut XsMachine,
-        count: c_int,
-        file: *const c_char,
-        line: c_int,
-    );
+    pub fn fxOverflow(the: *mut XsMachine, count: c_int, file: *const c_char, line: c_int);
+
+    // Argument count of the current host-callback frame (xs.h's `xsArgc`)
+    pub fn fxArgc(the: *mut XsMachine) -> i32;
 
     // Type inspection
     pub fn fxTypeOf(the: *mut XsMachine, slot: *mut XsSlot) -> i8;
@@ -124,11 +122,7 @@ extern "C" {
     pub fn fxBoolean(the: *mut XsMachine, slot: *mut XsSlot, value: i32);
     pub fn fxInteger(the: *mut XsMachine, slot: *mut XsSlot, value: i32);
     pub fn fxNumber(the: *mut XsMachine, slot: *mut XsSlot, value: f64);
-    pub fn fxString(
-        the: *mut XsMachine,
-        slot: *mut XsSlot,
-        value: *const c_char,
-    ) -> *mut c_char;
+    pub fn fxString(the: *mut XsMachine, slot: *mut XsSlot, value: *const c_char) -> *mut c_char;
     pub fn fxStringBuffer(
         the: *mut XsMachine,
         slot: *mut XsSlot,
@@ -147,10 +141,7 @@ extern "C" {
     pub fn fxToBoolean(the: *mut XsMachine, slot: *mut XsSlot) -> i32;
     pub fn fxToInteger(the: *mut XsMachine, slot: *mut XsSlot) -> i32;
     pub fn fxToNumber(the: *mut XsMachine, slot: *mut XsSlot) -> f64;
-    pub fn fxToString(
-        the: *mut XsMachine,
-        slot: *mut XsSlot,
-    ) -> *mut c_char;
+    pub fn fxToString(the: *mut XsMachine, slot: *mut XsSlot) -> *mut c_char;
 
     // ArrayBuffer access
     pub fn fxGetArrayBufferData(
@@ -160,10 +151,7 @@ extern "C" {
         buffer: *mut c_void,
         size: i32,
     );
-    pub fn fxGetArrayBufferLength(
-        the: *mut XsMachine,
-        slot: *mut XsSlot,
-    ) -> i32;
+    pub fn fxGetArrayBufferLength(the: *mut XsMachine, slot: *mut XsSlot) -> i32;
     pub fn fxSetArrayBufferData(
         the: *mut XsMachine,
         slot: *mut XsSlot,
@@ -171,11 +159,7 @@ extern "C" {
         buffer: *mut c_void,
         size: i32,
     );
-    pub fn fxSetArrayBufferLength(
-        the: *mut XsMachine,
-        slot: *mut XsSlot,
-        length: i32,
-    );
+    pub fn fxSetArrayBufferLength(the: *mut XsMachine, slot: *mut XsSlot, length: i32);
 
     // Property access (ID-based)
     // These operate on the top of the stack (TOS):
@@ -186,12 +170,7 @@ extern "C" {
     pub fn fxGetID(the: *mut XsMachine, id: i32);
     pub fn fxSetID(the: *mut XsMachine, id: i32);
     pub fn fxDeleteID(the: *mut XsMachine, id: i32);
-    pub fn fxDefineID(
-        the: *mut XsMachine,
-        id: i32,
-        flag: u8,
-        mask: u8,
-    );
+    pub fn fxDefineID(the: *mut XsMachine, id: i32, flag: u8, mask: u8);
 
     // Property access (index-based)
     pub fn fxHasIndex(the: *mut XsMachine, index: u32) -> i32;
@@ -218,15 +197,8 @@ extern "C" {
         the: *mut XsMachine,
         destructor: Option<unsafe extern "C" fn(*mut c_void)>,
     );
-    pub fn fxGetHostData(
-        the: *mut XsMachine,
-        slot: *mut XsSlot,
-    ) -> *mut c_void;
-    pub fn fxSetHostData(
-        the: *mut XsMachine,
-        slot: *mut XsSlot,
-        data: *mut c_void,
-    );
+    pub fn fxGetHostData(the: *mut XsMachine, slot: *mut XsSlot) -> *mut c_void;
+    pub fn fxSetHostData(the: *mut XsMachine, slot: *mut XsSlot, data: *mut c_void);
 
     // Call/construct
     pub fn fxCall(the: *mut XsMachine);
@@ -238,9 +210,12 @@ extern "C" {
     pub fn fxCollectGarbage(the: *mut XsMachine);
     pub fn fxEnableGarbageCollection(the: *mut XsMachine, enable: i32);
 
-    // Shared cluster (required init/teardown)
-    pub fn fxInitializeSharedCluster();
-    pub fn fxTerminateSharedCluster();
+    // Shared cluster (required init/teardown). xsAtomics.c takes the
+    // machine, used only to drop its Atomics waiters on terminate (skipped
+    // for null). Both update a process-global usage count with no lock:
+    // see `lib.rs`'s `cluster_lock`.
+    pub fn fxInitializeSharedCluster(the: *mut XsMachine);
+    pub fn fxTerminateSharedCluster(the: *mut XsMachine);
 
     // Promise jobs
     pub fn fxRunPromiseJobs(the: *mut XsMachine);
@@ -267,6 +242,30 @@ extern "C" {
     /// Safe wrapper: runs fxRunPromiseJobs inside mxTry/mxCatch.
     /// Returns 0 on success, or the XS abort status on abort.
     pub fn fxRunPromiseJobsMetered(the: *mut XsMachine) -> c_int;
+    /// xsnap-platform.c: `fxRunPromiseJobs` / `fxRunLoop` with an
+    /// outermost jump record installed. Returns 0, or the exit status of a
+    /// recoverable abort that landed there.
+    pub fn fxRunPromiseJobsGuarded(the: *mut XsMachine) -> c_int;
+    pub fn fxRunLoopGuarded(the: *mut XsMachine) -> c_int;
+    /// xsnap-platform.c: `xsDefine(xsGlobal, xsID(name),
+    /// xsNewHostFunction(callback, length), flag)` under an XS try frame.
+    /// Returns 0, -1 if it threw, or the exit status of an abort.
+    pub fn fxDefineHostFunctionGuarded(
+        the: *mut XsMachine,
+        name: *const c_char,
+        callback: XsCallback,
+        length: c_int,
+        flag: c_int,
+        mask: c_int,
+    ) -> c_int;
+    /// xsnap-platform.c: `fxID` under an XS try frame, storing the `txID`
+    /// through `id`. Returns 0, or nonzero as above.
+    pub fn fxIDGuarded(the: *mut XsMachine, name: *const c_char, id: *mut c_void) -> c_int;
+    /// xsnap-platform.c: the global `eval` of `source` under an XS try
+    /// frame, with a non-primitive completion value converted to a string
+    /// inside it. Returns 0 with the value in `*result`, -1 if it threw, or
+    /// the exit status of a recoverable abort that landed in that frame.
+    pub fn fxEvalGuarded(the: *mut XsMachine, source: *const c_char, result: *mut XsSlot) -> c_int;
 
     // Lockdown host functions (compiled in when mxLockdown is
     // defined; a runner that installs them as globals must include
@@ -275,10 +274,7 @@ extern "C" {
     pub fn fx_lockdown(the: *mut XsMachine);
 
     // Snapshots
-    pub fn fxWriteSnapshot(
-        the: *mut XsMachine,
-        snapshot: *mut XsSnapshot,
-    ) -> c_int;
+    pub fn fxWriteSnapshot(the: *mut XsMachine, snapshot: *mut XsSnapshot) -> c_int;
     pub fn fxReadSnapshot(
         snapshot: *mut XsSnapshot,
         name: *const c_char,
@@ -330,31 +326,48 @@ pub const XS_NATIVE_STACK_OVERFLOW_EXIT: c_int = 9;
 /// Equivalent to the C macro: `xsGlobal` = `the->stackTop[-1]`
 ///
 /// # Safety
-/// Caller must ensure `the` is valid.
+/// Caller must ensure `the` is a live machine whose stack the caller may
+/// read (inside `fxBeginHost`/`fxEndHost`, or a host callback).
 #[inline]
 pub unsafe fn xs_global(the: *mut XsMachine) -> XsSlot {
-    *(*the).stack_top.offset(-1)
+    // SAFETY: per the caller's contract `the` is live; XS keeps the global
+    // object in the slot just below `stack_top` for the machine's lifetime
+    // (`xsGlobal` in xs.h is this same read).
+    unsafe { *(*the).stack_top.offset(-1) }
 }
 
 /// Push a slot onto the XS stack.
 /// Equivalent to the C macro: `fxPush(_SLOT)` = `*(--the->stack) = _SLOT`
 ///
 /// # Safety
-/// Caller must ensure `the` is valid and stack has room.
+/// Caller must ensure `the` is a live machine and that the stack has room
+/// for one more slot, which in XS terms means a preceding `fxOverflow` (the
+/// C API's `xsOverflow`) for at least this push.
 #[inline]
 pub unsafe fn fx_push(the: *mut XsMachine, slot: XsSlot) {
-    (*the).stack = (*the).stack.offset(-1);
-    *(*the).stack = slot;
+    // SAFETY: the caller guarantees a live machine and a free slot below
+    // `stack`, so the decremented pointer stays inside the stack allocation
+    // and the write lands in it.
+    unsafe {
+        (*the).stack = (*the).stack.offset(-1);
+        *(*the).stack = slot;
+    }
 }
 
 /// Pop a slot from the XS stack.
 /// Equivalent to the C macro: `fxPop()` = `*(the->stack++)`
 ///
 /// # Safety
-/// Caller must ensure `the` is valid and stack is not empty.
+/// Caller must ensure `the` is a live machine and that the top slot is one
+/// the caller pushed (or otherwise owns), so popping it does not unbalance
+/// a frame XS is using.
 #[inline]
 pub unsafe fn fx_pop(the: *mut XsMachine) -> XsSlot {
-    let slot = *(*the).stack;
-    (*the).stack = (*the).stack.offset(1);
-    slot
+    // SAFETY: per the caller's contract the top slot is in bounds and the
+    // caller's to remove.
+    unsafe {
+        let slot = *(*the).stack;
+        (*the).stack = (*the).stack.offset(1);
+        slot
+    }
 }

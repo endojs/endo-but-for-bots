@@ -1,0 +1,12 @@
+Mutant SNAP-2-e: a Boolean byte other than 0/1 panics instead of being refused.
+--- a/ironhorse-snapshot/src/slot_codec.rs
++++ b/ironhorse-snapshot/src/slot_codec.rs
+@@ -174,7 +174,7 @@
+         P_NONE => (Payload::None, 0),
+         P_BOOL => match d0 {
+             0 | 1 => (Payload::Boolean(d0 != 0), 1),
+-            other => return Err(SlotCodecError::BadBoolean(other)),
++            other => unreachable!("boolean byte {other}"),
+         },
+         P_INT => (Payload::Integer(i32::from_be_bytes([d0, d1, d2, d3])), 4),
+         P_NUM => (

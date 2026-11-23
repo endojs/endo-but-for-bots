@@ -251,6 +251,102 @@ class Repository(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(self.selected(path)["build-ironhorse-wasm"])
 
+    def test_cargo_deny_runs_for_every_manifest_lockfile_and_its_policy(self):
+        for path in ["deny.toml", "Cargo.toml", "Cargo.lock", "rust/engine/Cargo.lock",
+                     "rust/engine/ironhorse-fuzz/fuzz/Cargo.lock", "rust/endo/xsnap/Cargo.toml",
+                     "rust/engine/ironhorse-vm/Cargo.toml",
+                     ".github/workflows/cargo-deny-advisories.yml"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["cargo-deny"])
+        for path in ["rust/endo/src/lib.rs", "rust/engine/ironhorse-vm/src/lib.rs",
+                     "packages/cbor/src/encode.js", "docs/ci-change-selection.md"]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["cargo-deny"])
+
+    def test_policy_file_alone_selects_only_cargo_deny(self):
+        jobs = self.selected("deny.toml")
+        self.assertEqual([n for n, value in jobs.items() if value], ["cargo-deny"])
+
+    OUTER_SOURCES = ["rust/endo/src/lib.rs", "rust/endo/xsnap/src/ffi.rs",
+                     "rust/endo/benches/codec.rs", "rust/endo_iroh/src/lib.rs",
+                     "rust/ocapn_noise/src/lib.rs", "rust/thixotrope-xs-worker/src/main.rs",
+                     "rust/thixotrope-ironhorse-worker/src/main.rs",
+                     "rust/endo/ironhorse-store-sqlite/src/lib.rs"]
+
+    def test_outer_workspace_format_follows_every_member(self):
+        """rustfmt covers the whole repo-root workspace, not only the SQLite
+        store, so every member's Rust source selects the format job, as does
+        a rustfmt configuration file."""
+        for path in self.OUTER_SOURCES + ["rust/endo/rustfmt.toml", ".rustfmt.toml"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["format-ironhorse"])
+        for path in ["packages/cbor/src/encode.js", "rust/endo/README.md"]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["format-ironhorse"])
+
+    def test_outer_workspace_clippy_follows_every_member(self):
+        """Clippy lints every root-workspace member with `--all-targets`:
+        each member, its benches, an engine crate a member compiles, and a
+        clippy configuration file select it. The oracle, which no member
+        compiles, and prose do not."""
+        for path in self.OUTER_SOURCES + ["rust/engine/ironhorse-vm/src/lib.rs",
+                                          "rust/endo/clippy.toml", "Cargo.toml"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["clippy-endo"])
+        for path in ["rust/engine/xs-oracle/src/lib.rs", "rust/endo/README.md",
+                     "packages/cbor/src/encode.js", "deny.toml"]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["clippy-endo"])
+
+    def test_cargo_machete_follows_every_manifest_and_rust_source(self):
+        for path in self.OUTER_SOURCES + ["rust/engine/ironhorse-vm/src/lib.rs",
+                                          "rust/engine/xs-oracle/build.rs",
+                                          "rust/engine/stack-lanes/probe/src/main.rs",
+                                          "rust/engine/ironhorse-fuzz/fuzz/Cargo.toml",
+                                          "Cargo.toml"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["cargo-machete"])
+        for path in ["rust/engine/Cargo.lock", "rust/endo/README.md", "deny.toml",
+                     "packages/cbor/src/encode.js"]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["cargo-machete"])
+
+    def test_engine_feature_matrix_follows_engine_members(self):
+        for path in ["rust/engine/ironhorse-text/src/lib.rs", "rust/engine/xs-oracle/src/lib.rs",
+                     "rust/engine/ironhorse-vm/Cargo.toml", "rust/engine/Cargo.lock",
+                     "rust/engine/Cargo.toml"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["hack-ironhorse"])
+        for path in ["rust/engine/README.md", "rust/engine/benches/xs_compare.py",
+                     "rust/engine/stack-lanes/probe/src/main.rs", "rust/endo/src/lib.rs",
+                     "packages/cbor/src/encode.js"]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["hack-ironhorse"])
+
+    def test_kani_follows_engine_members_and_the_proof_manifest(self):
+        for path in ["rust/engine/ironhorse-meter/src/lib.rs",
+                     "rust/engine/ironhorse-snapshot/src/atom.rs",
+                     "rust/engine/verification/manifest.toml",
+                     "rust/engine/verification/proofs.toml",
+                     "rust/engine/verification/proofs.d/numeric.toml",
+                     "rust/engine/verification/mutants/NUM-1-a.patch",
+                     "rust/engine/verification/selftest/src/lib.rs",
+                     "rust/engine/ironhorse-spec/src/lib.rs",
+                     "rust/engine/ironhorse-text/src/lib.rs",
+                     "rust/engine/VERIFICATION.md",
+                     "rust/engine/scripts/verify.py",
+                     "rust/engine/scripts/test-verify.py",
+                     "rust/engine/Cargo.lock",
+                     ".github/workflows/ironhorse-kani-nightly.yml"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["ironhorse-kani"])
+        for path in ["rust/engine/README.md", "rust/engine/scripts/bench.sh",
+                     "rust/engine/stack-lanes/lane_c.py", "rust/endo/src/lib.rs",
+                     "packages/cbor/src/encode.js",
+                     ".github/workflows/rust-quality-weekly.yml"]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["ironhorse-kani"])
+
     def test_format_helper_inputs(self):
         self.assertTrue(self.selected("rust/engine/scripts/generate-compiler-opcodes.py")["format-ironhorse"])
 

@@ -1,6 +1,6 @@
 //! Date value clipping, calendar construction, parsing, and display forms.
 
-use super::{days_from_civil, trim_ecma_whitespace};
+use super::{civil_from_days, days_from_civil, trim_ecma_whitespace};
 
 /// Civil calendar fields of a time value `t` (ms since the epoch) after
 /// applying a fixed zone offset (minutes east of UTC). Proleptic Gregorian,
@@ -14,16 +14,9 @@ pub(super) fn civil_fields(
     let day_ms = 86_400_000.0;
     let days = (local / day_ms).floor() as i64;
     let ms_of_day = (local - days as f64 * day_ms) as i64; // [0, 86_400_000)
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097; // [0, 146_096]
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    let year = if m <= 2 { y + 1 } else { y };
+                                                           // The one civil algorithm (Temporal shares it), so the two cannot
+                                                           // diverge.
+    let (year, m, d) = civil_from_days(i128::from(days));
     let weekday = (((days % 7 + 4) % 7 + 7) % 7) as u32; // 0 = Sunday
     let secs = ms_of_day / 1000;
     let hour = (secs / 3600) as u32;
@@ -128,7 +121,7 @@ fn parse_iso_date_string(text: &str) -> Option<f64> {
     let (month, day) = match tail.len() {
         0 => (1, 1),
         3 if tail.starts_with('-') => (tail[1..].parse().ok()?, 1),
-        6 if tail.as_bytes().get(0) == Some(&b'-') && tail.as_bytes().get(3) == Some(&b'-') => {
+        6 if tail.as_bytes().first() == Some(&b'-') && tail.as_bytes().get(3) == Some(&b'-') => {
             (tail[1..3].parse().ok()?, tail[4..6].parse().ok()?)
         }
         _ => return None,
@@ -434,3 +427,35 @@ pub(super) const EN_WEEKDAYS_LONG: [&str; 7] = [
 pub(super) const EN_WEEKDAYS_SHORT: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 pub(super) const EN_WEEKDAYS_NARROW: [&str; 7] = ["S", "M", "T", "W", "T", "F", "S"];
+
+#[cfg(test)]
+mod civil_consolidation_tests {
+    /// The i64 civil algorithm `civil_fields` carried before it called
+    /// `civil_from_days`, kept so the consolidation is checked to be
+    /// behaviour-identical over the TimeClip day range.
+    fn legacy_civil(days: i64) -> (i64, u32, u32) {
+        let z = days + 719_468;
+        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+        let year = if m <= 2 { y + 1 } else { y };
+        (year, m, d)
+    }
+
+    #[test]
+    fn civil_fields_matches_its_legacy_algorithm() {
+        for days in (-100_000_001i64..=100_000_001)
+            .step_by(13)
+            .chain([-100_000_000, 100_000_000])
+        {
+            let t = days as f64 * 86_400_000.0 + 3_723_004.0;
+            let (y, m, d, ..) = super::civil_fields(t, 0);
+            assert_eq!((y, m, d), legacy_civil(days), "{days}");
+        }
+    }
+}

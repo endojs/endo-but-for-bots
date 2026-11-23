@@ -2222,10 +2222,7 @@ impl Interp {
             return Err(self.catchable_type_error_msg("cannot coerce to unsigned".into()));
         }
         let n = self.to_number_f64(code, primitive)?;
-        if !n.is_finite() || n == 0.0 {
-            return Ok(0);
-        }
-        Ok(n.trunc().rem_euclid(4_294_967_296.0) as u32)
+        Ok(crate::numeric_kernel::to_uint32(n.to_bits()))
     }
 
     /// The `String.prototype.split` `withoutRegexp` path. Both the subject and

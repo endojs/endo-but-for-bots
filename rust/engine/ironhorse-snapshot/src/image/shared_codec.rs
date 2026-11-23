@@ -10,13 +10,13 @@ pub(super) fn encode<S: Sink>(state: &SharedMachineSnapshot, out: &mut S) {
         out.put(&x.to_be_bytes());
     }
     fn words<S: Sink>(out: &mut S, xs: &[u32]) {
-        word(out, xs.len() as u32);
+        word(out, wire_len(xs.len()));
         for x in xs {
             word(out, *x);
         }
     }
     fn pairs<S: Sink>(out: &mut S, xs: &[(u32, u32)]) {
-        word(out, xs.len() as u32);
+        word(out, wire_len(xs.len()));
         for (x, y) in xs {
             word(out, *x);
             word(out, *y);
@@ -26,10 +26,10 @@ pub(super) fn encode<S: Sink>(state: &SharedMachineSnapshot, out: &mut S) {
     word(out, state.default_global);
     word(out, state.current_global);
     words(out, &state.intrinsic_roots);
-    word(out, state.environments.len() as u32);
+    word(out, wire_len(state.environments.len()));
     for e in &state.environments {
         word(out, e.global);
-        word(out, e.binding_names.len() as u32);
+        word(out, wire_len(e.binding_names.len()));
         for id in &e.binding_names {
             out.put(&id.to_be_bytes());
         }
@@ -42,14 +42,14 @@ pub(super) fn encode<S: Sink>(state: &SharedMachineSnapshot, out: &mut S) {
     pairs(out, &state.generator_environments);
     pairs(out, &state.async_environments);
     pairs(out, &state.promise_environments);
-    word(out, state.evaluators.len() as u32);
+    word(out, wire_len(state.evaluators.len()));
     for e in &state.evaluators {
         word(out, e.owner);
         out.put_u8(e.kind);
         word(out, e.name_chunk);
     }
     words(out, &state.roots);
-    word(out, state.jobs.len() as u32);
+    word(out, wire_len(state.jobs.len()));
     for j in &state.jobs {
         out.put_u8(j.thenable as u8);
         out.put_u8(j.rejected as u8);
@@ -65,17 +65,17 @@ pub(super) fn encode<S: Sink>(state: &SharedMachineSnapshot, out: &mut S) {
     words(out, &state.pending_rejections);
     if !state.host_functions.is_empty() {
         out.put(b"HOST");
-        word(out, state.host_functions.len() as u32);
+        word(out, wire_len(state.host_functions.len()));
         for h in &state.host_functions {
             word(out, h.owner);
             for text in [&h.service, &h.name] {
-                word(out, text.len() as u32);
+                word(out, wire_len(text.len()));
                 out.put(text.as_bytes());
             }
             word(out, h.abi);
             word(out, h.arity);
             word(out, h.name_chunk);
-            word(out, h.captures.len() as u32);
+            word(out, wire_len(h.captures.len()));
             for capture in &h.captures {
                 crate::slot_codec::put_slot(capture, out);
             }
@@ -220,13 +220,13 @@ fn encode_modules<S: Sink>(graph: &ironhorse_vm::snapshot_api::ModuleGraphSnapsh
         out.put(&x.to_be_bytes());
     }
     fn text<S: Sink>(out: &mut S, s: &str) {
-        word(out, s.len() as u32);
+        word(out, wire_len(s.len()));
         out.put(s.as_bytes());
     }
-    word(out, graph.modules.len() as u32);
+    word(out, wire_len(graph.modules.len()));
     for m in &graph.modules {
         text(out, &m.specifier);
-        word(out, m.imports.len() as u32);
+        word(out, wire_len(m.imports.len()));
         for (request, name, local) in &m.imports {
             text(out, request);
             out.put_u8(name.is_some() as u8);
@@ -235,14 +235,14 @@ fn encode_modules<S: Sink>(graph: &ironhorse_vm::snapshot_api::ModuleGraphSnapsh
             }
             text(out, local);
         }
-        word(out, m.exports.len() as u32);
+        word(out, wire_len(m.exports.len()));
         for (kind, name, source, import) in &m.exports {
             out.put_u8(*kind);
             text(out, name);
             text(out, source);
             text(out, import);
         }
-        word(out, m.body.len() as u32);
+        word(out, wire_len(m.body.len()));
         for (name, value) in &m.body {
             text(out, name);
             out.put_u8(value.is_some() as u8);
@@ -251,7 +251,7 @@ fn encode_modules<S: Sink>(graph: &ironhorse_vm::snapshot_api::ModuleGraphSnapsh
             }
         }
         out.put_u8(m.status);
-        word(out, m.environment.len() as u32);
+        word(out, wire_len(m.environment.len()));
         for (name, cell) in &m.environment {
             text(out, name);
             word(out, *cell);
@@ -259,7 +259,7 @@ fn encode_modules<S: Sink>(graph: &ironhorse_vm::snapshot_api::ModuleGraphSnapsh
         word(out, m.dfs_index);
         word(out, m.dfs_ancestor_index);
     }
-    word(out, graph.cells.len() as u32);
+    word(out, wire_len(graph.cells.len()));
     for (kind, value, module) in &graph.cells {
         out.put_u8(*kind);
         crate::slot_codec::put_slot(value, out);

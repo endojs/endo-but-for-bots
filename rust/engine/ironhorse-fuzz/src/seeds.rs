@@ -7,7 +7,7 @@
 //!
 //! The corpus is *derived*, not collected: [`seed_corpus`] builds it from the
 //! same code the engine ships, and
-//! [`tests::the_checked_in_seed_corpus_is_current`] fails when the checked-in
+//! `tests::the_checked_in_seed_corpus_is_current` fails when the checked-in
 //! bytes drift from what the generator produces — the same "generated, and CI
 //! rejects a stale generation" discipline `scripts/intl-profile.py` uses for
 //! the ICU identity. Regenerate with:
@@ -31,7 +31,7 @@ use crate::gen_machine_image;
 /// Every libFuzzer target in `fuzz/Cargo.toml`, in the order the nightly
 /// loop runs them.
 ///
-/// [`tests::the_target_roster_matches_the_cargo_manifest`] holds this equal
+/// `tests::the_target_roster_matches_the_cargo_manifest` holds this equal
 /// to the manifest's `[[bin]]` names, so a target added without a seed
 /// corpus fails rather than running cold.
 pub const FUZZ_TARGETS: &[&str] = &[

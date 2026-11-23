@@ -1,0 +1,12 @@
+Mutant NUM-4-a: slot_from_number drops the sign test, so -0 becomes Integer(0).
+--- a/ironhorse-vm/src/interp/coerce.rs
++++ b/ironhorse-vm/src/interp/coerce.rs
+@@ -5,7 +5,7 @@
+     /// Preserve the integer fast representation without losing negative zero
+     /// or a non-integral/non-finite Number.
+     pub(super) fn slot_from_number(value: f64) -> Slot {
+-        if value == (value as i32) as f64 && !(value == 0.0 && value.is_sign_negative()) {
++        if value == (value as i32) as f64 {
+             Slot::integer(value as i32)
+         } else {
+             Slot::number(value)

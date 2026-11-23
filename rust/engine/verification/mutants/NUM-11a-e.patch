@@ -1,0 +1,12 @@
+Mutant NUM-11a-e: bi_bitwise drops the sign-extension limb.
+--- a/ironhorse-vm/src/interp/bigint.rs
++++ b/ironhorse-vm/src/interp/bigint.rs
+@@ -381,7 +381,7 @@
+     b_negative: bool,
+     b_magnitude: &[u32],
+ ) -> (bool, Vec<u32>) {
+-    let width = a_magnitude.len().max(b_magnitude.len()) + 1;
++    let width = a_magnitude.len().max(b_magnitude.len());
+     let a_twos = bi_to_twos_complement(a_negative, a_magnitude, width);
+     let b_twos = bi_to_twos_complement(b_negative, b_magnitude, width);
+     let result = a_twos

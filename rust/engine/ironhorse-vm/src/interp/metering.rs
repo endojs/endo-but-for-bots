@@ -377,8 +377,8 @@ pub(super) use ironhorse_meter::OBJECT_ENTRIES_PER_KEY_METERING;
 /// here): `655872 - 9<<16 = 66048`.
 pub(super) use ironhorse_meter::OBJECT_KEYS_FRAME_METERING;
 
-/// `Object.values(o)`/`entries(o)` native-body base (the result `fxNewArray`
-/// + own-keys walk setup), mirroring [`OBJECT_KEYS_FRAME_METERING`]. The
+/// `Object.values(o)`/`entries(o)` native-body base (the result `fxNewArray` +
+/// own-keys walk setup), mirroring [`OBJECT_KEYS_FRAME_METERING`]. The
 /// per-key allocations (the value slot, and for `entries` the pair array) are
 /// metered on top.
 pub(super) use ironhorse_meter::OBJECT_VALUES_FRAME_METERING;
@@ -911,8 +911,8 @@ pub(super) use ironhorse_meter::ARRAY_REVERSE_FRAME_METERING;
 
 pub(super) use ironhorse_meter::ARRAY_REVERSE_PER_SWAP_METERING;
 
-/// `Array.prototype.slice` frame cost (the result array's `fxCreateArraySpecies`
-/// + host frame + closing `mxMeterSome(3)`); a non-empty slice adds the result
+/// `Array.prototype.slice` frame cost (the result array's `fxCreateArraySpecies` +
+/// host frame + closing `mxMeterSome(3)`); a non-empty slice adds the result
 /// chunk and `mxMeterSome(count*10)`. Calibrated against the pin.
 pub(super) use ironhorse_meter::ARRAY_SLICE_FRAME_METERING;
 
@@ -1706,8 +1706,8 @@ pub(super) use ironhorse_meter::STRING_REGEXP_PROTOCOL_FRAME_METERING;
 /// per-match `index`/`0`/`length` gets. Calibrated raw-exact.
 pub(super) use ironhorse_meter::STRING_REPLACE_FRAME_METERING;
 
-/// The extra residual of `replace` on a match: the per-match `mxGetID(_index)`
-/// + `mxGetIndex(0)` + `mxGetID(_length)` reads (skipped on the no-match
+/// The extra residual of `replace` on a match: the per-match `mxGetID(_index)` +
+/// `mxGetIndex(0)` + `mxGetID(_length)` reads (skipped on the no-match
 /// unchanged-string path). Calibrated raw-exact.
 pub(super) use ironhorse_meter::STRING_REPLACE_MATCH_METERING;
 

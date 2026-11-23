@@ -2,6 +2,7 @@
 //! every other writer out: the single-writer premise the store-seam
 //! design's trust model rests on, rather than any check of what the store
 //! holds. Closed, the file takes any writer.
+#![forbid(unsafe_code)]
 
 mod common;
 

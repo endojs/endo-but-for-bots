@@ -179,21 +179,27 @@ pub extern "C" fn rust_debug_is_readable() -> c_int {
 
 /// Called by `fxReceive` in C.  Copies up to `capacity` bytes from
 /// the inbound buffer into the provided C buffer.  Returns the
-/// number of bytes copied, or 0 if empty.
+/// number of bytes copied, or 0 if empty (or if `capacity` is not positive).
+///
+/// # Safety
+/// `buffer` must be valid for writes of `capacity` bytes for the duration of
+/// the call, as `fxReceive` guarantees for `the->debugBuffer`.
 #[no_mangle]
-pub extern "C" fn rust_debug_recv(
-    buffer: *mut c_char,
-    capacity: c_int,
-) -> c_int {
+pub unsafe extern "C" fn rust_debug_recv(buffer: *mut c_char, capacity: c_int) -> c_int {
     crate::worker_io::guard_ffi_ret(0, || {
+        let Ok(capacity) = usize::try_from(capacity) else {
+            return 0;
+        };
         DEBUG_STATE.with(|cell| {
             let mut s = cell.borrow_mut();
-            let n = std::cmp::min(s.inbound.len(), capacity as usize);
+            let n = std::cmp::min(s.inbound.len(), capacity);
             if n == 0 {
                 return 0;
             }
-            let dst =
-                unsafe { std::slice::from_raw_parts_mut(buffer as *mut u8, n) };
+            // SAFETY: per this fn's contract `buffer` is writable for
+            // `capacity` bytes, and `n <= capacity` (a negative `capacity`
+            // returned above instead of wrapping to a huge `usize`).
+            let dst = unsafe { std::slice::from_raw_parts_mut(buffer as *mut u8, n) };
             for (i, byte) in s.inbound.drain(..n).enumerate() {
                 dst[i] = byte;
             }
@@ -204,17 +210,48 @@ pub extern "C" fn rust_debug_recv(
 
 /// Called by `fxSend` in C.  Appends the debug output bytes from XS
 /// into the outbound buffer for Rust to drain later.
+///
+/// # Safety
+/// `data` must be valid for reads of `length` bytes for the duration of the
+/// call when `length > 0`, as `fxSend` guarantees.
 #[no_mangle]
-pub extern "C" fn rust_debug_send(data: *const c_char, length: c_int) {
+pub unsafe extern "C" fn rust_debug_send(data: *const c_char, length: c_int) {
     crate::worker_io::guard_ffi(|| {
         if length <= 0 {
             return;
         }
-        let bytes = unsafe {
-            std::slice::from_raw_parts(data as *const u8, length as usize)
-        };
+        // SAFETY: per this fn's contract `data` holds `length` readable
+        // bytes, and `length > 0` was checked.
+        let bytes = unsafe { std::slice::from_raw_parts(data as *const u8, length as usize) };
         DEBUG_STATE.with(|cell| {
             cell.borrow_mut().outbound.extend(bytes);
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A negative `capacity` must not wrap to a huge `usize` and let the
+    /// queued bytes be written past the caller's buffer.
+    #[test]
+    fn recv_with_a_negative_capacity_copies_nothing() {
+        std::thread::spawn(|| {
+            debug_reset();
+            debug_push_inbound(b"queued command bytes");
+            let mut buffer = [0 as c_char; 4];
+            // SAFETY: `buffer` is writable for 4 bytes, more than the 0 a
+            // negative capacity may write.
+            let n = unsafe { rust_debug_recv(buffer.as_mut_ptr(), -1) };
+            assert_eq!(n, 0);
+            assert_eq!(buffer, [0; 4]);
+            // SAFETY: `buffer` is writable for its full 4 bytes.
+            let n = unsafe { rust_debug_recv(buffer.as_mut_ptr(), 4) };
+            assert_eq!(n, 4);
+            assert_eq!(buffer.map(|b| b as u8), *b"queu");
+        })
+        .join()
+        .unwrap();
+    }
 }

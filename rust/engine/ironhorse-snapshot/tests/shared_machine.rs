@@ -581,10 +581,7 @@ fn pending_endowments_refuse_snapshot_without_silently_losing_configuration() {
     let m = Machine::new();
     let mut c = m.new_compartment();
     c.define_global("x", ironhorse_vm::Slot::integer(42));
-    assert!(matches!(
-        m.write_snapshot(&Signature::new("pending")),
-        Err(_)
-    ));
+    assert!(m.write_snapshot(&Signature::new("pending")).is_err());
     assert_eq!(eval(&c, "x"), "42");
     let id = c.snapshot_id().unwrap();
     let restored = roundtrip(&m);

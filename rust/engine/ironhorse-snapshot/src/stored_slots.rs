@@ -506,8 +506,10 @@ macro_rules! define_payload_visitors {
             // The arena is outside the small-state payload roster. Its free
             // records are opaque bytes and must not become admission witnesses.
             let free: std::collections::BTreeSet<_> = image.slot_free.iter().copied().collect();
-            for (index, slot) in slots.iter().enumerate() {
-                if !free.contains(&(index as u32)) {
+            // Arena indices are `u32` by type; the inclusive range covers
+            // every record without the overflow an open `0..` would risk.
+            for (index, slot) in (0..=u32::MAX).zip(slots.iter()) {
+                if !free.contains(&index) {
                     slot.visit(f);
                 }
             }

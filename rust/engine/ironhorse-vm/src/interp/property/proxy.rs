@@ -1250,7 +1250,7 @@ impl Interp {
     /// `[[Construct]]` (ECMA-262 10.5.13). A light frame of the
     /// native-recursion budget, like `[[Call]]` ([`Self::proxy_run_call`]).
     ///
-    /// A Proxy has [[Construct]] only when its target does (ProxyCreate step
+    /// A Proxy has `[[Construct]]` only when its target does (ProxyCreate step
     /// 7), so `new` on one whose target is not a constructor throws before
     /// any trap runs, with XS's message (XS sets `XS_CAN_CONSTRUCT_FLAG` from
     /// the target when it creates the Proxy).

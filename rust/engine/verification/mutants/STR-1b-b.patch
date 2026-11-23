@@ -1,0 +1,12 @@
+Mutant STR-1b-b: the sweep reclaims already-free records too.
+--- a/ironhorse-vm/src/value/free_list.rs
++++ b/ironhorse-vm/src/value/free_list.rs
+@@ -151,7 +151,7 @@
+     ) -> u32 {
+         let mut reclaimed = 0u32;
+         for i in 0..capacity {
+-            if !self.marks[i as usize] && !self.is_free(i) {
++            if !self.marks[i as usize] {
+                 before(i);
+                 self.free.push(i);
+                 self.free_marks[i as usize] = true;

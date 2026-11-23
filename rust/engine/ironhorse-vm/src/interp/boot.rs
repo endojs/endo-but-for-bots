@@ -381,7 +381,7 @@ impl Interp {
             .push((typed_array_ctor, "prototype", typed_array_proto));
         for (name, native) in Native::intrinsics() {
             let f = self.slots.alloc(Slot::instance(func_proto));
-            let name_chunk = self.alloc_str_text(&name);
+            let name_chunk = self.alloc_str_text(name);
             self.functions.insert(
                 f,
                 FuncInfo {
@@ -1370,7 +1370,7 @@ impl Interp {
         ] {
             let name = native.display_name();
             let f = self.slots.alloc(Slot::instance(ctor_proto));
-            let name_chunk = self.alloc_str_text(&name);
+            let name_chunk = self.alloc_str_text(name);
             self.functions.insert(
                 f,
                 FuncInfo {
@@ -1852,7 +1852,7 @@ impl Interp {
     fn alloc_named_native(&mut self, native: Native) -> crate::value::SlotIndex {
         let f = self.slots.alloc(Slot::instance(self.function_proto));
         let name = native.display_name();
-        let name_chunk = self.alloc_str_text(&name);
+        let name_chunk = self.alloc_str_text(name);
         self.functions.insert(
             f,
             FuncInfo {
@@ -2980,7 +2980,7 @@ impl Interp {
         arity: u32,
     ) -> crate::value::SlotIndex {
         let f = self.slots.alloc(Slot::instance(self.function_proto));
-        let name_chunk = self.alloc_str_text(&name);
+        let name_chunk = self.alloc_str_text(name);
         self.functions.insert(
             f,
             FuncInfo {

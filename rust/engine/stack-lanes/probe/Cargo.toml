@@ -19,3 +19,11 @@ ironhorse-runtime = { path = "../../ironhorse-runtime" }
 # Match the workspace: guest-influenced arithmetic must not silently wrap.
 [profile.release]
 overflow-checks = true
+
+# A standalone cargo root outside the engine workspace, so it does not inherit
+# `[workspace.lints]`; it states the unsafe policy itself (checked by
+# scripts/test-crate-graph.py).
+# `deny`, not `forbid`: the included stack painter (`paint.rs`) carries a scoped
+# `#[allow(unsafe_code)]`.
+[lints.rust]
+unsafe_code = "deny"

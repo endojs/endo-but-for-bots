@@ -52,14 +52,14 @@ pub use snapshot::{
     RoundtripDivergence,
 };
 
-/// The store-seam decoder fuzz arm over `StoreManifest::decode`,
-/// `SmallState::decode`, `validate_store` and the adoption path — the
-/// targets the store-seam design's phase-1 acceptance bar names.
+// The store-seam decoder fuzz arm over `StoreManifest::decode`,
+// `SmallState::decode`, `validate_store` and the adoption path — the
+// targets the store-seam design's phase-1 acceptance bar names.
 pub mod store;
 pub use store::{export_adopt_is_identity, store_decoder_is_error_free, store_succession_is_total};
 
-/// The checked-in, derived seed corpus for every libFuzzer target, so
-/// coverage survives a cache eviction instead of silently resetting.
+// The checked-in, derived seed corpus for every libFuzzer target, so
+// coverage survives a cache eviction instead of silently resetting.
 pub mod seeds;
 
 /// The multi-crank differential arm: fuzzer bytes folded into a crank
@@ -153,7 +153,7 @@ const MAX_PROGRAM_CHARS: usize = 4_096;
 /// The recursion bound is drawn from the input rather than fixed, so the
 /// generator can emit both a bare literal and a deep nest, and libFuzzer
 /// can search the depth dimension. Generation still terminates: the drawn
-/// depth is capped at [`MAX_EXPR_DEPTH`] and decreases on every descent.
+/// depth is capped at `MAX_EXPR_DEPTH` and decreases on every descent.
 pub fn gen_program(data: &[u8]) -> String {
     let mut b = Bytes::new(data);
     let depth = 1 + b.choice(MAX_EXPR_DEPTH);
@@ -663,7 +663,7 @@ pub fn gen_stage3_for_of_program(data: &[u8]) -> String {
 fn gen_code_unit(b: &mut Bytes) -> String {
     let unit: u16 = match b.choice(8) {
         // ASCII, the ordinary case.
-        0 | 1 | 2 => 0x20 + (b.next() % 0x5f) as u16,
+        0..=2 => 0x20 + (b.next() % 0x5f) as u16,
         // Latin-1 supplement and friends: two UTF-8 bytes, one code unit.
         3 => 0x80 + b.next() as u16,
         // BMP beyond Latin-1: three UTF-8 bytes, one code unit.
@@ -897,10 +897,10 @@ pub fn gen_json_structured_program(data: &[u8]) -> String {
     // A value at the given remaining depth: a leaf at depth 0, else a leaf,
     // object, or array (bounded breadth).
     fn mk_value(b: &mut Bytes, depth: u8) -> String {
-        if depth == 0 || b.next() % 3 == 0 {
+        if depth == 0 || b.next().is_multiple_of(3) {
             return mk_leaf(b);
         }
-        if b.next() % 2 == 0 {
+        if b.next().is_multiple_of(2) {
             let n = (b.next() % 3) as usize; // 0..=2 keys (small literal)
             let mut parts = Vec::new();
             for i in 0..n {
@@ -938,7 +938,7 @@ pub fn gen_json_parse_program(data: &[u8]) -> String {
     }
     // A JSON value string at the given remaining depth.
     fn mk_json(b: &mut Bytes, depth: u8) -> String {
-        if depth == 0 || b.next() % 3 == 0 {
+        if depth == 0 || b.next().is_multiple_of(3) {
             return match b.choice(5) {
                 0 => ((b.next() % 200) as i32 - 100).to_string(),
                 1 => "true".to_string(),
@@ -947,7 +947,7 @@ pub fn gen_json_parse_program(data: &[u8]) -> String {
                 _ => format!("\"{}\"", mk_word(b)),
             };
         }
-        if b.next() % 2 == 0 {
+        if b.next().is_multiple_of(2) {
             let n = (b.next() % 4) as usize; // 0..=3 members, keys distinct by index
             let parts: Vec<String> = (0..n)
                 .map(|i| format!("\"{}{}\":{}", mk_word(b), i, mk_json(b, depth - 1)))
@@ -2195,7 +2195,7 @@ pub fn oracle_is_live() -> bool {
 /// [`run_program`] is not total on arbitrary bytecode — a malformed
 /// backward branch that targets itself (e.g. `BRANCH_STATUS_1` with offset
 /// `-2` at pc 0, decoded from seed 1750 of
-/// [`decoder_never_panics_on_arbitrary_bytes`]) spins forever with no
+/// `decoder_never_panics_on_arbitrary_bytes`) spins forever with no
 /// metering host armed to refuse it. Bounding execution turns any such hang
 /// into a [`ironhorse_vm::Halt::StepLimit`] in milliseconds. The bound is far
 /// above any well-formed `<= 40`-byte fuzz program's dispatch count, so it
@@ -2624,8 +2624,8 @@ mod tests {
 
     /// Regression for continuous-fuzz finding `783be6e6106bad98` (target
     /// `differential_source`). The 6-byte input `00 00 66 69 27 44` folds into
-    /// `((((true + 327155712) && (!true)) || ((~570425344) * (true + 327155712)))
-    /// + (!(...)))`, which collapses (the `&&` is `false`, so the `||` takes its
+    /// `((((true + 327155712) && (!true)) || ((~570425344) * (true + 327155712))) +
+    /// (!(...)))`, which collapses (the `&&` is `false`, so the `||` takes its
     /// right operand; the outer `!(...)` is `false` → `0`) to the single product
     /// `(~570425344) * (327155712 + 1) = -570425345 * 327155713`. Its exact value
     /// `-186617910456745985` overflows 2^53 and rounds to the double

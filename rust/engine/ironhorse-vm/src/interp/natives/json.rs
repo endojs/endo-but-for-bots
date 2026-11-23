@@ -965,7 +965,7 @@ impl Interp {
                     "false"
                 };
                 Ok(JsonStrOpened::Value(Some(
-                    self.json_output_text(state, &text)?,
+                    self.json_output_text(state, text)?,
                 )))
             }
             Kind::Integer => match value.value {
@@ -2193,12 +2193,19 @@ fn units_to_wtf8(units: &[u16]) -> Vec<u8> {
 
 /// The code point of the multi-byte WTF-8 sequence at the start of `bytes`,
 /// and its length in bytes.
+///
+/// Never a value above U+10FFFF: lead bytes `F5..F7` (which would encode up
+/// to 0x1FFFFF) and an `F4` sequence past U+10FFFF are refused, so
+/// [`code_point_units`] is only ever asked for a code point it can encode.
+/// The parser's input is always [`units_to_wtf8`] output, whose lead bytes
+/// stop at `F4`, so this changes nothing the tokenizer can see; it makes the
+/// kernel correct on its whole domain (guarantee TXT-1(e)).
 fn wtf8_code_point(bytes: &[u8]) -> Option<(u32, usize)> {
     let lead = u32::from(*bytes.first()?);
     let (width, mut point) = match lead {
         0xC0..=0xDF => (2, lead & 0x1F),
         0xE0..=0xEF => (3, lead & 0x0F),
-        0xF0..=0xF7 => (4, lead & 0x07),
+        0xF0..=0xF4 => (4, lead & 0x07),
         _ => return None,
     };
     for &byte in bytes.get(1..width)? {
@@ -2207,7 +2214,7 @@ fn wtf8_code_point(bytes: &[u8]) -> Option<(u32, usize)> {
         }
         point = (point << 6) | u32::from(byte & 0x3F);
     }
-    Some((point, width))
+    (point <= 0x10_FFFF).then_some((point, width))
 }
 
 /// The UTF-16 code units of a code point, a surrogate standing for itself.
@@ -2242,4 +2249,222 @@ fn wtf8_to_units(bytes: &[u8]) -> Vec<u16> {
         }
     }
     out
+}
+
+/// TXT-1 for the WTF-8 helpers: the F5..F7 regression, exhaustive code
+/// point domains, and PRNG-driven sequences.
+#[cfg(test)]
+mod wtf8_properties {
+    use super::{code_point_units, units_to_wtf8, wtf8_code_point, wtf8_to_units};
+
+    /// The four-byte form of any 21-bit value, as a lead byte `F0..F7`.
+    fn four_bytes(v: u32) -> [u8; 4] {
+        [
+            0xF0 | (v >> 18) as u8,
+            0x80 | ((v >> 12) & 0x3F) as u8,
+            0x80 | ((v >> 6) & 0x3F) as u8,
+            0x80 | (v & 0x3F) as u8,
+        ]
+    }
+
+    /// Regression: lead bytes F5..F7 decoded to values up to 0x1FFFFF,
+    /// which `code_point_units` turned into an ill-formed "pair" (0x1FFFFF
+    /// became 0xDFBF 0xDFFF: a low surrogate in the high position), as did
+    /// an F4 sequence past U+10FFFF.
+    #[test]
+    fn code_points_above_the_unicode_range_are_refused() {
+        assert_eq!(wtf8_code_point(&[0xF5, 0x80, 0x80, 0x80]), None);
+        assert_eq!(wtf8_code_point(&[0xF7, 0xBF, 0xBF, 0xBF]), None);
+        assert_eq!(wtf8_code_point(&[0xF4, 0x90, 0x80, 0x80]), None);
+        assert_eq!(
+            wtf8_code_point(&[0xF4, 0x8F, 0xBF, 0xBF]),
+            Some((0x10_FFFF, 4))
+        );
+    }
+
+    /// Every one of the 2^21 values a four-byte lead can carry: decoded
+    /// exactly iff it is at most U+10FFFF.
+    #[test]
+    fn every_four_byte_value() {
+        for v in 0..1u32 << 21 {
+            let want = (v <= 0x10_FFFF).then_some((v, 4));
+            assert_eq!(wtf8_code_point(&four_bytes(v)), want, "{v:#x}");
+        }
+    }
+
+    /// `code_point_units` is UTF16EncodeCodePoint (ECMA-262 §11.1.1) for
+    /// every code point, a surrogate standing for itself.
+    #[test]
+    fn code_point_units_is_utf16_encode_for_every_code_point() {
+        for point in 0..=0x10_FFFFu32 {
+            let mut buffer = [0u16; 2];
+            let got = code_point_units(point, &mut buffer).to_vec();
+            let want = match char::from_u32(point) {
+                Some(c) => c.encode_utf16(&mut [0; 2]).to_vec(),
+                None => vec![point as u16],
+            };
+            assert_eq!(got, want, "{point:#x}");
+        }
+    }
+
+    fn round_trip(units: &[u16]) {
+        let bytes = units_to_wtf8(units);
+        let back = wtf8_to_units(&bytes);
+        assert_eq!(back, units, "{units:x?}");
+        assert!(back.len() <= bytes.len());
+    }
+
+    /// The WTF-8 round trip on every single unit, every unit pair whose
+    /// first unit is a surrogate (all surrogate pairs and lone surrogates
+    /// before anything), and PRNG sequences of up to 8 units biased toward
+    /// surrogates.
+    #[test]
+    fn wtf8_round_trips_units() {
+        for u in 0..=u16::MAX {
+            round_trip(&[u]);
+        }
+        for hi in 0xD800..=0xDFFFu16 {
+            for lo in (0..=u16::MAX).step_by(7).chain(0xDC00..=0xDFFF) {
+                round_trip(&[hi, lo]);
+            }
+        }
+        let mut state = 0x7F18_u64;
+        let mut next = move || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+        for _ in 0..200_000 {
+            let n = (next() % 9) as usize;
+            let units: Vec<u16> = (0..n)
+                .map(|_| match next() % 4 {
+                    0 => 0xD800 | (next() as u16 & 0x7FF),
+                    1 => next() as u16 & 0x7F,
+                    _ => next() as u16,
+                })
+                .collect();
+            round_trip(&units);
+        }
+    }
+
+    /// `wtf8_to_units` is total and never yields more units than bytes, on
+    /// arbitrary (not only well-formed) byte strings.
+    #[test]
+    fn wtf8_to_units_is_total_and_short() {
+        let mut state = 0x77F8_u64;
+        for _ in 0..200_000 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            let n = (state >> 60) as usize;
+            let bytes: Vec<u8> = (0..n)
+                .map(|k| (state.rotate_left(8 * k as u32) >> 56) as u8 | 0x80)
+                .collect();
+            assert!(wtf8_to_units(&bytes).len() <= bytes.len());
+        }
+    }
+}
+
+/// Kani harnesses for guarantee TXT-1(e) (`verification/proofs.d/framing.toml`).
+#[cfg(kani)]
+mod wtf8_proofs {
+    use super::{code_point_units, wtf8_code_point};
+
+    /// UTF16EncodeCodePoint (ECMA-262 §11.1.1), written from the spec text.
+    fn utf16_encode_code_point(cp: u32) -> ([u16; 2], usize) {
+        if cp <= 0xFFFF {
+            return ([cp as u16, 0], 1);
+        }
+        let cu1 = ((cp - 0x1_0000) / 0x400 + 0xD800) as u16;
+        let cu2 = ((cp - 0x1_0000) % 0x400 + 0xDC00) as u16;
+        ([cu1, cu2], 2)
+    }
+
+    /// TXT-1(e): `code_point_units` is UTF16EncodeCodePoint for every code
+    /// point `<= 0x10FFFF`.
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn txt1_code_point_units_is_utf16_encode() {
+        let point: u32 = kani::any_where(|&p| p <= 0x10_FFFF);
+        let mut buffer = [0u16; 2];
+        let got = code_point_units(point, &mut buffer);
+        let (want, n) = utf16_encode_code_point(point);
+        assert!(got.len() == n && got == &want[..n]);
+        kani::cover!(point == 0x10_FFFF, "the last code point");
+    }
+
+    /// TXT-1(c, e): `wtf8_code_point` does not panic on any input of up to
+    /// 4 bytes; `Some((p, w))` implies `2 <= w <= 4`, `w <= len`, a lead of
+    /// that width followed by continuation bytes, `p` equal to their
+    /// combined payload bits, and `p <= 0x10FFFF`.
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn txt1_wtf8_code_point_in_range() {
+        let bytes: [u8; 4] = kani::any();
+        let len: usize = kani::any_where(|&l| l <= 4);
+        let input = &bytes[..len];
+        let result = wtf8_code_point(input);
+        if let Some((point, width)) = result {
+            assert!((2..=4).contains(&width) && width <= len);
+            assert!(point <= 0x10_FFFF);
+            let lead = u32::from(bytes[0]);
+            let mut want = match width {
+                2 => lead & 0x1F,
+                3 => lead & 0x0F,
+                _ => lead & 0x07,
+            };
+            for &b in &bytes[1..width] {
+                assert!(b & 0xC0 == 0x80);
+                want = (want << 6) | u32::from(b & 0x3F);
+            }
+            assert!(point == want);
+            kani::cover!(point == 0x10_FFFF, "U+10FFFF decoded");
+        }
+        kani::cover!(
+            result.is_none() && len == 4 && (0xF5..=0xF7).contains(&bytes[0]),
+            "a lead byte above F4 refused"
+        );
+    }
+
+    /// TXT-1(a, e): the WTF-8 encoding of every code point `<= 0x10FFFF`
+    /// (the generalised three-byte form for a surrogate) decodes back to it
+    /// with its exact width.
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn txt1_wtf8_code_point_inverts_encoding() {
+        let point: u32 = kani::any_where(|&p| (0x80..=0x10_FFFF).contains(&p));
+        let (bytes, width): ([u8; 4], usize) = if point < 0x800 {
+            (
+                [0xC0 | (point >> 6) as u8, 0x80 | (point & 0x3F) as u8, 0, 0],
+                2,
+            )
+        } else if point < 0x1_0000 {
+            (
+                [
+                    0xE0 | (point >> 12) as u8,
+                    0x80 | ((point >> 6) & 0x3F) as u8,
+                    0x80 | (point & 0x3F) as u8,
+                    0,
+                ],
+                3,
+            )
+        } else {
+            (
+                [
+                    0xF0 | (point >> 18) as u8,
+                    0x80 | ((point >> 12) & 0x3F) as u8,
+                    0x80 | ((point >> 6) & 0x3F) as u8,
+                    0x80 | (point & 0x3F) as u8,
+                ],
+                4,
+            )
+        };
+        assert!(wtf8_code_point(&bytes[..width]) == Some((point, width)));
+        kani::cover!(
+            (0xD800..=0xDFFF).contains(&point),
+            "a lone surrogate's form"
+        );
+    }
 }

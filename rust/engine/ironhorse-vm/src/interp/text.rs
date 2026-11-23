@@ -369,3 +369,115 @@ mod cesu8_decoder {
         );
     }
 }
+
+/// TXT-1 for the interpreter's string transcoders, beyond what Kani can
+/// hold: exhaustive single units and PRNG-driven sequences.
+#[cfg(test)]
+mod transcoder_properties {
+    use super::{be16_to_units, cesu8_to_units, units_to_be16};
+    use ironhorse_text::SymbolName;
+
+    fn splitmix(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn units(state: &mut u64, max: u64) -> Vec<u16> {
+        let n = splitmix(state) % (max + 1);
+        (0..n)
+            .map(|_| {
+                let r = splitmix(state);
+                match r % 4 {
+                    0 => 0xD800 | (r >> 16) as u16 & 0x7FF,
+                    1 => (r >> 16) as u16 & 0x7F,
+                    _ => (r >> 16) as u16,
+                }
+            })
+            .collect()
+    }
+
+    /// The bytecode decoder agrees with `SymbolName`'s CESU-8 (the
+    /// compiler's literal form, with its trailing NUL) on every single unit
+    /// and PRNG sequences of up to 8 units, and BE16 round-trips them.
+    #[test]
+    fn decoders_agree_on_canonical_cesu8() {
+        let check = |u: &[u16]| {
+            let mut bytes = SymbolName::from_units(u).into_bytes();
+            bytes.push(0);
+            assert_eq!(cesu8_to_units(&bytes), u, "{u:x?}");
+            assert_eq!(be16_to_units(&units_to_be16(u)), u);
+        };
+        for u in 0..=u16::MAX {
+            check(&[u]);
+        }
+        let mut state = 0xC35u64;
+        for _ in 0..200_000 {
+            check(&units(&mut state, 8));
+        }
+    }
+
+    /// `cesu8_to_units` is total and never yields more units than bytes, on
+    /// PRNG byte strings of up to 12 bytes over every lead shape.
+    #[test]
+    fn cesu8_to_units_is_total_and_short() {
+        let mut state = 0x7075u64;
+        for _ in 0..500_000 {
+            let n = (splitmix(&mut state) % 13) as usize;
+            let bytes: Vec<u8> = (0..n).map(|_| (splitmix(&mut state) >> 13) as u8).collect();
+            assert!(cesu8_to_units(&bytes).len() <= bytes.len());
+        }
+    }
+
+    /// TXT-1(d): a byte-lexicographic compare of BE16 payloads is the
+    /// code-unit order (ECMA-262 §7.2.13 IsLessThan on strings), on PRNG
+    /// pairs of up to 8 units, half of them sharing a prefix.
+    #[test]
+    fn be16_order_is_code_unit_order() {
+        let mut state = 0x0BDEu64;
+        for _ in 0..300_000 {
+            let a = units(&mut state, 8);
+            let mut b = units(&mut state, 8);
+            if splitmix(&mut state).is_multiple_of(2) {
+                let keep = a.len().min((splitmix(&mut state) % 9) as usize);
+                b.splice(0..0, a[..keep].iter().copied());
+            }
+            assert_eq!(units_to_be16(&a).cmp(&units_to_be16(&b)), a.cmp(&b));
+        }
+    }
+}
+
+/// Kani harnesses for guarantee TXT-1 (`verification/proofs.d/framing.toml`).
+#[cfg(kani)]
+mod transcoder_proofs {
+    use super::units_to_be16;
+
+    /// TXT-1(d), the per-unit lemma: big-endian bytes compare as the units
+    /// do, for every pair of code units.
+    #[kani::proof]
+    fn txt1_be16_unit_order() {
+        let a: u16 = kani::any();
+        let b: u16 = kani::any();
+        assert!(a.to_be_bytes().cmp(&b.to_be_bytes()) == a.cmp(&b));
+        kani::cover!(
+            a >> 8 == b >> 8 && a < b,
+            "units differing only in the low byte"
+        );
+    }
+
+    /// TXT-1(d): `units_to_be16` preserves order between every pair of
+    /// strings of lengths 1 and 2 and every pair of length-2 strings, so a
+    /// proper prefix sorts first and the first differing unit decides.
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn txt1_be16_order_short_strings() {
+        let a: [u16; 2] = kani::any();
+        let b: [u16; 2] = kani::any();
+        let short = &a[..1];
+        assert!(units_to_be16(&a).cmp(&units_to_be16(&b)) == a.cmp(&b));
+        assert!(units_to_be16(short).cmp(&units_to_be16(&b)) == short.cmp(&b[..]));
+        kani::cover!(a[0] == b[0] && a[1] > b[1], "the second unit decides");
+    }
+}

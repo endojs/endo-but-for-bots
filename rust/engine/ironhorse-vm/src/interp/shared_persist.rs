@@ -630,7 +630,7 @@ impl Interp {
                         && reject.reject
                         && resolve.promise == reject.promise
                         && resolve.guard == reject.guard
-                        && self.promise_guards.get(resolve.guard as usize) == Some(&false)
+                        && self.promise_guards.get(resolve.guard) == Some(&false)
                 }) {
                     return Err(refuse("invalid thenable resolving pair"));
                 }

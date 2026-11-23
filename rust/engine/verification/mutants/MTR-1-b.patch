@@ -1,0 +1,12 @@
+Mutant MTR-1-b: tick_code_n multiplies without saturating.
+--- a/ironhorse-vm/src/meter.rs
++++ b/ironhorse-vm/src/meter.rs
+@@ -214,7 +214,7 @@
+     /// element-access path).
+     #[inline]
+     pub fn tick_code_n(&mut self, n: u64) {
+-        self.tick_raw(n.saturating_mul(CODE_METERING));
++        self.tick_raw(n * CODE_METERING);
+     }
+ 
+     /// Add one built-in step (`mxMeterOne`).

@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use tokio::task::JoinHandle;
 
 use crate::mailbox::{self, Mailbox, MailboxReceiver};
-use crate::types::{Handle, MeterMode, MeterState, Message, RateLimit, WorkerInfo};
+use crate::types::{Handle, Message, MeterMode, MeterState, RateLimit, WorkerInfo};
 
 /// State for a suspended worker.
 ///
@@ -70,22 +70,43 @@ impl Supervisor {
 
     pub fn register(&self, h: Handle, info: Option<WorkerInfo>) -> MailboxReceiver {
         let (tx, rx) = mailbox::mailbox();
-        self.inboxes.write().unwrap_or_else(|e| e.into_inner()).insert(h, tx);
+        self.inboxes
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(h, tx);
         if let Some(info) = info {
-            self.workers.write().unwrap_or_else(|e| e.into_inner()).insert(h, info);
+            self.workers
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(h, info);
         }
         rx
     }
 
     pub fn unregister(&self, h: Handle) {
-        self.inboxes.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
-        self.workers.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
-        self.parents.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
-        self.meters.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
+        self.inboxes
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&h);
+        self.workers
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&h);
+        self.parents
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&h);
+        self.meters
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&h);
     }
 
     pub fn set_parent(&self, child: Handle, parent: Handle) {
-        self.parents.write().unwrap_or_else(|e| e.into_inner()).insert(child, parent);
+        self.parents
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(child, parent);
     }
 
     fn can_block(&self, caller: Handle, callee: Handle) -> bool {
@@ -133,12 +154,7 @@ impl Supervisor {
     ///
     /// Stores the snapshot, removes the inbox (the worker thread is
     /// about to exit), and preserves the worker info for re-registration.
-    pub fn mark_suspended(
-        &self,
-        handle: Handle,
-        sha256: String,
-        cas_dir: std::path::PathBuf,
-    ) {
+    pub fn mark_suspended(&self, handle: Handle, sha256: String, cas_dir: std::path::PathBuf) {
         self.mark_suspended_inner(handle, sha256, cas_dir, None);
     }
 
@@ -157,7 +173,12 @@ impl Supervisor {
     /// what makes the recorded path a complete suspend rather than one
     /// missing its tail.
     pub fn mark_suspended_store(&self, handle: Handle, heap_store: std::path::PathBuf) {
-        self.mark_suspended_inner(handle, String::new(), std::path::PathBuf::new(), Some(heap_store));
+        self.mark_suspended_inner(
+            handle,
+            String::new(),
+            std::path::PathBuf::new(),
+            Some(heap_store),
+        );
     }
 
     fn mark_suspended_inner(
@@ -180,32 +201,51 @@ impl Supervisor {
             started: std::time::SystemTime::now(),
         });
         // Capture meter state before removing it.
-        let meter = self.meters.write().unwrap_or_else(|e| e.into_inner()).remove(&handle);
+        let meter = self
+            .meters
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&handle);
         // Remove the inbox — the worker thread is exiting.
-        self.inboxes.write().unwrap_or_else(|e| e.into_inner()).remove(&handle);
-        self.workers.write().unwrap_or_else(|e| e.into_inner()).remove(&handle);
-        self.suspended.write().unwrap_or_else(|e| e.into_inner()).insert(
-            handle,
-            SuspendedWorker {
-                sha256,
-                cas_dir,
-                heap_store,
-                info,
-                meter,
-            },
-        );
+        self.inboxes
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&handle);
+        self.workers
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&handle);
+        self.suspended
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                handle,
+                SuspendedWorker {
+                    sha256,
+                    cas_dir,
+                    heap_store,
+                    info,
+                    meter,
+                },
+            );
     }
 
     /// Check if a handle is suspended.
     pub fn is_suspended(&self, handle: Handle) -> bool {
-        self.suspended.read().unwrap_or_else(|e| e.into_inner()).contains_key(&handle)
+        self.suspended
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&handle)
     }
 
     /// Take the suspended worker data, removing it from the
     /// suspended set.  Returns `None` if the handle is not
     /// suspended.
     pub fn take_suspended(&self, handle: Handle) -> Option<SuspendedWorker> {
-        self.suspended.write().unwrap_or_else(|e| e.into_inner()).remove(&handle)
+        self.suspended
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&handle)
     }
 
     /// Put a suspended-worker record back, exactly as taken — for a
@@ -214,19 +254,29 @@ impl Supervisor {
     /// before the Ironhorse envelope exists) and must leave the
     /// worker suspended rather than half-resumed.
     pub fn put_suspended(&self, handle: Handle, worker: SuspendedWorker) {
-        self.suspended.write().unwrap_or_else(|e| e.into_inner()).insert(handle, worker);
+        self.suspended
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(handle, worker);
     }
 
     // ---- Metering API ----
 
     /// Get a clone of the current meter state for a worker.
     pub fn meter_state(&self, handle: Handle) -> Option<MeterState> {
-        self.meters.read().unwrap_or_else(|e| e.into_inner()).get(&handle).cloned()
+        self.meters
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&handle)
+            .cloned()
     }
 
     /// Restore a meter state (used after resume from suspend).
     pub fn restore_meter(&self, handle: Handle, meter: MeterState) {
-        self.meters.write().unwrap_or_else(|e| e.into_inner()).insert(handle, meter);
+        self.meters
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(handle, meter);
     }
 
     /// Process a meter-report from a worker.
@@ -261,13 +311,7 @@ impl Supervisor {
     }
 
     /// Set rate-limited mode for a worker.
-    pub fn set_meter_rate(
-        &self,
-        handle: Handle,
-        hard_limit: u64,
-        rate: u64,
-        burst: u64,
-    ) {
+    pub fn set_meter_rate(&self, handle: Handle, hard_limit: u64, rate: u64, burst: u64) {
         let mut meters = self.meters.write().unwrap_or_else(|e| e.into_inner());
         let meter = meters.entry(handle).or_default();
         meter.mode = MeterMode::RateLimited;
@@ -392,10 +436,7 @@ fn route_message(sup: &Arc<Supervisor>, msg: Message, callbacks: &RoutingCallbac
             } else {
                 if !sup.can_block(msg.from, msg.to) {
                     if is_debug() {
-                        eprintln!(
-                            "endor: sync call denied: {} -> {}",
-                            msg.from, msg.to
-                        );
+                        eprintln!("endor: sync call denied: {} -> {}", msg.from, msg.to);
                     }
                     return;
                 }

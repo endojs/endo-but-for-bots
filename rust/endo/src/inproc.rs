@@ -61,10 +61,7 @@ pub fn spawn_inproc_xs_manager(
         // Default to the same binary's `worker` subcommand if the
         // embedder hasn't configured one explicitly.
         if let Ok(exe) = std::env::current_exe() {
-            std::env::set_var(
-                "ENDO_WORKER_BIN",
-                format!("{} worker", exe.display()),
-            );
+            std::env::set_var("ENDO_WORKER_BIN", format!("{} worker", exe.display()));
         }
     }
 
@@ -72,7 +69,7 @@ pub fn spawn_inproc_xs_manager(
         sup,
         "<in-process manager>".to_string(),
         Some(shutdown_notify),
-        Box::new(|transport| xsnap::run_xs_manager_inproc(transport)),
+        Box::new(xsnap::run_xs_manager_inproc),
     )
 }
 
@@ -80,15 +77,12 @@ pub fn spawn_inproc_xs_manager(
 ///
 /// Thin wrapper around `spawn_inproc_xs_peer` that runs
 /// `xsnap::run_xs_worker_inproc` on a dedicated thread.
-pub fn spawn_shared_worker(
-    sup: &Arc<Supervisor>,
-    _parent_handle: Handle,
-) -> io::Result<Handle> {
+pub fn spawn_shared_worker(sup: &Arc<Supervisor>, _parent_handle: Handle) -> io::Result<Handle> {
     spawn_inproc_xs_peer(
         sup,
         "<shared-worker>".to_string(),
         None,
-        Box::new(|transport| xsnap::run_xs_worker_inproc(transport)),
+        Box::new(xsnap::run_xs_worker_inproc),
     )
 }
 
@@ -107,9 +101,7 @@ pub fn spawn_inproc_xs_peer(
     label: String,
     shutdown_notify: Option<Arc<Notify>>,
     run: Box<
-        dyn FnOnce(
-                Box<dyn xsnap::worker_io::WorkerTransport>,
-            ) -> Result<(), xsnap::XsnapError>
+        dyn FnOnce(Box<dyn xsnap::worker_io::WorkerTransport>) -> Result<(), xsnap::XsnapError>
             + Send,
     >,
 ) -> io::Result<Handle> {
@@ -232,11 +224,9 @@ pub fn spawn_inproc_xs_peer(
     thread_builder.spawn(move || {
         // Drive the XS runner. The transport carries bytes that
         // match the pipe path exactly.
-        let transport: Box<dyn xsnap::worker_io::WorkerTransport> =
-            Box::new(xsnap::worker_io::ChannelTransport::new(
-                sup_to_machine_rx,
-                machine_to_sup_tx,
-            ));
+        let transport: Box<dyn xsnap::worker_io::WorkerTransport> = Box::new(
+            xsnap::worker_io::ChannelTransport::new(sup_to_machine_rx, machine_to_sup_tx),
+        );
         // Wrap the run entry so a Rust panic that escaped *past* the
         // per-callback FFI guards — a panic in pure-Rust crank code, or the
         // prospective Ironhorse arena-index panic that unwinds the machine

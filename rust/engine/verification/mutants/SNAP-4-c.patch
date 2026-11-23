@@ -1,0 +1,12 @@
+Mutant SNAP-4-c: the -2 sentinel reads its length prefix big-endian.
+--- a/ironhorse-vm/src/opcode.rs
++++ b/ironhorse-vm/src/opcode.rs
+@@ -1087,7 +1087,7 @@
+             -2 => {
+                 let lo = *code.get(pc + 1)?;
+                 let hi = *code.get(pc + 2)?;
+-                prefixed_len(3, u32::from(u16::from_le_bytes([lo, hi])))?
++                prefixed_len(3, u32::from(u16::from_be_bytes([lo, hi])))?
+             }
+             -4 => {
+                 let b0 = *code.get(pc + 1)?;

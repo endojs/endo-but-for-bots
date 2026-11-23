@@ -1,0 +1,207 @@
+# Weekly measurements of the ironhorse engine's tests: line coverage of the
+# workspace's own suites, and mutation testing of the small crates and files
+# whose arithmetic is consensus-critical. Both are reports, not gates, so
+# neither runs per pull request.
+
+name: Rust quality weekly
+
+on:
+  schedule:
+    # Sundays 04:29 UTC, off the peak hours and the daily 03:17 runs.
+    - cron: '29 4 * * 0'
+  workflow_dispatch:
+
+# Minimal permissions: read the checkout; artifacts ride the built-in
+# token scope.
+permissions:
+  contents: read
+
+# Repo convention (designs/ci-no-npm-lifecycle.md): no yarn here, but
+# the posture is kept uniform across workflows.
+env:
+  YARN_ENABLE_SCRIPTS: 'false'
+  npm_config_ignore_scripts: 'true'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    # A cold instrumented build and run of the oracle-free engine suites,
+    # which take 25 to 30 minutes uninstrumented in ci.yml's debug lane.
+    timeout-minutes: 90
+    env:
+      CARGO_LLVM_COV_VERSION: 0.9.1
+      # The engine's contract stack for unoptimized builds (see ci.yml's
+      # test-ironhorse job).
+      RUST_MIN_STACK: '33554432'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Add llvm-tools to the engine's pinned toolchain
+        working-directory: rust/engine
+        run: |
+          cargo --version
+          rustup component add llvm-tools-preview
+
+      - name: Cache cargo-llvm-cov
+        id: cache-cargo-llvm-cov
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-llvm-cov
+          key: ${{ runner.os }}-cargo-llvm-cov-${{ env.CARGO_LLVM_COV_VERSION }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Install cargo-llvm-cov
+        if: steps.cache-cargo-llvm-cov.outputs.cache-hit != 'true'
+        run: cargo install --locked "cargo-llvm-cov@$CARGO_LLVM_COV_VERSION"
+
+      - name: Cache Cargo + target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/engine/target
+          key: ${{ runner.os }}-ironhorse-coverage-${{ hashFiles('rust/engine/Cargo.lock', 'rust/engine/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-coverage-
+
+      # Every member but the three that link the XS oracle's C sources, which
+      # would need the moddable submodule and measure the oracle's harness
+      # rather than the engine.
+      - name: Run the engine suites under coverage
+        working-directory: rust/engine
+        run: >-
+          cargo llvm-cov --locked --no-report --workspace
+          --exclude xs-oracle --exclude ironhorse-262 --exclude ironhorse-fuzz
+          --features ironhorse-vm/store-integrity
+
+      - name: Report coverage
+        working-directory: rust/engine
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/coverage"
+          cargo llvm-cov report --lcov --output-path "$GITHUB_WORKSPACE/coverage/lcov.info"
+          cargo llvm-cov report --summary-only > "$GITHUB_WORKSPACE/coverage/summary.txt"
+          {
+            echo '## Engine coverage'
+            echo '```'
+            cat "$GITHUB_WORKSPACE/coverage/summary.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ironhorse-coverage
+          path: coverage/
+          if-no-files-found: warn
+
+  mutants:
+    name: mutants (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Each crate's own tests.
+          - target: leaf-crates
+            args: -p ironhorse-meter -p ironhorse-text -p ironhorse-unicode
+          # Single files of large crates. Every mutant rebuilds its crate, so
+          # the tests are limited to the library's and to the integration
+          # suites aimed at that file; a mutant only another suite would
+          # catch is reported missed. ironhorse-vm is split in two shards.
+          - target: vm-meter-0
+            args: >-
+              --file ironhorse-vm/src/meter.rs --shard 0/2 --
+              --lib --test golden_computrons --test meter_bounds
+              --test compilation_meter --test host_rendering_meter
+          - target: vm-meter-1
+            args: >-
+              --file ironhorse-vm/src/meter.rs --shard 1/2 --
+              --lib --test golden_computrons --test meter_bounds
+              --test compilation_meter --test host_rendering_meter
+          - target: snapshot-atom
+            args: >-
+              --file ironhorse-snapshot/src/atom.rs --
+              --lib --test chunk_free_blocks --test intl_bound_owner_refusal
+              --test persist_gates --test record_count_overflow
+              --test store_failure_classes --test streaming_identity
+              --test surrogate_keys
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      CARGO_MUTANTS_VERSION: 27.1.0
+      RUST_MIN_STACK: '33554432'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache cargo-mutants
+        id: cache-cargo-mutants
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-mutants
+          key: ${{ runner.os }}-cargo-mutants-${{ env.CARGO_MUTANTS_VERSION }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Install cargo-mutants
+        if: steps.cache-cargo-mutants.outputs.cache-hit != 'true'
+        run: cargo install --locked "cargo-mutants@$CARGO_MUTANTS_VERSION"
+
+      # Report-only: surviving mutants (exit 2) and timeouts (exit 3, usually
+      # a mutated loop counter that never ends) do not fail the run; a failing
+      # baseline (4), a usage error (1) or a tool crash (70) does.
+      - name: Test mutants
+        working-directory: rust/engine
+        env:
+          ARGS: ${{ matrix.args }}
+        run: |
+          read -ra args <<< "$ARGS"
+          status=0
+          cargo mutants --timeout-multiplier 3 --no-times --colors never \
+            --output "$GITHUB_WORKSPACE/mutants" "${args[@]}" || status=$?
+          case "$status" in
+            0 | 2 | 3) ;;
+            *) exit "$status" ;;
+          esac
+
+      - name: Summarize
+        if: always()
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          out=mutants/mutants.out
+          count() { if [ -f "$out/$1.txt" ]; then wc -l < "$out/$1.txt"; else echo '-'; fi; }
+          {
+            echo "## Mutants: $TARGET"
+            echo
+            echo '| caught | missed | unviable | timeout |'
+            echo '| --- | --- | --- | --- |'
+            echo "| $(count caught) | $(count missed) | $(count unviable) | $(count timeout) |"
+            if [ -s "$out/missed.txt" ]; then
+              echo
+              echo '### Missed'
+              echo '```'
+              cat "$out/missed.txt"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload mutants report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutants-${{ matrix.target }}
+          path: |
+            mutants/mutants.out/*.txt
+            mutants/mutants.out/outcomes.json
+          if-no-files-found: warn

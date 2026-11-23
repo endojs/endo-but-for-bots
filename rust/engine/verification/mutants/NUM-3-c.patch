@@ -1,0 +1,12 @@
+Mutant NUM-3-c: unary minus negates i32::MIN as an Integer (wrapping).
+--- a/ironhorse-vm/src/interp/numeric.rs
++++ b/ironhorse-vm/src/interp/numeric.rs
+@@ -489,7 +489,7 @@
+         Payload::Integer(i) => {
+             // XS: `if (integer & 0x7FFFFFFF)` negate as integer, else
+             // promote (covers 0 -> -0.0 and INT_MIN).
+-            if (i & 0x7FFF_FFFFu32 as i32) != 0 {
++            if i != 0 {
+                 Slot::integer(i.wrapping_neg())
+             } else {
+                 Slot::number(-(i as f64))

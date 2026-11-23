@@ -1,0 +1,12 @@
+Mutant STR-1b-e: a restored arena starts with every slot marked.
+--- a/ironhorse-vm/src/value/free_list.rs
++++ b/ironhorse-vm/src/value/free_list.rs
+@@ -59,7 +59,7 @@
+         FreeList {
+             free_low: free.len(),
+             free,
+-            marks: vec![false; free_marks.len()],
++            marks: vec![true; free_marks.len()],
+             free_marks,
+             live,
+         }

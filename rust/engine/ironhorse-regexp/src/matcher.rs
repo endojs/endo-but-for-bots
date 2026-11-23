@@ -1,5 +1,5 @@
 //! The backtracking match VM: a faithful port of `fxMatchRegExp`
-//! (`xsre.c`). It interprets the integer step stream the [`crate::compile`]
+//! (`xsre.c`). It interprets the integer step stream the [`crate::compile`](mod@crate::compile)
 //! pass emits, using an explicit state stack for backtracking, and meters
 //! `XS_REGEXP_METERING` per dispatched step — the matcher's consensus
 //! cost, deterministic per release (Iron Horse's own frozen value; drift

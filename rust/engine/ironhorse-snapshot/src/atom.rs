@@ -128,29 +128,94 @@ pub struct Atom<'a> {
     pub payload: &'a [u8],
 }
 
+/// Split one atom off the front of `buf`: its declared total size, its tag,
+/// its payload, and the bytes after it. The checks run in the order the
+/// errors are documented: a short header is [`AtomError::Truncated`], a
+/// size below the header [`AtomError::BadLength`], and a size past the end
+/// of `buf` [`AtomError::Truncated`] again.
+fn split_atom(buf: &[u8]) -> Result<(usize, FourCc, &[u8], &[u8]), AtomError> {
+    let (size, after_size) = buf.split_first_chunk::<4>().ok_or(AtomError::Truncated)?;
+    let (tag, _) = after_size
+        .split_first_chunk::<4>()
+        .ok_or(AtomError::Truncated)?;
+    // Where `usize` is narrower than `u32`, a size that does not convert
+    // could not fit inside `buf` either.
+    let size = usize::try_from(u32::from_be_bytes(*size)).map_err(|_| AtomError::Truncated)?;
+    if size < ATOM_HEADER {
+        return Err(AtomError::BadLength);
+    }
+    let (atom, rest) = buf.split_at_checked(size).ok_or(AtomError::Truncated)?;
+    // `size >= ATOM_HEADER` was checked above, so the header split succeeds.
+    let (_, payload) = atom
+        .split_at_checked(ATOM_HEADER)
+        .ok_or(AtomError::BadLength)?;
+    Ok((size, FourCc(*tag), payload, rest))
+}
+
 /// Parse the atom sequence inside a raw byte slice (no outer envelope),
 /// returning each `(tag, payload)` in order.
 fn parse_atoms(mut buf: &[u8]) -> Result<Vec<Atom<'_>>, AtomError> {
     let mut out = Vec::new();
     while !buf.is_empty() {
-        if buf.len() < ATOM_HEADER {
-            return Err(AtomError::Truncated);
-        }
-        let size = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-        if size < ATOM_HEADER {
-            return Err(AtomError::BadLength);
-        }
-        if size > buf.len() {
-            return Err(AtomError::Truncated);
-        }
-        let tag = FourCc([buf[4], buf[5], buf[6], buf[7]]);
-        out.push(Atom {
-            tag,
-            payload: &buf[ATOM_HEADER..size],
-        });
-        buf = &buf[size..];
+        let (_, tag, payload, rest) = split_atom(buf)?;
+        out.push(Atom { tag, payload });
+        buf = rest;
     }
     Ok(out)
+}
+
+/// Above this many atoms the duplicate-tag check switches from a pairwise
+/// scan to a set. The canonical grammar has a few dozen top-level atoms,
+/// so every container a writer produces takes the allocation-free scan;
+/// the set bounds a crafted container of many tiny atoms (8 bytes each) to
+/// `O(n log n)` instead of the scan's `O(n^2)`, which at a few megabytes
+/// of input is minutes of CPU before any other gate runs.
+const PAIRWISE_DUPLICATE_SCAN_MAX: usize = 64;
+
+/// The first atom (in file order) whose tag an earlier atom already used.
+///
+/// Under Kani only the pairwise shape is compiled: `BTreeSet`'s node code
+/// is beyond the solver (three symbolic tags did not finish symbolic
+/// execution in 300 s). That loses nothing for the SNAP-1 proofs, whose
+/// inputs of at most 48 bytes hold at most five atoms, so the threshold
+/// below selects the pairwise shape for every one of them (each harness
+/// asserts its bound against [`PAIRWISE_DUPLICATE_SCAN_MAX`]). The set
+/// shape and the two shapes' agreement are covered by ordinary tests.
+fn first_duplicate(atoms: &[Atom<'_>]) -> Option<FourCc> {
+    #[cfg(kani)]
+    {
+        first_duplicate_pairwise(atoms)
+    }
+    #[cfg(not(kani))]
+    {
+        first_duplicate_with(atoms, PAIRWISE_DUPLICATE_SCAN_MAX)
+    }
+}
+
+/// [`first_duplicate`] with the shape threshold as a parameter, so tests
+/// can run both shapes on the same input and check they agree.
+#[cfg(not(kani))]
+fn first_duplicate_with(atoms: &[Atom<'_>], pairwise_max: usize) -> Option<FourCc> {
+    if atoms.len() <= pairwise_max {
+        first_duplicate_pairwise(atoms)
+    } else {
+        first_duplicate_set(atoms)
+    }
+}
+
+/// The allocation-free `O(n^2)` shape.
+fn first_duplicate_pairwise(atoms: &[Atom<'_>]) -> Option<FourCc> {
+    atoms.iter().enumerate().find_map(|(i, a)| {
+        let earlier = atoms.get(..i)?;
+        earlier.iter().any(|b| b.tag == a.tag).then_some(a.tag)
+    })
+}
+
+/// The `O(n log n)` shape for many atoms.
+#[cfg(not(kani))]
+fn first_duplicate_set(atoms: &[Atom<'_>]) -> Option<FourCc> {
+    let mut seen = std::collections::BTreeSet::new();
+    atoms.iter().find(|a| !seen.insert(a.tag.0)).map(|a| a.tag)
 }
 
 /// A parsed atom container: the `XS_M` envelope unwrapped into its atom
@@ -164,17 +229,7 @@ pub struct AtomReader<'a> {
 impl<'a> AtomReader<'a> {
     /// Parse a whole container, verifying the outer `XS_M` envelope.
     pub fn parse(buf: &'a [u8]) -> Result<AtomReader<'a>, AtomError> {
-        if buf.len() < ATOM_HEADER {
-            return Err(AtomError::Truncated);
-        }
-        let size = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-        if size < ATOM_HEADER {
-            return Err(AtomError::BadLength);
-        }
-        if size > buf.len() {
-            return Err(AtomError::Truncated);
-        }
-        let tag = FourCc([buf[4], buf[5], buf[6], buf[7]]);
+        let (size, tag, payload, _) = split_atom(buf)?;
         if tag != crate::format::XS_M {
             return Err(AtomError::NotContainer(tag));
         }
@@ -182,13 +237,11 @@ impl<'a> AtomReader<'a> {
         if size != buf.len() {
             return Err(AtomError::TrailingBytes);
         }
-        let atoms = parse_atoms(&buf[ATOM_HEADER..size])?;
+        let atoms = parse_atoms(payload)?;
         // At most one of each tag, so `find`'s first-match is also the
         // only match and the encoding is canonical.
-        for (i, a) in atoms.iter().enumerate() {
-            if atoms[..i].iter().any(|b| b.tag == a.tag) {
-                return Err(AtomError::DuplicateAtom(a.tag));
-            }
+        if let Some(tag) = first_duplicate(&atoms) {
+            return Err(AtomError::DuplicateAtom(tag));
         }
         Ok(AtomReader { atoms })
     }
@@ -313,5 +366,380 @@ mod tests {
         );
     }
 
+    /// Regression: the duplicate-tag check was a pairwise scan, so a
+    /// crafted container of many 8-byte empty atoms with distinct tags cost
+    /// `n^2 / 2` tag compares before any other gate ran (here `2^18` atoms,
+    /// 2 MiB of input, about `3.4e10` compares: minutes, a hang under the
+    /// fuzz contract). The set-based check answers in well under a second;
+    /// the bound is generous so only the quadratic shape can trip it.
+    #[test]
+    fn many_tiny_atoms_check_duplicates_in_bounded_time() {
+        let n: u32 = 1 << 18;
+        let mut w = AtomWriter::new();
+        for i in 0..n {
+            w.atom(FourCc(i.to_be_bytes()), &[]).unwrap();
+        }
+        // The same sequence plus a final atom repeating the first tag.
+        let mut dup = AtomWriter::new();
+        for i in 0..n {
+            dup.atom(FourCc(i.to_be_bytes()), &[]).unwrap();
+        }
+        dup.atom(FourCc(0u32.to_be_bytes()), b"x").unwrap();
+        let (distinct, dup) = (w.finish().unwrap(), dup.finish().unwrap());
+
+        let start = std::time::Instant::now();
+        assert_eq!(AtomReader::parse(&distinct).unwrap().atoms().len(), 1 << 18);
+        assert_eq!(
+            AtomReader::parse(&dup).err(),
+            Some(AtomError::DuplicateAtom(FourCc([0; 4])))
+        );
+        assert!(start.elapsed() < std::time::Duration::from_secs(20));
+    }
+
+    /// Both duplicate-check shapes report the FIRST repeating atom in file
+    /// order, so the error does not depend on which shape ran.
+    #[test]
+    fn duplicate_check_reports_the_first_repeat_in_either_shape() {
+        for filler in [0u32, 100] {
+            let mut w = AtomWriter::new();
+            w.atom(FourCc(*b"AAAA"), &[]).unwrap();
+            w.atom(FourCc(*b"BBBB"), &[]).unwrap();
+            for i in 0..filler {
+                w.atom(FourCc((0x1000_0000 + i).to_be_bytes()), &[])
+                    .unwrap();
+            }
+            w.atom(FourCc(*b"BBBB"), &[]).unwrap();
+            w.atom(FourCc(*b"AAAA"), &[]).unwrap();
+            let bytes = w.finish().unwrap();
+            assert_eq!(
+                AtomReader::parse(&bytes).err(),
+                Some(AtomError::DuplicateAtom(FourCc(*b"BBBB")))
+            );
+        }
+    }
+
+    /// The reference meaning of the duplicate check: the first atom whose
+    /// tag an earlier atom already used.
+    fn naive_first_duplicate(tags: &[[u8; 4]]) -> Option<FourCc> {
+        (0..tags.len())
+            .find(|&k| tags[..k].contains(&tags[k]))
+            .map(|k| FourCc(tags[k]))
+    }
+
+    /// SNAP-1: both duplicate-check shapes agree with the reference on
+    /// PRNG-driven tag lists of up to 300 atoms over alphabets small enough
+    /// to repeat and large enough not to, and the threshold picks the set
+    /// shape above 64 atoms (the shape Kani does not reach).
+    #[test]
+    fn duplicate_shapes_agree_with_the_reference() {
+        let mut rng = crate::wire::SplitMix(0xD0B1);
+        for _ in 0..3_000 {
+            let n = rng.below(301) as usize;
+            let alphabet = 1 + rng.below(1_000) as u32;
+            let tags: Vec<[u8; 4]> = (0..n)
+                .map(|_| (rng.below(u64::from(alphabet)) as u32).to_be_bytes())
+                .collect();
+            let atoms: Vec<Atom<'_>> = tags
+                .iter()
+                .map(|&t| Atom {
+                    tag: FourCc(t),
+                    payload: &[],
+                })
+                .collect();
+            let want = naive_first_duplicate(&tags);
+            assert_eq!(first_duplicate_pairwise(&atoms), want);
+            assert_eq!(first_duplicate_set(&atoms), want);
+            assert_eq!(first_duplicate(&atoms), want);
+        }
+    }
+
+    /// SNAP-1(a, b, c, d) beyond the Kani bounds: written containers of up
+    /// to 12 atoms round-trip, and PRNG mutations of them (byte changes,
+    /// truncation, extension) either refuse or parse to atoms that tile the
+    /// input and rewrite to exactly it.
+    #[test]
+    fn containers_round_trip_and_accepted_bytes_are_canonical() {
+        let mut rng = crate::wire::SplitMix(0xA70A);
+        let mut accepted_mutants = 0;
+        for _ in 0..20_000 {
+            let k = rng.below(13) as usize;
+            let mut w = AtomWriter::new();
+            let mut list = Vec::new();
+            for _ in 0..k {
+                let tag = (rng.below(16) as u32).to_be_bytes();
+                let len = rng.below(20) as usize;
+                let payload = rng.bytes(len);
+                w.atom(FourCc(tag), &payload).unwrap();
+                list.push((tag, payload));
+            }
+            let bytes = w.finish().unwrap();
+            let tags: Vec<[u8; 4]> = list.iter().map(|(t, _)| *t).collect();
+            match AtomReader::parse(&bytes) {
+                Ok(r) => {
+                    assert_eq!(naive_first_duplicate(&tags), None);
+                    let got: Vec<([u8; 4], Vec<u8>)> = r
+                        .atoms()
+                        .iter()
+                        .map(|a| (a.tag.0, a.payload.to_vec()))
+                        .collect();
+                    assert_eq!(got, list);
+                }
+                Err(e) => assert_eq!(
+                    Some(e),
+                    naive_first_duplicate(&tags).map(AtomError::DuplicateAtom)
+                ),
+            }
+            let mut mutant = bytes.clone();
+            match rng.below(3) {
+                0 if !mutant.is_empty() => {
+                    let at = rng.below(mutant.len() as u64) as usize;
+                    mutant[at] = rng.next() as u8;
+                }
+                1 => mutant.truncate(rng.below(mutant.len() as u64 + 1) as usize),
+                _ => {
+                    let extra = 1 + rng.below(9) as usize;
+                    mutant.extend(rng.bytes(extra));
+                }
+            }
+            if let Ok(r) = AtomReader::parse(&mutant) {
+                accepted_mutants += 1;
+                let mut at = ATOM_HEADER;
+                let mut w = AtomWriter::new();
+                for a in r.atoms() {
+                    assert_eq!(
+                        a.payload.as_ptr() as usize - mutant.as_ptr() as usize,
+                        at + ATOM_HEADER
+                    );
+                    at += ATOM_HEADER + a.payload.len();
+                    w.atom(a.tag, a.payload).unwrap();
+                }
+                assert_eq!(at, mutant.len());
+                assert_eq!(w.finish().unwrap(), mutant);
+            }
+        }
+        assert!(
+            accepted_mutants > 1_000,
+            "only {accepted_mutants} mutants accepted"
+        );
+    }
+
     const XS_M_TAG: [u8; 4] = *b"XS_M";
+}
+
+/// Kani harnesses for guarantee SNAP-1 (`verification/proofs.d/framing.toml`).
+/// Every `FourCc` comparison is a `memcmp` whose loop needs unwind 5, so no
+/// harness here runs below it.
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+    use crate::format::XS_M;
+
+    /// The big-endian `u32` at `at`, as the proof's own reading of `buf`.
+    fn be32(buf: &[u8], at: usize) -> usize {
+        u32::from_be_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]]) as usize
+    }
+
+    /// What one parse did, for the calling harness's covers.
+    struct Outcome {
+        atoms: Option<usize>,
+        payload_bytes: usize,
+        duplicate: bool,
+        trailing: bool,
+    }
+
+    /// SNAP-1(a, b) on `buf[..len]`, `len <= N`: `parse` does not panic,
+    /// and when it accepts, the envelope header is `[len BE][XS_M]` and
+    /// the atoms tile `buf[8..]` exactly: atom `k` starts where atom `k-1`
+    /// ended, its header is `[8 + payload.len() BE][tag]`, its payload is
+    /// the very sub-slice of `buf` after that header, and the last atom ends
+    /// at `buf.len()`.
+    fn parse_tiles<const N: usize>() -> Outcome {
+        // Every container this small takes the pairwise duplicate scan in
+        // a production build too (see `first_duplicate`).
+        const { assert!(N <= ATOM_HEADER * (PAIRWISE_DUPLICATE_SCAN_MAX + 1)) };
+        let bytes: [u8; N] = kani::any();
+        let len: usize = kani::any_where(|&l| l <= N);
+        let buf = &bytes[..len];
+        let result = AtomReader::parse(buf);
+        let mut outcome = Outcome {
+            atoms: None,
+            payload_bytes: 0,
+            duplicate: matches!(result, Err(AtomError::DuplicateAtom(_))),
+            trailing: matches!(result, Err(AtomError::TrailingBytes)),
+        };
+        if let Ok(reader) = &result {
+            assert!(be32(buf, 0) == buf.len());
+            assert!(buf[4..8] == XS_M.0);
+            let mut at = ATOM_HEADER;
+            for atom in reader.atoms() {
+                assert!(be32(buf, at) == ATOM_HEADER + atom.payload.len());
+                assert!(buf[at + 4..at + 8] == atom.tag.0);
+                let start = at + ATOM_HEADER;
+                assert!(std::ptr::eq(atom.payload.as_ptr(), buf[start..].as_ptr()));
+                at = start + atom.payload.len();
+                outcome.payload_bytes += atom.payload.len();
+            }
+            assert!(at == buf.len());
+            outcome.atoms = Some(reader.atoms().len());
+        }
+        outcome
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn snap1_parse_tiles_16() {
+        let o = parse_tiles::<16>();
+        kani::cover!(o.atoms == Some(1), "a one-atom container");
+        kani::cover!(o.trailing, "a trailing tail refused");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(6)]
+    fn snap1_parse_tiles_32() {
+        let o = parse_tiles::<32>();
+        kani::cover!(o.atoms == Some(3), "a three-atom container");
+        kani::cover!(
+            o.atoms == Some(1) && o.payload_bytes == 16,
+            "one atom with 16 payload bytes"
+        );
+        kani::cover!(o.duplicate, "a duplicate tag refused");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(7)]
+    fn snap1_parse_tiles_48() {
+        let o = parse_tiles::<48>();
+        kani::cover!(o.atoms == Some(5), "a five-atom container");
+        kani::cover!(o.duplicate, "a duplicate tag refused");
+    }
+
+    /// SNAP-1(c): writing `K >= 2` atoms (so both outcomes are reachable)
+    /// with symbolic tags and contents and the concrete payload lengths
+    /// `lens`, then parsing, returns the same
+    /// `(tag, payload)` list when the tags are distinct and
+    /// `DuplicateAtom(t)` for the first repeated tag `t` in file order
+    /// otherwise.
+    fn write_parse_round_trip<const K: usize>(lens: [usize; K]) -> bool {
+        let tags: [[u8; 4]; K] = kani::any();
+        let contents: [[u8; 3]; K] = kani::any();
+        let mut writer = AtomWriter::new();
+        for k in 0..K {
+            assert!(writer
+                .atom(FourCc(tags[k]), &contents[k][..lens[k]])
+                .is_ok());
+        }
+        let bytes = writer.finish();
+        assert!(bytes.is_ok());
+        let bytes = bytes.unwrap_or_default();
+        // The writer's layout, byte for byte: with the tiling proved by
+        // `parse_tiles` this is SNAP-1(d), parse -> write canonicality.
+        assert!(be32(&bytes, 0) == bytes.len());
+        assert!(bytes[4..8] == XS_M.0);
+        let mut at = ATOM_HEADER;
+        for k in 0..K {
+            assert!(be32(&bytes, at) == ATOM_HEADER + lens[k]);
+            assert!(bytes[at + 4..at + 8] == tags[k]);
+            assert!(bytes[at + 8..at + 8 + lens[k]] == contents[k][..lens[k]]);
+            at += ATOM_HEADER + lens[k];
+        }
+        assert!(at == bytes.len());
+        let mut first_repeat = None;
+        for k in 0..K {
+            if first_repeat.is_none() && (0..k).any(|j| tags[j] == tags[k]) {
+                first_repeat = Some(FourCc(tags[k]));
+            }
+        }
+        match AtomReader::parse(&bytes) {
+            Ok(reader) => {
+                assert!(first_repeat.is_none());
+                assert!(reader.atoms().len() == K);
+                for k in 0..K {
+                    assert!(reader.atoms()[k].tag.0 == tags[k]);
+                    assert!(reader.atoms()[k].payload == &contents[k][..lens[k]]);
+                }
+                false
+            }
+            Err(error) => {
+                assert!(Some(error) == first_repeat.map(AtomError::DuplicateAtom));
+                true
+            }
+        }
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn snap1_write_parse_two() {
+        let refused = write_parse_round_trip([1, 3]);
+        kani::cover!(refused, "the duplicate-tag branch is reached");
+        kani::cover!(!refused, "two distinct atoms round-trip");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn snap1_write_parse_three() {
+        let refused = write_parse_round_trip([0, 2, 3]);
+        kani::cover!(refused, "the duplicate-tag branch is reached");
+        kani::cover!(!refused, "three distinct atoms round-trip");
+    }
+
+    /// SNAP-1(e): `atom_size` and `appended_atom_size` are exact on every
+    /// `usize`: they refuse precisely the sizes whose atom, or whose
+    /// enclosing envelope, would exceed `u32::MAX` bytes. `AtomWriter::atom`
+    /// and `finish` call them before touching or allocating any buffer.
+    #[kani::proof]
+    fn snap1_sizes_refuse_above_u32() {
+        let body: usize = kani::any();
+        let payload: usize = kani::any();
+        let max = u128::from(u32::MAX);
+        let exact = payload as u128 + ATOM_HEADER as u128;
+        match atom_size(payload) {
+            Ok(total) => assert!(u128::from(total) == exact),
+            Err(e) => {
+                assert!(exact > max);
+                assert!(matches!(e, SnapshotError::Atom(AtomError::TooLarge)));
+            }
+        }
+        let envelope = body as u128 + exact + ATOM_HEADER as u128;
+        match appended_atom_size(body, payload) {
+            Ok(total) => {
+                assert!(u128::from(total) == exact);
+                assert!(envelope <= max);
+            }
+            Err(e) => {
+                assert!(envelope > max);
+                assert!(matches!(e, SnapshotError::Atom(AtomError::TooLarge)));
+            }
+        }
+        kani::cover!(envelope == max, "an envelope of exactly u32::MAX bytes");
+        kani::cover!(
+            exact <= max && envelope > max,
+            "an atom refused only by its envelope"
+        );
+    }
+
+    /// SNAP-1: the pairwise duplicate scan (the shape every container of
+    /// up to 520 bytes takes) names the first atom whose tag repeats an
+    /// earlier one, on every list of up to four symbolic tags.
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn snap1_duplicate_scan_first_repeat() {
+        let tags: [[u8; 4]; 4] = kani::any();
+        let n: usize = kani::any_where(|&n| n <= 4);
+        let atoms: [Atom<'static>; 4] = tags.map(|t| Atom {
+            tag: FourCc(t),
+            payload: &[],
+        });
+        let found = first_duplicate_pairwise(&atoms[..n]);
+        let mut expected = None;
+        for k in 0..n {
+            if expected.is_none() && (0..k).any(|j| tags[j] == tags[k]) {
+                expected = Some(FourCc(tags[k]));
+            }
+        }
+        assert!(found == expected);
+        kani::cover!(
+            n == 4 && found == Some(FourCc(tags[3])),
+            "only the last atom repeats"
+        );
+    }
 }

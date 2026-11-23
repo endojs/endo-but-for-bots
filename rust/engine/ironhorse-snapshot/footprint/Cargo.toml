@@ -20,3 +20,9 @@ ironhorse-snapshot = { path = ".." }
 # Match the workspace: guest-influenced arithmetic must not silently wrap.
 [profile.release]
 overflow-checks = true
+
+# A standalone cargo root outside the engine workspace, so it does not inherit
+# `[workspace.lints]`; it states the unsafe policy itself (checked by
+# scripts/test-crate-graph.py).
+[lints.rust]
+unsafe_code = "forbid"

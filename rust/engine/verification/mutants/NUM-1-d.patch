@@ -1,0 +1,12 @@
+Mutant NUM-1-d: ToUint8Clamp rounds ties away from zero instead of to even.
+--- a/ironhorse-vm/src/numeric_kernel.rs
++++ b/ironhorse-vm/src/numeric_kernel.rs
+@@ -114,7 +114,7 @@
+     }
+     let fraction = significand & ((1 << shift) - 1);
+     let half = 1 << (shift - 1);
+-    let round_up = fraction > half || (fraction == half && integer & 1 == 1);
++    let round_up = fraction >= half;
+     (integer + u64::from(round_up)) as u8
+ }
+ 

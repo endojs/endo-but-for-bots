@@ -41,8 +41,8 @@ use crate::DecodeError;
 ///
 /// Every engine raise in the loop (`raise_js`, the `catchable_*` helpers)
 /// and every native re-entry that can raise must pass through here or
-/// [`dispatch_result!`], or in an outlined arm their `Flow` twins
-/// [`dispatch_halt_flow!`] and [`dispatch_result_flow!`];
+/// `dispatch_result!`, or in an outlined arm their `Flow` twins
+/// `dispatch_halt_flow!` and `dispatch_result_flow!`;
 /// `tests/dispatch_loop_control_transfer.rs` parses the source and rejects
 /// hand-expanded arms so they cannot bypass handler ownership checks or
 /// expose an internal unwind as a host result.
@@ -92,7 +92,7 @@ enum Flow {
 }
 
 /// Act on an outlined arm's [`Flow`] in the dispatch loop. The arm built its
-/// exit explicitly or through [`dispatch_halt_flow!`], which keeps every
+/// exit explicitly or through `dispatch_halt_flow!`, which keeps every
 /// unwind's ownership and catch-landing checks.
 macro_rules! dispatch_flow {
     ($flow:expr, $program_counter:ident) => {
@@ -127,7 +127,7 @@ macro_rules! dispatch_halt_flow {
     };
 }
 
-/// [`dispatch_result!`] for an outlined arm.
+/// `dispatch_result!` for an outlined arm.
 macro_rules! dispatch_result_flow {
     ($expression:expr, $machine:expr, $return_depth:expr, $code:expr) => {
         match $expression {
@@ -1172,9 +1172,9 @@ impl Interp {
     }
 }
 
-/// The arms outlined from [`Interp::dispatch_at_inner`], in the loop's order.
+/// The arms outlined from `Interp::dispatch_at_inner`, in the loop's order.
 /// Each runs one opcode in its own frame and tells the loop how to go on
-/// ([`Flow`]); the loop enters each through [`dispatch_flow!`].
+/// (`Flow`); the loop enters each through `dispatch_flow!`.
 impl Interp {
     // ---- program prologue / frame -----------------------
 

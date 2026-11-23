@@ -1,0 +1,12 @@
+Mutant SNAP-4-a: instruction_len admits an instruction one byte past the end.
+--- a/ironhorse-vm/src/opcode.rs
++++ b/ironhorse-vm/src/opcode.rs
+@@ -1065,7 +1065,7 @@
+ /// panics on malformed input; the bytecode-decoder fuzz target relies on it.
+ pub fn instruction_len(code: &[u8], pc: usize) -> Option<usize> {
+     let len = encoded_instruction_len(code, pc)?;
+-    (pc.checked_add(len)? <= code.len()).then_some(len)
++    (pc.checked_add(len)? <= code.len() + 1).then_some(len)
+ }
+ 
+ /// Resolve the encoded width before checking payload availability. Dispatch

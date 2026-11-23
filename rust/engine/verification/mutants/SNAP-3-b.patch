@@ -1,0 +1,12 @@
+Mutant SNAP-3-b: Cursor::array advances by less than the width it read.
+--- a/ironhorse-snapshot/src/image.rs
++++ b/ironhorse-snapshot/src/image.rs
+@@ -1091,7 +1091,7 @@
+     /// The next `N` bytes as a fixed array, advancing past them.
+     fn array<const N: usize>(&mut self) -> Result<[u8; N], SnapshotError> {
+         let x = *chunk_at::<N>(self.p, self.i).ok_or(SnapshotError::Corrupt(self.what))?;
+-        self.i += N;
++        self.i += N - N / 2;
+         Ok(x)
+     }
+     fn u32(&mut self) -> Result<u32, SnapshotError> {

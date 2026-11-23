@@ -34,9 +34,9 @@ use crate::sink::WriteSink;
 #[cfg(test)]
 use crate::store::image_to_batch_unchecked as image_to_batch;
 use crate::store::{
-    chunk_extent_count, derive_page_edges, encode_free_seg, free_seg_count, mint_token,
-    slot_page_count, CheckpointBatch, CommitToken, CommitTokenSource, HeapStore, RandomTokens,
-    SmallState, StoreError, StoreManifest, FREE_SEG_ENTRIES, STORE_SCHEMA_VERSION,
+    chunk_extent_count, derive_page_edges, encode_free_seg, mint_token, slot_page_count,
+    CheckpointBatch, CommitToken, CommitTokenSource, HeapStore, RandomTokens, SmallState,
+    StoreError, StoreManifest, FREE_SEG_ENTRIES, STORE_SCHEMA_VERSION,
 };
 use crate::store_sections::SMALL_SECTION_COUNT;
 use crate::stream::LiveSnapshot;
@@ -140,7 +140,10 @@ struct HashingWriter<'a> {
 impl Write for HashingWriter<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let accepted = self.inner.write(buf)?;
-        self.hasher.update(&buf[..accepted]);
+        let written = buf
+            .get(..accepted)
+            .ok_or_else(|| io::Error::other("writer accepted more bytes than it was given"))?;
+        self.hasher.update(written);
         Ok(accepted)
     }
 
@@ -513,9 +516,9 @@ pub fn image_to_interp(
     // descriptor slot and reinstate the top-down mint counter, so a
     // symbol-keyed property reads back under the same id and a later
     // mint cannot reuse a stored number.
-    if !interp
+    if interp
         .restore_symbol_key_table(image.symbols.next_id, &image.symbols.pairs)
-        .is_ok()
+        .is_err()
     {
         return Err(crate::format::SnapshotError::Corrupt(
             "symbol-key table does not restore",
@@ -863,12 +866,12 @@ fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64, cranks: u64) 
         signature: signature.clone(),
         creation: crate::image::CreationParams {
             initial_slot_count: interp.slots().capacity(),
-            initial_chunk_bytes: interp.chunks().byte_size() as u32,
+            initial_chunk_bytes: crate::wire::wire_len(interp.chunks().byte_size()),
         },
         slot_count: interp.slots().capacity(),
         slot_live: interp.slots().live_count(),
         chunk_len: interp.chunks().byte_size() as u64,
-        free_len: interp.slots().free_list().len() as u32,
+        free_len: crate::wire::wire_len(interp.slots().free_list().len()),
         epoch,
         cranks,
         collect_every: 0,
@@ -1167,9 +1170,8 @@ fn checkpoint_to_store_core(
         .filter_map(|section| {
             let bytes = small.encode_section(section);
             let digest = crate::store_sections::section_hash(section, &bytes);
-            let id = section.id() as usize;
-            (digest != prior_sections[id]).then(|| {
-                next_sections[id] = digest;
+            (digest != *section.of(&prior_sections)).then(|| {
+                *section.of_mut(&mut next_sections) = digest;
                 crate::store_sections::SectionUpdate { section, bytes }
             })
         })
@@ -1227,12 +1229,9 @@ fn checkpoint_to_store_core(
         // length is the committed one. A re-fault of a row this commit
         // wrote reads the committed bytes, which is all it needs.
         interp
-            .acknowledge_backing_commit(
-                tracking
-                    .backing_authority
-                    .as_mut()
-                    .expect("lazy session has backing authority"),
-            )
+            .acknowledge_backing_commit(tracking.backing_authority.as_mut().ok_or_else(|| {
+                StoreError::EngineInvariant("lazy session has no backing authority".to_string())
+            })?)
             .map_err(|_| {
                 StoreError::Snapshot(SnapshotError::Corrupt(
                     "commit authority does not match the machine's backing",
@@ -1254,23 +1253,24 @@ fn changed_free_segs(
     stored_len: u32,
 ) -> Vec<(u32, Vec<u8>)> {
     let free = slots.free_list();
-    let len = free.len() as u32;
+    // The free list holds arena indices, so its length is a `u32` count.
+    let len = crate::wire::wire_len(free.len());
     // Past the stored length nothing can be unchanged, whatever the mark.
     let first = match slots
         .free_list_unchanged_prefix(ack)
-        .map(|unchanged| (unchanged as u32).min(stored_len))
+        .map(|unchanged| crate::wire::wire_len(unchanged).min(stored_len))
     {
         // The list is the stored one.
         Some(unchanged) if unchanged == len && len == stored_len => return Vec::new(),
         Some(unchanged) => unchanged / FREE_SEG_ENTRIES,
         None => 0,
     };
-    (first..free_seg_count(len))
-        .map(|seg| {
-            let start = (seg * FREE_SEG_ENTRIES) as usize;
-            let end = free.len().min(start + FREE_SEG_ENTRIES as usize);
-            (seg, encode_free_seg(&free[start..end]))
-        })
+    // Segment `seg` is the `seg`-th `FREE_SEG_ENTRIES`-entry chunk of the
+    // list (the last one short), so `free_seg_count(len)` chunks in all.
+    (0..=u32::MAX)
+        .zip(free.chunks(FREE_SEG_ENTRIES as usize))
+        .skip(first as usize)
+        .map(|(seg, entries)| (seg, encode_free_seg(entries)))
         .collect()
 }
 
@@ -1399,8 +1399,15 @@ impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
             Ok(bytes) => bytes,
             Err(error) => raise_store_fault(error),
         };
-        crate::slot_codec::decode_slots(&bytes)
-            .unwrap_or_else(|e| panic!("lazy heap fault: slot page {page} decode: {e:?}"))
+        crate::slot_codec::decode_slots(&bytes).unwrap_or_else(
+            #[expect(
+                clippy::panic,
+                reason = "the PageSource contract: a store row that does not decode is a \
+                          crashed crank (the store is trusted; its rows were validated \
+                          at commit), not an error this infallible fault can return"
+            )]
+            |e| panic!("lazy heap fault: slot page {page} decode: {e:?}"),
+        )
     }
 
     fn chunk_extent(&self, ext: u32) -> Vec<u8> {
@@ -1441,12 +1448,16 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     // the gate the eager path runs inside `store_to_image`: a side-table
     // reference out of range, or owned by a free slot, is refused before
     // anything is restored. Heap records are checked as they fault.
-    crate::image::check_small_state_bounds(
-        &small,
-        manifest.slot_count,
-        manifest.chunk_len as usize,
-    )
-    .map_err(StoreError::Snapshot)?;
+    // The manifest decoder bounded `chunk_len` by the `u32` chunk offset
+    // space, so this conversion only refuses on a sub-32-bit `usize`; it is
+    // checked rather than cast so it can never truncate.
+    let chunk_len = usize::try_from(manifest.chunk_len).map_err(|_| {
+        StoreError::Snapshot(SnapshotError::Corrupt(
+            "store manifest chunk length exceeds the chunk offset space",
+        ))
+    })?;
+    crate::image::check_small_state_bounds(&small, manifest.slot_count, chunk_len)
+        .map_err(StoreError::Snapshot)?;
     let unbound = std::rc::Rc::new(std::cell::Cell::new(None));
     let pin = LazyPin {
         backed: (manifest.epoch, manifest.token),
@@ -1462,7 +1473,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
             manifest.slot_count,
             small.slot_free.clone(),
             manifest.slot_live,
-            manifest.chunk_len as usize,
+            chunk_len,
             source,
         )
         .map_err(|_| StoreError::Snapshot(SnapshotError::Corrupt("invalid lazy arena metadata")))?;
@@ -1487,9 +1498,9 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         }
         // The symbol-key id table rides the small state too, restored
         // before anything can mint.
-        if !interp
+        if interp
             .restore_symbol_key_table(small.symbols.next_id, &small.symbols.pairs)
-            .is_ok()
+            .is_err()
         {
             return Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
                 "symbol-key table does not restore",
@@ -1666,9 +1677,9 @@ fn partial_collect_core(
     // The side-table roots come as the page-bit projection: the same
     // single-body enumeration as `side_table_ref_slots` (parity-locked),
     // without materializing the O(live) index vector.
-    for (p, hit) in interp.side_table_ref_page_bits().into_iter().enumerate() {
+    for (p, hit) in (0..=u32::MAX).zip(interp.side_table_ref_page_bits()) {
         if hit {
-            root_pages.insert(p as u32);
+            root_pages.insert(p);
         }
     }
     // The projection can discover counted-state corruption and poison
@@ -1782,9 +1793,9 @@ fn generational_collect_core(
             }
         }
     }
-    for (p, hit) in interp.side_table_ref_page_bits().into_iter().enumerate() {
-        if hit && dirty_set.contains(&(p as u32)) {
-            seeds.insert(p as u32);
+    for (p, hit) in (0..=u32::MAX).zip(interp.side_table_ref_page_bits()) {
+        if hit && dirty_set.contains(&p) {
+            seeds.insert(p);
         }
     }
     if !interp.is_quiescent() {
@@ -2904,7 +2915,7 @@ pub(crate) mod extraction_counts {
         for i in 0..1000 {
             source.push_str(&format!("var retained_name_{i}={i};"));
         }
-        source.push_str("0");
+        source.push('0');
         let (code, names) = ironhorse_compile::compile_atoms(&source).unwrap();
         let mut interp = Interp::new();
         interp.link_intrinsics(&ironhorse_vm::parse_symbols(&names));

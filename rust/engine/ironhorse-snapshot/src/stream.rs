@@ -30,7 +30,7 @@
 //! [`ironhorse_vm::SlotArena::records_iter`] and
 //! [`ironhorse_vm::ChunkArena::raw_bytes`].
 
-use crate::atom::{appended_atom_size, atom_size, ATOM_HEADER};
+use crate::atom::{appended_atom_size, atom_size};
 use crate::format::{
     FourCc, Signature, SnapshotError, Version, BLOC, CREA, HEAP, SIGN, VERS, XS_M,
 };
@@ -66,12 +66,26 @@ pub(crate) struct LiveSnapshot<'a> {
     collections: Vec<CollectionRowView<'a>>,
 }
 
-/// One atom of the plan the sizing pass produces: its tag, the section it
-/// encodes (none for the five fixed atoms), and its payload length.
+/// One atom of the plan the sizing pass produces: its tag, what encodes its
+/// payload, and its payload length.
 struct PlannedAtom {
     tag: FourCc,
-    section: Option<SmallSection>,
+    source: AtomSource,
     payload_len: u64,
+}
+
+/// What encodes a planned atom's payload: one of the five fixed atoms, or a
+/// small-state section. Naming the fixed atoms here, rather than matching
+/// their tags at write time, makes "a fixed atom with no encoder" a state
+/// the plan cannot express.
+#[derive(Clone, Copy)]
+enum AtomSource {
+    Version,
+    Signature,
+    Creation,
+    Chunks,
+    Heap,
+    Section(SmallSection),
 }
 
 /// A sized snapshot: the plan plus the total container length, ready to
@@ -107,7 +121,7 @@ impl<'a> LiveSnapshot<'a> {
             signature: signature.clone(),
             creation: CreationParams {
                 initial_slot_count: interp.slots().capacity(),
-                initial_chunk_bytes: interp.chunks().byte_size() as u32,
+                initial_chunk_bytes: crate::wire::wire_len(interp.chunks().byte_size()),
             },
             small: small_state_of(interp, dirty),
             arrays: interp.arrays_rows(),
@@ -137,8 +151,10 @@ impl<'a> LiveSnapshot<'a> {
         // The arena: live records only, as the image visitor skips the
         // free list's opaque records.
         let slots = self.interp.slots();
-        for (index, record) in slots.records_iter().enumerate() {
-            if slots.is_free_index(SlotIndex(index as u32)) {
+        // Arena indices are `u32` by type, so the inclusive range covers
+        // every record without the overflow an open `0..` would risk.
+        for (index, record) in (0..=u32::MAX).zip(slots.records_iter()) {
+            if slots.is_free_index(SlotIndex(index)) {
                 continue;
             }
             if let Some(id) = check(&record) {
@@ -197,25 +213,22 @@ impl<'a> LiveSnapshot<'a> {
 
     /// One atom's payload.
     fn encode_atom<S: Sink>(&self, atom: &PlannedAtom, sink: &mut S) {
-        match atom.section {
-            Some(section) => self.encode_section(section, sink),
-            None => match atom.tag {
-                VERS => sink.put(&self.version.encode()),
-                SIGN => sink.put(&self.signature.encode()),
-                CREA => sink.put(&self.creation.encode()),
-                BLOC => sink.put(&self.interp.chunks().raw_bytes()),
-                HEAP => {
-                    let slots = self.interp.slots();
-                    encode_heap_into(
-                        slots.capacity(),
-                        slots.free_list(),
-                        slots.live_count(),
-                        slots.records_iter(),
-                        sink,
-                    );
-                }
-                other => unreachable!("fixed atom {} has no encoder", other.as_str()),
-            },
+        match atom.source {
+            AtomSource::Section(section) => self.encode_section(section, sink),
+            AtomSource::Version => sink.put(&self.version.encode()),
+            AtomSource::Signature => sink.put(&self.signature.encode()),
+            AtomSource::Creation => sink.put(&self.creation.encode()),
+            AtomSource::Chunks => sink.put(&self.interp.chunks().raw_bytes()),
+            AtomSource::Heap => {
+                let slots = self.interp.slots();
+                encode_heap_into(
+                    slots.capacity(),
+                    slots.free_list(),
+                    slots.live_count(),
+                    slots.records_iter(),
+                    sink,
+                );
+            }
         }
     }
 
@@ -227,27 +240,27 @@ impl<'a> LiveSnapshot<'a> {
         let mut atoms = vec![
             PlannedAtom {
                 tag: VERS,
-                section: None,
+                source: AtomSource::Version,
                 payload_len: self.version.encode().len() as u64,
             },
             PlannedAtom {
                 tag: SIGN,
-                section: None,
+                source: AtomSource::Signature,
                 payload_len: self.signature.encode().len() as u64,
             },
             PlannedAtom {
                 tag: CREA,
-                section: None,
+                source: AtomSource::Creation,
                 payload_len: self.creation.encode().len() as u64,
             },
             PlannedAtom {
                 tag: BLOC,
-                section: None,
+                source: AtomSource::Chunks,
                 payload_len: self.interp.chunks().byte_size() as u64,
             },
             PlannedAtom {
                 tag: HEAP,
-                section: None,
+                source: AtomSource::Heap,
                 payload_len: heap_payload_len(slots.capacity(), slots.free_list().len()),
             },
         ];
@@ -262,7 +275,7 @@ impl<'a> LiveSnapshot<'a> {
             self.encode_section(payload.section, &mut counter);
             atoms.push(PlannedAtom {
                 tag,
-                section: Some(payload.section),
+                source: AtomSource::Section(payload.section),
                 payload_len: counter.len,
             });
         }
@@ -292,7 +305,13 @@ impl SizedSnapshot<'_, '_> {
         sink.put(&self.total.to_be_bytes());
         sink.put(&XS_M.0);
         for atom in &self.atoms {
-            sink.put(&(atom.payload_len as u32 + ATOM_HEADER as u32).to_be_bytes());
+            // The sizing pass admitted this exact length, so the conversions
+            // succeed; they are re-derived rather than cast so a wider
+            // `payload_len` can never wrap into a short header.
+            let total = usize::try_from(atom.payload_len)
+                .map_err(|_| SnapshotError::Atom(crate::atom::AtomError::TooLarge))
+                .and_then(atom_size)?;
+            sink.put(&total.to_be_bytes());
             sink.put(&atom.tag.0);
             let mut counting = Counting {
                 inner: sink,

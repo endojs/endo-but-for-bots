@@ -1028,7 +1028,7 @@ impl Opcode {
     /// Raw `gxCodeSizes` entry. A positive value is the fixed
     /// instruction size; `0` marks an ID-operand opcode (size `1 +
     /// ID_SIZE`); a negative `-n` marks a length-prefixed variable
-    /// opcode (`1 + n + payload`). Use [`Opcode::instruction_len`] to
+    /// opcode (`1 + n + payload`). Use `Opcode::instruction_len` to
     /// resolve the concrete length against a byte stream.
     #[inline]
     pub fn size(self) -> i8 {
@@ -1081,20 +1081,20 @@ pub(crate) fn encoded_instruction_len(code: &[u8], pc: usize) -> Option<usize> {
         match size {
             0 => 1 + ID_SIZE,
             -1 => {
-                let n = *code.get(pc + 1)? as usize;
-                2 + n
+                let n = *code.get(pc + 1)?;
+                prefixed_len(2, u32::from(n))?
             }
             -2 => {
-                let lo = *code.get(pc + 1)? as usize;
-                let hi = *code.get(pc + 2)? as usize;
-                3 + (lo | (hi << 8))
+                let lo = *code.get(pc + 1)?;
+                let hi = *code.get(pc + 2)?;
+                prefixed_len(3, u32::from(u16::from_le_bytes([lo, hi])))?
             }
             -4 => {
-                let b0 = *code.get(pc + 1)? as usize;
-                let b1 = *code.get(pc + 2)? as usize;
-                let b2 = *code.get(pc + 3)? as usize;
-                let b3 = *code.get(pc + 4)? as usize;
-                5 + (b0 | (b1 << 8) | (b2 << 16) | (b3 << 24))
+                let b0 = *code.get(pc + 1)?;
+                let b1 = *code.get(pc + 2)?;
+                let b2 = *code.get(pc + 3)?;
+                let b3 = *code.get(pc + 4)?;
+                prefixed_len(5, u32::from_le_bytes([b0, b1, b2, b3]))?
             }
             // Every negative sentinel XS emits is -1/-2/-4; anything
             // else is an impossible table entry.
@@ -1102,6 +1102,21 @@ pub(crate) fn encoded_instruction_len(code: &[u8], pc: usize) -> Option<usize> {
         }
     };
     Some(len)
+}
+
+/// The length of a length-prefixed instruction: its `header` bytes (opcode
+/// and prefix) plus the declared `payload`, in the pointer-width type `W`,
+/// or `None` when that sum does not fit `W`.
+///
+/// The sum is formed in `u64`, where a `u32` payload plus a small header
+/// cannot overflow, and only then narrowed. Adding in `usize` directly
+/// overflowed on a 32-bit target for a declared payload near `u32::MAX` (a
+/// panic under `overflow-checks`); the kernel is generic so guarantee
+/// SNAP-4(d) can prove the `u32` instantiation, which is what `usize` is on
+/// `wasm32`, as well as the 64-bit one.
+#[inline]
+fn prefixed_len<W: TryFrom<u64>>(header: u8, payload: u32) -> Option<W> {
+    W::try_from(u64::from(payload) + u64::from(header)).ok()
 }
 
 /// Rewrite every 2-byte little-endian ID operand through `map`,
@@ -1249,5 +1264,273 @@ mod tests {
         let exact = [Opcode::XS_CODE_STRING_1 as u8, 2, b'a', b'b'];
         assert_eq!(instruction_len(&exact, 0), Some(4));
         assert!(remap_ids(&exact, Some).is_some());
+    }
+}
+
+/// SNAP-4 beyond the Kani bounds: exhaustive over every opcode byte and
+/// length prefix shape, PRNG-driven over longer streams.
+#[cfg(test)]
+mod framing_properties {
+    use super::*;
+
+    /// The pointer-width kernel at the 32-bit boundary: on `u32` (the
+    /// `usize` of `wasm32`) a declared payload whose instruction would pass
+    /// `u32::MAX` is `None`, not an overflow panic.
+    #[test]
+    fn prefixed_len_refuses_what_the_width_cannot_hold() {
+        assert_eq!(prefixed_len::<u32>(5, u32::MAX), None);
+        assert_eq!(prefixed_len::<u32>(5, u32::MAX - 5), Some(u32::MAX));
+        assert_eq!(
+            prefixed_len::<u64>(5, u32::MAX),
+            Some(u64::from(u32::MAX) + 5)
+        );
+        assert_eq!(
+            prefixed_len::<usize>(2, 7),
+            Some(9),
+            "the host instantiation is the plain sum"
+        );
+        // A -4 instruction declaring a u32::MAX payload sizes to the exact
+        // sum on a 64-bit host and refuses to walk a short stream.
+        let op = (0..=u8::MAX)
+            .find(|&b| Opcode::from_u8(b).is_some_and(|op| op.size() == -4))
+            .unwrap();
+        let code = [op, 0xFF, 0xFF, 0xFF, 0xFF];
+        assert_eq!(
+            encoded_instruction_len(&code, 0),
+            prefixed_len::<usize>(5, u32::MAX)
+        );
+        assert_eq!(instruction_len(&code, 0), None);
+    }
+
+    /// The SNAP-4(b, c) statements on every opcode byte with every one-byte
+    /// prefix value, every two-byte prefix value, and four-byte prefixes
+    /// around the boundaries, at every pc of a stream padded to the declared
+    /// payload and of one a byte short.
+    #[test]
+    fn instruction_len_bounds_every_opcode() {
+        for byte in 0..=u8::MAX {
+            let Some(op) = Opcode::from_u8(byte) else {
+                assert_eq!(instruction_len(&[byte, 0, 0, 0, 0], 0), None);
+                continue;
+            };
+            assert_eq!(op as u8, byte);
+            let prefixes: Vec<u32> = match op.size() {
+                -1 => (0..=0xFF).collect(),
+                -2 => (0..=0xFFFF).step_by(97).chain([0xFFFF]).collect(),
+                -4 => vec![0, 1, 255, 256, 65_536, 1 << 20],
+                _ => vec![0],
+            };
+            for prefix in prefixes {
+                let (header, want) = match op.size() {
+                    size if size > 0 => (0, size as usize),
+                    0 => (0, 1 + ID_SIZE),
+                    -1 => (1, 2 + prefix as usize),
+                    -2 => (2, 3 + prefix as usize),
+                    -4 => (4, 5 + prefix as usize),
+                    _ => unreachable!("no other sentinel in the table"),
+                };
+                let mut code = vec![byte];
+                code.extend_from_slice(&prefix.to_le_bytes()[..header]);
+                code.resize(want.max(code.len()), 0xAB);
+                assert_eq!(instruction_len(&code, 0), Some(want), "{}", op.name());
+                code.pop();
+                assert_eq!(instruction_len(&code, 0), None, "{} short", op.name());
+            }
+        }
+    }
+
+    /// `remap_ids` on PRNG-driven streams of whole instructions (up to 40):
+    /// the output has the input's length and differs only in ID operands,
+    /// each rewritten through the map.
+    #[test]
+    fn remap_ids_rewrites_only_id_operands() {
+        let ops: Vec<Opcode> = (0..=u8::MAX)
+            .filter_map(Opcode::from_u8)
+            .filter(|op| matches!(op.size(), -1..=8))
+            .collect();
+        let mut state = 0x0BC0_DE00_u64;
+        let mut next = move || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+        for _ in 0..5_000 {
+            let mut code = Vec::new();
+            let mut ids = Vec::new();
+            for _ in 0..next() % 41 {
+                let op = ops[(next() % ops.len() as u64) as usize];
+                let at = code.len();
+                code.push(op as u8);
+                match op.size() {
+                    0 => {
+                        ids.push(at + 1);
+                        code.extend_from_slice(&(next() as u16).to_le_bytes());
+                    }
+                    -1 => {
+                        let n = (next() % 6) as u8;
+                        code.push(n);
+                        code.extend((0..n).map(|_| next() as u8));
+                    }
+                    size => code.extend((1..size).map(|_| next() as u8)),
+                }
+            }
+            let out = remap_ids(&code, |id| Some(id.wrapping_mul(31).wrapping_add(7))).unwrap();
+            assert_eq!(out.len(), code.len());
+            let mut expected = code.clone();
+            for &at in &ids {
+                let id = u16::from_le_bytes([code[at], code[at + 1]]);
+                expected[at..at + 2]
+                    .copy_from_slice(&id.wrapping_mul(31).wrapping_add(7).to_le_bytes());
+            }
+            assert_eq!(out, expected);
+            if !ids.is_empty() {
+                assert!(remap_ids(&code, |_| None).is_none());
+            }
+        }
+    }
+}
+
+/// Kani harnesses for guarantee SNAP-4 (`verification/proofs.d/framing.toml`).
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    /// SNAP-4(a, b, c): `instruction_len` does not panic for any stream of
+    /// up to 6 bytes and any `pc: usize`; `Some(l)` implies `l >= 1` and
+    /// `pc + l <= code.len()`, and `l` is the opcode's fixed size, `1 +
+    /// ID_SIZE` for the ID sentinel, or for the `-1`, `-2`, `-4` sentinels
+    /// the header width plus the declared little-endian payload length.
+    #[kani::proof]
+    #[kani::unwind(7)]
+    fn snap4_instruction_len_bounded() {
+        let bytes: [u8; 6] = kani::any();
+        let len: usize = kani::any_where(|&l| l <= 6);
+        let code = &bytes[..len];
+        let pc: usize = kani::any();
+        let result = instruction_len(code, pc);
+        if let Some(l) = result {
+            assert!(l >= 1);
+            assert!(pc.checked_add(l).is_some_and(|end| end <= code.len()));
+            let op = Opcode::from_u8(code[pc]);
+            assert!(op.is_some());
+            if let Some(op) = op {
+                let declared = |n: usize| {
+                    let mut v = 0usize;
+                    for k in (0..n).rev() {
+                        v = (v << 8) | usize::from(code[pc + 1 + k]);
+                    }
+                    v
+                };
+                let size = op.size();
+                let want = match size {
+                    0 => 1 + ID_SIZE,
+                    -1 => 2 + declared(1),
+                    -2 => 3 + declared(2),
+                    -4 => 5 + declared(4),
+                    _ => size as usize,
+                };
+                assert!(l == want);
+                kani::cover!(size == -2, "a u16-prefixed instruction sized");
+                kani::cover!(size == -4, "a u32-prefixed instruction sized");
+            }
+        }
+        kani::cover!(
+            result.is_none() && pc < len,
+            "a truncated instruction refused"
+        );
+    }
+
+    /// SNAP-4(d): the width kernel is exact in every pointer width: in
+    /// `u32` (the `usize` of `wasm32`) and `u64` it returns `Some` of the
+    /// exact sum precisely when the sum fits, never panicking, for every
+    /// header and every `u32` payload; the host `usize` agrees with `u64`.
+    #[kani::proof]
+    fn snap4_prefixed_len_any_width() {
+        let header: u8 = kani::any();
+        let payload: u32 = kani::any();
+        let exact = u128::from(payload) + u128::from(header);
+        let narrow = prefixed_len::<u32>(header, payload);
+        assert!(narrow.is_some() == (exact <= u128::from(u32::MAX)));
+        if let Some(v) = narrow {
+            assert!(u128::from(v) == exact);
+        }
+        let wide = prefixed_len::<u64>(header, payload);
+        assert!(wide.map(u128::from) == Some(exact));
+        let host = prefixed_len::<usize>(header, payload);
+        assert!(host.map(|v| v as u128) == Some(exact));
+        if let (Some(n), Some(w)) = (narrow, wide) {
+            assert!(u64::from(n) == w);
+        }
+        kani::cover!(
+            header == 5 && narrow.is_none(),
+            "a payload only 32-bit refuses"
+        );
+    }
+
+    /// SNAP-4: `Opcode::from_u8` is total, and every opcode it returns
+    /// encodes back to its byte and carries a size the walkers resolve
+    /// (positive, the ID sentinel 0, or -1, -2, -4).
+    #[kani::proof]
+    fn snap4_from_u8_round_trips() {
+        let byte: u8 = kani::any();
+        if let Some(op) = Opcode::from_u8(byte) {
+            assert!(op as u8 == byte);
+            let size = op.size();
+            assert!(size >= 0 || size == -1 || size == -2 || size == -4);
+            kani::cover!(size == -1, "a u8-prefixed opcode");
+        }
+        kani::cover!(Opcode::from_u8(byte).is_none(), "an unknown opcode byte");
+    }
+
+    /// SNAP-4(e): on every stream of exactly `LEN` bytes and every answer
+    /// of the map, a successful `remap_ids` returns a stream of the same
+    /// length that equals the input except at the two bytes after each
+    /// ID-sentinel opcode of the instruction walk, which hold the map's
+    /// answer for the little-endian ID found there. (Concrete lengths keep
+    /// `to_vec` from allocating a symbolic size, the pattern that exhausts
+    /// the solver's memory.)
+    fn remap_ids_only_ids<const LEN: usize>() -> (bool, usize) {
+        let code: [u8; LEN] = kani::any();
+        let answers: [u16; 3] = kani::any();
+        let refuse: [bool; 3] = kani::any();
+        let mut asked = 0usize;
+        let mut ids = [0u16; 3];
+        let result = remap_ids(&code, |id| {
+            let k = asked.min(2);
+            ids[k] = id;
+            asked += 1;
+            (!refuse[k]).then_some(answers[k])
+        });
+        let mut calls = 0;
+        if let Some(out) = &result {
+            assert!(out.len() == LEN);
+            let mut pc = 0;
+            while pc < LEN {
+                let l = instruction_len(&code, pc);
+                assert!(l.is_some());
+                let l = l.unwrap_or(1);
+                if Opcode::from_u8(code[pc]).is_some_and(|op| op.size() == 0) {
+                    assert!(ids[calls] == u16::from_le_bytes([code[pc + 1], code[pc + 2]]));
+                    assert!(out[pc + 1..pc + 3] == answers[calls].to_le_bytes());
+                    assert!(out[pc] == code[pc]);
+                    calls += 1;
+                } else {
+                    assert!(out[pc..pc + l] == code[pc..pc + l]);
+                }
+                pc += l;
+            }
+            assert!(calls == asked);
+        }
+        (result.is_some(), calls)
+    }
+
+    #[kani::proof]
+    #[kani::unwind(7)]
+    fn snap4_remap_ids_only_ids_6() {
+        let (ok, calls) = remap_ids_only_ids::<6>();
+        kani::cover!(ok && calls == 2, "two ID operands rewritten");
+        kani::cover!(!ok, "a refusal");
     }
 }

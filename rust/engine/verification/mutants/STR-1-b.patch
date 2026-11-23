@@ -1,0 +1,12 @@
+Mutant STR-1-b: image_free_marks admits an image whose live count is short.
+--- a/ironhorse-vm/src/value.rs
++++ b/ironhorse-vm/src/value.rs
+@@ -942,7 +942,7 @@
+             }
+             *mark = true;
+         }
+-        if free.len() as u64 + u64::from(live) != u64::from(count) {
++        if free.len() as u64 + u64::from(live) > u64::from(count) {
+             return Err(SlotArenaImageError::LiveFreeAccounting);
+         }
+         Ok(marks)

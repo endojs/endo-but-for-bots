@@ -1,0 +1,568 @@
+# Kani proof manifest (VERIFICATION.md; designs/ironhorse-formal-verification.md).
+# One [[harness]] entry per #[kani::proof] in the engine tree; `scripts/verify.py
+# check` fails if the tree and this list differ. Time budgets are 3x the time
+# measured on the development host (4 shared cores), at least 5 s; `run` warns
+# past 1.5x and fails past 2x. Re-measure on the CI runner.
+# `unreachable` pins the count of library-internal UNREACHABLE checks (R3);
+# harness-own unreachable checks always fail. `flags` need `flags_reason` (R2).
+
+kani_version = "0.68.0"
+
+# Every attribute that compiles engine code differently under cfg(kani),
+# other than `#[cfg(kani)]` on a proof module and the kani::Arbitrary derives.
+# `verify.py check` counts them per file and fails on any site not listed
+# here; VERIFICATION.md lists each under "Production code that differs under
+# cfg(kani)".
+[[cfg_kani]]
+file = "ironhorse-snapshot/src/atom.rs"
+count = 4
+reason = "first_duplicate compiles only its pairwise shape under Kani (the BTreeSet shape for containers of more than 64 atoms did not finish symbolic execution in 300 s); every container the SNAP-1 harnesses admit (at most 48 bytes, so at most five atoms) takes the pairwise shape in a shipped build too."
+
+[[cfg_kani]]
+file = "ironhorse-regexp/src/encoding.rs"
+count = 1
+reason = "cesu8_unit is a test-and-proof-only reference encoder (cfg(any(test, kani))); no shipped code calls it."
+
+[[guarantee]]
+id = "MTR-1"
+title = "No panic from any restored meter state"
+claim = "For every MeterState a snapshot can carry and every argument, no meter operation panics (with overflow-checks on, as in release); refunds are proved under their pairing precondition index >= n."
+spec = "ironhorse-fuzz snapshot_decoder.rs: from_snapshot_bytes \"must NEVER panic, hang, or allocate unboundedly\"; Cargo.toml: \"Guest-influenced arithmetic must not silently wrap in shipped builds.\""
+trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
+
+[[guarantee]]
+id = "MTR-2"
+title = "Charging fails closed"
+claim = "Ticks saturate exactly at u64::MAX; an unrepresentable admission is refused with index unchanged; index = u64::MAX is absorbing: no guest-driven operation leaves it and every check or admission from it refuses, armed or not."
+spec = "ironhorse-vm/src/meter.rs Meter::charge_and_check: \"An unrepresentable total fails closed, even when checks are disabled; wrapping it would let guest work erase its accrued cost.\""
+trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
+
+[[guarantee]]
+id = "MTR-3"
+title = "Limit enforcement cannot be bypassed"
+claim = "Armed, not exhausted and index > count: the host is consulted exactly once with computrons(); false gives Abort; Continue leaves count > index; an approved check whose next deadline is unrepresentable aborts (execution) or saturates the deadline (compilation). Un-armed meters never consult the host."
+spec = "ironhorse-vm/src/meter.rs Meter::check: \"if metering is armed and the index passed the threshold, consult host\"; Meter::is_armed / interval: \"Zero disables checks\"."
+trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
+
+[[guarantee]]
+id = "MTR-4"
+title = "Unit relations"
+claim = "computrons() = index >> 16; scale_interval(i) = min(i * 2^16, u64::MAX) and is nonzero iff i is; chunk_cost and string_chunk_cost equal their fxAdjustChunkSize formulas where representable and saturate otherwise."
+spec = "ironhorse-vm/src/meter.rs scale_interval: \"Saturating keeps a non-zero interval non-zero, so the armed/un-armed distinction is never flipped by arithmetic.\"; Meter::tick_chunk_new: round_up_8(size) + 16; ironhorse-meter chunk_cost / string_chunk_cost."
+trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
+
+[[guarantee]]
+id = "MTR-5"
+title = "State and restore round trip"
+claim = "restore(s); state() == s for every s, and last_reported feeds no computation, so leaving it out of MeterState is sound."
+spec = "ironhorse-vm/src/meter.rs Meter::restore: \"last_reported is re-seeded from index for diagnostics; it feeds no computation.\""
+trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
+
+[[guarantee]]
+id = "MTR-6"
+title = "Monotone index, with its exact exceptions"
+claim = "No guest-driven operation decreases index (checks never move it); a paired refund returns it to its value before the paired tick, or leaves it at u64::MAX if the tick exhausted the meter. begin and restore are the only other writers."
+spec = "ironhorse-vm/src/meter.rs Meter::charge_and_check: \"would let guest work erase its accrued cost\"; Meter::check_compilation: \"Compilation receipts require a monotone accumulated index\"."
+trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses"]
+
+[[guarantee]]
+id = "KANI-1"
+title = "Canary: Kani's float %, rem_euclid, powi and powf are wrong"
+claim = "Each canary asserts the wrong value Kani 0.68 computes and so passes; a fix makes it fail, which forces review of rule R1 (no proof may depend on these operations)."
+spec = "IEEE 754-2019 remainder/pow semantics as computed by rustc (true values in the harness comments)."
+trusted = ["Kani 0.68 / CBMC 6.11"]
+
+[[guarantee]]
+id = "KANI-2"
+title = "Canary: the runner detects a failed check"
+claim = "A deliberately false assertion is reported as a failure; the manifest expects failure, so a runner that misses failures goes red."
+spec = "scripts/verify.py rule: a harness whose result differs from expect fails the run."
+trusted = ["Kani 0.68 / CBMC 6.11", "scripts/verify.py"]
+
+[[harness]]
+guarantee = "MTR-1"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr1_tick_code"
+tier = "pr"
+statement = "tick_code does not panic."
+domain = "every MeterState (index, interval, count: all u64 triples)"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = ["MTR-1-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-1"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr1_tick_code_n"
+tier = "pr"
+statement = "tick_code_n(n) does not panic."
+domain = "every MeterState (index, interval, count: all u64 triples); every n: u64"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = ["MTR-1-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-1"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr1_tick_builtin"
+tier = "pr"
+statement = "tick_builtin does not panic."
+domain = "every MeterState (index, interval, count: all u64 triples)"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = ["MTR-1-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-1"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr1_tick_builtin_some"
+tier = "pr"
+statement = "tick_builtin_some(k) does not panic."
+domain = "every MeterState (index, interval, count: all u64 triples); every k: u64"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = []
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-1"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr1_tick_slot_alloc"
+tier = "pr"
+statement = "tick_slot_alloc does not panic."
+domain = "every MeterState (index, interval, count: all u64 triples)"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = []
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-1"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr1_tick_chunk_alloc"
+tier = "pr"
+statement = "tick_chunk_alloc(size) does not panic."
+domain = "every MeterState (index, interval, count: all u64 triples); every size: u64"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = []
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-1"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr1_tick_chunk_new_and_string"
+tier = "pr"
+statement = "tick_chunk_new(size) and tick_string(units) do not panic."
+domain = "every MeterState (index, interval, count: all u64 triples); every argument: u64"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = []
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-1"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr1_tick_raw"
+tier = "pr"
+statement = "tick_raw(n) does not panic."
+domain = "every MeterState (index, interval, count: all u64 triples); every n: u64"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = ["MTR-1-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-1"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr1_untick_code"
+tier = "pr"
+statement = "untick_code does not panic when it refunds a prior tick."
+domain = "every MeterState (index, interval, count: all u64 triples) with index >= CODE_METERING (the pairing precondition)"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = []
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-1"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr1_untick_raw"
+tier = "pr"
+statement = "untick_raw(n) does not panic when it refunds a prior tick."
+domain = "every MeterState (index, interval, count: all u64 triples); every n: u64 with index >= n (the pairing precondition)"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = []
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-1"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr1_checks_and_charges"
+tier = "pr"
+statement = "check, check_compilation, charge_and_check(n) and charge_compilation(n, Some/None) do not panic."
+domain = "every MeterState (index, interval, count: all u64 triples); every n: u64; host answer: any bool"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 3
+unreachable_reason = "the op selector is assumed to the check/charge ops, so the excluded tick_chunk_new path (2 subtract checks in chunk_cost) and the paired-refund debug_assert! are never reached"
+mutants = []
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-1"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr1_configuration"
+tier = "pr"
+statement = "begin(i) and rearm(i), then state, computrons, is_armed and interval_raw, do not panic."
+domain = "every MeterState (index, interval, count: all u64 triples); every i: u64"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = []
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-1"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr1_sequence_of_four"
+tier = "pr"
+statement = "Any sequence of four guest-driven operations (ticks, paired refunds, checks, charges, computrons) does not panic."
+domain = "every MeterState (index, interval, count: all u64 triples); four ops, each with any u64 argument; host answer: any bool, fixed per run"
+unwind = 5
+flags = []
+time_budget_s = 9
+memory_budget_gb = 1
+unreachable = 1
+unreachable_reason = "an overflow check inside core::fmt::Arguments::from_str, reached only from the formatting of a debug_assert! message the harness never fails"
+mutants = ["MTR-1-a", "MTR-1-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-2"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr2_ticks_saturate_exactly"
+tier = "pr"
+statement = "Every tick_* leaves index = min(index + exact cost, u64::MAX), the exact cost computed in u128."
+domain = "every MeterState (index, interval, count: all u64 triples); every tick op and u64 argument"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 2
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): meter::Meter::computrons (1), meter::Meter::untick_raw (1). No operation this harness drives consults the host, so the test host's call counter in meter::proofs::Host::consult is unreachable; the manifest allows exactly that function (unreachable_allow)."
+unreachable_allow = ["meter::proofs::Host::consult"]
+mutants = ["MTR-1-a", "MTR-1-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-2"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr2_charge_and_check_fails_closed"
+tier = "pr"
+statement = "charge_and_check(n): an unrepresentable total aborts with index unchanged and no host call; a total of exactly u64::MAX aborts at u64::MAX; otherwise index = index + n."
+domain = "every MeterState (index, interval, count: all u64 triples); every n: u64; host answer: any bool"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = ["MTR-2-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-2"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr2_charge_compilation_fails_closed"
+tier = "pr"
+statement = "charge_compilation(n, host): an unrepresentable total is refused with index unchanged; a total of exactly u64::MAX is refused at u64::MAX; otherwise index = index + n."
+domain = "every MeterState (index, interval, count: all u64 triples); every n: u64; host Some(any bool) or None"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = ["MTR-2-c"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-2"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr2_exhausted_is_absorbing"
+tier = "pr"
+statement = "From index = u64::MAX, every guest-driven operation leaves index = u64::MAX, consults no host, and every check or admission refuses, armed or not."
+domain = "every MeterState (index, interval, count: all u64 triples) with index = u64::MAX; every op and u64 argument"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 1
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): meter::Meter::untick_raw (1). No operation this harness drives consults the host, so the test host's call counter in meter::proofs::Host::consult is unreachable; the manifest allows exactly that function (unreachable_allow)."
+unreachable_allow = ["meter::proofs::Host::consult"]
+mutants = ["MTR-2-a", "MTR-2-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-3"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr3_check_consults_the_host_when_due"
+tier = "pr"
+statement = "check and check_compilation: exhausted aborts without the host; else if armed and index > count the host is consulted exactly once with index >> 16, false gives Abort, Continue implies count > index, and Abort after approval only on the execution path with index + interval unrepresentable; else no host call, Continue, state unchanged; index never changes."
+domain = "every MeterState (index, interval, count: all u64 triples); host answer: any bool"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = ["MTR-3-a", "MTR-3-b", "MTR-6-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-3"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr3_unarmed_never_consults"
+tier = "pr"
+statement = "An un-armed meter (interval = 0) never consults the host in check, check_compilation, charge_and_check or charge_compilation."
+domain = "every MeterState (index, interval, count: all u64 triples) with interval = 0; every u64 argument"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 4
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): ironhorse_meter::chunk_cost (2), meter::Meter::computrons (1), meter::Meter::untick_raw (1). No operation this harness drives consults the host, so the test host's call counter in meter::proofs::Host::consult is unreachable; the manifest allows exactly that function (unreachable_allow)."
+unreachable_allow = ["meter::proofs::Host::consult"]
+mutants = ["MTR-3-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-4"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr4_computrons_and_interval_scaling"
+tier = "pr"
+statement = "computrons() = index >> 16; scale_interval(i) = min(i * 2^16, u64::MAX), nonzero iff i is; begin(i) arms iff i != 0."
+domain = "every MeterState (index, interval, count: all u64 triples); every i: u64"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = ["MTR-4-a", "MTR-4-c"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-5"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr5_restore_state_round_trip"
+tier = "pr"
+statement = "restore(s) then state() returns s exactly, whatever the meter held before."
+domain = "every MeterState s; any prior tick_raw"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = ["MTR-5-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-5"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr5_last_reported_feeds_nothing"
+tier = "pr"
+statement = "Two meters differing only in last_reported give equal outcomes, states and host consultations for every guest-driven operation."
+domain = "every MeterState (index, interval, count: all u64 triples); any last_reported; every op and u64 argument; host answer: any bool"
+unwind = 0
+flags = []
+time_budget_s = 18
+memory_budget_gb = 1
+unreachable = 0
+mutants = ["MTR-5-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-6"
+crate = "ironhorse-vm"
+name = "meter::proofs::mtr6_index_is_monotone"
+tier = "pr"
+statement = "No guest-driven operation decreases index; a paired tick then refund returns it exactly when the tick did not reach u64::MAX (and to u64::MAX otherwise); a check never moves it."
+domain = "every MeterState (index, interval, count: all u64 triples); every op and u64 argument; host answer: any bool"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = ["MTR-6-a", "MTR-6-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-4"
+crate = "ironhorse-meter"
+name = "proofs::mtr4_chunk_cost_formula"
+tier = "pr"
+statement = "chunk_cost(b) = min((round_up_8(b) + 16) * CHUNK_ALLOCATION_METERING, u64::MAX), computed in u128."
+domain = "every b: u64"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = ["MTR-4-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "MTR-4"
+crate = "ironhorse-meter"
+name = "proofs::mtr4_string_chunk_cost_formula"
+tier = "pr"
+statement = "string_chunk_cost(u) = min((round_up_8(u + 1) + 16) * CHUNK_ALLOCATION_METERING, u64::MAX), computed in u128."
+domain = "every u: u64"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = ["MTR-4-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "KANI-1"
+crate = "ironhorse-spec"
+name = "kani_canaries::float_rem_is_miscomputed"
+tier = "pr"
+statement = "Kani evaluates 3.0 % 2.0 to 0.0 (true value 1.0)."
+domain = "the single pinned input"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = []
+expect = "pass"
+canary = true
+
+[[harness]]
+guarantee = "KANI-1"
+crate = "ironhorse-spec"
+name = "kani_canaries::float_rem_euclid_is_miscomputed"
+tier = "pr"
+statement = "Kani evaluates (-3.0).rem_euclid(2.0) to 0.0 (true value 1.0)."
+domain = "the single pinned input"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = []
+expect = "pass"
+canary = true
+
+[[harness]]
+guarantee = "KANI-1"
+crate = "ironhorse-spec"
+name = "kani_canaries::float_powi_is_miscomputed"
+tier = "pr"
+statement = "Kani evaluates 3.0.powi(2) to something other than 9.0 (true value 9.0)."
+domain = "the single pinned input"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = []
+expect = "pass"
+canary = true
+
+[[harness]]
+guarantee = "KANI-1"
+crate = "ironhorse-spec"
+name = "kani_canaries::float_powf_is_miscomputed"
+tier = "pr"
+statement = "Kani evaluates 3.0.powf(2.0) to something other than 9.0 (true value 9.0)."
+domain = "the single pinned input"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = []
+expect = "pass"
+canary = true
+
+[[harness]]
+guarantee = "KANI-2"
+crate = "ironhorse-spec"
+name = "kani_canaries::false_assertion_is_reported"
+tier = "pr"
+statement = "A deliberately false assertion (x != 7 for any u8 x) is reported as a failure."
+domain = "every x: u8"
+unwind = 0
+flags = []
+time_budget_s = 5
+memory_budget_gb = 1
+unreachable = 0
+mutants = []
+expect = "fail"
+canary = true

@@ -8,3 +8,29 @@ resolver = "2"
 
 [profile.release]
 overflow-checks = true
+
+# Clippy gate, the same shape as rust/engine/Cargo.toml's: every default
+# family warns, and CI's `cargo clippy ... -- -D warnings` fails on any. The
+# families below fired when the gate was introduced (Rust 1.91.1) and are
+# grandfathered; remove an entry once its sites are cleaned up. Families with
+# few sites were fixed instead of listed.
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+result_large_err = "allow"
+should_implement_trait = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"
+# Unsafe hygiene. Every `unsafe` block and `unsafe impl` states, in a
+# `// SAFETY:` comment, the invariant it relies on; a site whose invariant
+# could not be established says `SAFETY: UNVERIFIED` and why.
+# `multiple_unsafe_ops_per_block` is deliberately not enabled: the XS FFI
+# sites are macro-like push/call/pop sequences whose invariant (a balanced
+# stack within one host entry) belongs to the sequence, not to each call.
+undocumented_unsafe_blocks = "deny"
+
+[workspace.lints.rust]
+# Unsafe operations inside an `unsafe fn` need their own documented block.
+# Members with no unsafe code at all say `#![forbid(unsafe_code)]` at each
+# target root instead: `[lints] workspace = true` cannot be combined with
+# per-crate `[lints.rust]` entries.
+unsafe_op_in_unsafe_fn = "deny"

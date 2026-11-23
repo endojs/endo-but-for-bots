@@ -257,7 +257,19 @@ pub const IRONHORSE_FORMAT_VERSION_MIN_READ: u32 = 1;
 /// image is a fixed [`crate::slot_codec::SLOT_RECORD_BYTES`]-byte record
 /// (its own encoding, not XS's 32-byte in-memory `txSlot`), recorded so a
 /// reader can reject a snapshot whose record width it cannot decode.
-pub const SLOT_WIDTH_TAG: u8 = crate::slot_codec::SLOT_RECORD_BYTES as u8;
+pub const SLOT_WIDTH_TAG: u8 = {
+    let width = crate::slot_codec::SLOT_RECORD_BYTES;
+    assert!(
+        width <= u8::MAX as usize,
+        "slot record width must fit its u8 tag"
+    );
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the const assertion above proves the width fits a u8"
+    )]
+    let tag = width as u8;
+    tag
+};
 
 /// Endianness marker (multi-byte integers in the atom grammar are always
 /// big-endian, as in `xsSnapshot.c`; the byte records this explicitly so a
@@ -303,12 +315,17 @@ impl Version {
         if payload.len() != 10 {
             return Err(VersionError::TrailingBytes);
         }
-        if payload[0..4] != IRONHORSE_MAGIC {
-            let mut m = [0u8; 4];
-            m.copy_from_slice(&payload[0..4]);
-            return Err(VersionError::NotIronhorse(m));
+        // Exactly ten bytes (checked above): magic, version, width, endian.
+        let Ok([m0, m1, m2, m3, v0, v1, v2, v3, slot_width, endian]) =
+            <[u8; 10]>::try_from(payload)
+        else {
+            return Err(VersionError::Truncated);
+        };
+        let magic = [m0, m1, m2, m3];
+        if magic != IRONHORSE_MAGIC {
+            return Err(VersionError::NotIronhorse(magic));
         }
-        let format_version = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+        let format_version = u32::from_be_bytes([v0, v1, v2, v3]);
         // The read RANGE, not the write stamp: an older readable
         // version decodes (its atoms are a subset with the same
         // encodings), while a NEWER one is refused — its atoms may
@@ -317,14 +334,12 @@ impl Version {
         {
             return Err(VersionError::UnsupportedVersion(format_version));
         }
-        let slot_width = payload[8];
         if slot_width != SLOT_WIDTH_TAG {
             return Err(VersionError::SlotWidthMismatch {
                 expected: SLOT_WIDTH_TAG,
                 found: slot_width,
             });
         }
-        let endian = payload[9];
         if endian != ENDIAN_BIG {
             return Err(VersionError::UnsupportedEndian(endian));
         }
@@ -428,8 +443,11 @@ impl Signature {
 
     pub fn decode(payload: &[u8]) -> Result<Signature, SignatureError> {
         let (boot, host) = if payload.starts_with(b"IHB1") {
-            let digest = payload.get(4..36).ok_or(SignatureError::Truncated)?;
-            (Some(digest.try_into().unwrap()), &payload[36..])
+            let (digest, host) = payload
+                .get(4..)
+                .and_then(<[u8]>::split_first_chunk::<32>)
+                .ok_or(SignatureError::Truncated)?;
+            (Some(*digest), host)
         } else {
             (None, payload)
         };
@@ -679,5 +697,128 @@ mod tests {
         assert_eq!(Signature::decode(&s.encode()).unwrap(), s);
         assert!(s.is_compatible_with(&Signature::new("ironhorse-worker-v1")));
         assert!(!s.is_compatible_with(&Signature::new("ironhorse-worker-v2")));
+    }
+}
+
+/// SNAP-3 beyond the Kani bounds, over PRNG-driven payloads.
+#[cfg(test)]
+mod framing_properties {
+    use super::*;
+    use crate::wire::SplitMix;
+
+    #[test]
+    fn version_decode_is_exact_and_round_trips() {
+        let mut rng = SplitMix(0x7E25);
+        for _ in 0..100_000 {
+            let len = rng.below(17) as usize;
+            let mut p = rng.bytes(len);
+            if len >= 4 && rng.below(2) == 0 {
+                p[..4].copy_from_slice(&IRONHORSE_MAGIC);
+            }
+            if let Ok(version) = Version::decode(&p) {
+                assert_eq!(version.encode(), p);
+                assert!(version.is_readable());
+            }
+        }
+        for format_version in (0..IRONHORSE_FORMAT_VERSION + 3).chain([u32::MAX]) {
+            for slot_width in 0..=u8::MAX {
+                for endian in 0..3 {
+                    let version = Version {
+                        format_version,
+                        slot_width,
+                        endian,
+                    };
+                    let back = Version::decode(&version.encode());
+                    assert_eq!(back.is_ok(), version.is_readable());
+                    if let Ok(back) = back {
+                        assert_eq!(back, version);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn signature_decode_is_exact_and_round_trips() {
+        let mut rng = SplitMix(0x5165);
+        let mut boot = 0;
+        for _ in 0..100_000 {
+            let len = rng.below(80) as usize;
+            let mut p = rng.bytes(len);
+            if len >= 4 && rng.below(2) == 0 {
+                p[..4].copy_from_slice(b"IHB1");
+            }
+            if let Ok(signature) = Signature::decode(&p) {
+                boot += usize::from(signature.boot.is_some());
+                assert_eq!(signature.encode(), p);
+            }
+        }
+        assert!(boot > 1_000, "only {boot} boot signatures");
+        for host in ["", "a", "ironhorse-worker-v1", "IHB1"] {
+            let signature = Signature {
+                host: host.to_string(),
+                boot: Some([7; 32]),
+            };
+            assert_eq!(Signature::decode(&signature.encode()), Ok(signature));
+        }
+        // The one non-round-trip, by construction unreachable from a decode:
+        // a legacy (digest-less) signature whose host starts with the boot
+        // magic encodes to bytes that decode as the boot form (or refuse).
+        let legacy = Signature {
+            host: "IHB1".to_string(),
+            boot: None,
+        };
+        assert_eq!(
+            Signature::decode(&legacy.encode()),
+            Err(SignatureError::Truncated)
+        );
+    }
+}
+
+/// Kani harnesses for guarantee SNAP-3 (`verification/proofs.d/framing.toml`).
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    /// SNAP-3(a, d): `Version::decode` does not panic on any payload of up
+    /// to 12 bytes; it accepts exactly ten bytes and then re-encoding gives
+    /// back the payload, and every accepted version is readable.
+    #[kani::proof]
+    #[kani::unwind(13)]
+    fn snap3_version_decode_exact() {
+        let bytes: [u8; 12] = kani::any();
+        let len: usize = kani::any_where(|&l| l <= 12);
+        let p = &bytes[..len];
+        let result = Version::decode(p);
+        if let Ok(version) = &result {
+            assert!(version.encode()[..] == p[..]);
+            assert!(version.is_readable());
+            kani::cover!(version.format_version == 1, "the oldest readable format");
+        }
+        kani::cover!(
+            matches!(result, Err(VersionError::UnsupportedVersion(_))),
+            "a framed but unreadable version"
+        );
+    }
+
+    /// SNAP-3(c): `Version::decode(v.encode())` is `Ok(v)` exactly when `v`
+    /// is readable, for every `Version`.
+    #[kani::proof]
+    #[kani::unwind(11)]
+    fn snap3_version_round_trip() {
+        let version = Version {
+            format_version: kani::any(),
+            slot_width: kani::any(),
+            endian: kani::any(),
+        };
+        let back = Version::decode(&version.encode());
+        assert!(back.is_ok() == version.is_readable());
+        if let Ok(back) = back {
+            assert!(back == version);
+        }
+        kani::cover!(
+            version == Version::current(),
+            "the current stamp round-trips"
+        );
     }
 }

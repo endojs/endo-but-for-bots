@@ -1,0 +1,12 @@
+Mutant STR-1c-c: the sweep appends reclaimed records in descending order.
+--- a/ironhorse-vm/src/value/free_list.rs
++++ b/ironhorse-vm/src/value/free_list.rs
+@@ -150,7 +150,7 @@
+         mut after: impl FnMut(u32),
+     ) -> u32 {
+         let mut reclaimed = 0u32;
+-        for i in 0..capacity {
++        for i in (0..capacity).rev() {
+             if !self.marks[i as usize] && !self.is_free(i) {
+                 before(i);
+                 self.free.push(i);

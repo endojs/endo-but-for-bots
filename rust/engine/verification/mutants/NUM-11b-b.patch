@@ -1,0 +1,11 @@
+Mutant NUM-11b-b: asIntN does not re-mask a negative result after negating it.
+--- a/ironhorse-vm/src/interp/bigint.rs
++++ b/ironhorse-vm/src/interp/bigint.rs
+@@ -168,7 +168,6 @@
+                 *limb = !*limb;
+             }
+             bi_add_one_in_place(&mut unsigned);
+-            bi_mask_width(&mut unsigned, bits);
+             return WidthResult::Value(true, unsigned);
+         }
+     }

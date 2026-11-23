@@ -40,16 +40,49 @@ pub const DEFAULT_CREATION: XsCreation = XsCreation {
     native_stack_size: 0,
 };
 
-/// Initialize the XS shared cluster. Must be called once before
-/// creating any machines, and `terminate_shared_cluster` must be
-/// called on shutdown.
-pub fn initialize_shared_cluster() {
-    unsafe { fxInitializeSharedCluster() }
+/// Serialises every call that changes the XS shared cluster's usage count.
+///
+/// `fxInitializeSharedCluster` and `fxTerminateSharedCluster` (xsAtomics.c)
+/// increment and decrement a process-global count, and allocate or free the
+/// cluster at its edges, with no lock. XS calls them itself from
+/// `fxCreateMachine`, `fxReadSnapshot` and `fxDeleteMachine`, and each worker
+/// creates and deletes its machine on its own thread, so unserialised calls
+/// race: a lost update can free the cluster (its waiter mutex and shared
+/// timers) while a machine still uses it. Every such call in this crate holds
+/// this lock.
+fn cluster_lock() -> std::sync::MutexGuard<'static, ()> {
+    static CLUSTER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // A panic while holding the lock leaves no torn state of ours behind
+    // (the guarded state is in C), so a poisoned lock is still usable.
+    CLUSTER.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Tear down the XS shared cluster.
-pub fn terminate_shared_cluster() {
-    unsafe { fxTerminateSharedCluster() }
+/// Initialize the XS shared cluster, taking one reference to it. Must be
+/// called before creating any machines; each call is balanced by one
+/// `terminate_shared_cluster` on shutdown.
+pub fn initialize_shared_cluster() {
+    let _cluster = cluster_lock();
+    // SAFETY: the declaration matches xsAtomics.c's
+    // `fxInitializeSharedCluster(txMachine* the)`, which does not use `the`;
+    // `cluster_lock` serialises the unlocked usage count it increments.
+    unsafe { fxInitializeSharedCluster(ptr::null_mut()) }
+}
+
+/// Tear down the XS shared cluster, dropping one reference to it.
+///
+/// # Safety
+/// Each call must balance an earlier `initialize_shared_cluster` (or the
+/// one `ensure_shared_cluster` takes) whose reference has not been dropped
+/// yet. An unbalanced call can drop the count to zero, freeing the cluster
+/// while live machines still hold references to it.
+pub unsafe fn terminate_shared_cluster() {
+    let _cluster = cluster_lock();
+    // SAFETY: the declaration matches xsAtomics.c's
+    // `fxTerminateSharedCluster(txMachine* the)`; with a null `the` it
+    // skips the per-machine waiter cleanup and only drops one reference,
+    // which the caller guarantees it holds. `cluster_lock` serialises the
+    // unlocked usage count.
+    unsafe { fxTerminateSharedCluster(ptr::null_mut()) }
 }
 
 /// Idempotently initialize the XS shared cluster.
@@ -60,7 +93,7 @@ pub fn terminate_shared_cluster() {
 pub fn ensure_shared_cluster() {
     use std::sync::Once;
     static CLUSTER_INIT: Once = Once::new();
-    CLUSTER_INIT.call_once(|| unsafe { fxInitializeSharedCluster() });
+    CLUSTER_INIT.call_once(initialize_shared_cluster);
 }
 
 /// An XS JavaScript machine.
@@ -91,6 +124,13 @@ impl Machine {
     /// Create a new XS machine with the given creation parameters.
     pub fn new(creation: &XsCreation, name: &str) -> Option<Machine> {
         let c_name = CString::new(name).ok()?;
+        let _cluster = cluster_lock();
+        // SAFETY: `creation` is a live, fully initialised `XsCreation` that
+        // XS only reads; `_cluster` serialises the shared-cluster usage count
+        // `fxCreateMachine` increments; `c_name` is NUL-terminated and
+        // outlives the call (XS copies the name); a null context and
+        // `XS_NO_ID` archive are the documented "none" values. A null return
+        // is handled below.
         let raw = unsafe {
             fxCreateMachine(
                 creation as *const XsCreation,
@@ -115,7 +155,19 @@ impl Machine {
     }
 
     /// Set the host context pointer (retrievable from host functions).
-    pub fn set_context<T>(&self, ctx: *mut T) {
+    ///
+    /// # Safety
+    /// The powers callbacks (`register_powers`) dereference `context` as a
+    /// `HostPowers`, so on a machine that has them registered (including one
+    /// restored from a snapshot that carries them), `ctx` must be null or
+    /// point at a live `powers::HostPowers` that outlives every later entry
+    /// into this machine's JS, and that nothing mutates while such an entry
+    /// runs.
+    pub unsafe fn set_context<T>(&self, ctx: *mut T) {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns, and
+        // nothing reads `context` concurrently (`Machine` is `!Send`); what
+        // the pointer is used for is the caller's obligation, per this fn's
+        // contract.
         unsafe { (*self.raw).context = ctx as *mut c_void };
     }
 
@@ -124,65 +176,55 @@ impl Machine {
     /// # Safety
     /// Caller must ensure T matches the type that was set.
     pub unsafe fn context<T>(&self) -> *mut T {
-        (*self.raw).context as *mut T
+        // SAFETY: `self.raw` is the live machine this `Machine` owns; reading
+        // the field is a plain load. What the pointer may be used for is the
+        // caller's obligation, per this fn's contract.
+        unsafe { (*self.raw).context as *mut T }
     }
 
     /// Evaluate a JavaScript expression.
     ///
-    /// Uses `eval()` via the XS call mechanism:
-    /// `xsCall1(xsGlobal, xsID("eval"), xsString(source))`
+    /// Calls the global `eval` on `source` (xsnap-platform.c's
+    /// `fxEvalGuarded`) under an XS try frame.
     ///
-    /// Returns `None` if the evaluation throws.
+    /// Returns `None` if the evaluation throws (a syntax error, a guest
+    /// `throw`, or a completion value whose `toString` throws), if a
+    /// recoverable abort ends it, or if `source` holds an interior NUL.
     pub fn eval(&self, source: &str) -> Option<JsValue> {
         let c_source = CString::new(source).ok()?;
 
+        // SAFETY: `self.raw` is the live machine owned by this `Machine`,
+        // used on its own thread. `fxEvalGuarded` runs between `fxBeginHost`
+        // and `fxEndHost`, and keeps every throw from the evaluation (and
+        // from converting its value) in its own C frame: its `mxTry` is the
+        // nearest jump record for the whole call, so no `longjmp` crosses this
+        // frame or `c_source`'s drop. It restores the stack on either path,
+        // so `fxEndHost` pops exactly the host frame `fxBeginHost` pushed.
+        // `c_source` outlives the call, and XS copies it. On success
+        // `scratch` holds a primitive, so `slot_to_value` calls no JS and
+        // allocates nothing: a string's chunk pointer is copied out before
+        // `fxEndHost`.
+        //
+        // UNVERIFIED in one case: a recoverable `fxAbort` (metering, stack
+        // or memory exhaustion) longjmps to the *outermost* jump record, not
+        // the nearest. At top level that is `fxEvalGuarded`'s own, but when
+        // `eval` runs inside a host callback (`host_import_archive`) the
+        // outermost record is below that callback's Rust frames, which the
+        // abort then skips; see "What XS does NOT establish" in `worker_io`.
         unsafe {
             let the = fxBeginHost(self.raw);
             if the.is_null() {
                 return None;
             }
-
-            // Equivalent to: xsCall1(xsGlobal, xsID("eval"), xsString(source))
-            //
-            // Expanded:
-            //   xsOverflow(-XS_FRAME_COUNT-1)
-            //   fxPush(xsGlobal)        — push `this`
-            //   fxCallID(the, evalID)    — set up call frame
-            //   fxPush(xsString(src))    — push argument
-            //   fxRunCount(the, 1)       — execute with 1 arg
-            //   result = fxPop()         — pop result
-
-            let eval_id = fxID(the, b"eval\0".as_ptr() as *const c_char);
-
-            fxOverflow(the, -(XS_FRAME_COUNT + 1), ptr::null(), 0);
-
-            // Push global as `this`
-            fx_push(the, xs_global(the));
-
-            // Set up the call frame for eval
-            fxCallID(the, eval_id);
-
-            // Push the source string as the argument
-            fxString(
-                the,
-                &mut (*the).scratch,
-                c_source.as_ptr(),
-            );
-            fx_push(the, (*the).scratch);
-
-            // Execute with 1 argument
-            fxRunCount(the, 1);
-
-            // Pop the result
-            let result_slot = fx_pop(the);
-            (*the).scratch = result_slot;
-
-            let ty = fxTypeOf(the, &mut (*the).scratch);
-            let value = slot_to_value(the, &mut (*the).scratch, ty);
-
+            let status = fxEvalGuarded(the, c_source.as_ptr(), &mut (*the).scratch);
+            let value = if status == 0 {
+                let ty = fxTypeOf(the, &mut (*the).scratch);
+                Some(slot_to_value(the, &mut (*the).scratch, ty))
+            } else {
+                None
+            };
             fxEndHost(the);
-
-            Some(value)
+            value
         }
     }
 
@@ -201,67 +243,78 @@ impl Machine {
     }
 
     /// Look up or create an identifier (symbol) for the given name.
+    ///
+    /// # Panics
+    /// If `name` holds an interior NUL, or XS's key table is full.
     pub fn id(&self, name: &str) -> i32 {
         let c_name = CString::new(name).unwrap();
-        unsafe {
+        let mut id: u32 = 0;
+        // SAFETY: `self.raw` is the live machine this `Machine` owns;
+        // `c_name` is NUL-terminated and outlives the call, and `fxID` copies
+        // it into the key table. `fxIDGuarded` runs `fxID` under an XS try
+        // frame, so the key-table-full abort lands in C (at top level; see
+        // `eval` for a call from inside a host callback). `id` is a `u32`,
+        // wide enough for `txID` in either XS build (`txU2`, or `txU4` under
+        // `mx32bitID`), and zeroed so that a 16-bit store leaves a clean
+        // value on this little-endian target.
+        let status = unsafe {
             let the = fxBeginHost(self.raw);
-            let id = fxID(the, c_name.as_ptr());
+            let status = fxIDGuarded(the, c_name.as_ptr(), &mut id as *mut u32 as *mut c_void);
             fxEndHost(the);
-            id
-        }
+            status
+        };
+        assert!(
+            status == 0,
+            "xsnap: fxID({name:?}) aborted (exit status {status})"
+        );
+        id as i32
     }
 
     /// Define a host function on the global object.
     ///
     /// The callback receives `the: *mut XsMachine` and can access
-    /// arguments via the XS stack (frame[-2 - index]).
-    pub fn define_function(
-        &self,
-        name: &str,
-        callback: XsCallback,
-        length: i32,
-    ) {
+    /// arguments via the XS stack (frame[-1 - index]).
+    ///
+    /// # Panics
+    /// If `name` holds an interior NUL, or the definition throws (the
+    /// global already has a non-configurable `name`, or is frozen) or
+    /// aborts.
+    pub fn define_function(&self, name: &str, callback: XsCallback, length: i32) {
         // Track for snapshot callback table (dedup by pointer).
         {
             let mut cbs = self.registered_callbacks.borrow_mut();
-            if !cbs.iter().any(|&c| c == callback) {
+            // Address equality, as before: a function compiled into two
+            // codegen units may not compare equal, which only costs a
+            // duplicate table entry.
+            if !cbs.iter().any(|&c| std::ptr::fn_addr_eq(c, callback)) {
                 cbs.push(callback);
             }
         }
         let c_name = CString::new(name).unwrap();
-        unsafe {
+        // xsDontEnum; the mask adds xsDontDelete and xsDontSet.
+        let attrs: c_int = 4;
+        let mask: c_int = attrs | 2 | 4 | 8;
+        // SAFETY: `self.raw` is the live machine this `Machine` owns.
+        // `fxDefineHostFunctionGuarded` is xs.h's
+        // `xsDefine(xsGlobal, xsID(name), xsNewHostFunction(callback,
+        // length), xsDontEnum)` under an XS try frame: it reserves its stack
+        // slots and balances its pushes, and a throw from `fxDefineID` (a
+        // non-configurable existing property) or an abort lands in that C
+        // frame and restores the stack, so `fxEndHost` pops exactly the
+        // frame `fxBeginHost` pushed. `c_name` outlives the call. `callback`
+        // is an `extern "C"` fn the caller promises honours the host-callback
+        // contract; it is also recorded for the snapshot table.
+        let status = unsafe {
             let the = fxBeginHost(self.raw);
-            let id = fxID(the, c_name.as_ptr());
-
-            // Equivalent to:
-            //   xsDefine(xsGlobal, xsID(name),
-            //     xsNewHostFunction(callback, length), xsDontEnum)
-            //
-            // xsDefine expands to:
-            //   fxPush(value)        — push value first
-            //   fxPush(this)         — push target object
-            //   fxDefineID(the, id, attrs, mask)
-            //   the->stack++         — pop
-            fxOverflow(the, -8, ptr::null(), 0);
-
-            // Create host function — pushes value onto stack
-            fxNewHostFunction(the, callback, length, id, XS_NO_ID);
-            // Stack: [function]  (value is on top)
-
-            // Push global (the target object) on top of the value
-            fx_push(the, xs_global(the));
-            // Stack: [function, global]
-
-            // xsDontEnum = 4
-            let attrs: u8 = 4;
-            let mask: u8 = attrs | 2 | 4 | 8; // xsDontDelete | xsDontEnum | xsDontSet
-            fxDefineID(the, id, attrs, mask);
-
-            // Pop (xsDefine does the->stack++)
-            (*the).stack = (*the).stack.add(1);
-
+            let status =
+                fxDefineHostFunctionGuarded(the, c_name.as_ptr(), callback, length, attrs, mask);
             fxEndHost(the);
-        }
+            status
+        };
+        assert!(
+            status == 0,
+            "xsnap: defining host function {name:?} failed (status {status})"
+        );
     }
 
     /// Process all pending promise reactions (microtask queue).
@@ -271,8 +324,24 @@ impl Machine {
     /// essential for the Rust-driven main loop pattern where Rust
     /// reads messages, dispatches them to JS, then processes all
     /// resulting async work before reading the next message.
-    pub fn run_promise_jobs(&self) {
-        unsafe { fxRunPromiseJobs(self.raw) }
+    ///
+    /// Returns `Err(status)` with the XS exit status (for example
+    /// `XS_JAVASCRIPT_STACK_OVERFLOW_EXIT`, or `XS_TOO_MUCH_COMPUTATION_EXIT`
+    /// on a metered machine) if a job aborted the machine. XS treats an
+    /// abort as fatal for the machine: the caller should stop running it.
+    pub fn run_promise_jobs(&self) -> Result<(), i32> {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns, used
+        // on its own thread. `fxRunPromiseJobsGuarded` installs an outermost
+        // jump record in C, so a recoverable abort in a job (which
+        // `fxRunPromiseJobs`'s per-job catch turns into a second abort)
+        // lands in that C frame rather than crossing this one or
+        // dereferencing a NULL `firstJump`. Called from inside a host
+        // callback the abort still reaches past it; see `worker_io`'s "What
+        // XS does NOT establish".
+        match unsafe { ffi::fxRunPromiseJobsGuarded(self.raw) } {
+            0 => Ok(()),
+            status => Err(status),
+        }
     }
 
     /// Drain the microtask queue completely.
@@ -284,13 +353,24 @@ impl Machine {
     /// The pending check is per-machine so concurrent machines on
     /// other threads cannot steal this machine's pending signal and
     /// leave its queue undrained.
+    ///
+    /// An abort ends the drain, as in [`Machine::run_promise_jobs`], but is
+    /// not reported; [`Machine::try_quiesce`] reports it. (This signature is
+    /// kept for callers outside this crate, such as thixotrope-xs-worker.)
     pub fn quiesce(&self) {
-        unsafe {
-            loop {
-                fxRunPromiseJobs(self.raw);
-                if ffi::fxMachineHasPendingJobs(self.raw) == 0 {
-                    break;
-                }
+        // The machine is dead after an abort; there is nothing more to drain.
+        let _ = self.try_quiesce();
+    }
+
+    /// [`Machine::quiesce`], returning `Err(status)` with the XS exit status
+    /// if a job aborted the machine.
+    pub fn try_quiesce(&self) -> Result<(), i32> {
+        loop {
+            self.run_promise_jobs()?;
+            // SAFETY: `fxMachineHasPendingJobs` only reads this live
+            // machine's queue flag.
+            if unsafe { ffi::fxMachineHasPendingJobs(self.raw) } == 0 {
+                return Ok(());
             }
         }
     }
@@ -303,12 +383,24 @@ impl Machine {
     /// programs with no async work exit immediately, programs with
     /// promises drain to completion, and programs with setTimeout run
     /// until all timers fire.
-    pub fn run_loop(&self) {
-        unsafe { ffi::fxRunLoop(self.raw) }
+    ///
+    /// Returns `Err(status)` if a job or timer callback aborted the
+    /// machine, as [`Machine::run_promise_jobs`].
+    pub fn run_loop(&self) -> Result<(), i32> {
+        // SAFETY: as `run_promise_jobs`: `fxRunLoopGuarded` keeps an abort
+        // from a job, or the abort `fxRunLoop` raises for a throwing timer
+        // callback, in its own C frame.
+        match unsafe { ffi::fxRunLoopGuarded(self.raw) } {
+            0 => Ok(()),
+            status => Err(status),
+        }
     }
 
     /// Run garbage collection.
     pub fn collect_garbage(&self) {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns. Called
+        // through `&self` outside any host callback, no Rust code holds a
+        // pointer into the XS heap that a moving collection could invalidate.
         unsafe { fxCollectGarbage(self.raw) };
     }
 
@@ -324,6 +416,9 @@ impl Machine {
     /// Use [`set_crank_limit`] to set the per-crank hard limit that
     /// the default [`metering_callback`] checks against.
     pub fn begin_metering(&self, interval: u64) {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns;
+        // `metering_callback` matches the C callback type and is guarded
+        // against unwinding into C.
         unsafe {
             ffi::fxBeginMetering(self.raw, Some(metering_callback), interval);
         }
@@ -331,12 +426,16 @@ impl Machine {
 
     /// Disable metering and clear meter state.
     pub fn end_metering(&self) {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns; this
+        // reads or writes its meter fields and runs no JS.
         unsafe { ffi::fxEndMetering(self.raw) }
     }
 
     /// Read the current raw meterIndex.
     /// Computrons = value >> 16.
     pub fn current_meter(&self) -> u64 {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns; this
+        // reads or writes its meter fields and runs no JS.
         unsafe { ffi::fxGetCurrentMeter(self.raw) }
     }
 
@@ -348,6 +447,8 @@ impl Machine {
     /// Reset the meter to a given raw value (typically 0 at crank
     /// start).
     pub fn set_meter(&self, value: u64) {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns; this
+        // reads or writes its meter fields and runs no JS.
         unsafe { ffi::fxSetCurrentMeter(self.raw, value) }
     }
 
@@ -360,6 +461,9 @@ impl Machine {
     /// Returns `Ok(())` on normal completion, or `Err(status)` if
     /// XS aborted (e.g., `XS_TOO_MUCH_COMPUTATION_EXIT`).
     pub fn run_promise_jobs_metered(&self) -> Result<(), i32> {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns. The C
+        // wrapper runs the jobs inside `mxTry`, so a metering abort's longjmp
+        // ends in C and returns a status here instead of crossing this frame.
         let status = unsafe { ffi::fxRunPromiseJobsMetered(self.raw) };
         if status == 0 {
             Ok(())
@@ -398,6 +502,12 @@ impl Machine {
             slot_size: 0,
             slots: ptr::null_mut(),
         };
+        // SAFETY: `self.raw` is the live machine this `Machine` owns, which
+        // the caller keeps quiescent (no JS running). `snapshot` and the
+        // `MemWriteStream` stream it points at are locals that outlive the call, and
+        // nothing else touches the stream until it returns; `signature`
+        // (read-only, despite the `*mut` C field) and `callbacks` are live
+        // slices of the given lengths. XS calls `mem_write` only during this call.
         let ok = unsafe { ffi::fxWriteSnapshot(self.raw, &mut snapshot) };
         if ok == 1 {
             Ok(stream.data)
@@ -433,9 +543,25 @@ impl Machine {
             slot_size: 0,
             slots: ptr::null_mut(),
         };
-        let raw = unsafe {
-            ffi::fxReadSnapshot(&mut snapshot, c_name.as_ptr(), ptr::null_mut())
-        };
+        let cluster = cluster_lock();
+        // SAFETY: UNVERIFIED — `fxReadSnapshot` rebuilds the heap from the
+        // bytes it is given and is not hardened against a crafted snapshot:
+        // xsSnapshot.c checks the version, architecture, signature and
+        // callback indices (`fxUnprojectCallback`), but `fxUnprojectSlot`
+        // turns every stored slot index into `firstSlot + index` with no
+        // bound, and chunk offsets are trusted the same way, so a crafted
+        // snapshot yields out-of-bounds heap pointers. This safe fn accepts
+        // any bytes, so its soundness rests on them being a snapshot this
+        // host wrote (`resume_from_cas` does not re-check the file's SHA-256
+        // against its name either). The fix is either an `unsafe fn` with
+        // that provenance contract (which changes thixotrope-xs-worker's
+        // `resume_from_cas` call) or bounds checks in xsSnapshot.c. The call
+        // itself: `snapshot`, its `MemReadStream` stream, `signature`, `callbacks`
+        // and `c_name` are live for the call and only read through `mem_read`.
+        // `cluster` serialises the shared-cluster usage count that
+        // `fxReadSnapshot` increments (and decrements again on failure).
+        let raw = unsafe { ffi::fxReadSnapshot(&mut snapshot, c_name.as_ptr(), ptr::null_mut()) };
+        drop(cluster);
         if raw.is_null() {
             Err(SnapshotError::Read(snapshot.error))
         } else {
@@ -464,17 +590,9 @@ impl Machine {
     ///
     /// Convenience wrapper around `from_snapshot` that unpacks the
     /// suspend data.
-    pub fn resume(
-        data: &SuspendData,
-        name: &str,
-    ) -> Result<Machine, SnapshotError> {
+    pub fn resume(data: &SuspendData, name: &str) -> Result<Machine, SnapshotError> {
         let mut cbs = data.callbacks.clone();
-        Machine::from_snapshot(
-            &data.snapshot,
-            name,
-            &data.signature,
-            &mut cbs,
-        )
+        Machine::from_snapshot(&data.snapshot, name, &data.signature, &mut cbs)
     }
 }
 
@@ -561,11 +679,11 @@ struct MemReadStream<'a> {
 // the stream error sentinel (`1`) on a caught panic so the snapshot op fails
 // closed rather than unwinding past the C frame (design
 // `designs/ironhorse-panic.md` § Scope: "The already-live FFI abort hazard").
-unsafe extern "C" fn mem_write(
-    stream: *mut c_void,
-    ptr: *mut c_void,
-    size: usize,
-) -> c_int {
+unsafe extern "C" fn mem_write(stream: *mut c_void, ptr: *mut c_void, size: usize) -> c_int {
+    // SAFETY: XS passes back the `stream` pointer the snapshot record was
+    // given, which the calling `write_snapshot` set to a live, otherwise untouched
+    // `MemWriteStream`; `ptr` and `size` describe a buffer XS owns for the duration of
+    // this call (read here).
     worker_io::guard_ffi_ret(1, || unsafe {
         let s = &mut *(stream as *mut MemWriteStream);
         let bytes = std::slice::from_raw_parts(ptr as *const u8, size);
@@ -574,11 +692,11 @@ unsafe extern "C" fn mem_write(
     })
 }
 
-unsafe extern "C" fn mem_read(
-    stream: *mut c_void,
-    ptr: *mut c_void,
-    size: usize,
-) -> c_int {
+unsafe extern "C" fn mem_read(stream: *mut c_void, ptr: *mut c_void, size: usize) -> c_int {
+    // SAFETY: XS passes back the `stream` pointer the snapshot record was
+    // given, which the calling `from_snapshot` set to a live, otherwise untouched
+    // `MemReadStream`; `ptr` and `size` describe a buffer XS owns for the duration of
+    // this call (written here only after the bounds check).
     worker_io::guard_ffi_ret(1, || unsafe {
         let s = &mut *(stream as *mut MemReadStream);
         // `checked_add`: a corrupted `size` from a bad snapshot must not wrap
@@ -617,11 +735,11 @@ struct FileReadStream {
     file: std::fs::File,
 }
 
-unsafe extern "C" fn file_write(
-    stream: *mut c_void,
-    ptr: *mut c_void,
-    size: usize,
-) -> c_int {
+unsafe extern "C" fn file_write(stream: *mut c_void, ptr: *mut c_void, size: usize) -> c_int {
+    // SAFETY: XS passes back the `stream` pointer the snapshot record was
+    // given, which the calling `write_snapshot_to_file` set to a live, otherwise untouched
+    // `FileWriteStream`; `ptr` and `size` describe a buffer XS owns for the duration of
+    // this call (read here).
     worker_io::guard_ffi_ret(1, || unsafe {
         let s = &mut *(stream as *mut FileWriteStream);
         if s.err.is_some() {
@@ -639,11 +757,11 @@ unsafe extern "C" fn file_write(
     })
 }
 
-unsafe extern "C" fn file_read(
-    stream: *mut c_void,
-    ptr: *mut c_void,
-    size: usize,
-) -> c_int {
+unsafe extern "C" fn file_read(stream: *mut c_void, ptr: *mut c_void, size: usize) -> c_int {
+    // SAFETY: XS passes back the `stream` pointer the snapshot record was
+    // given, which the calling `from_snapshot_file` set to a live, otherwise untouched
+    // `FileReadStream`; `ptr` and `size` describe a buffer XS owns for the duration of
+    // this call (filled here).
     worker_io::guard_ffi_ret(1, || unsafe {
         use std::io::Read;
         let s = &mut *(stream as *mut FileReadStream);
@@ -694,6 +812,12 @@ impl Machine {
             slot_size: 0,
             slots: ptr::null_mut(),
         };
+        // SAFETY: `self.raw` is the live machine this `Machine` owns, which
+        // the caller keeps quiescent (no JS running). `snapshot` and the
+        // `FileWriteStream` stream it points at are locals that outlive the call, and
+        // nothing else touches the stream until it returns; `signature`
+        // (read-only, despite the `*mut` C field) and `callbacks` are live
+        // slices of the given lengths. XS calls `file_write` only during this call.
         let ok = unsafe { ffi::fxWriteSnapshot(self.raw, &mut snapshot) };
         if ok != 1 {
             return Err(SnapshotError::Write(snapshot.error));
@@ -733,9 +857,25 @@ impl Machine {
             slot_size: 0,
             slots: ptr::null_mut(),
         };
-        let raw = unsafe {
-            ffi::fxReadSnapshot(&mut snapshot, c_name.as_ptr(), ptr::null_mut())
-        };
+        let cluster = cluster_lock();
+        // SAFETY: UNVERIFIED — `fxReadSnapshot` rebuilds the heap from the
+        // bytes it is given and is not hardened against a crafted snapshot:
+        // xsSnapshot.c checks the version, architecture, signature and
+        // callback indices (`fxUnprojectCallback`), but `fxUnprojectSlot`
+        // turns every stored slot index into `firstSlot + index` with no
+        // bound, and chunk offsets are trusted the same way, so a crafted
+        // snapshot yields out-of-bounds heap pointers. This safe fn accepts
+        // any bytes, so its soundness rests on them being a snapshot this
+        // host wrote (`resume_from_cas` does not re-check the file's SHA-256
+        // against its name either). The fix is either an `unsafe fn` with
+        // that provenance contract (which changes thixotrope-xs-worker's
+        // `resume_from_cas` call) or bounds checks in xsSnapshot.c. The call
+        // itself: `snapshot`, its `FileReadStream` stream, `signature`, `callbacks`
+        // and `c_name` are live for the call and only read through `file_read`.
+        // `cluster` serialises the shared-cluster usage count that
+        // `fxReadSnapshot` increments (and decrements again on failure).
+        let raw = unsafe { ffi::fxReadSnapshot(&mut snapshot, c_name.as_ptr(), ptr::null_mut()) };
+        drop(cluster);
         if raw.is_null() {
             Err(SnapshotError::Read(snapshot.error))
         } else {
@@ -761,13 +901,8 @@ impl Machine {
         // directory interleave writes and corrupt each other.
         static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp_path = cas_dir.join(format!(
-            ".snapshot.{}.{}.tmp",
-            std::process::id(),
-            seq
-        ));
-        let file = std::fs::File::create(&tmp_path)
-            .map_err(SnapshotError::Io)?;
+        let tmp_path = cas_dir.join(format!(".snapshot.{}.{}.tmp", std::process::id(), seq));
+        let file = std::fs::File::create(&tmp_path).map_err(SnapshotError::Io)?;
         let mut cbs = self.registered_callbacks.borrow().clone();
         let hash = match self.write_snapshot_to_file(signature, &mut cbs, file) {
             Ok(hash) => hash,
@@ -796,32 +931,40 @@ impl Machine {
 }
 
 /// Convert an XS slot to a Rust JsValue based on its type tag.
-unsafe fn slot_to_value(
-    the: *mut XsMachine,
-    slot: *mut XsSlot,
-    ty: i8,
-) -> JsValue {
-    match ty {
-        XS_UNDEFINED_TYPE => JsValue::Undefined,
-        XS_NULL_TYPE => JsValue::Null,
-        XS_BOOLEAN_TYPE => JsValue::Boolean(fxToBoolean(the, slot) != 0),
-        XS_INTEGER_TYPE => JsValue::Integer(fxToInteger(the, slot)),
-        XS_NUMBER_TYPE => JsValue::Number(fxToNumber(the, slot)),
-        XS_STRING_TYPE | XS_STRING_X_TYPE => {
-            let s = fxToString(the, slot);
-            if s.is_null() {
-                JsValue::Undefined
-            } else {
-                JsValue::String(worker_io::xs_string_to_utf8(s))
+///
+/// # Safety
+/// `the` must be a live machine inside a host entry and `slot` one of its
+/// slots whose type tag is `ty`, holding a primitive (undefined, null, a
+/// boolean, a number or a string), as `fxEvalGuarded` leaves it.
+unsafe fn slot_to_value(the: *mut XsMachine, slot: *mut XsSlot, ty: i8) -> JsValue {
+    // SAFETY: per the contract above. On a primitive these conversions run
+    // no JS and cannot throw; `fxToString` of a string returns its pointer
+    // without allocating, and `xs_string_to_utf8` copies it out before XS
+    // runs again. (The fallback arm would call a reference's `toString`,
+    // which can throw, but the contract excludes references.)
+    unsafe {
+        match ty {
+            XS_UNDEFINED_TYPE => JsValue::Undefined,
+            XS_NULL_TYPE => JsValue::Null,
+            XS_BOOLEAN_TYPE => JsValue::Boolean(fxToBoolean(the, slot) != 0),
+            XS_INTEGER_TYPE => JsValue::Integer(fxToInteger(the, slot)),
+            XS_NUMBER_TYPE => JsValue::Number(fxToNumber(the, slot)),
+            XS_STRING_TYPE | XS_STRING_X_TYPE => {
+                let s = fxToString(the, slot);
+                if s.is_null() {
+                    JsValue::Undefined
+                } else {
+                    JsValue::String(worker_io::xs_string_to_utf8(s))
+                }
             }
-        }
-        // For references and other types, coerce to string
-        _ => {
-            let s = fxToString(the, slot);
-            if s.is_null() {
-                JsValue::Undefined
-            } else {
-                JsValue::String(worker_io::xs_string_to_utf8(s))
+            // For references and other types, coerce to string
+            _ => {
+                let s = fxToString(the, slot);
+                if s.is_null() {
+                    JsValue::Undefined
+                } else {
+                    JsValue::String(worker_io::xs_string_to_utf8(s))
+                }
             }
         }
     }
@@ -830,10 +973,18 @@ unsafe fn slot_to_value(
 impl Machine {
     /// Set up host powers and register all host functions.
     ///
-    /// The HostPowers pointer must outlive the Machine.
     /// Registers filesystem, crypto, and module loading host functions.
-    pub fn register_powers(&self, powers: *mut powers::HostPowers) {
-        self.set_context(powers);
+    ///
+    /// # Safety
+    /// As [`Machine::set_context`] with `powers`: it must point at a live
+    /// `HostPowers` for as long as this machine's JS can run, and nothing
+    /// may mutate it while JS runs.
+    pub unsafe fn register_powers(&self, powers: *mut powers::HostPowers) {
+        // SAFETY: `powers` meets `set_context`'s contract, per this fn's.
+        unsafe { self.set_context(powers) };
+        // SAFETY: the `register` fns only call `define_function` on this
+        // live machine, whose context was just set to the `HostPowers`
+        // their callbacks read (`powers::host_powers`).
         unsafe {
             powers::fs::register(self);
             powers::crypto::register(self);
@@ -848,6 +999,9 @@ impl Machine {
     /// Call this after `worker_io::install_transport()` has been
     /// called on the active thread.
     pub fn register_worker_io(&self) {
+        // SAFETY: `worker_io::register` only calls `define_function` on this
+        // live machine; its callbacks fail closed (a caught panic) if no
+        // transport is installed on the thread.
         unsafe {
             worker_io::register(self);
         }
@@ -864,6 +1018,8 @@ impl Machine {
     /// When `mxDebug` is not enabled (default build), this is a
     /// no-op.
     pub fn run_debugger(&self) {
+        // SAFETY: `self.raw` is the live machine this `Machine` owns, on its
+        // own thread; without `mxDebug` the C function is empty.
         unsafe { ffi::fxRunDebugger(self.raw) };
     }
 
@@ -880,6 +1036,14 @@ impl Machine {
 impl Drop for Machine {
     fn drop(&mut self) {
         if !self.raw.is_null() {
+            let _cluster = cluster_lock();
+            // SAFETY: a `Machine` that is dropped owns `raw` (the borrowed
+            // views the host callbacks build are `ManuallyDrop`), so this is
+            // the one delete; `raw` is nulled straight after. No host object
+            // destructors read the context pointer, so it does not matter that
+            // `run_xs_program` frees the `HostPowers` first. `_cluster`
+            // serialises the shared-cluster usage count `fxDeleteMachine`
+            // decrements.
             unsafe { fxDeleteMachine(self.raw) };
             self.raw = ptr::null_mut();
         }
@@ -919,7 +1083,7 @@ pub const HOST_ALIASES: &str = include_str!("host_aliases.js");
 /// declared in `ffi.rs` but never called). The realm runs on
 /// unrepaired intrinsics and `polyfills.js`'s deep-freeze `harden`.
 /// Tracked in `designs/worker-rust-xs.md` § Known Gaps.
-
+///
 /// Web-platform text endowments for archive compartments, evaluated as
 /// a side-effecting script after the base endowments object so it
 /// installs onto `globalThis.__archiveEndowments`: the machine's
@@ -1016,6 +1180,10 @@ pub enum XsnapError {
     Io(String),
     Archive(String),
     Bootstrap(String),
+    /// XS aborted the machine (`fxAbort`: stack or memory exhaustion, or a
+    /// metering refusal) while draining promise jobs or running the event
+    /// loop. Carries where, and the XS exit status.
+    Aborted(String),
     /// A Rust panic was caught and converted into this worker's death instead
     /// of aborting the whole daemon process (design
     /// `designs/ironhorse-panic.md` § Scope: "The already-live FFI abort
@@ -1047,6 +1215,7 @@ impl std::fmt::Display for XsnapError {
             XsnapError::Io(s) => write!(f, "io: {s}"),
             XsnapError::Archive(s) => write!(f, "archive: {s}"),
             XsnapError::Bootstrap(s) => write!(f, "bootstrap: {s}"),
+            XsnapError::Aborted(s) => write!(f, "aborted: {s}"),
             // No "(FFI-guarded)" qualifier: this variant also carries a panic
             // caught by the non-FFI machine-thread run-entry net (`inproc.rs`),
             // which never crossed an `extern "C"` frame. The `message` names the
@@ -1194,7 +1363,10 @@ fn handle_suspend(machine: &Machine, nonce: i64, cas_dir: &[u8]) -> EnvelopeActi
         || powers::sqlite::has_open_handles()
         || powers::crypto::has_open_handles()
     {
-        send_suspend_error(nonce, "suspend: close native file, directory, SQLite, and hasher handles first");
+        send_suspend_error(
+            nonce,
+            "suspend: close native file, directory, SQLite, and hasher handles first",
+        );
         return EnvelopeAction::Continue;
     }
     let cas_path = match std::str::from_utf8(cas_dir) {
@@ -1265,21 +1437,24 @@ fn bootstrap_ses(machine: &Machine, label: &str) {
     if !eval_wrapped(machine, SES_BOOT, "ses-boot") {
         eprintln!("{label}: SES boot failed");
     }
-    machine.run_promise_jobs();
+    if let Err(status) = machine.run_promise_jobs() {
+        eprintln!("{label}: SES boot jobs aborted the machine (exit status {status})");
+    }
 }
 
 /// Register host powers (fs, crypto, modules, process) on the machine.
 /// Returns the raw pointer for later cleanup.
 fn register_host_powers(machine: &Machine) -> *mut powers::HostPowers {
     let mut host_powers = powers::HostPowers::new();
-    if let Ok(root) = cap_std::fs::Dir::open_ambient_dir(
-        "/",
-        cap_std::ambient_authority(),
-    ) {
+    if let Ok(root) = cap_std::fs::Dir::open_ambient_dir("/", cap_std::ambient_authority()) {
         host_powers.add_dir("root", root);
     }
     let powers_ptr = Box::into_raw(Box::new(host_powers));
-    machine.register_powers(powers_ptr);
+    // SAFETY: `powers_ptr` is a fresh, leaked box that only the powers
+    // callbacks read. `run_xs_program` frees it after its last entry into
+    // the machine's JS (just before dropping the machine);
+    // `run_xs_archive_loaded` never frees it.
+    unsafe { machine.register_powers(powers_ptr) };
     powers_ptr
 }
 
@@ -1295,13 +1470,13 @@ pub const DEFAULT_METERING_INTERVAL: u64 = 10_000;
 
 thread_local! {
     /// Per-crank hard limit (computrons). 0 = no enforcement.
-    static CRANK_LIMIT: Cell<u64> = Cell::new(0);
+    static CRANK_LIMIT: Cell<u64> = const { Cell::new(0) };
     /// Set to true when the metering callback aborted execution.
-    static METERING_ABORTED: Cell<bool> = Cell::new(false);
+    static METERING_ABORTED: Cell<bool> = const { Cell::new(false) };
     /// Hard limit received via `meter-config` envelope. 0 = no
     /// enforcement.  Persists across cranks; updated only when the
     /// supervisor sends a new config.
-    static CRANK_HARD_LIMIT: Cell<u64> = Cell::new(0);
+    static CRANK_HARD_LIMIT: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Metering callback invoked by XS every `interval` computrons.
@@ -1309,10 +1484,7 @@ thread_local! {
 ///
 /// # Safety
 /// Called from C during XS bytecode execution.
-unsafe extern "C" fn metering_callback(
-    _the: *mut ffi::XsMachine,
-    index: u64,
-) -> i32 {
+unsafe extern "C" fn metering_callback(_the: *mut ffi::XsMachine, index: u64) -> i32 {
     // Guarded like every other XS-invoked `extern "C"` callback: fires only
     // every `DEFAULT_METERING_INTERVAL` computrons, so the guard's cost is
     // negligible, and a caught panic fails **closed** by returning 0 (abort)
@@ -1451,23 +1623,31 @@ fn cbor_read_uint(data: &[u8], pos: usize) -> Option<(u64, usize)> {
     match additional {
         0..=23 => Some((additional as u64, pos + 1)),
         24 => {
-            if pos + 2 > data.len() { return None; }
+            if pos + 2 > data.len() {
+                return None;
+            }
             Some((data[pos + 1] as u64, pos + 2))
         }
         25 => {
-            if pos + 3 > data.len() { return None; }
+            if pos + 3 > data.len() {
+                return None;
+            }
             let v = u16::from_be_bytes([data[pos + 1], data[pos + 2]]);
             Some((v as u64, pos + 3))
         }
         26 => {
-            if pos + 5 > data.len() { return None; }
+            if pos + 5 > data.len() {
+                return None;
+            }
             let v = u32::from_be_bytes(data[pos + 1..pos + 5].try_into().ok()?);
             Some((v as u64, pos + 5))
         }
         27 => {
-            if pos + 9 > data.len() { return None; }
+            if pos + 9 > data.len() {
+                return None;
+            }
             let v = u64::from_be_bytes(data[pos + 1..pos + 9].try_into().ok()?);
-            Some((v as u64, pos + 9))
+            Some((v, pos + 9))
         }
         _ => None,
     }
@@ -1480,16 +1660,22 @@ fn cbor_read_length(data: &[u8], pos: usize) -> Option<(usize, usize)> {
     match additional {
         0..=23 => Some((additional as usize, pos + 1)),
         24 => {
-            if pos + 2 > data.len() { return None; }
+            if pos + 2 > data.len() {
+                return None;
+            }
             Some((data[pos + 1] as usize, pos + 2))
         }
         25 => {
-            if pos + 3 > data.len() { return None; }
+            if pos + 3 > data.len() {
+                return None;
+            }
             let v = u16::from_be_bytes([data[pos + 1], data[pos + 2]]);
             Some((v as usize, pos + 3))
         }
         26 => {
-            if pos + 5 > data.len() { return None; }
+            if pos + 5 > data.len() {
+                return None;
+            }
             let v = u32::from_be_bytes(data[pos + 1..pos + 5].try_into().ok()?);
             Some((v as usize, pos + 5))
         }
@@ -1696,7 +1882,8 @@ pub fn run_xs_program(
     //    sendRawFrame/trace/etc. resolve; in standalone mode, only
     //    trace is exercised).
     if let Some(mut t) = transport {
-        let init_result = t.init_handshake()
+        let init_result = t
+            .init_handshake()
             .map_err(|e| XsnapError::Io(format!("init handshake failed: {e}")))?;
         if let worker_io::InitResult::Restore(_, path_bytes) = init_result {
             let path_str = String::from_utf8(path_bytes)
@@ -1714,12 +1901,8 @@ pub fn run_xs_program(
         let file = std::fs::File::open(snap_path)
             .map_err(|e| XsnapError::Io(format!("open snapshot: {e}")))?;
         let mut callbacks = worker_snapshot_callbacks();
-        let m = Machine::from_snapshot_file(
-            file,
-            label,
-            SNAPSHOT_SIGNATURE,
-            &mut callbacks,
-        ).map_err(|e| XsnapError::MachineInit(format!("snapshot restore failed: {e}")))?;
+        let m = Machine::from_snapshot_file(file, label, SNAPSHOT_SIGNATURE, &mut callbacks)
+            .map_err(|e| XsnapError::MachineInit(format!("snapshot restore failed: {e}")))?;
         eprintln!("{label}: machine restored from snapshot");
         m
     } else {
@@ -1806,12 +1989,12 @@ pub fn run_xs_program(
                 // We use eval_wrapped (inline try/catch) as a safety
                 // net for any unexpected synchronous errors.
                 if !eval_wrapped(&machine, src, &format!("{label}/bundle")) {
-                    return Err(XsnapError::Bootstrap(format!(
-                        "{label}: bundle eval threw"
-                    )));
+                    return Err(XsnapError::Bootstrap(format!("{label}: bundle eval threw")));
                 }
                 eprintln!("{label}: bundle eval returned, quiescing");
-                machine.quiesce();
+                machine.try_quiesce().map_err(|status| {
+                    XsnapError::Aborted(format!("{label}: bundle jobs (exit status {status})"))
+                })?;
                 eprintln!("{label}: quiesce complete");
             }
             XsProgram::Archive(bytes) => {
@@ -1834,7 +2017,9 @@ pub fn run_xs_program(
                         "archive installation failed".to_string(),
                     ));
                 }
-                machine.quiesce();
+                machine.try_quiesce().map_err(|status| {
+                    XsnapError::Aborted(format!("{label}: archive jobs (exit status {status})"))
+                })?;
                 archive::entry_import_result(&machine)?;
             }
         }
@@ -1871,6 +2056,7 @@ pub fn run_xs_program(
     // panic-injection harness (tracked follow-on; the `guard_ffi` unit suite
     // pins the poison/short-circuit mechanics these checkpoints consume).
     let mut ffi_death: Option<worker_io::FfiPanic> = None;
+    let mut loop_abort: Option<i32> = None;
 
     // A guarded `extern "C"` callback can panic during *bootstrap eval*
     // above — the bundle's own guest JS calls `hostBase64Decode`,
@@ -1972,6 +2158,8 @@ pub fn run_xs_program(
                             break;
                         }
                     }
+                    // SAFETY: `machine` is the live machine this thread owns;
+                    // the call only reads its job queue.
                     if unsafe { ffi::fxMachineHasPendingJobs(machine.raw) } == 0 {
                         break;
                     }
@@ -2061,6 +2249,7 @@ pub fn run_xs_program(
                 // No envelopes and no ready promise jobs. Check if
                 // any new jobs were queued during envelope handling
                 // (e.g., by sendRawFrame callbacks).
+                // SAFETY: as above, a read of the live machine's job queue.
                 if unsafe { ffi::fxMachineHasPendingJobs(machine.raw) } != 0 {
                     continue;
                 }
@@ -2104,9 +2293,7 @@ pub fn run_xs_program(
             // Report steps to the supervisor.
             send_meter_report(steps, "ok");
 
-            if let Some(JsValue::Boolean(true)) =
-                machine.eval("__shouldTerminate()")
-            {
+            if let Some(JsValue::Boolean(true)) = machine.eval("__shouldTerminate()") {
                 break;
             }
         }
@@ -2115,7 +2302,10 @@ pub fn run_xs_program(
     } else if ffi_death.is_none() {
         // Run until idle: drain promise jobs and fire timers until
         // both queues are empty.
-        machine.run_loop();
+        if let Err(status) = machine.run_loop() {
+            eprintln!("{label}: event loop aborted the machine (exit status {status})");
+            loop_abort = Some(status);
+        }
         // Heal a `CAPTURING` flag stranded by an `fxAbort`->`longjmp` during
         // this non-metered run before the poison drain and teardown below.
         worker_io::reset_capturing();
@@ -2126,6 +2316,10 @@ pub fn run_xs_program(
         ffi_death = worker_io::take_ffi_panic();
     }
 
+    // SAFETY: `powers_ptr` came from `Box::into_raw` in
+    // `register_host_powers` and is freed only here. The machine's context
+    // still points at it, but `machine` is dropped on the next line with no
+    // JS run in between, and its teardown reads no context.
     unsafe { drop(Box::from_raw(powers_ptr)) };
     drop(machine);
 
@@ -2134,6 +2328,11 @@ pub fn run_xs_program(
             message: ffi_panic.message,
             location: ffi_panic.location,
         });
+    }
+    if let Some(status) = loop_abort {
+        return Err(XsnapError::Aborted(format!(
+            "{label}: event loop (exit status {status})"
+        )));
     }
     Ok(())
 }
@@ -2148,7 +2347,9 @@ pub fn run_xs_program(
 ///
 /// Must only be called once per process (acquires fds 3/4).
 pub unsafe fn run_xs_worker() -> Result<(), XsnapError> {
-    let t = worker_io::PipeTransport::from_fds()
+    // SAFETY: the caller guarantees fds 3/4 are this process's worker pipes
+    // and that this runs once, which is `from_fds`'s contract.
+    let t = unsafe { worker_io::PipeTransport::from_fds() }
         .map_err(|e| XsnapError::Io(format!("failed to open worker pipes: {e}")))?;
     run_xs_program(
         XsProgram::Bundle(WORKER_BOOTSTRAP),
@@ -2245,7 +2446,9 @@ pub fn run_xs_archive_loaded(loaded: &archive::LoadedArchive) -> Result<(), Xsna
             "archive installation failed".to_string(),
         ));
     }
-    machine.quiesce();
+    machine.try_quiesce().map_err(|status| {
+        XsnapError::Aborted(format!("endor[run]: archive jobs (exit status {status})"))
+    })?;
     archive::entry_import_result(&machine)
 }
 
@@ -2263,6 +2466,63 @@ mod tests {
     fn new_machine() -> Machine {
         setup();
         Machine::new(&DEFAULT_CREATION, "test").expect("failed to create machine")
+    }
+
+    /// A promise job that overflows the JS stack makes XS `fxAbort`. With no
+    /// jump record outside `fxRunPromiseJobs`, its own catch re-aborts with
+    /// `firstJump` NULL and `fxExitToHost` dereferences it. The drains now
+    /// run under an outermost C jump record and report the abort.
+    #[test]
+    fn a_promise_job_abort_is_reported_by_every_drain() {
+        let machine = new_machine();
+        let queue = "Promise.resolve().then(function f() { return f(); }); 'queued'";
+        machine.eval(queue).unwrap();
+        assert_eq!(
+            machine.run_promise_jobs(),
+            Err(XS_JAVASCRIPT_STACK_OVERFLOW_EXIT)
+        );
+        machine.eval(queue).unwrap();
+        assert_eq!(
+            machine.try_quiesce(),
+            Err(XS_JAVASCRIPT_STACK_OVERFLOW_EXIT)
+        );
+        machine.eval(queue).unwrap();
+        assert_eq!(machine.run_loop(), Err(XS_JAVASCRIPT_STACK_OVERFLOW_EXIT));
+        // A drain with nothing to abort still succeeds.
+        machine
+            .eval("var settled = false; Promise.resolve().then(function () { settled = true; }); 0")
+            .unwrap();
+        assert_eq!(machine.try_quiesce(), Ok(()));
+        assert!(matches!(
+            machine.eval("settled"),
+            Some(JsValue::Boolean(true))
+        ));
+    }
+
+    /// `fxDefineID` throws when the global already has a non-configurable
+    /// property of that name; with no jump record that throw used to
+    /// longjmp through a NULL `firstJump`. It now fails as a Rust panic and
+    /// leaves the machine usable.
+    #[test]
+    fn define_function_over_a_non_configurable_global_panics_cleanly() {
+        unsafe extern "C" fn noop(_the: *mut XsMachine) {}
+        let machine = new_machine();
+        machine
+            .eval(
+                "Object.defineProperty(globalThis, 'taken', { value: 1, configurable: false }); 0",
+            )
+            .unwrap();
+        let defined = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            machine.define_function("taken", noop, 0)
+        }));
+        assert!(defined.is_err());
+        match machine.eval("taken + 1").unwrap() {
+            JsValue::Integer(n) => assert_eq!(n, 2),
+            other => panic!("expected 2, got {:?}", js_value_debug(&other)),
+        }
+        // Ordinary definitions and key lookups still work.
+        machine.define_function("free", noop, 0);
+        assert_eq!(machine.id("free"), machine.id("free"));
     }
 
     #[test]
@@ -2290,10 +2550,13 @@ mod tests {
                function (e) { __r = 'err:' + e.message; }); \
              undefined",
         );
-        machine.quiesce();
+        machine.try_quiesce().unwrap();
         match machine.eval("__r") {
             Some(JsValue::String(s)) => assert_eq!(s, "ok:42"),
-            other => panic!("expected result string, got {:?}", other.map(|v| js_value_debug(&v))),
+            other => panic!(
+                "expected result string, got {:?}",
+                other.map(|v| js_value_debug(&v))
+            ),
         }
     }
 
@@ -2328,10 +2591,13 @@ mod tests {
                function (e) { __r = 'err:' + e.message; }); \
              undefined",
         );
-        machine.quiesce();
+        machine.try_quiesce().unwrap();
         match machine.eval("__r") {
             Some(JsValue::String(s)) => assert_eq!(s, "ok:8"),
-            other => panic!("expected result string, got {:?}", other.map(|v| js_value_debug(&v))),
+            other => panic!(
+                "expected result string, got {:?}",
+                other.map(|v| js_value_debug(&v))
+            ),
         }
     }
 
@@ -2345,9 +2611,19 @@ mod tests {
         let machine = new_machine();
         machine.define_function("hostUrlParse", worker_io::host_url_parse, 2);
         machine.define_function("hostUrlSet", worker_io::host_url_set, 3);
-        machine.define_function("hostFormUrlDecode", worker_io::host_form_urlencoded_decode, 1);
-        machine.define_function("hostFormUrlEncode", worker_io::host_form_urlencoded_encode, 1);
-        machine.eval(URL_GLOBALS_JS).expect("url globals eval failed");
+        machine.define_function(
+            "hostFormUrlDecode",
+            worker_io::host_form_urlencoded_decode,
+            1,
+        );
+        machine.define_function(
+            "hostFormUrlEncode",
+            worker_io::host_form_urlencoded_encode,
+            1,
+        );
+        machine
+            .eval(URL_GLOBALS_JS)
+            .expect("url globals eval failed");
         let probe = r#"(function () {
             var out = [];
             var u = new URL('HTTPS://User:Pw@ExAmPle.com:8443/a/b/../c?x=1&y=2#frag');
@@ -2413,14 +2689,21 @@ mod tests {
     #[test]
     fn promise_resolve() {
         let machine = new_machine();
-        machine.eval("Promise.resolve(42); undefined").expect("Promise.resolve failed");
-        machine.eval("new Promise(function(resolve) { resolve(42); }); undefined")
+        machine
+            .eval("Promise.resolve(42); undefined")
+            .expect("Promise.resolve failed");
+        machine
+            .eval("new Promise(function(resolve) { resolve(42); }); undefined")
             .expect("new Promise failed");
         match machine.eval("typeof Promise.resolve(42).then") {
             Some(JsValue::String(s)) => assert_eq!(s, "function"),
-            other => panic!("expected 'function', got {:?}", other.map(|v| js_value_debug(&v))),
+            other => panic!(
+                "expected 'function', got {:?}",
+                other.map(|v| js_value_debug(&v))
+            ),
         }
-        machine.eval("Promise.resolve(42).then(function(v) { return v; }); undefined")
+        machine
+            .eval("Promise.resolve(42).then(function(v) { return v; }); undefined")
             .expect(".then(fn) crashed");
     }
 
@@ -2455,10 +2738,7 @@ mod tests {
     fn eval_to_string_coercion() {
         let machine = new_machine();
         assert_eq!(machine.eval_to_string("1 + 2").unwrap(), "3");
-        assert_eq!(
-            machine.eval_to_string("'hello'").unwrap(),
-            "hello"
-        );
+        assert_eq!(machine.eval_to_string("'hello'").unwrap(), "hello");
     }
 
     #[test]
@@ -2481,8 +2761,12 @@ mod tests {
         let machine = new_machine();
 
         unsafe extern "C" fn return_42(the: *mut XsMachine) {
-            fxInteger(the, &mut (*the).scratch, 42);
-            *(*the).frame.add(1) = (*the).scratch;
+            // SAFETY: test host callback; XS calls it under the host-callback
+            // contract (`worker_io`), and it only writes `xsResult`.
+            unsafe {
+                fxInteger(the, &mut (*the).scratch, 42);
+                *(*the).frame.add(1) = (*the).scratch;
+            }
         }
 
         machine.define_function("hostReturn42", return_42, 0);
@@ -2499,12 +2783,16 @@ mod tests {
 
         // Host function that adds two numbers
         unsafe extern "C" fn add(the: *mut XsMachine) {
-            // mxArgv(0) = frame - 1, mxArgv(1) = frame - 2
-            let a = fxToInteger(the, (*the).frame.sub(1));
-            let b = fxToInteger(the, (*the).frame.sub(2));
-            fxInteger(the, &mut (*the).scratch, a + b);
-            // xsResult = the->frame[1]
-            *(*the).frame.add(1) = (*the).scratch;
+            // SAFETY: test host callback under the host-callback contract;
+            // the script always passes the two arguments read here.
+            unsafe {
+                // mxArgv(0) = frame - 1, mxArgv(1) = frame - 2
+                let a = fxToInteger(the, (*the).frame.sub(1));
+                let b = fxToInteger(the, (*the).frame.sub(2));
+                fxInteger(the, &mut (*the).scratch, a + b);
+                // xsResult = the->frame[1]
+                *(*the).frame.add(1) = (*the).scratch;
+            }
         }
 
         machine.define_function("hostAdd", add, 2);
@@ -2515,16 +2803,88 @@ mod tests {
         }
     }
 
+    /// `eval` used to call XS with no jump record installed, so any throw
+    /// longjmped through a NULL `firstJump` and the process took SIGSEGV.
+    #[test]
+    fn eval_returns_none_when_the_evaluation_throws() {
+        let machine = new_machine();
+        for source in [
+            "throw new Error('boom')",
+            "var = ;",
+            "undefinedVariable + 1",
+            "({ toString() { throw new Error('no string'); } })",
+            "Symbol('cannot be a string')",
+            "(function f() { return f(); })()",
+        ] {
+            assert!(machine.eval(source).is_none(), "{source}");
+            // The machine is intact afterwards.
+            match machine.eval("1 + 1").unwrap() {
+                JsValue::Integer(n) => assert_eq!(n, 2, "after {source}"),
+                other => panic!("after {source}: {:?}", js_value_debug(&other)),
+            }
+        }
+        match machine
+            .eval("({ toString() { return 'coerced'; } })")
+            .unwrap()
+        {
+            JsValue::String(s) => assert_eq!(s, "coerced"),
+            other => panic!("expected 'coerced', got {:?}", js_value_debug(&other)),
+        }
+    }
+
+    /// A throwing `eval` made from inside a host callback, itself called
+    /// inside a JS `try`, must come back to the callback as `None`, not
+    /// longjmp over the callback's Rust frames to the JS `catch`.
+    #[test]
+    fn nested_eval_throw_stays_inside_the_host_callback() {
+        thread_local! {
+            static NESTED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+        }
+        unsafe extern "C" fn eval_throwing(the: *mut XsMachine) {
+            // SAFETY: test host callback; the borrowed `Machine` view is
+            // never dropped (it does not own `the`), as in
+            // `host_import_archive`.
+            let machine = std::mem::ManuallyDrop::new(Machine {
+                raw: the,
+                registered_callbacks: RefCell::new(Vec::new()),
+            });
+            let failed = machine.eval("throw new Error('inner')").is_none();
+            NESTED.with(|n| n.set(Some(failed)));
+            // SAFETY: host-callback contract; `xsResult` is `frame[1]`.
+            unsafe {
+                fxBoolean(the, &mut (*the).scratch, i32::from(failed));
+                *(*the).frame.add(1) = (*the).scratch;
+            }
+        }
+        let machine = new_machine();
+        machine.define_function("evalThrowing", eval_throwing, 0);
+        match machine
+            .eval(
+                "(function () { try { return evalThrowing(); } catch (e) { return 'caught'; } })()",
+            )
+            .unwrap()
+        {
+            JsValue::Boolean(b) => assert!(b),
+            other => panic!("expected true, got {:?}", js_value_debug(&other)),
+        }
+        assert_eq!(NESTED.with(|n| n.get()), Some(true));
+    }
+
     #[test]
     fn host_function_with_string_arg() {
         let machine = new_machine();
 
         // Host function that returns the length of a string
         unsafe extern "C" fn strlen(the: *mut XsMachine) {
-            let s = fxToString(the, (*the).frame.sub(1));
-            let len = std::ffi::CStr::from_ptr(s).to_bytes().len() as i32;
-            fxInteger(the, &mut (*the).scratch, len);
-            *(*the).frame.add(1) = (*the).scratch;
+            // SAFETY: test host callback under the host-callback contract;
+            // the script passes the one argument read, and the string is
+            // measured before the next XS call.
+            unsafe {
+                let s = fxToString(the, (*the).frame.sub(1));
+                let len = std::ffi::CStr::from_ptr(s).to_bytes().len() as i32;
+                fxInteger(the, &mut (*the).scratch, len);
+                *(*the).frame.add(1) = (*the).scratch;
+            }
         }
 
         machine.define_function("hostStrlen", strlen, 1);
@@ -2559,22 +2919,19 @@ mod tests {
 
     // --- Phase 2: Host Powers Tests ---
 
-    fn new_machine_with_powers(
-        powers: &mut powers::HostPowers,
-    ) -> Machine {
+    fn new_machine_with_powers(powers: &mut powers::HostPowers) -> Machine {
         let machine = new_machine();
-        machine.register_powers(powers as *mut powers::HostPowers);
+        // SAFETY: the caller's `powers` outlives the returned machine in
+        // every test, and is not touched while JS runs.
+        unsafe { machine.register_powers(powers as *mut powers::HostPowers) };
         machine
     }
 
     #[test]
     fn fs_write_and_read() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = cap_std::fs::Dir::open_ambient_dir(
-            tmp.path(),
-            cap_std::ambient_authority(),
-        )
-        .unwrap();
+        let dir =
+            cap_std::fs::Dir::open_ambient_dir(tmp.path(), cap_std::ambient_authority()).unwrap();
 
         let mut powers = powers::HostPowers::new();
         powers.add_dir("test", dir);
@@ -2596,11 +2953,8 @@ mod tests {
     #[test]
     fn fs_exists_and_is_dir() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = cap_std::fs::Dir::open_ambient_dir(
-            tmp.path(),
-            cap_std::ambient_authority(),
-        )
-        .unwrap();
+        let dir =
+            cap_std::fs::Dir::open_ambient_dir(tmp.path(), cap_std::ambient_authority()).unwrap();
 
         let mut powers = powers::HostPowers::new();
         powers.add_dir("test", dir);
@@ -2630,11 +2984,8 @@ mod tests {
     #[test]
     fn fs_readdir() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = cap_std::fs::Dir::open_ambient_dir(
-            tmp.path(),
-            cap_std::ambient_authority(),
-        )
-        .unwrap();
+        let dir =
+            cap_std::fs::Dir::open_ambient_dir(tmp.path(), cap_std::ambient_authority()).unwrap();
 
         let mut powers = powers::HostPowers::new();
         powers.add_dir("test", dir);
@@ -2642,12 +2993,8 @@ mod tests {
         let machine = new_machine_with_powers(&mut powers);
 
         // Create some files
-        machine
-            .eval("writeFileText('test', 'a.txt', 'a')")
-            .unwrap();
-        machine
-            .eval("writeFileText('test', 'b.txt', 'b')")
-            .unwrap();
+        machine.eval("writeFileText('test', 'a.txt', 'a')").unwrap();
+        machine.eval("writeFileText('test', 'b.txt', 'b')").unwrap();
 
         // Read directory — returns JSON array
         match machine.eval("readDir('test', '')").unwrap() {
@@ -2662,11 +3009,8 @@ mod tests {
     #[test]
     fn fs_remove_and_rename() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = cap_std::fs::Dir::open_ambient_dir(
-            tmp.path(),
-            cap_std::ambient_authority(),
-        )
-        .unwrap();
+        let dir =
+            cap_std::fs::Dir::open_ambient_dir(tmp.path(), cap_std::ambient_authority()).unwrap();
 
         let mut powers = powers::HostPowers::new();
         powers.add_dir("test", dir);
@@ -2739,7 +3083,10 @@ mod tests {
                 s,
                 "true:89273d2f70b93285bb7ddb4bcee86a5347ca7159352e3cbdd20c23e9d1e507d3"
             ),
-            other => panic!("expected binary hash result, got {:?}", js_value_debug(&other)),
+            other => panic!(
+                "expected binary hash result, got {:?}",
+                js_value_debug(&other)
+            ),
         }
 
         match machine
@@ -2753,7 +3100,10 @@ mod tests {
         machine.eval(HOST_ALIASES).unwrap();
         match machine.eval("hostSha256Bytes === sha256Bytes").unwrap() {
             JsValue::Boolean(equal) => assert!(equal),
-            other => panic!("expected host alias comparison, got {:?}", js_value_debug(&other)),
+            other => panic!(
+                "expected host alias comparison, got {:?}",
+                js_value_debug(&other)
+            ),
         }
     }
 
@@ -2806,8 +3156,10 @@ mod tests {
         // But NOT visible inside a bare compartment
         machine.eval("var guestC = new Compartment({});").unwrap();
         match machine.eval("guestC.evaluate('typeof sha256')").unwrap() {
-            JsValue::String(s) => assert_eq!(s, "undefined",
-                "guest compartment should NOT see host functions"),
+            JsValue::String(s) => assert_eq!(
+                s, "undefined",
+                "guest compartment should NOT see host functions"
+            ),
             other => panic!("expected 'undefined', got {:?}", js_value_debug(&other)),
         }
     }
@@ -2817,9 +3169,9 @@ mod tests {
         let machine = new_machine();
         // Pass custom globals into the compartment — two separate evals
         // to avoid re-entrant eval issues
-        machine.eval(
-            "var c2 = new Compartment({ globals: { x: 42, greeting: 'hello' } });"
-        ).unwrap();
+        machine
+            .eval("var c2 = new Compartment({ globals: { x: 42, greeting: 'hello' } });")
+            .unwrap();
 
         match machine.eval("c2.evaluate('x + 8')").unwrap() {
             JsValue::Integer(n) => assert_eq!(n, 50),
@@ -2839,14 +3191,16 @@ mod tests {
         machine.eval("var sentinel = 'original'").unwrap();
 
         // Guest compartment has its own sentinel — should not affect host
-        machine.eval(
-            "var c3 = new Compartment({ globals: { sentinel: 'modified' } });"
-        ).unwrap();
+        machine
+            .eval("var c3 = new Compartment({ globals: { sentinel: 'modified' } });")
+            .unwrap();
         machine.eval("c3.evaluate('sentinel')").unwrap();
 
         match machine.eval("sentinel").unwrap() {
-            JsValue::String(s) => assert_eq!(s, "original",
-                "host global should not be modified by guest compartment"),
+            JsValue::String(s) => assert_eq!(
+                s, "original",
+                "host global should not be modified by guest compartment"
+            ),
             other => panic!("expected 'original', got {:?}", js_value_debug(&other)),
         }
     }
@@ -2915,25 +3269,30 @@ mod tests {
         let machine = new_machine_with_powers(&mut powers);
 
         // Create a compartment that only gets sha256, not other host fns
-        machine.eval(
-            "var endowed = new Compartment({ \
+        machine
+            .eval(
+                "var endowed = new Compartment({ \
                 globals: { sha256: sha256 } \
-             });"
-        ).unwrap();
+             });",
+            )
+            .unwrap();
 
-        match machine.eval(
-            "endowed.evaluate('sha256(\"hello\")')"
-        ).unwrap() {
+        match machine
+            .eval("endowed.evaluate('sha256(\"hello\")')")
+            .unwrap()
+        {
             JsValue::String(s) => assert_eq!(
-                s, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+                s,
+                "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
             ),
             other => panic!("expected hash, got {:?}", js_value_debug(&other)),
         }
 
         // But randomHex256 should NOT be available
-        match machine.eval(
-            "endowed.evaluate('typeof randomHex256')"
-        ).unwrap() {
+        match machine
+            .eval("endowed.evaluate('typeof randomHex256')")
+            .unwrap()
+        {
             JsValue::String(s) => assert_eq!(s, "undefined"),
             other => panic!("expected 'undefined', got {:?}", js_value_debug(&other)),
         }
@@ -2942,21 +3301,30 @@ mod tests {
     #[test]
     fn module_registry_and_load() {
         let mut powers = powers::HostPowers::new();
-        powers.add_module("math-utils", "var exports = { double: function(x) { return x * 2; } }; exports;");
+        powers.add_module(
+            "math-utils",
+            "var exports = { double: function(x) { return x * 2; } }; exports;",
+        );
 
         let machine = new_machine_with_powers(&mut powers);
 
         // Verify the host function can look up module source
         match machine.eval("loadModuleSource('math-utils')").unwrap() {
-            JsValue::String(s) => assert!(s.contains("double"),
-                "expected module source containing 'double', got {}", s),
+            JsValue::String(s) => assert!(
+                s.contains("double"),
+                "expected module source containing 'double', got {}",
+                s
+            ),
             other => panic!("expected string, got {:?}", js_value_debug(&other)),
         }
 
         // Unknown module returns undefined
         match machine.eval("loadModuleSource('nonexistent')").unwrap() {
             JsValue::Undefined => {}
-            other => panic!("expected undefined for missing module, got {:?}", js_value_debug(&other)),
+            other => panic!(
+                "expected undefined for missing module, got {:?}",
+                js_value_debug(&other)
+            ),
         }
     }
 
@@ -2966,13 +3334,19 @@ mod tests {
         let machine = new_machine_with_powers(&mut powers);
 
         // Absolute specifier passes through
-        match machine.eval("resolveModule('@endo/far', 'anything')").unwrap() {
+        match machine
+            .eval("resolveModule('@endo/far', 'anything')")
+            .unwrap()
+        {
             JsValue::String(s) => assert_eq!(s, "@endo/far"),
             other => panic!("expected '@endo/far', got {:?}", js_value_debug(&other)),
         }
 
         // Relative specifier resolves against referrer
-        match machine.eval("resolveModule('./utils', 'lib/main')").unwrap() {
+        match machine
+            .eval("resolveModule('./utils', 'lib/main')")
+            .unwrap()
+        {
             JsValue::String(s) => assert_eq!(s, "lib/utils"),
             other => panic!("expected 'lib/utils', got {:?}", js_value_debug(&other)),
         }
@@ -2984,7 +3358,7 @@ mod tests {
         // Register a module that exports a value
         powers.add_module(
             "greeter",
-            "export default function greet(name) { return 'Hello, ' + name + '!'; }"
+            "export default function greet(name) { return 'Hello, ' + name + '!'; }",
         );
 
         let machine = new_machine_with_powers(&mut powers);
@@ -2993,7 +3367,9 @@ mod tests {
         // that uses our host functions. The loadNowHook must return
         // { source: new ModuleSource(code) } — XS treats a string
         // source as a specifier alias, not source text.
-        machine.eval("\
+        machine
+            .eval(
+                "\
             var modComp = new Compartment({ \
                 resolveHook: function(specifier, referrer) { \
                     return resolveModule(specifier, referrer || ''); \
@@ -3004,11 +3380,14 @@ mod tests {
                         throw new Error('Module not found: ' + specifier); \
                     return { source: new ModuleSource(src) }; \
                 } \
-            });"
-        ).unwrap();
+            });",
+            )
+            .unwrap();
 
         // Import the module synchronously
-        machine.eval("var mod = modComp.importNow('greeter');").unwrap();
+        machine
+            .eval("var mod = modComp.importNow('greeter');")
+            .unwrap();
 
         match machine.eval("mod.default('XS')").unwrap() {
             JsValue::String(s) => assert_eq!(s, "Hello, XS!"),
@@ -3022,7 +3401,9 @@ mod tests {
 
         // Simulate the Endo pattern: a factory function that receives powers
         // and returns a capability object
-        machine.eval("\
+        machine
+            .eval(
+                "\
             var guestFactory = new Compartment({ \
                 globals: { \
                     makeGreeter: function(prefix) { \
@@ -3031,12 +3412,13 @@ mod tests {
                         }; \
                     } \
                 } \
-             });"
-        ).unwrap();
+             });",
+            )
+            .unwrap();
 
-        machine.eval(
-            "var greeter = guestFactory.evaluate('makeGreeter(\"Hi\")');"
-        ).unwrap();
+        machine
+            .eval("var greeter = guestFactory.evaluate('makeGreeter(\"Hi\")');")
+            .unwrap();
 
         match machine.eval("greeter.greet('World')").unwrap() {
             JsValue::String(s) => assert_eq!(s, "Hi World"),
@@ -3050,21 +3432,29 @@ mod tests {
 
         // Outer compartment creates inner compartment — inner should not
         // see outer's globals
-        machine.eval("\
+        machine
+            .eval(
+                "\
             var outer = new Compartment({ \
                 globals: { secret: 'outer-secret' } \
-             });"
-        ).unwrap();
+             });",
+            )
+            .unwrap();
 
         // Evaluate code in outer that creates and queries inner
-        match machine.eval(
-            "outer.evaluate( \
+        match machine
+            .eval(
+                "outer.evaluate( \
                 'var inner = new Compartment({}); ' + \
                 'inner.evaluate(\"typeof secret\")' \
-             )"
-        ).unwrap() {
-            JsValue::String(s) => assert_eq!(s, "undefined",
-                "inner compartment should not see outer's globals"),
+             )",
+            )
+            .unwrap()
+        {
+            JsValue::String(s) => assert_eq!(
+                s, "undefined",
+                "inner compartment should not see outer's globals"
+            ),
             other => panic!("expected 'undefined', got {:?}", js_value_debug(&other)),
         }
     }
@@ -3073,19 +3463,18 @@ mod tests {
     fn module_with_dependencies() {
         let mut powers = powers::HostPowers::new();
         // Register two modules: utils depends on nothing, app depends on utils
-        powers.add_module(
-            "utils",
-            "export function double(x) { return x * 2; }"
-        );
+        powers.add_module("utils", "export function double(x) { return x * 2; }");
         powers.add_module(
             "app",
             "import { double } from 'utils'; \
-             export default function compute(x) { return double(x) + 1; }"
+             export default function compute(x) { return double(x) + 1; }",
         );
 
         let machine = new_machine_with_powers(&mut powers);
 
-        machine.eval("\
+        machine
+            .eval(
+                "\
             var depComp = new Compartment({ \
                 resolveHook: function(specifier, referrer) { \
                     return resolveModule(specifier, referrer || ''); \
@@ -3096,8 +3485,9 @@ mod tests {
                         throw new Error('Module not found: ' + specifier); \
                     return { source: new ModuleSource(src) }; \
                 } \
-            });"
-        ).unwrap();
+            });",
+            )
+            .unwrap();
 
         machine.eval("var app = depComp.importNow('app');").unwrap();
 
@@ -3114,13 +3504,15 @@ mod tests {
         powers.add_module(
             "sneaky",
             "export var hasHash = typeof sha256 !== 'undefined'; \
-             export var hasRandom = typeof randomHex256 !== 'undefined';"
+             export var hasRandom = typeof randomHex256 !== 'undefined';",
         );
 
         let machine = new_machine_with_powers(&mut powers);
 
         // Create compartment WITHOUT host function endowments
-        machine.eval("\
+        machine
+            .eval(
+                "\
             var isolatedComp = new Compartment({ \
                 resolveHook: function(specifier) { return specifier; }, \
                 loadNowHook: function(specifier) { \
@@ -3129,20 +3521,26 @@ mod tests {
                         throw new Error('Module not found: ' + specifier); \
                     return { source: new ModuleSource(src) }; \
                 } \
-            });"
-        ).unwrap();
+            });",
+            )
+            .unwrap();
 
-        machine.eval("var sneaky = isolatedComp.importNow('sneaky');").unwrap();
+        machine
+            .eval("var sneaky = isolatedComp.importNow('sneaky');")
+            .unwrap();
 
         // Module code runs in the compartment's scope — should NOT see host fns
         match machine.eval("sneaky.hasHash").unwrap() {
-            JsValue::Boolean(b) => assert!(!b,
-                "module in isolated compartment should NOT see sha256"),
+            JsValue::Boolean(b) => {
+                assert!(!b, "module in isolated compartment should NOT see sha256")
+            }
             other => panic!("expected false, got {:?}", js_value_debug(&other)),
         }
         match machine.eval("sneaky.hasRandom").unwrap() {
-            JsValue::Boolean(b) => assert!(!b,
-                "module in isolated compartment should NOT see randomHex256"),
+            JsValue::Boolean(b) => assert!(
+                !b,
+                "module in isolated compartment should NOT see randomHex256"
+            ),
             other => panic!("expected false, got {:?}", js_value_debug(&other)),
         }
     }
@@ -3162,16 +3560,15 @@ mod tests {
         );
 
         // Parse the keys in JS and sign a message
-        machine.eval(&format!(
-            "var keys = JSON.parse('{}'); var pk = keys.privateKey;",
-            json.replace('\'', "\\'")
-        )).unwrap();
+        machine
+            .eval(&format!(
+                "var keys = JSON.parse('{}'); var pk = keys.privateKey;",
+                json.replace('\'', "\\'")
+            ))
+            .unwrap();
 
         // Sign hex-encoded message "hello" = 68656c6c6f
-        match machine
-            .eval("ed25519Sign(pk, '68656c6c6f')")
-            .unwrap()
-        {
+        match machine.eval("ed25519Sign(pk, '68656c6c6f')").unwrap() {
             JsValue::String(sig) => {
                 assert_eq!(
                     sig.len(),
@@ -3349,12 +3746,15 @@ mod tests {
         machine.register_worker_io();
 
         // JS echo loop: receive frame, send it back
-        machine.eval("\
+        machine
+            .eval(
+                "\
             var frame; \
             while ((frame = recvFrame()) !== undefined) { \
                 sendFrame(frame); \
-            }"
-        ).unwrap();
+            }",
+            )
+            .unwrap();
 
         // Read back the 3 echoed envelopes
         let mut reader = std::io::BufReader::new(tmp_write_clone);
@@ -3370,10 +3770,7 @@ mod tests {
 
     // --- Archive Import Tests ---
 
-    fn make_test_zip(
-        map: &archive::CompartmentMap,
-        files: &[(&str, &str)],
-    ) -> Vec<u8> {
+    fn make_test_zip(map: &archive::CompartmentMap, files: &[(&str, &str)]) -> Vec<u8> {
         use std::io::Write;
         let mut buf = std::io::Cursor::new(Vec::new());
         {
@@ -3429,20 +3826,20 @@ mod tests {
             vec![(
                 "app-v1",
                 "app",
-                vec![(".", archive::ModuleDescriptor::File {
-                    parser: "mjs".to_string(),
-                    location: Some("index.js".to_string()),
-                    sha512: None,
-                })],
+                vec![(
+                    ".",
+                    archive::ModuleDescriptor::File {
+                        parser: "mjs".to_string(),
+                        location: Some("index.js".to_string()),
+                        sha512: None,
+                    },
+                )],
             )],
             "app-v1",
             ".",
         );
 
-        let zip = make_test_zip(&map, &[(
-            "app-v1/index.js",
-            "export const answer = 42;",
-        )]);
+        let zip = make_test_zip(&map, &[("app-v1/index.js", "export const answer = 42;")]);
 
         let loaded = archive::load_archive(std::io::Cursor::new(zip)).unwrap();
         let machine = new_machine();
@@ -3462,41 +3859,53 @@ mod tests {
                     "app-v1",
                     "app",
                     vec![
-                        (".", archive::ModuleDescriptor::File {
-                            parser: "mjs".to_string(),
-                            location: Some("index.js".to_string()),
-                            sha512: None,
-                        }),
-                        ("utils", archive::ModuleDescriptor::Link {
-                            compartment: "utils-v2".to_string(),
-                            module: ".".to_string(),
-                        }),
+                        (
+                            ".",
+                            archive::ModuleDescriptor::File {
+                                parser: "mjs".to_string(),
+                                location: Some("index.js".to_string()),
+                                sha512: None,
+                            },
+                        ),
+                        (
+                            "utils",
+                            archive::ModuleDescriptor::Link {
+                                compartment: "utils-v2".to_string(),
+                                module: ".".to_string(),
+                            },
+                        ),
                     ],
                 ),
                 (
                     "utils-v2",
                     "utils",
-                    vec![(".", archive::ModuleDescriptor::File {
-                        parser: "mjs".to_string(),
-                        location: Some("index.js".to_string()),
-                        sha512: None,
-                    })],
+                    vec![(
+                        ".",
+                        archive::ModuleDescriptor::File {
+                            parser: "mjs".to_string(),
+                            location: Some("index.js".to_string()),
+                            sha512: None,
+                        },
+                    )],
                 ),
             ],
             "app-v1",
             ".",
         );
 
-        let zip = make_test_zip(&map, &[
-            (
-                "app-v1/index.js",
-                "import { triple } from 'utils'; export const result = triple(7);",
-            ),
-            (
-                "utils-v2/index.js",
-                "export function triple(x) { return x * 3; }",
-            ),
-        ]);
+        let zip = make_test_zip(
+            &map,
+            &[
+                (
+                    "app-v1/index.js",
+                    "import { triple } from 'utils'; export const result = triple(7);",
+                ),
+                (
+                    "utils-v2/index.js",
+                    "export function triple(x) { return x * 3; }",
+                ),
+            ],
+        );
 
         let loaded = archive::load_archive(std::io::Cursor::new(zip)).unwrap();
         let machine = new_machine();
@@ -3519,41 +3928,50 @@ mod tests {
                 "app-v1",
                 "app",
                 vec![
-                    (".", archive::ModuleDescriptor::File {
-                        parser: "mjs".to_string(),
-                        location: Some("index.js".to_string()),
-                        sha512: None,
-                    }),
-                    ("./lib/helper.js", archive::ModuleDescriptor::File {
-                        parser: "mjs".to_string(),
-                        location: Some("lib/helper.js".to_string()),
-                        sha512: None,
-                    }),
-                    ("./lib/sibling.js", archive::ModuleDescriptor::File {
-                        parser: "mjs".to_string(),
-                        location: Some("lib/sibling.js".to_string()),
-                        sha512: None,
-                    }),
+                    (
+                        ".",
+                        archive::ModuleDescriptor::File {
+                            parser: "mjs".to_string(),
+                            location: Some("index.js".to_string()),
+                            sha512: None,
+                        },
+                    ),
+                    (
+                        "./lib/helper.js",
+                        archive::ModuleDescriptor::File {
+                            parser: "mjs".to_string(),
+                            location: Some("lib/helper.js".to_string()),
+                            sha512: None,
+                        },
+                    ),
+                    (
+                        "./lib/sibling.js",
+                        archive::ModuleDescriptor::File {
+                            parser: "mjs".to_string(),
+                            location: Some("lib/sibling.js".to_string()),
+                            sha512: None,
+                        },
+                    ),
                 ],
             )],
             "app-v1",
             ".",
         );
 
-        let zip = make_test_zip(&map, &[
-            (
-                "app-v1/index.js",
-                "import { total } from './lib/helper.js'; export const result = total;",
-            ),
-            (
-                "app-v1/lib/helper.js",
-                "import { base } from './sibling.js'; export const total = base + 1;",
-            ),
-            (
-                "app-v1/lib/sibling.js",
-                "export const base = 20;",
-            ),
-        ]);
+        let zip = make_test_zip(
+            &map,
+            &[
+                (
+                    "app-v1/index.js",
+                    "import { total } from './lib/helper.js'; export const result = total;",
+                ),
+                (
+                    "app-v1/lib/helper.js",
+                    "import { base } from './sibling.js'; export const total = base + 1;",
+                ),
+                ("app-v1/lib/sibling.js", "export const base = 20;"),
+            ],
+        );
 
         let loaded = archive::load_archive(std::io::Cursor::new(zip)).unwrap();
         let machine = new_machine();
@@ -3576,37 +3994,49 @@ mod tests {
                 "app-v1",
                 "app",
                 vec![
-                    (".", archive::ModuleDescriptor::File {
-                        parser: "mjs".to_string(),
-                        location: Some("index.js".to_string()),
-                        sha512: None,
-                    }),
-                    ("./calc.js", archive::ModuleDescriptor::File {
-                        parser: "mjs".to_string(),
-                        location: Some("calc.js".to_string()),
-                        sha512: None,
-                    }),
-                    ("./lib/add.js", archive::ModuleDescriptor::File {
-                        parser: "mjs".to_string(),
-                        location: Some("lib/add.js".to_string()),
-                        sha512: None,
-                    }),
+                    (
+                        ".",
+                        archive::ModuleDescriptor::File {
+                            parser: "mjs".to_string(),
+                            location: Some("index.js".to_string()),
+                            sha512: None,
+                        },
+                    ),
+                    (
+                        "./calc.js",
+                        archive::ModuleDescriptor::File {
+                            parser: "mjs".to_string(),
+                            location: Some("calc.js".to_string()),
+                            sha512: None,
+                        },
+                    ),
+                    (
+                        "./lib/add.js",
+                        archive::ModuleDescriptor::File {
+                            parser: "mjs".to_string(),
+                            location: Some("lib/add.js".to_string()),
+                            sha512: None,
+                        },
+                    ),
                 ],
             )],
             "app-v1",
             ".",
         );
 
-        let zip = make_test_zip(&map, &[
-            (
-                "app-v1/index.js",
-                "import calc from './calc.js'; export const result = calc;",
-            ),
-            // Placeholder registry entries; the runtime loads these
-            // modules through the raw CJS sources injected below.
-            ("app-v1/calc.js", "export default 0;"),
-            ("app-v1/lib/add.js", "export default 0;"),
-        ]);
+        let zip = make_test_zip(
+            &map,
+            &[
+                (
+                    "app-v1/index.js",
+                    "import calc from './calc.js'; export const result = calc;",
+                ),
+                // Placeholder registry entries; the runtime loads these
+                // modules through the raw CJS sources injected below.
+                ("app-v1/calc.js", "export default 0;"),
+                ("app-v1/lib/add.js", "export default 0;"),
+            ],
+        );
 
         let mut loaded = archive::load_archive(std::io::Cursor::new(zip)).unwrap();
         loaded.sources.insert(
@@ -3638,26 +4068,32 @@ mod tests {
             vec![(
                 "plugin-v1",
                 "plugin",
-                vec![(".", archive::ModuleDescriptor::File {
-                    parser: "mjs".to_string(),
-                    location: Some("index.js".to_string()),
-                    sha512: None,
-                })],
+                vec![(
+                    ".",
+                    archive::ModuleDescriptor::File {
+                        parser: "mjs".to_string(),
+                        location: Some("index.js".to_string()),
+                        sha512: None,
+                    },
+                )],
             )],
             "plugin-v1",
             ".",
         );
 
-        let zip = make_test_zip(&map, &[(
-            "plugin-v1/index.js",
-            "export function make(powers) { \
+        let zip = make_test_zip(
+            &map,
+            &[(
+                "plugin-v1/index.js",
+                "export function make(powers) { \
                 return { \
                     greet: function(name) { \
                         return 'Hello from ' + name + '!'; \
                     } \
                 }; \
             }",
-        )]);
+            )],
+        );
 
         let loaded = archive::load_archive(std::io::Cursor::new(zip)).unwrap();
         let machine = new_machine();
@@ -3681,20 +4117,26 @@ mod tests {
             vec![(
                 "app-v1",
                 "app",
-                vec![("./main.js", archive::ModuleDescriptor::File {
-                    parser: "mjs".to_string(),
-                    location: Some("main.js".to_string()),
-                    sha512: None,
-                })],
+                vec![(
+                    "./main.js",
+                    archive::ModuleDescriptor::File {
+                        parser: "mjs".to_string(),
+                        location: Some("main.js".to_string()),
+                        sha512: None,
+                    },
+                )],
             )],
             "app-v1",
             "./main.js",
         );
 
-        let zip = make_test_zip(&map, &[(
-            "app-v1/main.js",
-            "noSuchGlobal(42); export const unreachable = 1;",
-        )]);
+        let zip = make_test_zip(
+            &map,
+            &[(
+                "app-v1/main.js",
+                "noSuchGlobal(42); export const unreachable = 1;",
+            )],
+        );
 
         let loaded = archive::load_archive(std::io::Cursor::new(zip)).unwrap();
         let machine = new_machine();
@@ -3709,20 +4151,20 @@ mod tests {
             vec![(
                 "app-v1",
                 "app",
-                vec![(".", archive::ModuleDescriptor::File {
-                    parser: "mjs".to_string(),
-                    location: Some("index.js".to_string()),
-                    sha512: None,
-                })],
+                vec![(
+                    ".",
+                    archive::ModuleDescriptor::File {
+                        parser: "mjs".to_string(),
+                        location: Some("index.js".to_string()),
+                        sha512: None,
+                    },
+                )],
             )],
             "app-v1",
             ".",
         );
 
-        let zip = make_test_zip(&map, &[(
-            "app-v1/index.js",
-            "export const pi = 3;",
-        )]);
+        let zip = make_test_zip(&map, &[("app-v1/index.js", "export const pi = 3;")]);
 
         let b64 = base64::engine::general_purpose::STANDARD.encode(&zip);
         let loaded = archive::load_archive_base64(&b64).unwrap();
@@ -3754,8 +4196,7 @@ mod tests {
             static_size: 0,
             native_stack_size: 0,
         };
-        let machine = Machine::new(&creation, "bootstrap-test")
-            .expect("machine");
+        let machine = Machine::new(&creation, "bootstrap-test").expect("machine");
         let bootstrap = include_str!("worker_bootstrap.js");
         eprintln!("bootstrap length: {}", bootstrap.len());
 
@@ -3804,13 +4245,15 @@ mod tests {
         );
         match machine.eval(&ses_wrapped) {
             Some(JsValue::String(ref s)) if s.starts_with("ERROR") => {
-                for line in s.lines() { eprintln!("  {}", line); }
+                for line in s.lines() {
+                    eprintln!("  {}", line);
+                }
                 panic!("SES boot failed");
             }
             Some(v) => eprintln!("ses_boot result: {}", js_value_debug(&v)),
             None => panic!("ses_boot returned None"),
         }
-        machine.run_promise_jobs();
+        machine.run_promise_jobs().unwrap();
 
         // Step 2: Evaluate the worker bootstrap
         eprintln!("executing worker bootstrap...");
@@ -3826,7 +4269,7 @@ mod tests {
                 }
             }
         }
-        machine.run_promise_jobs();
+        machine.run_promise_jobs().unwrap();
         match &result {
             Some(v) => eprintln!("eval result: {}", js_value_debug(v)),
             None => eprintln!("eval returned None (threw)"),
@@ -3837,7 +4280,10 @@ mod tests {
                 eprintln!("typeof handleCommand = {}", s);
                 assert_eq!(s, "function", "handleCommand should be a function");
             }
-            other => panic!("typeof handleCommand: {:?}", other.map(|v| js_value_debug(&v))),
+            other => panic!(
+                "typeof handleCommand: {:?}",
+                other.map(|v| js_value_debug(&v))
+            ),
         }
         // Diagnostic: check closure-captured fromString.
         let enc_test = "(function() {\
@@ -3851,7 +4297,10 @@ mod tests {
             Some(JsValue::String(s)) => {
                 eprintln!("TextEncoder probe: {}", s);
             }
-            other => panic!("TextEncoder probe failed: {:?}", other.map(|v| js_value_debug(&v))),
+            other => panic!(
+                "TextEncoder probe failed: {:?}",
+                other.map(|v| js_value_debug(&v))
+            ),
         }
         // Check __shouldTerminate
         match machine.eval("typeof __shouldTerminate") {
@@ -3859,7 +4308,10 @@ mod tests {
                 eprintln!("typeof __shouldTerminate = {}", s);
                 assert_eq!(s, "function");
             }
-            other => panic!("typeof __shouldTerminate: {:?}", other.map(|v| js_value_debug(&v))),
+            other => panic!(
+                "typeof __shouldTerminate: {:?}",
+                other.map(|v| js_value_debug(&v))
+            ),
         }
     }
 
@@ -3904,15 +4356,10 @@ mod tests {
 
         machine.eval("var db = sqliteOpen(':memory:')").unwrap();
         // Invalid SQL should return an error string
-        match machine
-            .eval("sqliteExec(db, 'NOT VALID SQL')")
-            .unwrap()
-        {
-            JsValue::String(s) => assert!(
-                s.starts_with("Error: "),
-                "expected error string, got {}",
-                s,
-            ),
+        match machine.eval("sqliteExec(db, 'NOT VALID SQL')").unwrap() {
+            JsValue::String(s) => {
+                assert!(s.starts_with("Error: "), "expected error string, got {}", s,)
+            }
             other => panic!("expected error string, got {:?}", js_value_debug(&other)),
         }
         machine.eval("sqliteClose(db)").unwrap();
@@ -3929,10 +4376,19 @@ mod tests {
             .unwrap();
 
         // Prepare and run an INSERT
-        machine.eval("var ins = sqlitePrepare(db, 'INSERT INTO t (id, name) VALUES (?, ?)')").unwrap();
-        match machine.eval("sqliteStmtRun(ins, '[1, \"alice\"]')").unwrap() {
+        machine
+            .eval("var ins = sqlitePrepare(db, 'INSERT INTO t (id, name) VALUES (?, ?)')")
+            .unwrap();
+        match machine
+            .eval("sqliteStmtRun(ins, '[1, \"alice\"]')")
+            .unwrap()
+        {
             JsValue::String(s) => {
-                assert!(s.contains("\"changes\":\"1\""), "expected changes=1, got {}", s);
+                assert!(
+                    s.contains("\"changes\":\"1\""),
+                    "expected changes=1, got {}",
+                    s
+                );
             }
             other => panic!("expected JSON result, got {:?}", js_value_debug(&other)),
         }
@@ -3950,12 +4406,18 @@ mod tests {
         machine
             .eval("sqliteExec(db, 'CREATE TABLE t (id INTEGER, val REAL, name TEXT)')")
             .unwrap();
-        machine.eval("var ins = sqlitePrepare(db, 'INSERT INTO t VALUES (?, ?, ?)')").unwrap();
-        machine.eval("sqliteStmtRun(ins, '[42, 3.14, \"hello\"]')").unwrap();
+        machine
+            .eval("var ins = sqlitePrepare(db, 'INSERT INTO t VALUES (?, ?, ?)')")
+            .unwrap();
+        machine
+            .eval("sqliteStmtRun(ins, '[42, 3.14, \"hello\"]')")
+            .unwrap();
         machine.eval("sqliteStmtFinalize(ins)").unwrap();
 
         // Query the row back
-        machine.eval("var sel = sqlitePrepare(db, 'SELECT * FROM t')").unwrap();
+        machine
+            .eval("var sel = sqlitePrepare(db, 'SELECT * FROM t')")
+            .unwrap();
         match machine.eval("sqliteStmtGet(sel, 'null')").unwrap() {
             JsValue::String(s) => {
                 // INTEGER 42 should be tagged as $bigint
@@ -3993,7 +4455,9 @@ mod tests {
         machine
             .eval("sqliteExec(db, 'CREATE TABLE t (id INTEGER)')")
             .unwrap();
-        machine.eval("var sel = sqlitePrepare(db, 'SELECT * FROM t')").unwrap();
+        machine
+            .eval("var sel = sqlitePrepare(db, 'SELECT * FROM t')")
+            .unwrap();
         match machine.eval("sqliteStmtGet(sel, 'null')").unwrap() {
             JsValue::String(s) => assert_eq!(s, "null"),
             other => panic!("expected 'null' string, got {:?}", js_value_debug(&other)),
@@ -4012,12 +4476,18 @@ mod tests {
         machine
             .eval("sqliteExec(db, 'CREATE TABLE t (id INTEGER, name TEXT)')")
             .unwrap();
-        machine.eval("var ins = sqlitePrepare(db, 'INSERT INTO t VALUES (?, ?)')").unwrap();
-        machine.eval("sqliteStmtRun(ins, '[1, \"alice\"]')").unwrap();
+        machine
+            .eval("var ins = sqlitePrepare(db, 'INSERT INTO t VALUES (?, ?)')")
+            .unwrap();
+        machine
+            .eval("sqliteStmtRun(ins, '[1, \"alice\"]')")
+            .unwrap();
         machine.eval("sqliteStmtRun(ins, '[2, \"bob\"]')").unwrap();
         machine.eval("sqliteStmtFinalize(ins)").unwrap();
 
-        machine.eval("var sel = sqlitePrepare(db, 'SELECT * FROM t ORDER BY id')").unwrap();
+        machine
+            .eval("var sel = sqlitePrepare(db, 'SELECT * FROM t ORDER BY id')")
+            .unwrap();
         match machine.eval("sqliteStmtAll(sel, 'null')").unwrap() {
             JsValue::String(s) => {
                 let parsed: serde_json::Value = serde_json::from_str(&s).unwrap();
@@ -4048,14 +4518,18 @@ mod tests {
             .unwrap();
 
         // Insert a blob via $bytes tag (base64 of [0xDE, 0xAD, 0xBE, 0xEF])
-        machine.eval("var ins = sqlitePrepare(db, 'INSERT INTO blobs VALUES (?)')").unwrap();
+        machine
+            .eval("var ins = sqlitePrepare(db, 'INSERT INTO blobs VALUES (?)')")
+            .unwrap();
         machine
             .eval("sqliteStmtRun(ins, '[{\"$bytes\": \"3q2+7w==\"}]')")
             .unwrap();
         machine.eval("sqliteStmtFinalize(ins)").unwrap();
 
         // Read it back
-        machine.eval("var sel = sqlitePrepare(db, 'SELECT data FROM blobs')").unwrap();
+        machine
+            .eval("var sel = sqlitePrepare(db, 'SELECT data FROM blobs')")
+            .unwrap();
         match machine.eval("sqliteStmtGet(sel, 'null')").unwrap() {
             JsValue::String(s) => {
                 let parsed: serde_json::Value = serde_json::from_str(&s).unwrap();
@@ -4083,14 +4557,18 @@ mod tests {
             .unwrap();
 
         // Insert a large integer via $bigint tag
-        machine.eval("var ins = sqlitePrepare(db, 'INSERT INTO big VALUES (?)')").unwrap();
+        machine
+            .eval("var ins = sqlitePrepare(db, 'INSERT INTO big VALUES (?)')")
+            .unwrap();
         machine
             .eval("sqliteStmtRun(ins, '[{\"$bigint\": \"9007199254740993\"}]')")
             .unwrap();
         machine.eval("sqliteStmtFinalize(ins)").unwrap();
 
         // Read it back — should come back as $bigint
-        machine.eval("var sel = sqlitePrepare(db, 'SELECT val FROM big')").unwrap();
+        machine
+            .eval("var sel = sqlitePrepare(db, 'SELECT val FROM big')")
+            .unwrap();
         match machine.eval("sqliteStmtGet(sel, 'null')").unwrap() {
             JsValue::String(s) => {
                 let parsed: serde_json::Value = serde_json::from_str(&s).unwrap();
@@ -4116,11 +4594,15 @@ mod tests {
         machine
             .eval("sqliteExec(db, 'CREATE TABLE t (a INTEGER, b TEXT)')")
             .unwrap();
-        machine.eval("var ins = sqlitePrepare(db, 'INSERT INTO t VALUES (?, ?)')").unwrap();
+        machine
+            .eval("var ins = sqlitePrepare(db, 'INSERT INTO t VALUES (?, ?)')")
+            .unwrap();
         machine.eval("sqliteStmtRun(ins, '[null, null]')").unwrap();
         machine.eval("sqliteStmtFinalize(ins)").unwrap();
 
-        machine.eval("var sel = sqlitePrepare(db, 'SELECT * FROM t')").unwrap();
+        machine
+            .eval("var sel = sqlitePrepare(db, 'SELECT * FROM t')")
+            .unwrap();
         match machine.eval("sqliteStmtGet(sel, 'null')").unwrap() {
             JsValue::String(s) => {
                 let parsed: serde_json::Value = serde_json::from_str(&s).unwrap();
@@ -4143,15 +4625,17 @@ mod tests {
         machine
             .eval("sqliteExec(db, 'CREATE TABLE t (id INTEGER, name TEXT)')")
             .unwrap();
-        machine.eval(
-            "var ins = sqlitePrepare(db, 'INSERT INTO t VALUES (:id, :name)')",
-        ).unwrap();
+        machine
+            .eval("var ins = sqlitePrepare(db, 'INSERT INTO t VALUES (:id, :name)')")
+            .unwrap();
         machine
             .eval("sqliteStmtRun(ins, '{\":id\": {\"$bigint\": \"1\"}, \":name\": \"alice\"}')")
             .unwrap();
         machine.eval("sqliteStmtFinalize(ins)").unwrap();
 
-        machine.eval("var sel = sqlitePrepare(db, 'SELECT * FROM t')").unwrap();
+        machine
+            .eval("var sel = sqlitePrepare(db, 'SELECT * FROM t')")
+            .unwrap();
         match machine.eval("sqliteStmtGet(sel, 'null')").unwrap() {
             JsValue::String(s) => {
                 let parsed: serde_json::Value = serde_json::from_str(&s).unwrap();
@@ -4174,7 +4658,9 @@ mod tests {
         machine
             .eval("sqliteExec(db, 'CREATE TABLE t (id INTEGER, name TEXT, score REAL)')")
             .unwrap();
-        machine.eval("var sel = sqlitePrepare(db, 'SELECT id, name, score FROM t')").unwrap();
+        machine
+            .eval("var sel = sqlitePrepare(db, 'SELECT id, name, score FROM t')")
+            .unwrap();
         match machine.eval("sqliteStmtColumns(sel)").unwrap() {
             JsValue::String(s) => {
                 let parsed: serde_json::Value = serde_json::from_str(&s).unwrap();
@@ -4200,8 +4686,12 @@ mod tests {
         machine
             .eval("sqliteExec(db, 'CREATE TABLE t (id INTEGER)')")
             .unwrap();
-        machine.eval("var s1 = sqlitePrepare(db, 'SELECT * FROM t')").unwrap();
-        machine.eval("var s2 = sqlitePrepare(db, 'INSERT INTO t VALUES (?)')").unwrap();
+        machine
+            .eval("var s1 = sqlitePrepare(db, 'SELECT * FROM t')")
+            .unwrap();
+        machine
+            .eval("var s2 = sqlitePrepare(db, 'INSERT INTO t VALUES (?)')")
+            .unwrap();
 
         // Close db — should clean up both statements
         machine.eval("sqliteClose(db)").unwrap();
@@ -4229,12 +4719,18 @@ mod tests {
 
         // Begin transaction, insert, rollback
         machine.eval("sqliteExec(db, 'BEGIN')").unwrap();
-        machine.eval("var ins = sqlitePrepare(db, 'INSERT INTO t VALUES (?)')").unwrap();
-        machine.eval("sqliteStmtRun(ins, '[{\"$bigint\": \"1\"}]')").unwrap();
+        machine
+            .eval("var ins = sqlitePrepare(db, 'INSERT INTO t VALUES (?)')")
+            .unwrap();
+        machine
+            .eval("sqliteStmtRun(ins, '[{\"$bigint\": \"1\"}]')")
+            .unwrap();
         machine.eval("sqliteExec(db, 'ROLLBACK')").unwrap();
 
         // Should have no rows
-        machine.eval("var sel = sqlitePrepare(db, 'SELECT COUNT(*) as cnt FROM t')").unwrap();
+        machine
+            .eval("var sel = sqlitePrepare(db, 'SELECT COUNT(*) as cnt FROM t')")
+            .unwrap();
         match machine.eval("sqliteStmtGet(sel, 'null')").unwrap() {
             JsValue::String(s) => {
                 let parsed: serde_json::Value = serde_json::from_str(&s).unwrap();
@@ -4280,7 +4776,11 @@ mod tests {
 
             if let Some(data) = debug::debug_drain_outbound() {
                 let xml = String::from_utf8_lossy(&data);
-                eprintln!("debug outbound ({} bytes): {}", data.len(), &xml[..std::cmp::min(xml.len(), 500)]);
+                eprintln!(
+                    "debug outbound ({} bytes): {}",
+                    data.len(),
+                    &xml[..std::cmp::min(xml.len(), 500)]
+                );
                 assert!(
                     xml.contains("<login"),
                     "expected <login> element in debug output, got: {}",
@@ -4332,7 +4832,10 @@ mod tests {
 
         // Start with debug NOT enabled.
         debug::debug_reset();
-        assert!(!debug::debug_is_active(), "debug should be inactive initially");
+        assert!(
+            !debug::debug_is_active(),
+            "debug should be inactive initially"
+        );
 
         let mut powers_store = powers::HostPowers::new();
         let machine = new_machine_with_powers(&mut powers_store);
@@ -4354,7 +4857,10 @@ mod tests {
 
         // Process the debug-attach envelope.
         let action = handle_envelope(&machine, &attach_bytes);
-        assert!(matches!(action, EnvelopeAction::Continue), "debug-attach should be handled");
+        assert!(
+            matches!(action, EnvelopeAction::Continue),
+            "debug-attach should be handled"
+        );
 
         // Check that debug is now active (only if mxDebug is in
         // the binary).
@@ -4363,7 +4869,7 @@ mod tests {
             // (login XML) and debug-attached ack.
             let frames = sent.lock().unwrap();
             assert!(
-                frames.len() >= 1,
+                !frames.is_empty(),
                 "expected at least 1 outbound frame, got {}",
                 frames.len()
             );
@@ -4395,14 +4901,21 @@ mod tests {
         }));
         // Queue real debugger output before a callback fails, so suppressing
         // only the ack (or draining the torn buffer) does not pass this test.
-        debug::rust_debug_send(c"partial reply".as_ptr(), 13);
+        // SAFETY: the literal holds 13 readable bytes plus its NUL.
+        unsafe { debug::rust_debug_send(c"partial reply".as_ptr(), 13) };
         assert!(debug::debug_has_outbound());
         worker_io::guard_ffi(|| panic!("debug callback failed"));
         flush_debug_outbound();
         send_control_response("debug-attached", 42);
         assert!(sent.lock().unwrap().is_empty());
-        assert!(debug::debug_has_outbound(), "do not touch poisoned debug state");
-        assert_eq!(worker_io::take_ffi_panic().unwrap().message, "debug callback failed");
+        assert!(
+            debug::debug_has_outbound(),
+            "do not touch poisoned debug state"
+        );
+        assert_eq!(
+            worker_io::take_ffi_panic().unwrap().message,
+            "debug callback failed"
+        );
         debug::debug_reset();
         worker_io::clear_transport();
     }
@@ -4418,16 +4931,25 @@ mod tests {
         worker_io::install_transport(Box::new(MockTransport { sent: sent.clone() }));
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().to_str().unwrap().as_bytes();
-        assert!(matches!(handle_suspend(&machine, 123, path), EnvelopeAction::Continue));
+        assert!(matches!(
+            handle_suspend(&machine, 123, path),
+            EnvelopeAction::Continue
+        ));
         let frames = sent.lock().unwrap();
         let reply = envelope::decode_envelope(&frames[0]).unwrap();
         assert_eq!(reply.verb, "suspend-error");
         assert_eq!(reply.nonce, 123);
         drop(frames);
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
-        assert!(matches!(machine.eval("finishHash(handle)"), Some(JsValue::String(_))));
+        assert!(matches!(
+            machine.eval("finishHash(handle)"),
+            Some(JsValue::String(_))
+        ));
         assert!(!powers::crypto::has_open_handles());
-        assert!(matches!(handle_suspend(&machine, 124, path), EnvelopeAction::Suspend));
+        assert!(matches!(
+            handle_suspend(&machine, 124, path),
+            EnvelopeAction::Suspend
+        ));
         worker_io::clear_transport();
     }
 
@@ -4479,13 +5001,8 @@ mod tests {
 
         assert!(!snap.is_empty(), "snapshot should not be empty");
 
-        let restored = Machine::from_snapshot(
-            &snap,
-            "restored",
-            TEST_SNAPSHOT_SIG,
-            &mut callbacks,
-        )
-        .expect("from_snapshot failed");
+        let restored = Machine::from_snapshot(&snap, "restored", TEST_SNAPSHOT_SIG, &mut callbacks)
+            .expect("from_snapshot failed");
 
         match restored.eval("x").unwrap() {
             JsValue::Integer(n) => assert_eq!(n, 42),
@@ -4504,13 +5021,8 @@ mod tests {
             .write_snapshot(TEST_SNAPSHOT_SIG, &mut callbacks)
             .expect("write_snapshot failed");
 
-        let restored = Machine::from_snapshot(
-            &snap,
-            "restored",
-            TEST_SNAPSHOT_SIG,
-            &mut callbacks,
-        )
-        .expect("from_snapshot failed");
+        let restored = Machine::from_snapshot(&snap, "restored", TEST_SNAPSHOT_SIG, &mut callbacks)
+            .expect("from_snapshot failed");
 
         match restored.eval("greeting").unwrap() {
             JsValue::String(s) => assert_eq!(s, "hello snapshot"),
@@ -4530,13 +5042,8 @@ mod tests {
             .write_snapshot(TEST_SNAPSHOT_SIG, &mut callbacks)
             .expect("write_snapshot failed");
 
-        let restored = Machine::from_snapshot(
-            &snap,
-            "restored",
-            TEST_SNAPSHOT_SIG,
-            &mut callbacks,
-        )
-        .expect("from_snapshot failed");
+        let restored = Machine::from_snapshot(&snap, "restored", TEST_SNAPSHOT_SIG, &mut callbacks)
+            .expect("from_snapshot failed");
 
         match restored.eval("obj.a").unwrap() {
             JsValue::Integer(n) => assert_eq!(n, 1),
@@ -4566,13 +5073,8 @@ mod tests {
             .write_snapshot(TEST_SNAPSHOT_SIG, &mut callbacks)
             .expect("write_snapshot failed");
 
-        let restored = Machine::from_snapshot(
-            &snap,
-            "restored",
-            TEST_SNAPSHOT_SIG,
-            &mut callbacks,
-        )
-        .expect("from_snapshot failed");
+        let restored = Machine::from_snapshot(&snap, "restored", TEST_SNAPSHOT_SIG, &mut callbacks)
+            .expect("from_snapshot failed");
 
         // Counter should resume from 3
         match restored.eval("inc()").unwrap() {
@@ -4592,12 +5094,7 @@ mod tests {
             .expect("write_snapshot failed");
 
         // Try to restore with a different signature
-        let result = Machine::from_snapshot(
-            &snap,
-            "restored",
-            b"wrong-sig 9",
-            &mut callbacks,
-        );
+        let result = Machine::from_snapshot(&snap, "restored", b"wrong-sig 9", &mut callbacks);
         assert!(result.is_err(), "mismatched signature should fail");
     }
 
@@ -4606,8 +5103,12 @@ mod tests {
         let machine = new_machine();
 
         unsafe extern "C" fn return_99(the: *mut XsMachine) {
-            fxInteger(the, &mut (*the).scratch, 99);
-            *(*the).frame.add(1) = (*the).scratch;
+            // SAFETY: test host callback; XS calls it under the host-callback
+            // contract (`worker_io`), and it only writes `xsResult`.
+            unsafe {
+                fxInteger(the, &mut (*the).scratch, 99);
+                *(*the).frame.add(1) = (*the).scratch;
+            }
         }
 
         machine.define_function("hostReturn99", return_99, 0);
@@ -4618,13 +5119,8 @@ mod tests {
             .write_snapshot(TEST_SNAPSHOT_SIG, &mut callbacks)
             .expect("write_snapshot failed");
 
-        let restored = Machine::from_snapshot(
-            &snap,
-            "restored",
-            TEST_SNAPSHOT_SIG,
-            &mut callbacks,
-        )
-        .expect("from_snapshot failed");
+        let restored = Machine::from_snapshot(&snap, "restored", TEST_SNAPSHOT_SIG, &mut callbacks)
+            .expect("from_snapshot failed");
 
         // The cached value should survive
         match restored.eval("cached").unwrap() {
@@ -4646,12 +5142,12 @@ mod tests {
     #[test]
     fn suspend_resume_preserves_state() {
         let machine = new_machine();
-        machine.eval("var counter = 0; function inc() { return ++counter; }").unwrap();
+        machine
+            .eval("var counter = 0; function inc() { return ++counter; }")
+            .unwrap();
         machine.eval("inc(); inc(); inc()").unwrap(); // counter = 3
 
-        let suspend_data = machine
-            .suspend(TEST_SNAPSHOT_SIG)
-            .expect("suspend failed");
+        let suspend_data = machine.suspend(TEST_SNAPSHOT_SIG).expect("suspend failed");
 
         assert!(!suspend_data.snapshot.is_empty());
 
@@ -4659,8 +5155,7 @@ mod tests {
         drop(machine);
 
         // Resume from the suspend data.
-        let restored = Machine::resume(&suspend_data, "resumed")
-            .expect("resume failed");
+        let restored = Machine::resume(&suspend_data, "resumed").expect("resume failed");
 
         // Counter should continue from 3.
         match restored.eval("inc()").unwrap() {
@@ -4674,20 +5169,21 @@ mod tests {
         let machine = new_machine();
 
         unsafe extern "C" fn return_7(the: *mut XsMachine) {
-            fxInteger(the, &mut (*the).scratch, 7);
-            *(*the).frame.add(1) = (*the).scratch;
+            // SAFETY: test host callback; XS calls it under the host-callback
+            // contract (`worker_io`), and it only writes `xsResult`.
+            unsafe {
+                fxInteger(the, &mut (*the).scratch, 7);
+                *(*the).frame.add(1) = (*the).scratch;
+            }
         }
 
         machine.define_function("hostSeven", return_7, 0);
         machine.eval("var saved = hostSeven()").unwrap();
 
-        let suspend_data = machine
-            .suspend(TEST_SNAPSHOT_SIG)
-            .expect("suspend failed");
+        let suspend_data = machine.suspend(TEST_SNAPSHOT_SIG).expect("suspend failed");
         drop(machine);
 
-        let restored = Machine::resume(&suspend_data, "resumed")
-            .expect("resume failed");
+        let restored = Machine::resume(&suspend_data, "resumed").expect("resume failed");
 
         // Cached value survives.
         match restored.eval("saved").unwrap() {
@@ -4708,22 +5204,17 @@ mod tests {
         machine.eval("var n = 0").unwrap();
 
         // Suspend/resume three times, incrementing each time.
-        let mut data = machine
-            .suspend(TEST_SNAPSHOT_SIG)
-            .expect("first suspend");
+        let mut data = machine.suspend(TEST_SNAPSHOT_SIG).expect("first suspend");
         drop(machine);
 
-        for i in 1..=3 {
-            let m = Machine::resume(&data, "cycle")
-                .expect("resume failed");
+        for _ in 1..=3 {
+            let m = Machine::resume(&data, "cycle").expect("resume failed");
             m.eval("n++").unwrap();
-            data = m.suspend(TEST_SNAPSHOT_SIG)
-                .expect("suspend failed");
+            data = m.suspend(TEST_SNAPSHOT_SIG).expect("suspend failed");
             drop(m);
         }
 
-        let final_m = Machine::resume(&data, "final")
-            .expect("final resume");
+        let final_m = Machine::resume(&data, "final").expect("final resume");
         match final_m.eval("n").unwrap() {
             JsValue::Integer(n) => assert_eq!(n, 3),
             other => panic!("expected 3, got {:?}", js_value_debug(&other)),
@@ -4748,7 +5239,11 @@ mod tests {
 
         // The CAS file should exist.
         let cas_file = cas_dir.join(&hash);
-        assert!(cas_file.exists(), "CAS file should exist at {}", cas_file.display());
+        assert!(
+            cas_file.exists(),
+            "CAS file should exist at {}",
+            cas_file.display()
+        );
         let file_size = std::fs::metadata(&cas_file).unwrap().len();
         assert!(file_size > 0, "CAS file should not be empty");
 
@@ -4760,7 +5255,8 @@ mod tests {
             "restored",
             TEST_SNAPSHOT_SIG,
             &mut callbacks,
-        ).expect("resume_from_cas failed");
+        )
+        .expect("resume_from_cas failed");
 
         match restored.eval("x").unwrap() {
             JsValue::Integer(n) => assert_eq!(n, 42),
@@ -4777,8 +5273,12 @@ mod tests {
         let machine = new_machine();
 
         unsafe extern "C" fn return_11(the: *mut XsMachine) {
-            fxInteger(the, &mut (*the).scratch, 11);
-            *(*the).frame.add(1) = (*the).scratch;
+            // SAFETY: test host callback; XS calls it under the host-callback
+            // contract (`worker_io`), and it only writes `xsResult`.
+            unsafe {
+                fxInteger(the, &mut (*the).scratch, 11);
+                *(*the).frame.add(1) = (*the).scratch;
+            }
         }
 
         machine.define_function("hostEleven", return_11, 0);
@@ -4799,7 +5299,8 @@ mod tests {
             "restored",
             TEST_SNAPSHOT_SIG,
             &mut callbacks,
-        ).expect("resume_from_cas failed");
+        )
+        .expect("resume_from_cas failed");
 
         match restored.eval("cached").unwrap() {
             JsValue::Integer(n) => assert_eq!(n, 11),
@@ -4832,7 +5333,8 @@ mod tests {
                 "cycle",
                 TEST_SNAPSHOT_SIG,
                 &mut cbs,
-            ).expect("resume failed");
+            )
+            .expect("resume failed");
             m.eval("n++").unwrap();
             last_hash = m
                 .suspend_to_cas(TEST_SNAPSHOT_SIG, &cas_dir)
@@ -4852,13 +5354,9 @@ mod tests {
         );
 
         let mut cbs: Vec<ffi::XsCallback> = Vec::new();
-        let final_m = Machine::resume_from_cas(
-            &cas_dir,
-            &last_hash,
-            "final",
-            TEST_SNAPSHOT_SIG,
-            &mut cbs,
-        ).expect("final resume");
+        let final_m =
+            Machine::resume_from_cas(&cas_dir, &last_hash, "final", TEST_SNAPSHOT_SIG, &mut cbs)
+                .expect("final resume");
         match final_m.eval("n").unwrap() {
             JsValue::Integer(n) => assert_eq!(n, 3),
             other => panic!("expected 3, got {:?}", js_value_debug(&other)),
@@ -4878,10 +5376,7 @@ mod tests {
             .expect("loop should succeed");
 
         let computrons = machine.current_computrons();
-        assert!(
-            computrons > 0,
-            "expected computrons > 0, got {computrons}"
-        );
+        assert!(computrons > 0, "expected computrons > 0, got {computrons}");
         machine.end_metering();
     }
 
@@ -4923,22 +5418,21 @@ mod tests {
         // Do this with NO limit so the eval itself succeeds.
         set_crank_limit(0);
         machine.set_meter(0);
-        machine.eval(
-            "Promise.resolve().then(function() { \
+        machine
+            .eval(
+                "Promise.resolve().then(function() { \
                 var s = 0; \
                 for (var i = 0; i < 1000000; i++) { s += i; } \
-            })"
-        ).expect("promise creation should succeed");
+            })",
+            )
+            .expect("promise creation should succeed");
 
         // Now set a low limit and run the promise jobs.
         machine.set_meter(0);
         set_crank_limit(100);
 
         let result = machine.run_promise_jobs_metered();
-        assert!(
-            result.is_err(),
-            "expected metering abort, got Ok"
-        );
+        assert!(result.is_err(), "expected metering abort, got Ok");
         let status = result.unwrap_err();
         assert_eq!(
             status,
@@ -4968,11 +5462,13 @@ mod tests {
         // Queue work without a limit.
         set_crank_limit(0);
         machine.set_meter(0);
-        machine.eval(
-            "Promise.resolve().then(function() { \
+        machine
+            .eval(
+                "Promise.resolve().then(function() { \
                 for (var i = 0; i < 1000000; i++) {} \
-            })"
-        ).expect("promise creation");
+            })",
+            )
+            .expect("promise creation");
 
         // Run with a low limit.
         machine.set_meter(0);
@@ -5033,7 +5529,7 @@ mod tests {
         // Encode {"hard_limit": 50000} manually
         let mut data = Vec::new();
         data.push(0xa1); // map(1)
-        // key: "hard_limit" (10 bytes)
+                         // key: "hard_limit" (10 bytes)
         data.push(0x6a);
         data.extend_from_slice(b"hard_limit");
         // value: 50000 (u16)
@@ -5086,6 +5582,9 @@ mod tests {
             pos: usize::MAX,
         };
         let mut dst = [0u8; 1];
+        // SAFETY: `stream` points at the live `MemReadStream` `s` and `dst`
+        // is a writable one-byte buffer, which is `mem_read`'s contract with
+        // a `size` of 1.
         let rc = unsafe {
             mem_read(
                 &mut s as *mut _ as *mut c_void,
@@ -5094,7 +5593,10 @@ mod tests {
             )
         };
         assert_eq!(rc, 1, "an overflowing pos+size must fail closed, not wrap");
-        assert_eq!(dst, [0u8; 1], "a failed read must not write the destination");
+        assert_eq!(
+            dst, [0u8; 1],
+            "a failed read must not write the destination"
+        );
         assert_eq!(s.pos, usize::MAX, "pos must be unchanged on a failed read");
         assert!(
             !crate::worker_io::ffi_panicked(),

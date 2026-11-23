@@ -35,8 +35,7 @@ pub fn resolve_paths() -> Result<EndoPaths, EndoError> {
     }
 
     // Platform-specific defaults.
-    let home = env::var("HOME")
-        .map_err(|_| EndoError::Config("HOME not set".to_string()))?;
+    let home = env::var("HOME").map_err(|_| EndoError::Config("HOME not set".to_string()))?;
     let username = env::var("USER")
         .or_else(|_| env::var("LOGNAME"))
         .unwrap_or_else(|_| "unknown".to_string());
@@ -52,9 +51,7 @@ pub fn resolve_paths() -> Result<EndoPaths, EndoError> {
 
     let ephemeral_path = env::var("XDG_RUNTIME_DIR")
         .map(|d| PathBuf::from(d).join("endo"))
-        .unwrap_or_else(|_| {
-            PathBuf::from(env::temp_dir()).join(format!("endo-{username}"))
-        });
+        .unwrap_or_else(|_| env::temp_dir().join(format!("endo-{username}")));
 
     let sock_path = env::var("ENDO_SOCK")
         .map(PathBuf::from)

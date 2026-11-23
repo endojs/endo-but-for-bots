@@ -1,0 +1,8 @@
+# Read by Clippy for this package only (it searches from the package's
+# manifest directory upward). The crate gates its non-test code with
+# restriction lints (`src/lib.rs`); tests may still unwrap, expect, index and
+# panic on fixtures they build themselves.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-panic-in-tests = true

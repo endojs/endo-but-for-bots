@@ -1,0 +1,12 @@
+Mutant SNAP-3-c: decode_u32s tolerates trailing bytes.
+--- a/ironhorse-snapshot/src/image.rs
++++ b/ironhorse-snapshot/src/image.rs
+@@ -972,7 +972,7 @@
+         out.push(be_u32_at(p, i).ok_or(SnapshotError::Corrupt("u32 list entry"))?);
+         i += 4;
+     }
+-    if i != p.len() {
++    if i > p.len() {
+         return Err(SnapshotError::Corrupt("u32 list trailing bytes"));
+     }
+     Ok(out)

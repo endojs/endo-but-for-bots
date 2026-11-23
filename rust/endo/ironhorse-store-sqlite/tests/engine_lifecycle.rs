@@ -22,6 +22,7 @@
 //! `link_intrinsics`; every later independently compiled crank passes through
 //! `relink_crank`, the production boundary that maps its local symbol ids into
 //! the retained realm and keeps its function bytecode alive.
+#![forbid(unsafe_code)]
 
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, resume_from_store, MachineSnapshot,
@@ -510,9 +511,7 @@ fn multi_extent_chunks_survive_sqlite_sleep_cycles() {
 #[test]
 fn many_epoch_lifecycle_tracks_uninterrupted() {
     let mut cranks: Vec<&str> = vec!["var x = 1;"];
-    for _ in 0..8 {
-        cranks.push("x = x + x;");
-    }
+    cranks.extend(std::iter::repeat_n("x = x + x;", 8));
     cranks.push("x");
     let last = run_scenario("many-epochs", &cranks);
     assert_eq!(last, "256");

@@ -1,0 +1,12 @@
+Mutant SNAP-4-b: prefixed_len drops one header byte.
+--- a/ironhorse-vm/src/opcode.rs
++++ b/ironhorse-vm/src/opcode.rs
+@@ -1116,7 +1116,7 @@
+ /// `wasm32`, as well as the 64-bit one.
+ #[inline]
+ fn prefixed_len<W: TryFrom<u64>>(header: u8, payload: u32) -> Option<W> {
+-    W::try_from(u64::from(payload) + u64::from(header)).ok()
++    W::try_from(u64::from(payload) + u64::from(header.saturating_sub(1))).ok()
+ }
+ 
+ /// Rewrite every 2-byte little-endian ID operand through `map`,

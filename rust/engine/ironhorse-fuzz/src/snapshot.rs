@@ -422,7 +422,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     let live_idxs: Vec<SlotIndex> = idxs.iter().copied().filter(|i| i.0 < live_cap).collect();
     let slot =
         |c: &mut Cursor| Slot::of(Kind::Reference, Payload::Reference(pick_ref(c, &live_idxs)));
-    let opt_slot = |c: &mut Cursor| (c.byte() % 3 != 0).then(|| slot(c));
+    let opt_slot = |c: &mut Cursor| (!c.byte().is_multiple_of(3)).then(|| slot(c));
 
     let mut next_owner = 0u32;
     let mut proxies: Vec<ironhorse_vm::snapshot_api::ProxyRow> = Vec::new();
@@ -432,7 +432,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         }
         let owner = next_owner;
         next_owner += 1 + (c.byte() % 3) as u32;
-        let revoked = c.byte() % 4 == 0;
+        let revoked = c.byte().is_multiple_of(4);
         proxies.push(ironhorse_vm::snapshot_api::ProxyRow {
             owner,
             // A revoked proxy NULLs both edges (`SlotIndex::NULL`, not
@@ -542,19 +542,19 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         }
         let owner = next_owner;
         next_owner += 1 + (c.byte() % 3) as u32;
-        let disposed = c.byte() % 4 == 0;
+        let disposed = c.byte().is_multiple_of(4);
         // A disposed stack ran its records to completion; the decoder
         // refuses one that still retains them.
         let n_records = if disposed { 0 } else { (c.byte() % 3) as usize };
         disposable_stacks.push(ironhorse_vm::snapshot_api::DisposableStackRow {
             owner,
             disposed,
-            asynchronous: c.byte() % 2 == 0,
+            asynchronous: c.byte().is_multiple_of(2),
             records: (0..n_records)
                 .map(|_| ironhorse_vm::snapshot_api::DisposalRecordRow {
                     resource: slot(&mut c),
                     method: slot(&mut c),
-                    pass_resource: c.byte() % 2 == 0,
+                    pass_resource: c.byte().is_multiple_of(2),
                 })
                 .collect(),
         });
@@ -637,9 +637,9 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
                 this_val: slot(&mut c),
                 env: slot(&mut c),
                 cur_func: func_owner.0,
-                cur_target: c.byte() % 2 == 0,
+                cur_target: c.byte().is_multiple_of(2),
                 target_func: u32::MAX,
-                strict: c.byte() % 2 == 0,
+                strict: c.byte().is_multiple_of(2),
                 result: slot(&mut c),
                 stack_slice: (0..(c.byte() % 3) as usize).map(|_| slot(&mut c)).collect(),
                 jumps: Vec::new(),

@@ -1,0 +1,11 @@
+Mutant STR-1b-c: reuse keeps the record's stale mark.
+--- a/ironhorse-vm/src/value/free_list.rs
++++ b/ironhorse-vm/src/value/free_list.rs
+@@ -95,7 +95,6 @@
+     /// longer free, and its stale mark is cleared.
+     pub(super) fn claim(&mut self, i: u32) {
+         self.free_marks[i as usize] = false;
+-        self.marks[i as usize] = false;
+     }
+ 
+     /// Finish an allocation that appended a record: the new record is

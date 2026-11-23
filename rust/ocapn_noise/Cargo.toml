@@ -2,6 +2,7 @@
 name = "ocapn_noise_protocol_facilities"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [lib]
 crate-type = ["cdylib"]
@@ -35,3 +36,11 @@ features = ['rand_core']
 #This was recommended but not evidently necessary:
 #[target.wasm32-unknown-unknown]
 #rustflags = ['--cfg', 'getrandom_backend="custom"']
+
+# getrandom is never named in the source: the dependency exists only to turn
+# on its `custom` backend for the wasm build.
+[package.metadata.cargo-machete]
+ignored = ["getrandom"]
+
+[lints]
+workspace = true

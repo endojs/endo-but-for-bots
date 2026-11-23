@@ -107,8 +107,11 @@ impl PipeTransport {
     /// The caller must ensure fd 3 and fd 4 are valid, open pipe
     /// file descriptors owned by this process.
     pub unsafe fn from_fds() -> io::Result<Self> {
-        let read_file = std::fs::File::from_raw_fd(4);
-        let write_file = std::fs::File::from_raw_fd(3);
+        // SAFETY: the caller guarantees fds 3 and 4 are open pipe ends this
+        // process owns and that nothing else will close or wrap them; each
+        // `File` becomes their sole owner and closes it on drop.
+        let (read_file, write_file) =
+            unsafe { (std::fs::File::from_raw_fd(4), std::fs::File::from_raw_fd(3)) };
         Ok(PipeTransport {
             reader: BufReader::new(read_file),
             writer: BufWriter::new(write_file),
@@ -217,10 +220,7 @@ impl ChannelTransport {
     /// raw CBOR envelope frames from the supervisor; the `outbound`
     /// sender carries raw CBOR envelope frames back to the
     /// supervisor.
-    pub fn new(
-        inbound: std_mpsc::Receiver<Vec<u8>>,
-        outbound: std_mpsc::Sender<Vec<u8>>,
-    ) -> Self {
+    pub fn new(inbound: std_mpsc::Receiver<Vec<u8>>, outbound: std_mpsc::Sender<Vec<u8>>) -> Self {
         ChannelTransport {
             inbound,
             outbound,
@@ -322,7 +322,7 @@ impl WorkerTransport for ChannelTransport {
 
 thread_local! {
     static ACTIVE_TRANSPORT: RefCell<Option<Box<dyn WorkerTransport>>> = RefCell::new(None);
-    static PENDING_ENVELOPE: RefCell<Option<Vec<u8>>> = RefCell::new(None);
+    static PENDING_ENVELOPE: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
 }
 
 /// Store envelope bytes in the thread-local for retrieval by `host_get_pending_envelope`.
@@ -585,6 +585,110 @@ pub fn take_ffi_panic() -> Option<FfiPanic> {
 // ---------------------------------------------------------------------------
 // XS host functions
 // ---------------------------------------------------------------------------
+//
+// The host-callback contract.
+//
+// Every `host_*` function in this crate is an `XsCallback`: XS calls it from
+// its interpreter loop (`xsRun.c`, the `XS_CALLBACK_KIND` case) after building
+// a C frame, on the thread that is running that machine. The `// SAFETY:`
+// comments on the callback bodies (here and in `powers/`) cite this contract
+// and add what is particular to the site. For the duration of the call XS
+// establishes:
+//
+// 1. `the` is the live machine. Rust holds no `&mut` to it, and it is used
+//    only on this thread: `Machine` is `!Send`, and each worker owns one
+//    machine on its own thread.
+// 2. `(*the).frame` points at the callback's frame: `frame[1]` is `xsResult`,
+//    and `frame[-1 - i]` is argument `i` for `i < argc`, where `argc` is the
+//    frame slot's `ID` (XS's `mxArgc`, `fxArgc`).
+// 3. `(*the).scratch` is a slot the host may overwrite (xs.h's own macros use
+//    it so), and a slot value copied into `xsResult` stays reachable for the
+//    GC.
+// 4. A string or buffer pointer XS hands out (`fxToString`) points into the
+//    XS chunk heap, which the GC may move or free on the next allocation; it
+//    is valid until the next XS call that can allocate, so every helper copies
+//    it out before calling XS again.
+// 5. The functions copy what they are given: `fxString` copies a C string,
+//    `fxArrayBuffer` and `fxSetArrayBufferData` copy `size` bytes from the
+//    pointer, `fxGetArrayBufferData` copies `size` bytes into it.
+//
+// The callbacks are `pub` so that the snapshot callback table and tests can
+// name them. Calling one other than through XS breaks the contract.
+//
+// What XS does NOT establish, and the helpers below handle:
+//
+// - XS does not pad missing arguments. `frame[-1 - i]` for `i >= argc` is the
+//   frame's scope slot or free stack below it. The C API's `xsArg` checks the
+//   index (`fxCheckArg`). Here every argument read goes through `arg_slot`
+//   (directly, or via `arg_str`, `arg_integer` and `powers::fs`'s helpers),
+//   which compares the index with `fxArgc` and hands back a caller-owned
+//   `undefined` slot for a missing argument, as JS itself would supply.
+// - XS reserves no stack for the host beyond its frame. The C API brackets
+//   every push with `xsOverflow` (`fxOverflow`); the typed-array helpers do
+//   the same (`push_reserved`) rather than `fx_push` alone.
+//
+// What XS does NOT establish, and this crate does not handle either
+// (UNVERIFIED, and cross-cutting, so stated once here rather than at every
+// callback that inherits it):
+//
+// - Any XS call that can run JS or throw (`fxToString` on an object, `fxGetID`
+//   through a getter) can `longjmp` to the nearest XS `try`, skipping the Rust
+//   frames in between: the callback body's live `Drop` values and
+//   `guard_ffi`'s bookkeeping (see `reset_capturing`). Rust only defines a
+//   `longjmp` over frames with nothing to drop. A recoverable `fxAbort`
+//   (metering, stack or memory exhaustion, including `push_reserved`'s
+//   `fxOverflow`) is worse: it longjmps to the *outermost* jump record. The
+//   fix is to keep every XS call that can throw or abort inside a C-level
+//   `mxTry` (as `fxEvalGuarded` does for `Machine::eval`) and report the
+//   outcome to Rust as a status, or to have callbacks throw only after their
+//   Rust frames have returned.
+
+/// The slot holding argument `index` of the current host-callback frame, or
+/// `absent` (set to `undefined`) when the script passed fewer arguments.
+///
+/// XS does not pad a host function's arguments up to its declared length,
+/// so `frame[-1 - index]` for `index >= argc` is the frame's scope slot or
+/// free stack, which a coercion would read and overwrite in place. A missing
+/// argument reads as `undefined` instead, as it would in JS.
+///
+/// The returned pointer is valid while `absent` is, and only for the current
+/// callback.
+///
+/// # Safety
+/// Call only from a host callback (the host-callback contract above), with
+/// `the` the machine XS passed it.
+pub unsafe fn arg_slot(the: *mut XsMachine, index: usize, absent: &mut XsSlot) -> *mut XsSlot {
+    // SAFETY: per the caller, `the` is the live machine with `frame` at this
+    // callback's frame (host-callback contract 1-2). `fxArgc` reads the
+    // frame's `ID`. For `index < argc`, `frame.sub(1 + index)` is argument
+    // `index`, inside the frame's argument area; otherwise nothing is read
+    // from the frame, and `fxUndefined` only writes `absent`.
+    unsafe {
+        let argc = usize::try_from(fxArgc(the)).unwrap_or(0);
+        if index < argc {
+            (*the).frame.sub(1 + index)
+        } else {
+            fxUndefined(the, absent);
+            absent
+        }
+    }
+}
+
+/// Read argument `index` as an integer (`fxToInteger`; `0` when absent).
+///
+/// # Safety
+/// As [`arg_slot`].
+pub unsafe fn arg_integer(the: *mut XsMachine, index: usize) -> i32 {
+    // SAFETY: as `arg_slot`, whose slot (an argument, or `absent`, which
+    // outlives the call) `fxToInteger` coerces in place.
+    unsafe {
+        let mut absent = XsSlot::default();
+        let slot = arg_slot(the, index, &mut absent);
+        let value = fxToInteger(the, slot);
+        abort_if_ffi_panicked();
+        value
+    }
+}
 
 /// Read a string argument from the XS stack frame.
 ///
@@ -592,14 +696,23 @@ pub fn take_ffi_panic() -> Option<FfiPanic> {
 /// pairs into proper UTF-8 so that Rust string operations work
 /// correctly on supplementary characters (emoji, etc.).
 ///
+/// A missing argument reads as `undefined`, i.e. the string
+/// `"undefined"`.
+///
 /// # Safety
-/// Caller must ensure `the` is a valid XS machine pointer and
-/// `index` is within the argument count.
+/// As [`arg_slot`].
 pub unsafe fn arg_str(the: *mut XsMachine, index: usize) -> String {
-    let slot = (*the).frame.sub(1 + index);
-    let ptr = fxToString(the, slot);
-    abort_if_ffi_panicked();
-    xs_string_to_utf8(ptr)
+    // SAFETY: `arg_slot` yields argument `index` or the local `absent`
+    // slot, which outlives its use here; the string pointer `fxToString`
+    // returns is copied out by `xs_string_to_utf8` before XS is called again
+    // (host-callback contract 4).
+    unsafe {
+        let mut absent = XsSlot::default();
+        let slot = arg_slot(the, index, &mut absent);
+        let ptr = fxToString(the, slot);
+        abort_if_ffi_panicked();
+        xs_string_to_utf8(ptr)
+    }
 }
 
 /// Set xsResult to a string.
@@ -612,8 +725,14 @@ pub unsafe fn arg_str(the: *mut XsMachine, index: usize) -> String {
 pub unsafe fn set_result_string(the: *mut XsMachine, s: &str) {
     let cesu = crate::cesu8::encode(s);
     let c_str = std::ffi::CString::new(cesu).unwrap_or_default();
-    fxString(the, &mut (*the).scratch, c_str.as_ptr());
-    *(*the).frame.add(1) = (*the).scratch;
+    // SAFETY: the caller is a host callback, so `the` is the live machine and
+    // `frame.add(1)` is `xsResult` (host-callback contract 1-3). `c_str` is a
+    // NUL-terminated buffer alive across the call, and `fxString` copies it
+    // into the XS heap (5).
+    unsafe {
+        fxString(the, &mut (*the).scratch, c_str.as_ptr());
+        *(*the).frame.add(1) = (*the).scratch;
+    }
 }
 
 /// Convert an XS C string (CESU-8) to a Rust UTF-8 `String`.
@@ -624,7 +743,10 @@ pub(crate) unsafe fn xs_string_to_utf8(ptr: *const std::os::raw::c_char) -> Stri
     if ptr.is_null() {
         return String::new();
     }
-    let bytes = CStr::from_ptr(ptr).to_bytes();
+    // SAFETY: the caller passes a non-null (checked above) NUL-terminated
+    // string from XS that is still valid (host-callback contract 4); the
+    // borrow ends when `decode_lossy` has copied it, before any XS call.
+    let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes();
     crate::cesu8::decode_lossy(bytes)
 }
 
@@ -632,7 +754,13 @@ pub(crate) unsafe fn xs_string_to_utf8(ptr: *const std::os::raw::c_char) -> Stri
 ///
 /// Blocks until the next CapTP frame arrives from the supervisor.
 /// Returns the frame payload as a hex string, or undefined on EOF.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_recv_frame(the: *mut XsMachine) {
+    // SAFETY: host-callback contract; the body writes only `xsResult`, via
+    // `set_result_string`, and calls no XS function that can run JS.
     guard_ffi(|| unsafe {
         let result = with_transport(|t| t.recv_frame());
         match result {
@@ -651,20 +779,29 @@ pub unsafe extern "C" fn host_recv_frame(the: *mut XsMachine) {
 }
 
 /// `sendFrame(hexData: string) -> undefined`
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_send_frame(the: *mut XsMachine) {
+    // SAFETY: host-callback contract; reads argument 0 with `arg_str`
+    // (a missing argument reads as `undefined`) and touches the machine no further.
     guard_ffi(|| unsafe {
         let hex_data = arg_str(the, 0);
-        match hex::decode(hex_data) {
-            Ok(data) => {
-                let _ = with_transport(|t| t.send_frame(&data));
-            }
-            Err(_) => {}
+        if let Ok(data) = hex::decode(hex_data) {
+            let _ = with_transport(|t| t.send_frame(&data));
         }
     });
 }
 
 /// `getDaemonHandle() -> number`
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_get_daemon_handle(the: *mut XsMachine) {
+    // SAFETY: host-callback contract; `fxInteger` writes `scratch`, which is
+    // then copied to `xsResult` (`frame.add(1)`). No arguments are read.
     guard_ffi(|| unsafe {
         let handle = with_transport(|t| t.daemon_handle());
         fxInteger(the, &mut (*the).scratch, handle as i32);
@@ -673,9 +810,17 @@ pub unsafe extern "C" fn host_get_daemon_handle(the: *mut XsMachine) {
 }
 
 /// `issueCommand(uint8Array) -> undefined`
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_issue_command(the: *mut XsMachine) {
+    // SAFETY: host-callback contract; argument 0 is `frame.sub(1)` (a
+    // missing one reads as `undefined`) and `read_typed_array_bytes` copies its
+    // bytes into a Rust `Vec` before the transport sees them.
     guard_ffi(|| unsafe {
-        let slot = (*the).frame.sub(1);
+        let mut slot_absent = XsSlot::default();
+        let slot = arg_slot(the, 0, &mut slot_absent);
         if let Some(buf) = read_typed_array_bytes(the, slot) {
             if let Err(e) = with_transport(|t| t.send_frame(&buf)) {
                 eprintln!("endor: issueCommand error: {}", e);
@@ -685,9 +830,16 @@ pub unsafe extern "C" fn host_issue_command(the: *mut XsMachine) {
 }
 
 /// `sendRawFrame(uint8Array) -> undefined`
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_send_raw_frame(the: *mut XsMachine) {
+    // SAFETY: as `host_issue_command`: argument 0 (`undefined` if missing) is copied
+    // out by `read_typed_array_bytes` before use.
     guard_ffi(|| unsafe {
-        let slot = (*the).frame.sub(1);
+        let mut slot_absent = XsSlot::default();
+        let slot = arg_slot(the, 0, &mut slot_absent);
         if let Some(buf) = read_typed_array_bytes(the, slot) {
             if let Err(e) = with_transport(|t| t.send_raw_frame(&buf)) {
                 eprintln!("endor: sendRawFrame error: {}", e);
@@ -696,105 +848,182 @@ pub unsafe extern "C" fn host_send_raw_frame(the: *mut XsMachine) {
     });
 }
 
-/// Read bytes from a TypedArray (e.g. Uint8Array) argument slot.
-pub unsafe fn read_typed_array_bytes(the: *mut XsMachine, slot: *mut XsSlot) -> Option<Vec<u8>> {
-    fx_push(the, *slot);
-    let byte_length_id = fxID(the, c"byteLength".as_ptr());
-    fxGetID(the, byte_length_id);
-    abort_if_ffi_panicked();
-    let byte_length = fxToInteger(the, (*the).stack) as usize;
-    abort_if_ffi_panicked();
-    fx_pop(the);
-
-    if byte_length == 0 {
-        return None;
+/// Push a copy of `*slot`, reserving the stack slot first.
+///
+/// # Safety
+/// As [`read_typed_array_bytes`]; the caller pops what this pushes.
+unsafe fn push_reserved(the: *mut XsMachine, slot: *mut XsSlot) {
+    // SAFETY: `fxOverflow` checks that one more slot fits above
+    // `stack_bottom` (it aborts the machine otherwise, never returning), so
+    // the `fx_push` that follows writes inside the stack, as xs.h's own
+    // `xsOverflow` + push does. XS reserves nothing for a host callback
+    // beyond its frame, so without the check a callback entered with a full
+    // stack would write below `stack_bottom`.
+    unsafe {
+        fxOverflow(the, -1, std::ptr::null(), 0);
+        fx_push(the, *slot);
     }
-
-    fx_push(the, *slot);
-    let byte_offset_id = fxID(the, c"byteOffset".as_ptr());
-    fxGetID(the, byte_offset_id);
-    abort_if_ffi_panicked();
-    let byte_offset = fxToInteger(the, (*the).stack) as i32;
-    abort_if_ffi_panicked();
-    fx_pop(the);
-
-    fx_push(the, *slot);
-    let buffer_id = fxID(the, c"buffer".as_ptr());
-    fxGetID(the, buffer_id);
-    abort_if_ffi_panicked();
-    let buffer_slot = (*the).stack;
-
-    let mut buf = vec![0u8; byte_length];
-    fxGetArrayBufferData(
-        the,
-        buffer_slot,
-        byte_offset,
-        buf.as_mut_ptr() as *mut std::os::raw::c_void,
-        byte_length as i32,
-    );
-    fx_pop(the);
-
-    Some(buf)
 }
 
-/// Read the `byteLength` of a TypedArray (e.g. Uint8Array) argument
-/// slot without copying its contents.
-pub unsafe fn typed_array_byte_length(the: *mut XsMachine, slot: *mut XsSlot) -> usize {
-    fx_push(the, *slot);
-    let byte_length_id = fxID(the, c"byteLength".as_ptr());
-    fxGetID(the, byte_length_id);
-    abort_if_ffi_panicked();
-    let byte_length = fxToInteger(the, (*the).stack) as usize;
-    abort_if_ffi_panicked();
-    fx_pop(the);
-    byte_length
+/// Read property `name` of `*slot` as an integer (`fxToInteger`).
+///
+/// # Safety
+/// As [`read_typed_array_bytes`].
+unsafe fn get_integer_property(the: *mut XsMachine, slot: *mut XsSlot, name: &CStr) -> i32 {
+    // SAFETY: `push_reserved` pushes one slot, which `fxGetID` replaces with
+    // the property value at `(*the).stack` (running any getter, which keeps
+    // the value on the stack and so reachable), `fxToInteger` converts it in
+    // place, and `fx_pop` removes it, leaving the stack as found. `fxID`
+    // copies the NUL-terminated `name`.
+    unsafe {
+        push_reserved(the, slot);
+        fxGetID(the, fxID(the, name.as_ptr()));
+        abort_if_ffi_panicked();
+        let value = fxToInteger(the, (*the).stack);
+        abort_if_ffi_panicked();
+        fx_pop(the);
+        value
+    }
 }
 
-/// Write `data` into a TypedArray (e.g. Uint8Array) argument slot,
-/// in place, mirroring `read_typed_array_bytes`. Writes exactly the
-/// view's `byteLength` bytes at its `byteOffset` and returns the
-/// number written; a `data` shorter than the view, or an empty view,
-/// writes nothing and returns 0.
-pub unsafe fn write_typed_array_bytes(
+/// Push `slot.buffer` and check that `byte_length` bytes at `byte_offset`
+/// lie inside that ArrayBuffer. Returns whether they do; either way the
+/// buffer is left pushed at `(*the).stack` for the caller to use and pop.
+///
+/// `fxGetArrayBufferData` and `fxSetArrayBufferData` check
+/// `length < byteOffset + byteLength` in `txInteger`, which overflows for a
+/// `byteLength` near `i32::MAX` (a script can pass any object with lying
+/// `byteLength`/`byteOffset`/`buffer` properties), and then copy out of
+/// bounds. The check here is done in `i64` against the buffer's real length,
+/// with no JS running between it and the caller's copy.
+///
+/// # Safety
+/// As [`read_typed_array_bytes`].
+unsafe fn push_buffer_and_check(
     the: *mut XsMachine,
     slot: *mut XsSlot,
-    data: &[u8],
-) -> usize {
-    let byte_length = typed_array_byte_length(the, slot);
-    if byte_length == 0 || data.len() < byte_length {
-        return 0;
+    byte_offset: i32,
+    byte_length: i32,
+) -> bool {
+    // SAFETY: as `get_integer_property`, minus the pop: the `buffer` value is
+    // left on the stack (reachable) for the caller. `fxGetArrayBufferLength`
+    // reads the length of the ArrayBuffer instance (throwing a TypeError for
+    // anything else, as `fxGetArrayBufferData` would) and runs no JS.
+    unsafe {
+        push_reserved(the, slot);
+        fxGetID(the, fxID(the, c"buffer".as_ptr()));
+        abort_if_ffi_panicked();
+        let length = i64::from(fxGetArrayBufferLength(the, (*the).stack));
+        let (offset, count) = (i64::from(byte_offset), i64::from(byte_length));
+        offset >= 0 && count >= 0 && offset + count <= length
     }
+}
 
-    fx_push(the, *slot);
-    let byte_offset_id = fxID(the, c"byteOffset".as_ptr());
-    fxGetID(the, byte_offset_id);
-    abort_if_ffi_panicked();
-    let byte_offset = fxToInteger(the, (*the).stack) as i32;
-    abort_if_ffi_panicked();
-    fx_pop(the);
+/// Read bytes from a TypedArray (e.g. Uint8Array) argument slot.
+///
+/// Returns `None` for an empty view, and also for a view-like object whose
+/// `byteLength`/`byteOffset` do not lie inside its `buffer`.
+///
+/// # Safety
+/// Call only from a host callback (the host-callback contract above), with
+/// `slot` pointing at a slot of `the`'s current frame, or at a slot the
+/// caller owns that outlives the call (`arg_slot`'s `absent`).
+pub unsafe fn read_typed_array_bytes(the: *mut XsMachine, slot: *mut XsSlot) -> Option<Vec<u8>> {
+    // SAFETY: `the` and `slot` are valid per the caller; the helpers balance
+    // their pushes, and the one slot `push_buffer_and_check` leaves is popped
+    // on both paths. The range `byte_offset..byte_offset + byte_length` was
+    // checked against the buffer just pushed, with no JS run since, so
+    // `fxGetArrayBufferData` copies exactly `byte_length` in-bounds bytes into
+    // `buf`, which holds `byte_length` bytes. A `byteLength` getter that
+    // lies cannot overrun `buf`: the copy length is the value `buf` was sized
+    // from.
+    unsafe {
+        let byte_length = get_integer_property(the, slot, c"byteLength");
+        if byte_length <= 0 {
+            return None;
+        }
+        let byte_offset = get_integer_property(the, slot, c"byteOffset");
+        if !push_buffer_and_check(the, slot, byte_offset, byte_length) {
+            fx_pop(the);
+            return None;
+        }
+        let buffer_slot = (*the).stack;
+        let mut buf = vec![0u8; byte_length as usize];
+        fxGetArrayBufferData(
+            the,
+            buffer_slot,
+            byte_offset,
+            buf.as_mut_ptr() as *mut std::os::raw::c_void,
+            byte_length,
+        );
+        fx_pop(the);
+        Some(buf)
+    }
+}
 
-    fx_push(the, *slot);
-    let buffer_id = fxID(the, c"buffer".as_ptr());
-    fxGetID(the, buffer_id);
-    abort_if_ffi_panicked();
-    let buffer_slot = (*the).stack;
-
-    fxSetArrayBufferData(
-        the,
-        buffer_slot,
-        byte_offset,
-        data.as_ptr() as *mut std::os::raw::c_void,
-        byte_length as i32,
-    );
-    fx_pop(the);
-
-    byte_length
+/// Fill a TypedArray (e.g. Uint8Array) argument slot in place: `fill` is
+/// handed a zeroed buffer of the view's `byteLength`, and what it leaves
+/// there is written at the view's `byteOffset`. Returns the number of bytes
+/// written; an empty view, or a view-like object whose range does not lie
+/// inside its `buffer`, writes nothing (and does not call `fill`) and
+/// returns 0.
+///
+/// The view is checked before the buffer is allocated, so a lying
+/// `byteLength` cannot make the host allocate and fill gigabytes it will
+/// then not write. `fill` must not call into XS.
+///
+/// # Safety
+/// As [`read_typed_array_bytes`].
+pub unsafe fn fill_typed_array_bytes(
+    the: *mut XsMachine,
+    slot: *mut XsSlot,
+    fill: impl FnOnce(&mut [u8]),
+) -> usize {
+    // SAFETY: as `read_typed_array_bytes`: balanced pushes, and the range
+    // checked against the pushed buffer with no JS since (`fill` is pure
+    // Rust, per this fn's contract). `data` holds exactly `byte_length`
+    // bytes, and `fxSetArrayBufferData` only reads `byte_length` bytes from
+    // it; it never writes through the `*mut` cast of `data`.
+    unsafe {
+        let byte_length = get_integer_property(the, slot, c"byteLength");
+        if byte_length <= 0 {
+            return 0;
+        }
+        let byte_offset = get_integer_property(the, slot, c"byteOffset");
+        if !push_buffer_and_check(the, slot, byte_offset, byte_length) {
+            fx_pop(the);
+            return 0;
+        }
+        let mut data = vec![0u8; byte_length as usize];
+        fill(&mut data);
+        let buffer_slot = (*the).stack;
+        fxSetArrayBufferData(
+            the,
+            buffer_slot,
+            byte_offset,
+            data.as_mut_ptr() as *mut std::os::raw::c_void,
+            byte_length,
+        );
+        fx_pop(the);
+        data.len()
+    }
 }
 
 /// `importArchive(uint8Array) -> boolean`
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_import_archive(the: *mut XsMachine) {
+    // SAFETY: host-callback contract. Argument 0 (`undefined` if missing) is copied
+    // out by `read_typed_array_bytes`. The `Machine` built over `the` is a
+    // borrowed view for `install_archive`: `ManuallyDrop` keeps its `Drop`
+    // from deleting a machine this callback does not own, and XS supports
+    // the nested `fxBeginHost` entries `install_archive` makes. `xsResult`
+    // is written only after the nested evaluation has returned.
     guard_ffi(|| unsafe {
-        let slot = (*the).frame.sub(1);
+        let mut slot_absent = XsSlot::default();
+        let slot = arg_slot(the, 0, &mut slot_absent);
         let buf = match read_typed_array_bytes(the, slot) {
             Some(b) => b,
             None => {
@@ -806,7 +1035,10 @@ pub unsafe extern "C" fn host_import_archive(the: *mut XsMachine) {
         let cursor = std::io::Cursor::new(buf);
         match crate::archive::load_archive(cursor) {
             Ok(loaded) => {
-                let machine = std::mem::ManuallyDrop::new(crate::Machine { raw: the, registered_callbacks: std::cell::RefCell::new(Vec::new()) });
+                let machine = std::mem::ManuallyDrop::new(crate::Machine {
+                    raw: the,
+                    registered_callbacks: std::cell::RefCell::new(Vec::new()),
+                });
                 let ok = crate::archive::install_archive(&machine, &loaded);
                 if ffi_panicked() {
                     return;
@@ -823,7 +1055,13 @@ pub unsafe extern "C" fn host_import_archive(the: *mut XsMachine) {
 }
 
 /// `trace(msg: string) -> undefined`
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_trace(the: *mut XsMachine) {
+    // SAFETY: host-callback contract; reads argument 0 with `arg_str`
+    // (a missing argument reads as `undefined`).
     guard_ffi(|| unsafe {
         let msg = arg_str(the, 0);
         eprintln!("endor: [trace] {}", msg);
@@ -836,7 +1074,13 @@ pub unsafe extern "C" fn host_trace(the: *mut XsMachine) {
 /// standalone archive runner as the sink for `console.log` so a
 /// program's own output is separable from the runner's stderr
 /// diagnostics.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_stdout_line(the: *mut XsMachine) {
+    // SAFETY: host-callback contract; reads argument 0 with `arg_str`
+    // (a missing argument reads as `undefined`).
     guard_ffi(|| unsafe {
         let msg = arg_str(the, 0);
         println!("{}", msg);
@@ -849,7 +1093,16 @@ pub unsafe extern "C" fn host_stdout_line(the: *mut XsMachine) {
 /// as an ArrayBuffer, or undefined if none is pending.
 /// Used by `dispatch_envelope` to pass binary data to JS without
 /// hex-encoding (which is O(n²) for large payloads).
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_get_pending_envelope(the: *mut XsMachine) {
+    // SAFETY: host-callback contract; `data` is a live Rust buffer of exactly
+    // `data.len()` bytes, which `fxArrayBuffer` copies into the XS heap
+    // (contract 5) before `data` drops. The `as i32` length truncates for an
+    // envelope over 2 GiB; XS then copies fewer bytes than the `Vec` holds,
+    // never more.
     guard_ffi(|| unsafe {
         if let Some(mut data) = take_pending_envelope() {
             fxArrayBuffer(
@@ -871,7 +1124,14 @@ pub unsafe extern "C" fn host_get_pending_envelope(the: *mut XsMachine) {
 /// ArrayBuffer. This provides the native `Base64.decode` that
 /// `@endo/base64` checks for, avoiding the pure-JS fallback which is
 /// orders of magnitude too slow in XS for large inputs.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_base64_decode(the: *mut XsMachine) {
+    // SAFETY: host-callback contract; argument 0 via `arg_str` (a
+    // missing argument reads as `undefined`). `fxArrayBuffer` copies `data.len()` bytes from
+    // the live `data` buffer (contract 5).
     guard_ffi(|| unsafe {
         let input = arg_str(the, 0);
         // Use the base64 standard engine with padding.
@@ -898,9 +1158,17 @@ pub unsafe extern "C" fn host_base64_decode(the: *mut XsMachine) {
 /// `hostBase64Encode(uint8Array) -> string`
 ///
 /// Encode raw bytes as a base64 string. Paired with `hostBase64Decode`.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_base64_encode(the: *mut XsMachine) {
+    // SAFETY: host-callback contract; argument 0 (`undefined` if missing) is copied
+    // out by `read_typed_array_bytes`, and `fxString` copies the
+    // NUL-terminated `c_str`, which outlives the call.
     guard_ffi(|| unsafe {
-        let slot = (*the).frame.sub(1);
+        let mut slot_absent = XsSlot::default();
+        let slot = arg_slot(the, 0, &mut slot_absent);
         if let Some(buf) = read_typed_array_bytes(the, slot) {
             use base64::Engine as _;
             let encoded = base64::engine::general_purpose::STANDARD.encode(&buf);
@@ -917,9 +1185,17 @@ pub unsafe extern "C" fn host_base64_encode(the: *mut XsMachine) {
 /// This bypasses XS's TextDecoder which is extremely slow for large
 /// buffers (>100KB), causing the daemon to hang on large CapTP
 /// payloads like bundled source code in storeBlob.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_decode_utf8(the: *mut XsMachine) {
+    // SAFETY: host-callback contract; argument 0 (`undefined` if missing) is copied
+    // out by `read_typed_array_bytes`; the result goes through
+    // `set_result_string`.
     guard_ffi(|| unsafe {
-        let slot = (*the).frame.sub(1);
+        let mut slot_absent = XsSlot::default();
+        let slot = arg_slot(the, 0, &mut slot_absent);
         if let Some(buf) = read_typed_array_bytes(the, slot) {
             match std::str::from_utf8(&buf) {
                 Ok(s) => {
@@ -942,7 +1218,14 @@ pub unsafe extern "C" fn host_decode_utf8(the: *mut XsMachine) {
 /// ArrayBuffer. This bypasses XS's TextEncoder which is extremely slow
 /// for large strings (>100KB), causing the daemon to hang when
 /// serializing large CapTP payloads like bundled source code.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_encode_utf8(the: *mut XsMachine) {
+    // SAFETY: host-callback contract; argument 0 via `arg_str` (a
+    // missing argument reads as `undefined`). `fxArrayBuffer` copies `len` bytes from `data`,
+    // which holds exactly `len` bytes and outlives the call (contract 5).
     guard_ffi(|| unsafe {
         let s = arg_str(the, 0);
         let bytes = s.as_bytes();
@@ -991,7 +1274,13 @@ fn url_error_json(message: &str) -> String {
 /// Parse `href` (against `base` when non-empty — the empty string is
 /// the no-base sentinel) and return a JSON url record, or
 /// `{"error": ...}` when the input does not parse.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_url_parse(the: *mut XsMachine) {
+    // SAFETY: host-callback contract; arguments 0 and 1 via `arg_str`
+    // (a missing argument reads as `undefined`), result via `set_result_string`.
     guard_ffi(|| unsafe {
         let href = arg_str(the, 0);
         let base = arg_str(the, 1);
@@ -1014,7 +1303,13 @@ pub unsafe extern "C" fn host_url_parse(the: *mut XsMachine) {
 /// url record, or `{"error": ...}` when the setter rejects the value
 /// (the JS side ignores that, per the spec's setter semantics, except
 /// for `href` which throws).
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_url_set(the: *mut XsMachine) {
+    // SAFETY: host-callback contract; arguments 0-2 via `arg_str`
+    // (a missing argument reads as `undefined`), result via `set_result_string`.
     guard_ffi(|| unsafe {
         let href = arg_str(the, 0);
         let field = arg_str(the, 1);
@@ -1059,7 +1354,13 @@ pub unsafe extern "C" fn host_url_set(the: *mut XsMachine) {
 ///
 /// Parse an application/x-www-form-urlencoded string into a JSON
 /// array of `[name, value]` pairs.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_form_urlencoded_decode(the: *mut XsMachine) {
+    // SAFETY: host-callback contract; argument 0 via `arg_str` (a
+    // missing argument reads as `undefined`), result via `set_result_string`.
     guard_ffi(|| unsafe {
         let input = arg_str(the, 0);
         let pairs: Vec<(String, String)> = url::form_urlencoded::parse(input.as_bytes())
@@ -1074,7 +1375,13 @@ pub unsafe extern "C" fn host_form_urlencoded_decode(the: *mut XsMachine) {
 ///
 /// Serialize a JSON array of `[name, value]` pairs as an
 /// application/x-www-form-urlencoded string.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_form_urlencoded_encode(the: *mut XsMachine) {
+    // SAFETY: host-callback contract; argument 0 via `arg_str` (a
+    // missing argument reads as `undefined`), result via `set_result_string`.
     guard_ffi(|| unsafe {
         let input = arg_str(the, 0);
         let pairs: Vec<(String, String)> = serde_json::from_str(&input).unwrap_or_default();
@@ -1095,9 +1402,16 @@ pub unsafe extern "C" fn host_form_urlencoded_encode(the: *mut XsMachine) {
 /// before the first eval.
 ///
 /// When mxDebug is not compiled in, `run_debugger()` is a no-op.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_debug_poll(the: *mut XsMachine) {
     guard_ffi(|| {
-        let machine = std::mem::ManuallyDrop::new(crate::Machine { raw: the, registered_callbacks: std::cell::RefCell::new(Vec::new()) });
+        let machine = std::mem::ManuallyDrop::new(crate::Machine {
+            raw: the,
+            registered_callbacks: std::cell::RefCell::new(Vec::new()),
+        });
         machine.run_debugger();
         crate::flush_debug_outbound();
     });
@@ -1127,6 +1441,11 @@ pub const WORKER_IO_CALLBACKS: &[crate::ffi::XsCallback] = &[
 ];
 
 /// Register worker I/O host functions on the machine.
+///
+/// # Safety
+/// The callbacks reach the thread's installed transport, so the machine
+/// must run on the thread that calls `install_transport`. Nothing here is
+/// itself unsafe; the marker keeps the registration paths uniform.
 pub unsafe fn register(machine: &crate::Machine) {
     machine.define_function("recvFrame", host_recv_frame, 0);
     machine.define_function("sendFrame", host_send_frame, 1);
@@ -1173,10 +1492,7 @@ mod tests {
 
         let tmp_write = tempfile::tempfile().unwrap();
 
-        PipeTransport::from_streams(
-            BufReader::new(tmp_read),
-            BufWriter::new(tmp_write),
-        )
+        PipeTransport::from_streams(BufReader::new(tmp_read), BufWriter::new(tmp_write))
     }
 
     #[test]
@@ -1269,7 +1585,11 @@ mod tests {
 
     // ChannelTransport tests
 
-    fn make_channel_pair() -> (ChannelTransport, std_mpsc::Sender<Vec<u8>>, std_mpsc::Receiver<Vec<u8>>) {
+    fn make_channel_pair() -> (
+        ChannelTransport,
+        std_mpsc::Sender<Vec<u8>>,
+        std_mpsc::Receiver<Vec<u8>>,
+    ) {
         let (sup_to_machine_tx, sup_to_machine_rx) = std_mpsc::channel();
         let (machine_to_sup_tx, machine_to_sup_rx) = std_mpsc::channel();
         let t = ChannelTransport::new(sup_to_machine_rx, machine_to_sup_tx);
@@ -1384,7 +1704,10 @@ mod tests {
         );
         // The capture hook recovers the panic!'s source position.
         let location = p.location.expect("a location was captured");
-        assert!(location.contains("worker_io.rs"), "location was {location:?}");
+        assert!(
+            location.contains("worker_io.rs"),
+            "location was {location:?}"
+        );
         assert!(!ffi_panicked(), "take clears the marker");
     }
 
@@ -1441,7 +1764,10 @@ mod tests {
             }),
             1,
         );
-        assert!(!ran, "a poisoned worker must not run further guarded bodies");
+        assert!(
+            !ran,
+            "a poisoned worker must not run further guarded bodies"
+        );
         let _ = take_ffi_panic();
     }
 
@@ -1457,6 +1783,11 @@ mod tests {
         // worker poisoned rather than aborting the process across the FFI
         // frame.
         assert!(take_ffi_panic().is_none(), "start clean");
+        // SAFETY: deliberately outside the host-callback contract, with a
+        // null `the`: `host_recv_frame`'s first action is `with_transport`,
+        // which panics on this transport-less thread before `the` is read,
+        // and the guard catches that panic. If that ordering ever changes,
+        // this test dereferences null.
         unsafe { host_recv_frame(std::ptr::null_mut()) };
         assert!(
             ffi_panicked(),
@@ -1488,7 +1819,10 @@ mod tests {
         let location = p
             .location
             .expect("the outer panic's location must survive nesting");
-        assert!(location.contains("worker_io.rs"), "location was {location:?}");
+        assert!(
+            location.contains("worker_io.rs"),
+            "location was {location:?}"
+        );
         let _ = take_ffi_panic();
     }
 

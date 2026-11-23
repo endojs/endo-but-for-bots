@@ -174,6 +174,9 @@ pub const CHUNK_EXTENT_BYTES: u32 = 64 * 1024;
 use std::cell::{Cell, Ref, RefCell};
 use std::rc::Rc;
 
+mod free_list;
+use free_list::FreeList;
+
 /// A source of snapshot pages for **lazy reification** (store seam
 /// design, phase 3): the arenas fault a page/extent in on first touch
 /// instead of reading the whole heap at resume. Implemented outside
@@ -430,6 +433,7 @@ fn materialized_page() -> Box<[Cell<Slot>]> {
 /// Handle into the slot arena. `u32::MAX` is the null sentinel
 /// (XS's `C_NULL`), never a live index.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub struct SlotIndex(pub u32);
 
 impl SlotIndex {
@@ -442,6 +446,7 @@ impl SlotIndex {
 
 /// Handle into the chunk (byte) arena.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub struct ChunkOffset(pub u32);
 
 impl ChunkOffset {
@@ -455,6 +460,7 @@ impl ChunkOffset {
 /// Slot kind byte. Values mirror the XS `XS_*_KIND` ordering for the
 /// represented kinds; this enum does not claim every XS kind is supported.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 #[repr(u8)]
 pub enum Kind {
     Undefined = 0,
@@ -562,6 +568,7 @@ impl Kind {
 
 /// The 16-byte value payload for the represented XS value-union arms.
 #[derive(Copy, Clone, Debug)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub enum Payload {
     None,
     Boolean(bool),
@@ -617,6 +624,7 @@ impl PartialEq for Payload {
 /// It is 24 bytes on the audited 64-bit build; the snapshot codec encodes fields
 /// individually and does not copy or rely on this resident layout.
 #[derive(Copy, Clone, Debug, PartialEq)]
+#[cfg_attr(kani, derive(kani::Arbitrary))]
 pub struct Slot {
     /// XS `next` link (property lists, frame chains): a slot index.
     pub next: SlotIndex,
@@ -736,9 +744,8 @@ impl Slot {
         if !self.next.is_null() {
             f(self.next);
         }
-        match self.value {
-            Payload::Reference(r) => f(r),
-            _ => {}
+        if let Payload::Reference(r) = self.value {
+            f(r)
         }
     }
 
@@ -841,33 +848,38 @@ pub struct SlotArena {
     /// dispatches on `lazy`, which the detached hot path already
     /// branched on, so eager machines keep their exact pre-H1 path.
     slots: Vec<Cell<Slot>>,
-    free: Vec<u32>,
-    /// The free list's low-water mark: the shortest the list has been
-    /// since the last [`SlotArena::acknowledge_free_list`], or since the
-    /// arena was built, when it starts at the list's length. The list
-    /// changes only at its end — the LIFO pop in [`SlotArena::alloc`] and
-    /// the pushes in [`SlotArena::free`] and the sweep — so every entry
-    /// below the mark is as it was then, and a checkpoint ships only the
-    /// segments from the mark on.
-    free_low: usize,
+    /// The allocation bookkeeping, every write to which goes through
+    /// [`FreeList`]'s methods (STR-1b and STR-1c prove them):
+    ///
+    /// - `free`, the free list in the LIFO reuse order the snapshot
+    ///   serializes.
+    /// - `free_low`, the free list's low-water mark: the shortest the list
+    ///   has been since the last [`SlotArena::acknowledge_free_list`], or
+    ///   since the arena was built, when it starts at the list's length.
+    ///   The list changes only at its end — the LIFO pop in
+    ///   [`SlotArena::alloc`] and the pushes in [`SlotArena::free`] and the
+    ///   sweep — so every entry below the mark is as it was then, and a
+    ///   checkpoint ships only the segments from the mark on.
+    /// - `free_marks`, twin of `free` as one bit per record, kept in exact
+    ///   sync by every free-list writer: `free` keeps the LIFO reuse order
+    ///   the snapshot serializes; this bitmap answers "is `i` free?" in
+    ///   O(1). Without it the sweep and the page-granular partial collector
+    ///   scan the free `Vec` per record — O(records x free-list length),
+    ///   quadratic on exactly the large-free-list heaps the segmented free
+    ///   list (store seam phase 9) exists to support.
+    /// - `marks`, one mark bit per slot, used by the mark-sweep collector.
+    ///   The collector clears all marks before a collection, a free slot
+    ///   cannot be marked, and the sweep moves the unmarked-and-not-already-
+    ///   free slots onto the free list, so no slot is both free and marked
+    ///   while a collection runs. Between collections a slot freed after
+    ///   the sweep keeps its stale mark until the next `clear_marks` or its
+    ///   reuse.
+    /// - `live`, the count of live (non-free) slots, mirroring
+    ///   `currentHeapCount`.
+    book: FreeList,
     /// The identity the current [`FreeListAck`] carries, replaced by each
     /// acknowledgement. A new arena's is carried by none.
     free_ack: Rc<()>,
-    /// Twin of `free` as one bit per record, kept in exact sync by
-    /// every free-list writer: `free` keeps the LIFO reuse order the
-    /// snapshot serializes; this bitmap answers "is `i` free?" in O(1).
-    /// Without it the sweep and the page-granular partial collector
-    /// scan the free `Vec` per record — O(records x free-list length),
-    /// quadratic on exactly the large-free-list heaps the segmented
-    /// free list (store seam phase 9) exists to support.
-    free_marks: Vec<bool>,
-    /// One mark bit per slot, used by the mark-sweep collector. A slot
-    /// is never both free and marked; the collector clears all marks
-    /// before a collection and sweeps the unmarked-and-not-already-free
-    /// slots onto the free list.
-    marks: Vec<bool>,
-    /// Count of live (non-free) slots, mirroring `currentHeapCount`.
-    live: u32,
     /// One dirty bit per [`SLOTS_PER_PAGE`]-record page, set by the
     /// record-mutating paths ([`SlotArena::alloc`],
     /// [`SlotArena::get_mut`]) and drained by the incremental snapshot
@@ -950,12 +962,8 @@ impl SlotArena {
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
             slots: Vec::new(),
-            free: Vec::new(),
-            free_low: 0,
+            book: FreeList::new(),
             free_ack: Rc::default(),
-            free_marks: Vec::new(),
-            marks: Vec::new(),
-            live: 0,
             dirty: Vec::new(),
             unbacked: Vec::new(),
             lazy: None,
@@ -995,12 +1003,8 @@ impl SlotArena {
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
             slots: Vec::new(),
-            free_low: free.len(),
-            free,
+            book: FreeList::restored(free, free_marks, live),
             free_ack: Rc::default(),
-            free_marks,
-            marks: vec![false; slot_count as usize],
-            live,
             dirty: vec![false; pages],
             // Every backed page starts holding exactly what the source
             // will serve for it.
@@ -1041,7 +1045,7 @@ impl SlotArena {
             return;
         }
         let records = backing.source.slot_page(page);
-        backing.validate_records(page, &records, &self.free_marks);
+        backing.validate_records(page, &records, &self.book.free_marks);
         let start = page as usize * SLOTS_PER_PAGE as usize;
         for (k, s) in records.into_iter().enumerate() {
             backing.set(start + k, s);
@@ -1225,24 +1229,21 @@ impl SlotArena {
     /// Allocate a slot, reusing the free list first (XS semantics).
     pub fn alloc(&mut self, slot: Slot) -> SlotIndex {
         if self.capacity() > self.ceiling
-            || (self.free.is_empty() && self.capacity() >= self.ceiling)
+            || (self.book.free.is_empty() && self.capacity() >= self.ceiling)
         {
             heap_exhausted();
         }
         // The ceiling admitted the slot; a failure to grow the record
         // vectors now is the host allocator's.
-        if self.free.is_empty()
+        if self.book.free.is_empty()
             && ((self.lazy.is_none() && self.slots.try_reserve(1).is_err())
-                || self.free_marks.try_reserve(1).is_err()
-                || self.marks.try_reserve(1).is_err())
+                || !self.book.reserve_growth())
         {
             host_allocation_failed();
         }
         self.snapshot_dirt.content();
         self.snapshot_dirt.liveness();
-        self.live += 1;
-        if let Some(i) = self.free.pop() {
-            self.free_low = self.free_low.min(self.free.len());
+        if let Some(i) = self.book.take() {
             self.property_index.get_mut().free(SlotIndex(i));
             // Fault the page first: overwriting one record of a
             // non-resident page and then marking nothing would let a
@@ -1253,8 +1254,9 @@ impl SlotArena {
                 Some(b) => b.set(i as usize, slot),
                 None => self.slots[i as usize].set(slot),
             }
-            self.free_marks[i as usize] = false;
-            self.marks[i as usize] = false;
+            // After the fault: the fault validates the page against the
+            // free map, in which `i` is still free.
+            self.book.claim(i);
             self.mark_dirty_slot(i);
             SlotIndex(i)
         } else {
@@ -1266,8 +1268,7 @@ impl SlotArena {
                 Some(b) => b.push(slot),
                 None => self.slots.push(Cell::new(slot)),
             }
-            self.free_marks.push(false);
-            self.marks.push(false);
+            self.book.append();
             self.mark_dirty_slot(i);
             SlotIndex(i)
         }
@@ -1279,13 +1280,11 @@ impl SlotArena {
             !index.is_null() && index.0 < self.capacity(),
             "invalid slot index in free"
         );
-        assert!(!self.is_free(index.0), "double free of slot");
-        let live = self.live.checked_sub(1).expect("slot live count underflow");
-        self.snapshot_dirt.liveness();
-        self.property_index.get_mut().free(index);
-        self.free.push(index.0);
-        self.free_marks[index.0 as usize] = true;
-        self.live = live;
+        let (dirt, properties) = (&self.snapshot_dirt, self.property_index.get_mut());
+        self.book.release(index.0, || {
+            dirt.liveness();
+            properties.free(index);
+        });
     }
 
     /// Read a record by value (`Slot` is `Copy`; after inlining only
@@ -1366,9 +1365,7 @@ impl SlotArena {
 
     /// Clear every mark bit. Called at the start of a collection.
     pub fn clear_marks(&mut self) {
-        for m in self.marks.iter_mut() {
-            *m = false;
-        }
+        self.book.clear_marks();
     }
 
     /// Mark a slot reachable. Returns `true` if it was not already
@@ -1380,19 +1377,12 @@ impl SlotArena {
             return false;
         }
         assert!(index.0 < self.capacity(), "mark of out-of-arena slot");
-        assert!(!self.is_free(index.0), "mark of free slot");
-        let i = index.0 as usize;
-        if self.marks[i] {
-            false
-        } else {
-            self.marks[i] = true;
-            true
-        }
+        self.book.mark(index.0)
     }
 
     #[inline]
     pub fn is_marked(&self, index: SlotIndex) -> bool {
-        !index.is_null() && self.marks[index.0 as usize]
+        !index.is_null() && self.book.marks[index.0 as usize]
     }
 
     /// Whether `idx` is on the free list — the liveness query the
@@ -1406,7 +1396,7 @@ impl SlotArena {
     /// sweep and the partial collector ask this once per record, so a
     /// free-`Vec` scan here would be quadratic in the free-list length.
     fn is_free(&self, i: u32) -> bool {
-        self.free_marks.get(i as usize).copied().unwrap_or(false)
+        self.book.is_free(i)
     }
 
     /// Sweep: every allocated slot that is not marked and not already
@@ -1420,26 +1410,23 @@ impl SlotArena {
     /// side-table entries keyed by it (the GC side-table liveness
     /// contract) — same deterministic index order as [`Self::sweep`].
     pub fn sweep_each(&mut self, swept: &mut dyn FnMut(SlotIndex)) -> u32 {
-        let mut reclaimed = 0u32;
-        for i in 0..self.capacity() {
-            if !self.marks[i as usize] && !self.is_free(i) {
-                self.property_index.get_mut().free(SlotIndex(i));
-                self.snapshot_dirt.liveness();
-                self.free.push(i);
-                self.free_marks[i as usize] = true;
-                self.live -= 1;
-                reclaimed += 1;
-                swept(SlotIndex(i));
-            }
-        }
-        reclaimed
+        let capacity = self.capacity();
+        let (dirt, properties) = (&self.snapshot_dirt, self.property_index.get_mut());
+        self.book.sweep_each(
+            capacity,
+            |i| {
+                properties.free(SlotIndex(i));
+                dirt.liveness();
+            },
+            |i| swept(SlotIndex(i)),
+        )
     }
 
     /// Live slot count. XS accounts 32 bytes per slot; this is the
     /// count `currentHeapCount` reports.
     #[inline]
     pub fn live_count(&self) -> u32 {
-        self.live
+        self.book.live
     }
 
     /// XS-accounted capacity: 32 bytes per addressable record.
@@ -1502,9 +1489,9 @@ impl SlotArena {
             }
         };
         records
-            + self.free.capacity() * size_of::<u32>()
-            + self.free_marks.capacity()
-            + self.marks.capacity()
+            + self.book.free.capacity() * size_of::<u32>()
+            + self.book.free_marks.capacity()
+            + self.book.marks.capacity()
             + self.dirty.capacity()
             + self.unbacked.capacity()
     }
@@ -1579,7 +1566,7 @@ impl SlotArena {
     /// original would have — keeping post-restore allocation deterministic.
     #[inline]
     pub fn free_list(&self) -> &[u32] {
-        &self.free
+        &self.book.free
     }
 
     /// Acknowledge the free list as the store now holds it, after a
@@ -1588,7 +1575,7 @@ impl SlotArena {
     /// restored from the store is adopted with
     /// [`SlotArena::free_list_baseline`] instead.
     pub fn acknowledge_free_list(&mut self) -> FreeListAck {
-        self.free_low = self.free.len();
+        self.book.acknowledge();
         self.free_ack = Rc::new(());
         FreeListAck {
             identity: self.free_ack.clone(),
@@ -1612,7 +1599,7 @@ impl SlotArena {
     /// acknowledged again since, and the caller must treat the whole list
     /// as changed.
     pub fn free_list_unchanged_prefix(&self, ack: &FreeListAck) -> Option<usize> {
-        Rc::ptr_eq(&ack.identity, &self.free_ack).then_some(self.free_low)
+        Rc::ptr_eq(&ack.identity, &self.free_ack).then_some(self.book.free_low)
     }
 
     /// Rebuild an arena from a serialized image: the flat record array, the
@@ -1633,7 +1620,6 @@ impl SlotArena {
         live: u32,
     ) -> Result<SlotArena, SlotArenaImageError> {
         let free_marks = Self::image_free_marks(slots.len(), &free, live)?;
-        let marks = vec![false; slots.len()];
         let dirty = vec![false; slots.len().div_ceil(SLOTS_PER_PAGE as usize)];
         let unbacked = vec![false; dirty.len()];
         Ok(SlotArena {
@@ -1641,12 +1627,8 @@ impl SlotArena {
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
             slots: slots.into_iter().map(Cell::new).collect(),
-            free_low: free.len(),
-            free,
+            book: FreeList::restored(free, free_marks, live),
             free_ack: Rc::default(),
-            free_marks,
-            marks,
-            live,
             dirty,
             unbacked,
             lazy: None,
@@ -3036,18 +3018,13 @@ impl ChunkArena {
     }
 }
 
-/// ToInt32 (ECMAScript 7.1.5 / XS `fxNumberToInteger`): fold a number
-/// into the signed 32-bit range used by the bitwise opcodes.
+/// ToInt32 (ECMA-262 §7.1.6): fold a number into the signed 32-bit range
+/// used by the bitwise opcodes. Integer-only bit arithmetic; see
+/// `numeric_kernel`, whose proofs check it against the spec model for every
+/// bit pattern.
 #[inline]
 pub fn to_int32(n: f64) -> i32 {
-    if !n.is_finite() {
-        return 0;
-    }
-    // Truncate toward zero, then reduce modulo 2^32 into i32 range.
-    let m = n.trunc();
-    let m = m.rem_euclid(4294967296.0); // 2^32
-    let u = m as u32; // exact: m in [0, 2^32)
-    u as i32
+    crate::numeric_kernel::to_int32(n.to_bits())
 }
 
 /// The ECMAScript Number::toString(10) rendering (spec 6.1.6.1.20,
@@ -3461,5 +3438,209 @@ mod dirty_tests {
         assert!(!authority.authorizes(&other_slots, &chunks));
         assert!(!other.authorizes(&slots, &chunks));
         assert!(!authority.authorizes(&SlotArena::new(), &ChunkArena::new()));
+    }
+}
+
+/// STR-1 and STR-2 beyond the Kani bounds: exhaustive over small images,
+/// PRNG-driven chunk chains.
+#[cfg(test)]
+mod structure_properties {
+    use super::*;
+
+    /// The acceptance rule of the free-list image: entries distinct and in
+    /// range, and `free.len() + live == count`.
+    fn image_is_coherent(count: usize, free: &[u32], live: u32) -> bool {
+        free.iter().all(|&f| (f as usize) < count)
+            && free.iter().enumerate().all(|(i, f)| !free[..i].contains(f))
+            && free.len() as u64 + u64::from(live) == count as u64
+    }
+
+    /// STR-1(a), exhaustive: every free list of up to 4 entries over values
+    /// `0..=5`, every `live` in `0..=6`, every count `0..=5`.
+    #[test]
+    fn image_free_marks_accepts_exactly_coherent_images() {
+        let mut free = Vec::new();
+        let mut accepted = 0;
+        fn lists(depth: usize, free: &mut Vec<u32>, visit: &mut dyn FnMut(&[u32])) {
+            visit(free);
+            if depth == 0 {
+                return;
+            }
+            for v in 0..=5 {
+                free.push(v);
+                lists(depth - 1, free, visit);
+                free.pop();
+            }
+        }
+        lists(4, &mut free, &mut |free| {
+            for count in 0..=5 {
+                for live in 0..=6 {
+                    let result = SlotArena::image_free_marks(count, free, live);
+                    assert_eq!(result.is_ok(), image_is_coherent(count, free, live));
+                    if let Ok(marks) = result {
+                        accepted += 1;
+                        assert_eq!(marks.len(), count);
+                        for (i, &m) in marks.iter().enumerate() {
+                            assert_eq!(m, free.contains(&(i as u32)));
+                        }
+                        let slots = vec![Slot::undefined(); count];
+                        let arena = SlotArena::try_from_image(slots, free.to_vec(), live).unwrap();
+                        assert_eq!(arena.live_count(), live);
+                        for i in 0..count as u32 {
+                            assert_eq!(arena.is_free_index(SlotIndex(i)), free.contains(&i));
+                        }
+                    } else {
+                        let slots = vec![Slot::undefined(); count];
+                        assert!(SlotArena::try_from_image(slots, free.to_vec(), live).is_err());
+                    }
+                }
+            }
+        });
+        assert!(accepted > 100);
+    }
+
+    /// STR-2 on PRNG-driven byte spaces of up to 200 bytes, every header
+    /// position: `checked_block_at` never panics, and `Ok((end, _))` implies
+    /// `header < end <= total`, so walking a chain always terminates.
+    #[test]
+    fn checked_block_at_always_progresses() {
+        let mut state = 0x000C_4A1B_u64;
+        let mut next = move || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+        let mut progressed = 0;
+        for _ in 0..2_000 {
+            let len = (next() % 201) as usize;
+            let mut bytes: Vec<u8> = (0..len)
+                .map(|_| {
+                    if next().is_multiple_of(3) {
+                        next() as u8
+                    } else {
+                        0
+                    }
+                })
+                .collect();
+            // Plant plausible headers: small lengths and free-chunk markers.
+            for at in (0..len.saturating_sub(4)).step_by(4) {
+                match next() % 4 {
+                    0 => bytes[at..at + 4].copy_from_slice(&((next() % 24) as u32).to_le_bytes()),
+                    1 => bytes[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes()),
+                    _ => {}
+                }
+            }
+            let plain = ChunkBytes::Plain(bytes);
+            let mut reader = ChunkReader {
+                bytes: &plain,
+                cached: None,
+            };
+            for total in [len, len / 2] {
+                for header in 0..=len + 1 {
+                    if let Ok((end, _)) = reader.checked_block_at(header, total) {
+                        progressed += 1;
+                        assert!(header < end && end <= total);
+                    }
+                }
+            }
+        }
+        assert!(progressed > 10_000, "only {progressed} blocks");
+    }
+}
+
+/// Kani harnesses for guarantees STR-1 and STR-2
+/// (`verification/proofs.d/framing.toml`).
+#[cfg(kani)]
+mod structure_proofs {
+    use super::*;
+
+    /// STR-1(a) at one concrete `slot_count`: `image_free_marks` accepts
+    /// iff the free entries are distinct and below the count and
+    /// `free.len() + live == count`, and then marks exactly the free slots.
+    fn free_marks_iff_coherent<const COUNT: usize>() -> (bool, usize) {
+        let values: [u32; 5] = kani::any();
+        let n: usize = kani::any_where(|&n| n <= 5);
+        let free = &values[..n];
+        let live: u32 = kani::any();
+        let result = SlotArena::image_free_marks(COUNT, free, live);
+        let mut coherent = free.len() as u64 + u64::from(live) == COUNT as u64;
+        for i in 0..n {
+            coherent &= (free[i] as usize) < COUNT;
+            for j in 0..i {
+                coherent &= free[j] != free[i];
+            }
+        }
+        assert!(result.is_ok() == coherent);
+        if let Ok(marks) = &result {
+            assert!(marks.len() == COUNT);
+            for slot in 0..COUNT {
+                assert!(marks[slot] == free.contains(&(slot as u32)));
+            }
+        }
+        (result.is_ok(), n)
+    }
+
+    #[kani::proof]
+    #[kani::unwind(6)]
+    fn str1_image_free_marks_count_0_to_2() {
+        let a = free_marks_iff_coherent::<0>();
+        let b = free_marks_iff_coherent::<1>();
+        let c = free_marks_iff_coherent::<2>();
+        kani::cover!(a == (true, 0), "the empty image accepted");
+        kani::cover!(b == (true, 1), "a one-slot image with its slot free");
+        kani::cover!(c == (true, 2), "a two-slot image with both slots free");
+    }
+
+    #[kani::proof]
+    #[kani::unwind(6)]
+    fn str1_image_free_marks_count_3_to_4() {
+        let a = free_marks_iff_coherent::<3>();
+        let b = free_marks_iff_coherent::<4>();
+        kani::cover!(a == (true, 3), "a three-slot image, all free");
+        kani::cover!(b.0 && b.1 >= 2, "a four-slot image with two free slots");
+    }
+
+    /// STR-2: on a plain byte space of 24 symbolic bytes, for every
+    /// `total <= 24` (the chain's end; bytes past it are never read) and
+    /// every `header: usize`, `checked_block_at` does not panic, and
+    /// `Ok((end, _))` implies `header < end <= total`.
+    ///
+    /// Termination of `free_chunk_for`'s `while header < len` walk follows:
+    /// each step sets `header = end`, strictly larger and never past `len`.
+    #[kani::proof]
+    #[kani::unwind(6)]
+    fn str2_checked_block_at_progresses() {
+        let bytes: [u8; 24] = kani::any();
+        let plain = ChunkBytes::Plain(bytes.to_vec());
+        let mut reader = ChunkReader {
+            bytes: &plain,
+            cached: None,
+        };
+        let total: usize = kani::any_where(|&t| t <= 24);
+        let header: usize = kani::any();
+        let result = reader.checked_block_at(header, total);
+        if let Ok((end, free)) = result {
+            assert!(header < end && end <= total);
+            kani::cover!(free, "a free block");
+            kani::cover!(
+                !free && end - header > CHUNK_HEADER,
+                "a live block with payload"
+            );
+        }
+        kani::cover!(result.is_err() && header < total, "a corrupt block refused");
+    }
+
+    /// STR-2: `chunk_allocation_fits` is exactly its arithmetic model,
+    /// computed without overflow in `u128`.
+    #[kani::proof]
+    fn str2_chunk_allocation_fits_model() {
+        let header: usize = kani::any();
+        let payload: usize = kani::any();
+        let ceiling: usize = kani::any();
+        let end = header as u128 + CHUNK_HEADER as u128 + payload as u128;
+        assert!(chunk_allocation_fits(header, payload, ceiling) == (end < ceiling as u128));
+        kani::cover!(end + 1 == ceiling as u128, "the last block that fits");
     }
 }

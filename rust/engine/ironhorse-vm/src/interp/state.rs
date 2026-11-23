@@ -344,7 +344,7 @@ pub struct Interp {
     /// Dispatch-count ceiling. `u64::MAX` (the default) is unbounded, so
     /// the oracle-differential harness sees exactly the historical
     /// behavior. A finite value — installed by [`Interp::run_bounded`] /
-    /// [`run_program_bounded`] for un-metered callers such as the decoder
+    /// `run_program_bounded` for un-metered callers such as the decoder
     /// fuzz harness — makes the dispatch loop halt with [`Halt::StepLimit`]
     /// once `n_dispatched` reaches it, so a non-terminating program (a
     /// self-targeting backward branch, an unbounded loop) aborts in bounded

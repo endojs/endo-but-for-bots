@@ -11,3 +11,9 @@ publish = false
 [dependencies]
 ironhorse-snapshot = { path = "../../ironhorse-snapshot" }
 ironhorse-store-sqlite = { path = "../../../endo/ironhorse-store-sqlite" }
+
+# A standalone cargo root outside the engine workspace, so it does not inherit
+# `[workspace.lints]`; it states the unsafe policy itself (checked by
+# scripts/test-crate-graph.py).
+[lints.rust]
+unsafe_code = "forbid"

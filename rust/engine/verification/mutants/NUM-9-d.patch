@@ -1,0 +1,17 @@
+Mutant NUM-9-d: both civil kernels shift the epoch by one day, consistently, so the round trip still holds.
+--- a/ironhorse-vm/src/interp/temporal.rs
++++ b/ironhorse-vm/src/interp/temporal.rs
+@@ -942,11 +942,11 @@
+     let mp = i128::from(month) + if month > 2 { -3 } else { 9 };
+     let doy = (153 * mp + 2) / 5 + i128::from(day) - 1;
+     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+-    Some(era * 146097 + doe - 719468)
++    Some(era * 146097 + doe - 719469)
+ }
+ 
+ pub(super) fn civil_from_days(days: i128) -> (i64, u32, u32) {
+-    let z = days as i64 + 719468;
++    let z = days as i64 + 719469;
+     let era = if z >= 0 { z } else { z - 146096 } / 146097;
+     let doe = z - era * 146097;
+     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;

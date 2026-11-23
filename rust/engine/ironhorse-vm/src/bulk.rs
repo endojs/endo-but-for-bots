@@ -197,7 +197,7 @@ impl ArrayData {
 
     /// Whether any element carries a non-default descriptor flag.
     ///
-    /// The dense fast paths ([`Interp::dense_array_this`] and the
+    /// The dense fast paths (`Interp::dense_array_this` and the
     /// `*_fast_safe` predicates) may only run when this is false. They write
     /// items directly, without carrying attributes across, so over an
     /// attributed element they would erase or relocate its flags — turning
@@ -1256,7 +1256,9 @@ mod tests {
         for n in 0..4u32 {
             a.insert_item(n, Slot::integer(0), &mut refs, &mut chunks);
         }
-        chunks.set_ceiling(chunks.byte_size() + chunks.side_reserved() as usize);
+        chunks
+            .set_ceiling(chunks.byte_size() + chunks.side_reserved() as usize)
+            .expect("a ceiling below the consensus cap is admitted");
         let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             a.insert_item(4, Slot::integer(0), &mut refs, &mut chunks);
         }));

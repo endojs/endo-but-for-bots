@@ -1,0 +1,12 @@
+Mutant TXT-1-a: wtf8_code_point re-admits F4 sequences above U+10FFFF.
+--- a/ironhorse-vm/src/interp/natives/json.rs
++++ b/ironhorse-vm/src/interp/natives/json.rs
+@@ -2214,7 +2214,7 @@
+         }
+         point = (point << 6) | u32::from(byte & 0x3F);
+     }
+-    (point <= 0x10_FFFF).then_some((point, width))
++    Some((point, width))
+ }
+ 
+ /// The UTF-16 code units of a code point, a surrogate standing for itself.

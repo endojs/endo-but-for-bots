@@ -1,0 +1,12 @@
+Mutant SNAP-4-d: remap_ids writes the new ID big-endian.
+--- a/ironhorse-vm/src/opcode.rs
++++ b/ironhorse-vm/src/opcode.rs
+@@ -1143,7 +1143,7 @@
+             }
+             let id = u16::from_le_bytes([out[pc + 1], out[pc + 2]]);
+             let new = map(id)?;
+-            out[pc + 1..pc + 1 + ID_SIZE].copy_from_slice(&new.to_le_bytes());
++            out[pc + 1..pc + 1 + ID_SIZE].copy_from_slice(&new.to_be_bytes());
+         }
+         pc = pc.checked_add(len)?;
+     }

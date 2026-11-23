@@ -4,12 +4,12 @@
 //! ([`crate::parser`], stage-5 children 2–3) and the coder (a later
 //! child), performing XS's two dispatch passes over the tree:
 //!
-//!   * **hoist** ([`fxParserHoist`]): builds the scope tree
+//!   * **hoist** (`fxParserHoist`): builds the scope tree
 //!     (global/eval/function/module/block/`with`/`catch` scopes), hoists
 //!     `var` / function declarations, records lexical (`let` / `const` /
 //!     `using`) declarations with their duplicate-declaration early
 //!     errors, and poisons scopes reached by direct `eval` / `with`.
-//!   * **bind** ([`fxParserBind`]): resolves every identifier access to
+//!   * **bind** (`fxParserBind`): resolves every identifier access to
 //!     its declaration up the scope chain, marks captured declarations as
 //!     **closure** slots, and computes each function's `scopeCount` — the
 //!     frame slot count the coder consumes.
@@ -21,7 +21,7 @@
 //! nodes in each scope, the closure flags, and the per-function
 //! `scopeCount` are a byte-identity contract. This module reproduces XS's
 //! exact declare ordering, counter arithmetic, and closure marking; the
-//! fixture tests ([`tests`]) pin them as the contract for the coder child.
+//! fixture tests (`tests`) pin them as the contract for the coder child.
 //!
 //! **Representation.** XS mutates the AST in place, hanging a `txScope*`
 //! off each scope-creating node and an `access->declaration` off each
@@ -677,10 +677,10 @@ fn delete_target_is_private(item: &Item) -> bool {
 
 // --------- child-slot accessors (positional, per the struct layout) ---------
 
-fn child<'a>(n: &'a Node, i: usize) -> Option<&'a Item> {
+fn child(n: &Node, i: usize) -> Option<&Item> {
     n.children.get(i)
 }
-fn child_node<'a>(n: &'a Node, i: usize) -> Option<&'a Node> {
+fn child_node(n: &Node, i: usize) -> Option<&Node> {
     match n.children.get(i) {
         Some(Item::Node(b)) => Some(b.as_ref()),
         _ => None,
@@ -760,7 +760,7 @@ fn class_has_constructor_init_member(class: &Node) -> bool {
     })
 }
 #[allow(dead_code)]
-fn child_list<'a>(n: &'a Node, i: usize) -> Option<&'a [Item]> {
+fn child_list(n: &Node, i: usize) -> Option<&[Item]> {
     match n.children.get(i) {
         Some(Item::List(v)) => Some(v.as_slice()),
         _ => None,
@@ -1638,7 +1638,7 @@ impl Scoper<'_> {
         if node.flags & flags::STRING_LEGACY != 0 {
             let strict = self
                 .scope
-                .map_or(false, |si| self.scopes[si].flags & SCOPE_STRICT != 0);
+                .is_some_and(|si| self.scopes[si].flags & SCOPE_STRICT != 0);
             if strict {
                 return Err(err(node.line, "invalid escape sequence"));
             }

@@ -7,13 +7,19 @@
 //!   realPath(dirToken, path) -> string
 
 use crate::ffi::*;
-use crate::powers::HostPowers;
 use crate::worker_io::{arg_str, set_result_string};
 
 /// `getPid() -> number`
 ///
 /// Returns the current process ID.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_get_pid(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads no
+    // arguments, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         let pid = std::process::id();
         fxInteger(the, &mut (*the).scratch, pid as i32);
@@ -24,7 +30,15 @@ pub unsafe extern "C" fn host_get_pid(the: *mut XsMachine) {
 /// `getEnv(name) -> string | undefined`
 ///
 /// Reads an environment variable. Returns undefined if not set.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_get_env(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads argument 0 (missing
+    // ones read as `undefined`, `arg_slot`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         let name = arg_str(the, 0);
         match std::env::var(name) {
@@ -40,13 +54,19 @@ pub unsafe extern "C" fn host_get_env(the: *mut XsMachine) {
 ///
 /// Joins path components. Accepts 1-8 string arguments.
 /// Uses the argc from the XS frame to determine how many parts.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_join_path(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0..argc (at
+    // most 8) through `arg_str`; strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
-        // XS stores argc in the frame slot's ID field: mxArgc = the->frame->ID
-        // In the txSlot layout (64-bit LE): next(8) + kind(1) + flag(1) + ID(2)
-        // So ID is at byte offset 10 as a signed 16-bit integer.
-        let frame_bytes = (*the).frame as *const u8;
-        let argc = *(frame_bytes.add(10) as *const i16) as usize;
+        // `fxArgc` reads the frame slot's `ID` (`mxArgc`), whatever the
+        // `txSlot` layout of this XS build.
+        let argc = usize::try_from(fxArgc(the)).unwrap_or(0);
         let count = argc.min(8);
         // Collect all parts, then split on path separator to handle
         // ".." and "." components (matching Node.js path.join behavior).
@@ -94,9 +114,17 @@ pub unsafe extern "C" fn host_join_path(the: *mut XsMachine) {
 /// enforces any higher-level confinement (`isConfinedPath` in
 /// `mount.js`). For other tokens we stay within cap-std's
 /// capability-bounded `canonicalize`.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_real_path(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Arguments 0 and 1 via
+    // `arg_str` (a missing one reads as `undefined`). `host_powers` checks
+    // the context; the shared borrow is only read, never held past the
+    // callback.
     crate::worker_io::guard_ffi(|| unsafe {
-        let powers = &*((*the).context as *const HostPowers);
+        let powers = crate::powers::host_powers(the);
         let dir_token = arg_str(the, 0);
         let path = arg_str(the, 1);
 
@@ -130,14 +158,16 @@ pub unsafe extern "C" fn host_real_path(the: *mut XsMachine) {
 }
 
 /// All host callbacks in registration order for snapshot tables.
-pub const CALLBACKS: &[crate::ffi::XsCallback] = &[
-    host_get_pid,
-    host_get_env,
-    host_join_path,
-    host_real_path,
-];
+pub const CALLBACKS: &[crate::ffi::XsCallback] =
+    &[host_get_pid, host_get_env, host_join_path, host_real_path];
 
 /// Register all process host functions on the machine.
+///
+/// # Safety
+/// Nothing here is itself unsafe: it only calls `define_function`. The
+/// callbacks it installs dereference the machine's context as `HostPowers`,
+/// so call it (through `Machine::register_powers`) only once that context
+/// points at a `HostPowers` that outlives the machine.
 pub unsafe fn register(machine: &crate::Machine) {
     machine.define_function("getPid", host_get_pid, 0);
     machine.define_function("getEnv", host_get_env, 1);

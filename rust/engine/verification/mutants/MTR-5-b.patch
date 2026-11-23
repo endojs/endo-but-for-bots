@@ -1,0 +1,11 @@
+Mutant MTR-5-b: the check shows the host a stale last_reported.
+--- a/ironhorse-vm/src/meter.rs
++++ b/ironhorse-vm/src/meter.rs
+@@ -425,7 +425,6 @@
+             return MeterCheck::Abort;
+         }
+         if self.interval != 0 && self.index > self.count {
+-            self.last_reported = self.computrons();
+             if !host(self.last_reported) {
+                 return MeterCheck::Abort;
+             }

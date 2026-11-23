@@ -6,6 +6,7 @@
 //! committed epoch (a store from before the table or its marker, or
 //! one last committed by a build that does not keep the marker). An
 //! index the store does attest is trusted as stored (issue #1330).
+#![forbid(unsafe_code)]
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -85,8 +86,7 @@ fn build_closed_store(path: &std::path::Path) -> u64 {
     build_store(store.clone());
     let epoch = store.borrow().manifest().unwrap().epoch;
     Rc::try_unwrap(store)
-        .ok()
-        .expect("sole owner")
+        .unwrap_or_else(|_| panic!("sole owner"))
         .into_inner()
         .close()
         .unwrap();
@@ -347,8 +347,7 @@ fn stale_store_rebuilds_before_its_first_commit_attests_the_index() {
     assert_eq!(committed, epoch + 1);
     drop(session);
     Rc::try_unwrap(store)
-        .ok()
-        .expect("sole owner")
+        .unwrap_or_else(|_| panic!("sole owner"))
         .into_inner()
         .close()
         .unwrap();
@@ -385,8 +384,7 @@ fn summary_page_count_refuses_gapped_page_edges() {
         "healthy store reports its geometry"
     );
     Rc::try_unwrap(store)
-        .ok()
-        .expect("sole owner")
+        .unwrap_or_else(|_| panic!("sole owner"))
         .into_inner()
         .close()
         .unwrap();

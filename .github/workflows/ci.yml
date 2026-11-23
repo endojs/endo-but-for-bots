@@ -726,6 +726,167 @@ jobs:
           cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler --test js_machine_trait
           cargo test --locked -p endo --features ironhorse-engine --lib ironhorse_engine::
 
+  # Clippy for every member of the repo-root workspace (rust/engine has its
+  # own gate in test-ironhorse-oracle). Like build-xsnap, this compiles XS
+  # from the c/moddable submodule and needs the gitignored XS bootstraps that
+  # xsnap and endo embed with include_str!. The toolchain, with clippy, comes
+  # from the root rust-toolchain.toml; the lint levels from Cargo.toml's
+  # [workspace.lints].
+  clippy-endo:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['clippy-endo']) }}
+    name: clippy-endo
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - run: corepack enable
+
+      - name: Use Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Cache Cargo + target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-clippy-endo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-clippy-endo-
+
+      - name: Generate XS bootstraps
+        run: |
+          yarn workspace @endo/thixotrope run build:xs-bundles
+          yarn bundle:xs
+
+      # `endo`'s default features are `ironhorse-engine`; the XS-only daemon
+      # (`--no-default-features`) is a supported build too, so lint both.
+      - name: Clippy, default features
+        run: cargo clippy --locked --workspace --all-targets --no-deps -- -D warnings
+
+      - name: Clippy, XS-only endo
+        run: cargo clippy --locked -p endo --no-default-features --all-targets --no-deps -- -D warnings
+
+  # Supply-chain policy (deny.toml): advisories, licences, bans and sources
+  # for every Cargo root with a committed lockfile. deny.toml says which roots
+  # and why. The weekly advisory sweep in cargo-deny-advisories.yml shares
+  # the install recipe; bump CARGO_DENY_VERSION in both.
+  cargo-deny:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['cargo-deny']) }}
+    name: cargo-deny
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_DENY_VERSION: 0.21.0
+
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache cargo-deny
+        id: cache-cargo-deny
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: ${{ runner.os }}-cargo-deny-${{ env.CARGO_DENY_VERSION }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Install cargo-deny
+        if: steps.cache-cargo-deny.outputs.cache-hit != 'true'
+        run: cargo install --locked "cargo-deny@$CARGO_DENY_VERSION"
+
+      - name: Check supply-chain policy
+        run: |
+          status=0
+          for manifest in Cargo.toml rust/engine/Cargo.toml rust/engine/ironhorse-fuzz/fuzz/Cargo.toml; do
+            echo "::group::cargo deny $manifest"
+            cargo deny --manifest-path "$manifest" --locked check || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"
+
+  # Unused dependencies in every Cargo manifest of the tree: both workspaces
+  # and the standalone roots. cargo-machete reads sources and manifests and
+  # compiles nothing. 0.10.x does not build on the pinned 1.91.1 toolchain.
+  cargo-machete:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['cargo-machete']) }}
+    name: cargo-machete
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_MACHETE_VERSION: 0.9.1
+
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache cargo-machete
+        id: cache-cargo-machete
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-machete
+          key: ${{ runner.os }}-cargo-machete-${{ env.CARGO_MACHETE_VERSION }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Install cargo-machete
+        if: steps.cache-cargo-machete.outputs.cache-hit != 'true'
+        run: cargo install --locked "cargo-machete@$CARGO_MACHETE_VERSION"
+
+      # A ratchet: the findings must equal KNOWN_UNUSED exactly, so a new
+      # unused dependency fails, and so does fixing a known one until it is
+      # struck from the list. A false positive belongs in that crate's
+      # `[package.metadata.cargo-machete] ignored`, not here.
+      - name: Check for unused dependencies
+        env:
+          # Space-separated crate:dependency pairs; empty today.
+          KNOWN_UNUSED: ''
+        run: |
+          status=0
+          cargo machete --skip-target-dir > "$RUNNER_TEMP/machete.log" || status=$?
+          cat "$RUNNER_TEMP/machete.log"
+          # 1 reports findings; anything above it is a tool error.
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+          awk '/ -- .*Cargo\.toml:$/ { crate = $1; next } /^\t/ { sub(/^\t+/, ""); print crate ":" $0 }' \
+            "$RUNNER_TEMP/machete.log" | sort > "$RUNNER_TEMP/found.txt"
+          printf '%s\n' $KNOWN_UNUSED | sed '/^$/d' | sort > "$RUNNER_TEMP/known.txt"
+          if ! diff -u "$RUNNER_TEMP/known.txt" "$RUNNER_TEMP/found.txt"; then
+            echo "::error::cargo-machete findings differ from KNOWN_UNUSED (- now used, + newly unused)"
+            exit 1
+          fi
+
   # Skip entire jobs, including the runner matrix, on unrelated PRs/pushes.
   format-ironhorse:
     needs: changes
@@ -768,25 +929,28 @@ jobs:
           python3 rust/engine/scripts/test-crate-graph.py
           python3 rust/engine/scripts/crate-graph.py --check
 
-      - name: Install pinned rustfmt
-        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt
-
       - name: Check generated compiler opcode table
         run: |
           python3 rust/engine/scripts/test-compiler-opcodes.py
           python3 rust/engine/scripts/generate-compiler-opcodes.py --check
 
       - name: Check ironhorse engine formatting
-        run: cargo +1.88.0 fmt --manifest-path rust/engine/Cargo.toml --all -- --check
+        run: cargo fmt --manifest-path rust/engine/Cargo.toml --all -- --check
       # The stack-lanes probes and the snapshot footprint harness are standalone
       # cargo roots outside the workspace (rust/engine/stack-lanes/probe/Cargo.toml,
       # rust/engine/stack-lanes/memory/probe/Cargo.toml,
       # rust/engine/ironhorse-snapshot/footprint/Cargo.toml), so `fmt --all` never sees them.
       - name: Check standalone-root formatting
-        run: rustfmt +1.88.0 --edition 2021 --check rust/engine/stack-lanes/probe/src/main.rs rust/engine/stack-lanes/cases.rs rust/engine/ironhorse-snapshot/footprint/src/main.rs rust/engine/stack-lanes/memory/probe/src/main.rs
+        run: rustfmt --edition 2021 --check rust/engine/stack-lanes/probe/src/main.rs rust/engine/stack-lanes/cases.rs rust/engine/ironhorse-snapshot/footprint/src/main.rs rust/engine/stack-lanes/memory/probe/src/main.rs
 
-      - name: Check SQLite heap-store formatting
-        run: cargo +1.88.0 fmt --manifest-path Cargo.toml --package ironhorse-store-sqlite -- --check
+      # Every member of the repo-root workspace, on the root
+      # rust-toolchain.toml's compiler (rustup installs it and its rustfmt on
+      # first use). Not `--all`: that also walks the members' path
+      # dependencies into rust/engine, which the step above checks with its
+      # own pinned rustfmt. (`cargo fmt` takes no `--manifest-path` for a
+      # virtual manifest without `-p`; it runs from the repository root.)
+      - name: Check outer Rust workspace formatting
+        run: cargo fmt -- --check
 
   test-thixotrope-ironhorse:
     needs: changes
@@ -993,6 +1157,136 @@ jobs:
           fi
           grep -F 'consensus and cost-calibration are mutually exclusive' feature-conflict.log
 
+  # Every engine member must check under each of its features alone, with dev
+  # dependencies out of the graph so a feature cannot lean on one. Not all
+  # features together: consensus and cost-calibration are mutually exclusive
+  # (the job above asserts the refusal). A job of its own rather than a step
+  # of test-ironhorse-oracle: that job's cache holds `cargo build`, Clippy and
+  # rustdoc output under the default features, which none of these per-feature
+  # check units reuse, and it already runs close to its 30-minute bound.
+  # `--no-dev-deps` rewrites the manifests while it runs, so it cannot take
+  # `--locked`.
+  hack-ironhorse:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['hack-ironhorse']) }}
+    name: hack-ironhorse
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_HACK_VERSION: 0.6.46
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch XS oracle submodule
+        # xs-oracle's build script compiles XS even under `cargo check`.
+        run: |
+          for i in 1 2 3; do
+            git submodule update --init --depth 1 c/moddable && break
+            sleep $((10 * i))
+          done
+          test -f c/moddable/xs/sources/xsAll.h
+
+      - name: Cache cargo-hack
+        id: cache-cargo-hack
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-hack
+          key: ${{ runner.os }}-cargo-hack-${{ env.CARGO_HACK_VERSION }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Install cargo-hack
+        if: steps.cache-cargo-hack.outputs.cache-hit != 'true'
+        run: cargo install --locked "cargo-hack@$CARGO_HACK_VERSION"
+
+      - name: Cache Cargo + target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/engine/target
+          key: ${{ runner.os }}-ironhorse-hack-${{ hashFiles('rust/engine/Cargo.lock', 'rust/engine/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-hack-
+
+      - name: Check each feature of every engine crate
+        working-directory: rust/engine
+        run: cargo hack check --workspace --each-feature --no-dev-deps --exclude-all-features
+
+  # Kani proofs of the engine (rust/engine/verification/ is the manifest,
+  # VERIFICATION.md the generated ledger). The cheap consistency checks run
+  # before the toolchain is installed; the PR tier is budgeted under ten
+  # minutes of proving. ironhorse-kani-nightly.yml runs the nightly tier and
+  # the mutation check with the same install and caches; bump KANI_VERSION in
+  # both.
+  ironhorse-kani:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['ironhorse-kani']) }}
+    name: ironhorse-kani
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      KANI_VERSION: 0.68.0
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test the proof runner
+        run: python3 rust/engine/scripts/test-verify.py
+
+      # `cargo kani setup` unpacks CBMC and Kani's library into ~/.kani and
+      # installs the nightly toolchain Kani compiles with through rustup; the
+      # bundle links to that toolchain, so both are cached together.
+      - name: Cache Kani
+        id: cache-kani
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/cargo-kani
+            ~/.cargo/bin/kani
+            ~/.kani
+            ~/.rustup/toolchains/nightly-*
+          key: ${{ runner.os }}-kani-${{ env.KANI_VERSION }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Install Kani
+        if: steps.cache-kani.outputs.cache-hit != 'true'
+        run: |
+          cargo install --locked "kani-verifier@$KANI_VERSION"
+          cargo kani setup
+
+      - name: Cache Cargo + target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/engine/target
+          key: ${{ runner.os }}-ironhorse-kani-${{ env.KANI_VERSION }}-${{ hashFiles('rust/engine/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-kani-${{ env.KANI_VERSION }}-
+
+      # `check` lists the harnesses with `cargo kani list`, so it runs after
+      # Kani is installed.
+      - name: Check the proof manifest and ledger
+        run: |
+          python3 rust/engine/scripts/verify.py check
+          python3 rust/engine/scripts/verify.py ledger --check
+
+      - name: Prove the PR tier
+        run: python3 rust/engine/scripts/verify.py run --tier pr
+
   compare-ironhorse-math:
     needs: [changes, test-ironhorse]
     if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['compare-ironhorse-math']) }}
@@ -1110,18 +1404,23 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ironhorse-oracle-
 
-      - name: Install pinned lint toolchain
-        run: rustup toolchain install 1.88.0 --profile minimal --component clippy
-
+      # Lints run on the toolchain pinned by rust/engine/rust-toolchain.toml,
+      # the same compiler that builds and tests the engine.
       - name: Check engine build warnings
         working-directory: rust/engine
         env:
           RUSTFLAGS: -D warnings
-        run: cargo +1.88.0 build --locked --workspace
+        run: cargo build --locked --workspace
 
       - name: Check engine Clippy warnings
         working-directory: rust/engine
-        run: cargo +1.88.0 clippy --locked --workspace --no-deps -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --no-deps -- -D warnings
+
+      - name: Check engine rustdoc warnings
+        working-directory: rust/engine
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --workspace --no-deps --document-private-items
 
       - name: Vendor test262 at the pinned SHA
         # `corpus_compiler_totality.rs` compiles every test262 source and

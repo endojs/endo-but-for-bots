@@ -67,7 +67,10 @@ pub fn ingest_archive<R: Read + Seek>(
             continue;
         }
 
-        let name = file.name().to_string();
+        let name = file
+            .name()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+            .into_owned();
         let mut contents = Vec::new();
         file.read_to_end(&mut contents)?;
 

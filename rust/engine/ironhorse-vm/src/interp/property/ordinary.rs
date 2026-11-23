@@ -182,10 +182,10 @@ impl Interp {
 
     /// ECMAScript SameValue, including NaN equality and distinct signed zeros.
     pub(in crate::interp) fn same_value(&self, left: Slot, right: Slot) -> bool {
-        match (numeric_of(&left), numeric_of(&right)) {
-            (Some(a), Some(b)) => (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits(),
-            _ => self.strict_equal(&left, &right),
+        if needs_arena_equality(&left, &right) {
+            return self.strict_equal(&left, &right);
         }
+        same_value_immediate(&left, &right)
     }
 
     /// Give a function's synthesized exotic `length`/`name` a real backing slot
@@ -312,14 +312,13 @@ impl Interp {
 
         let current = current.unwrap();
         let current_configurable = current.configurable.unwrap_or(false);
-        if !current_configurable {
-            if descriptor.configurable == Some(true)
+        if !current_configurable
+            && (descriptor.configurable == Some(true)
                 || descriptor
                     .enumerable
-                    .is_some_and(|value| Some(value) != current.enumerable)
-            {
-                return false;
-            }
+                    .is_some_and(|value| Some(value) != current.enumerable))
+        {
+            return false;
         }
         let current_accessor = current.is_accessor();
         if (descriptor.is_accessor() || descriptor.is_data())
@@ -329,25 +328,24 @@ impl Interp {
                 return false;
             }
         } else if !current_configurable {
-            if !current_accessor && current.writable == Some(false) {
-                if descriptor.writable == Some(true)
+            if !current_accessor
+                && current.writable == Some(false)
+                && (descriptor.writable == Some(true)
                     || descriptor
                         .value
-                        .is_some_and(|value| !self.same_value(value, current.value.unwrap()))
-                {
-                    return false;
-                }
+                        .is_some_and(|value| !self.same_value(value, current.value.unwrap())))
+            {
+                return false;
             }
-            if current_accessor {
-                if descriptor
+            if current_accessor
+                && (descriptor
                     .get
                     .is_some_and(|value| !self.same_value(value, current.get.unwrap()))
                     || descriptor
                         .set
-                        .is_some_and(|value| !self.same_value(value, current.set.unwrap()))
-                {
-                    return false;
-                }
+                        .is_some_and(|value| !self.same_value(value, current.set.unwrap())))
+            {
+                return false;
             }
         }
 

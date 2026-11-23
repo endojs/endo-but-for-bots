@@ -22,6 +22,7 @@
 //! The transport only moves bytes. The CapTP/greeter handshake runs in the
 //! Endo manager, exactly as it does over the Unix-socket bridge in
 //! `endo::socket`.
+#![forbid(unsafe_code)]
 
 pub mod address;
 pub mod netstring;

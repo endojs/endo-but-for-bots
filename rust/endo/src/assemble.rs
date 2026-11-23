@@ -229,30 +229,6 @@ pub fn find_package_root(entry_js: &Path) -> Result<(PathBuf, Option<String>), A
         }
     }
 }
-/// Parse the `dependencies` field only — the simple map read_tree_dependencies
-/// returns (workspace members need only concrete dependencies; peer/optional
-/// classification happens through the full resolver for registry packages).
-fn parse_dependencies(
-    doc: &serde_json::Value,
-    who: &str,
-) -> Result<BTreeMap<String, String>, AssembleError> {
-    let mut dependencies = BTreeMap::new();
-    if let Some(deps) = doc.get("dependencies") {
-        let obj = deps.as_object().ok_or_else(|| {
-            AssembleError::BadPackageJson(format!("{who}: \"dependencies\" is not an object"))
-        })?;
-        for (dep, range) in obj {
-            let range = range.as_str().ok_or_else(|| {
-                AssembleError::BadPackageJson(format!(
-                    "{who}: dependency {dep} has a non-string range"
-                ))
-            })?;
-            dependencies.insert(dep.clone(), range.to_string());
-        }
-    }
-    Ok(dependencies)
-}
-
 /// Parse the entry package's name and classified dependency edges
 /// out of its `package.json`. Absent fields default (name `"entry"`,
 /// no dependencies).
@@ -267,24 +243,6 @@ fn parse_manifest(text: &str) -> Result<(String, DepEdges), AssembleError> {
     let edges = dep_edges_from_manifest(&doc)
         .map_err(|detail| AssembleError::BadPackageJson(format!("{name}: {detail}")))?;
     Ok((name, edges))
-}
-
-/// Read a resolved package's declared `dependencies` back out of its
-/// CAS tree, mirroring the resolver's own walk so the map's edges
-/// bind exactly the ranges resolution satisfied.
-fn read_tree_dependencies(
-    cas: &ContentStore,
-    name: &str,
-    version: &str,
-    tree_hash: &str,
-) -> Result<BTreeMap<String, String>, AssembleError> {
-    let who = format!("{name}@{version}");
-    let bytes = cas
-        .fetch_from_tree(tree_hash, "package.json")
-        .map_err(|e| AssembleError::BadPackageJson(format!("{who}: read package.json: {e}")))?;
-    let doc: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|e| AssembleError::BadPackageJson(format!("{who}: parse: {e}")))?;
-    parse_dependencies(&doc, &who)
 }
 
 /// Split classified edges into the map shape edge binding consumes:
@@ -311,12 +269,8 @@ fn edge_maps(edges: &DepEdges) -> (BTreeMap<String, String>, BTreeMap<String, St
 pub fn store_dir_tree(cas: &ContentStore, dir: &Path) -> Result<String, AssembleError> {
     let mut root = DirNode::new();
     ingest_dir(cas, dir, &mut Vec::new(), &mut root)?;
-    materialise(&root, cas).map_err(|e| {
-        AssembleError::Io(io::Error::new(
-            io::ErrorKind::Other,
-            format!("materialise tree: {e}"),
-        ))
-    })
+    materialise(&root, cas)
+        .map_err(|e| AssembleError::Io(io::Error::other(format!("materialise tree: {e}"))))
 }
 
 fn ingest_dir(
@@ -596,12 +550,8 @@ pub fn build_compartment_map(
     });
     // `serde_json::Map` is sorted (BTreeMap-backed), so this
     // serialisation is canonical and the CAS hash deterministic.
-    serde_json::to_vec_pretty(&doc).map_err(|e| {
-        AssembleError::Io(io::Error::new(
-            io::ErrorKind::Other,
-            format!("encode map: {e}"),
-        ))
-    })
+    serde_json::to_vec_pretty(&doc)
+        .map_err(|e| AssembleError::Io(io::Error::other(format!("encode map: {e}"))))
 }
 
 /// Assemble an entry-point run: resolve and fetch the entry
@@ -643,7 +593,13 @@ pub fn assemble_entry_with_config<H: HttpClient>(
     // reachable member\'s — feeds the registry resolver.
     let (workspace_packages, roots) =
         resolve_workspace_members(cas, &package_root, &package_name, &root_edges.required)?;
-    let outcome = resolve_transitive_outcome(http, cas, registry_table, config, &DepEdges::required_only(&roots))?;
+    let outcome = resolve_transitive_outcome(
+        http,
+        cas,
+        registry_table,
+        config,
+        &DepEdges::required_only(&roots),
+    )?;
     let mut packages = Vec::with_capacity(outcome.packages.len() + workspace_packages.len());
     for package in outcome.packages {
         let edges = read_dep_edges(cas, &package.name, &package.version, &package.tree_hash)?;

@@ -1,0 +1,12 @@
+Mutant NUM-1-a: ToUint32 saturates at u32::MAX instead of reducing modulo 2^32.
+--- a/ironhorse-vm/src/numeric_kernel.rs
++++ b/ironhorse-vm/src/numeric_kernel.rs
+@@ -59,7 +59,7 @@
+ /// ECMA-262 §7.1.7 ToUint32 of the Number with bit pattern `bits`.
+ #[inline]
+ pub(crate) fn to_uint32(bits: u64) -> u32 {
+-    number_to_u64_wrapping(bits) as u32
++    number_to_u64_wrapping(bits).min(u64::from(u32::MAX)) as u32
+ }
+ 
+ /// ECMA-262 §7.1.8 ToInt16 of the Number with bit pattern `bits`.

@@ -37,13 +37,55 @@ use std::collections::BTreeSet;
 /// as ESM binding names, and the interop names Node itself excludes.
 const EXCLUDED_NAMES: &[&str] = &[
     // ECMAScript reserved words.
-    "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do",
-    "else", "enum", "export", "extends", "false", "finally", "for", "function", "if", "import",
-    "in", "instanceof", "new", "null", "return", "super", "switch", "this", "throw", "true",
-    "try", "typeof", "var", "void", "while", "with",
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "debugger",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "enum",
+    "export",
+    "extends",
+    "false",
+    "finally",
+    "for",
+    "function",
+    "if",
+    "import",
+    "in",
+    "instanceof",
+    "new",
+    "null",
+    "return",
+    "super",
+    "switch",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typeof",
+    "var",
+    "void",
+    "while",
+    "with",
     // Illegal or hazardous as module-level `const` binding names.
-    "let", "static", "yield", "await", "implements", "interface", "package", "private",
-    "protected", "public", "arguments", "eval",
+    "let",
+    "static",
+    "yield",
+    "await",
+    "implements",
+    "interface",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "arguments",
+    "eval",
     // Interop and synthetic names the ESM facade itself declares or
     // references (`rust/endo/src/execute.rs`): synthesizing an
     // `export const` for any of these would shadow or duplicate a
@@ -54,7 +96,10 @@ const EXCLUDED_NAMES: &[&str] = &[
     // put that call in the temporal dead zone). Excluding them keeps
     // the over-approximation bargain: an unexportable name falls back
     // to the `default` namespace rather than breaking the whole module.
-    "__esModule", "__cjs", "__cjsO", "__loadCjs",
+    "__esModule",
+    "__cjs",
+    "__cjsO",
+    "__loadCjs",
 ];
 
 /// True when `name` may be emitted as `export const <name>` — an
@@ -177,7 +222,10 @@ fn tokenize(source: &str) -> Vec<Token> {
                     && name != "in" && name != "of" && name != "instanceof" && name != "new"
                     && name != "delete" && name != "void" && name != "do" && name != "else"
                     && name != "throw" && name != "yield"
-            ) || matches!(tokens.last(), Some(Token::Str(_)) | Some(Token::Punct(')')) | Some(Token::Punct(']')));
+            ) || matches!(
+                tokens.last(),
+                Some(Token::Str(_)) | Some(Token::Punct(')')) | Some(Token::Punct(']'))
+            );
             if divides {
                 tokens.push(Token::Punct('/'));
                 i += 1;
@@ -284,7 +332,10 @@ fn collect_object_literal_keys(tokens: &[Token], i: usize, names: &mut BTreeSet<
                 // the accessor/modifier word is followed by another
                 // identifier key rather than `:`/`,`/`(`/`}`.
                 if (name == "get" || name == "set" || name == "async")
-                    && matches!(tokens.get(j + 1), Some(Token::Ident(_)) | Some(Token::Str(_)))
+                    && matches!(
+                        tokens.get(j + 1),
+                        Some(Token::Ident(_)) | Some(Token::Str(_))
+                    )
                 {
                     j += 1;
                     continue;
@@ -442,7 +493,10 @@ pub fn detect_named_exports(source: &str) -> BTreeSet<String> {
             // Assignment position only: `… = `, not `==`/`===`/`=>`.
             let assigns_at = |k: usize| {
                 matches!(tokens.get(k), Some(Token::Punct('=')))
-                    && !matches!(tokens.get(k + 1), Some(Token::Punct('=')) | Some(Token::Punct('>')))
+                    && !matches!(
+                        tokens.get(k + 1),
+                        Some(Token::Punct('=')) | Some(Token::Punct('>'))
+                    )
             };
             // `exports.name = …` / `module.exports.name = …`
             if matches!(tokens.get(j), Some(Token::Punct('.'))) {
@@ -498,7 +552,10 @@ mod tests {
 
     #[test]
     fn detects_bracket_string_assignments() {
-        assert_eq!(detect("exports[\"gamma\"] = 3;\nexports['delta'] = 4;"), vec!["delta", "gamma"]);
+        assert_eq!(
+            detect("exports[\"gamma\"] = 3;\nexports['delta'] = 4;"),
+            vec!["delta", "gamma"]
+        );
     }
 
     #[test]
@@ -516,7 +573,9 @@ mod tests {
     #[test]
     fn detects_object_literal_keys() {
         assert_eq!(
-            detect("module.exports = { parse, valid: v, 'clean': c, satisfies(a, b) { return 1; } };"),
+            detect(
+                "module.exports = { parse, valid: v, 'clean': c, satisfies(a, b) { return 1; } };"
+            ),
             vec!["clean", "parse", "satisfies", "valid"]
         );
     }
@@ -680,13 +739,19 @@ mod tests {
     #[test]
     fn esm_syntax_not_detected_in_cjs() {
         assert!(!detect_esm_syntax("module.exports = { a: 1 };\n"));
-        assert!(!detect_esm_syntax("const m = require('m');\nexports.f = () => m;\n"));
+        assert!(!detect_esm_syntax(
+            "const m = require('m');\nexports.f = () => m;\n"
+        ));
         assert!(!detect_esm_syntax("import('lazy').then(ns => ns.go());\n"));
         assert!(!detect_esm_syntax("const module = import('lazy');\n"));
         assert!(!detect_esm_syntax("foo.import = 1;\nbar.export = 2;\n"));
         assert!(!detect_esm_syntax("var o = { import: 1, export: 2 };\n"));
-        assert!(!detect_esm_syntax("// import x from 'y';\n/* export default 1; */\n"));
-        assert!(!detect_esm_syntax("var s = \"import x from 'y'\";\nvar t = `export const a = 1`;\n"));
+        assert!(!detect_esm_syntax(
+            "// import x from 'y';\n/* export default 1; */\n"
+        ));
+        assert!(!detect_esm_syntax(
+            "var s = \"import x from 'y'\";\nvar t = `export const a = 1`;\n"
+        ));
         assert!(!detect_esm_syntax("function f() { return exports; }\n"));
     }
 
@@ -695,6 +760,8 @@ mod tests {
     /// hit is decisive and a nested mention proves nothing).
     #[test]
     fn esm_syntax_ignores_nested_mentions() {
-        assert!(!detect_esm_syntax("register({ import: spec => load(spec) });\n"));
+        assert!(!detect_esm_syntax(
+            "register({ import: spec => load(spec) });\n"
+        ));
     }
 }

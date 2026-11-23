@@ -71,12 +71,8 @@ impl Interp {
             let n = self.to_number_f64(code, value)?;
             match m {
                 NativeMethod::StringFromCharCode => {
-                    let integer = if !n.is_finite() || n == 0.0 {
-                        0i64
-                    } else {
-                        n.trunc() as i64
-                    };
-                    out.push(integer.rem_euclid(0x1_0000) as u16);
+                    // ToUint16 (§7.1.9): truncate(ℝ(n)) modulo 2^16.
+                    out.push(crate::numeric_kernel::to_uint16(n.to_bits()));
                 }
                 NativeMethod::StringFromCodePoint => {
                     if !n.is_finite() || n.fract() != 0.0 || !(0.0..=0x10_FFFF as f64).contains(&n)
@@ -188,13 +184,9 @@ impl Interp {
             return Ok(default);
         };
         let integer = self.array_to_integer_or_infinity(code, value)?;
-        if integer == f64::NEG_INFINITY {
-            return Ok(0);
-        }
-        if integer < 0.0 {
-            return Ok((len as f64 + integer).max(0.0) as i64);
-        }
-        Ok(integer.min(len as f64) as i64)
+        // A string length is non-negative and far below 2^53, and the clamp
+        // stays in `0..=len`.
+        Ok(crate::numeric_kernel::relative_index(integer, len as u64) as i64)
     }
 
     /// `ToIntegerOrInfinity` followed by the absolute-position clamp used by

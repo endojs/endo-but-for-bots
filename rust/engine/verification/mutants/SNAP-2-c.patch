@@ -1,0 +1,12 @@
+Mutant SNAP-2-c: decode_slot reports the expected width instead of the length found.
+--- a/ironhorse-snapshot/src/slot_codec.rs
++++ b/ironhorse-snapshot/src/slot_codec.rs
+@@ -135,7 +135,7 @@
+ pub fn decode_slot(rec: &[u8]) -> Result<Slot, SlotCodecError> {
+     let rec: &[u8; SLOT_RECORD_BYTES] = rec
+         .try_into()
+-        .map_err(|_| SlotCodecError::BadLength(rec.len()))?;
++        .map_err(|_| SlotCodecError::BadLength(SLOT_RECORD_BYTES))?;
+     decode_record(rec)
+ }
+ 

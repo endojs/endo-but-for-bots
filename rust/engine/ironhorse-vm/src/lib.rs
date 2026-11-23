@@ -26,6 +26,7 @@ compile_error!("consensus and cost-calibration are mutually exclusive");
 
 mod intl_profile;
 mod math;
+mod numeric_kernel;
 pub use math::MATH_PROVIDER;
 mod bulk;
 mod side_storage;

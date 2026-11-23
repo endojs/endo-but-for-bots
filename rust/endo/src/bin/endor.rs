@@ -79,6 +79,11 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         "worker" => match engine {
+            // SAFETY: this is the `endor worker` child the supervisor spawns
+            // through `proc::spawn_with_pipes`, whose `pre_exec` dup2s the
+            // two pipe ends onto fds 3 and 4 and clears their close-on-exec
+            // flag; nothing else in this process opens or closes fds 3/4
+            // before `run_xs_worker` takes ownership of them.
             "xs" => xsnap_result_to_exit(unsafe { xsnap::run_xs_worker() }),
             #[cfg(feature = "ironhorse-engine")]
             "ironhorse" => ironhorse_result_to_exit(endo::ironhorse_engine::engine::run_worker()),
@@ -92,7 +97,7 @@ fn main() -> ExitCode {
                 "xs" => {
                     if let Some(hash) = cas_hash {
                         // Run from CAS root hash.
-                        result_to_exit("endor", cmd_run_from_cas(&hash))
+                        result_to_exit("endor", cmd_run_from_cas(hash))
                     } else if let Some(ref p) = path {
                         match classify_run_input(p) {
                             RunInput::ZipArchive => {
@@ -550,6 +555,10 @@ fn cmd_stop() -> Result<(), EndoError> {
 
     let pid = endo::pidfile::read_pid(&paths.ephemeral_path)?;
     if pid != 0 && endo::pidfile::is_process_running(pid) {
+        // SAFETY: `kill` has no memory-safety preconditions. (It is not
+        // harmless, though: `pid` comes from the pid file, and a value above
+        // `i32::MAX` wraps to a negative pid, which signals a process group,
+        // or every permitted process for -1.)
         unsafe {
             libc::kill(pid as i32, libc::SIGINT);
         }

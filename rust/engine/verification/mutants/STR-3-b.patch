@@ -1,0 +1,12 @@
+Mutant STR-3-b: subtraction drops the first set's tail.
+--- a/ironhorse-regexp/src/compile.rs
++++ b/ironhorse-regexp/src/compile.rs
+@@ -3370,7 +3370,7 @@
+         }
+         old = flag;
+     }
+-    if op & 2 == 0 {
++    if op == 0 {
+         while i1 < lim1 {
+             emit(c1[i1]);
+             i1 += 1;

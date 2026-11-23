@@ -277,10 +277,7 @@ fn normalize_to_esm(
     compartment: &str,
 ) -> NormalizedSource {
     let source = String::from_utf8_lossy(bytes).into_owned();
-    let esm_only = |esm: String| NormalizedSource {
-        esm,
-        cjs_raw: None,
-    };
+    let esm_only = |esm: String| NormalizedSource { esm, cjs_raw: None };
     if Path::new(path).file_name().and_then(|n| n.to_str()) == Some("package.json") {
         return esm_only(source);
     }
@@ -308,8 +305,8 @@ fn normalize_to_esm(
             };
             let comp_json =
                 serde_json::to_string(compartment).unwrap_or_else(|_| "\"\"".to_string());
-            let key_json = serde_json::to_string(&format!("./{path}"))
-                .unwrap_or_else(|_| "\"\"".to_string());
+            let key_json =
+                serde_json::to_string(&format!("./{path}")).unwrap_or_else(|_| "\"\"".to_string());
             // Synthesize named exports for the statically detected
             // `module.exports` names (cjs-module-lexer shape), so
             // `import { named } from 'cjsPkg'` links; a name the
@@ -690,8 +687,7 @@ mod tests {
         .unwrap();
 
         let archive = load_assembled_archive(&cas, &run.compartment_map_hash).unwrap();
-        xsnap::run_xs_archive_loaded(&archive)
-            .expect("XS execution of the top-level-await graph");
+        xsnap::run_xs_archive_loaded(&archive).expect("XS execution of the top-level-await graph");
     }
 
     /// An ambiguous `.js` entry — its manifest has no `"type"` field —
@@ -731,8 +727,7 @@ mod tests {
             archive.sources[&(ENTRY_COMPARTMENT.to_string(), "./main.js".to_string())],
             "import { a } from 'esm-a';\nprint(`a=${a}`);\n"
         );
-        xsnap::run_xs_archive_loaded(&archive)
-            .expect("XS execution of the ambiguous-entry graph");
+        xsnap::run_xs_archive_loaded(&archive).expect("XS execution of the ambiguous-entry graph");
     }
 
     /// Module-syntax detection applies per file: in the same typeless
@@ -843,10 +838,7 @@ mod tests {
         // marker (`cjs/package.json` with no `type`, meaning
         // CommonJS, nearest wins).
         let mut mirror: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-        mirror.insert(
-            "package.json".into(),
-            b"{\"type\":\"module\"}".to_vec(),
-        );
+        mirror.insert("package.json".into(), b"{\"type\":\"module\"}".to_vec());
         mirror.insert("cjs/package.json".into(), b"{}".to_vec());
         let mirror_flavors = esm_flavor_by_dir(&mirror, true);
         assert!(esm_default_for("index.js", &mirror_flavors));
@@ -1024,8 +1016,7 @@ mod tests {
     fn entry_throw_surfaces_as_error_not_crash() {
         let cas_tmp = tempfile::tempdir().unwrap();
         let cas = ContentStore::open(cas_tmp.path()).unwrap();
-        let map_hash =
-            single_module_map(&cas, "noSuchGlobal(1);\nexport const unreachable = 1;\n");
+        let map_hash = single_module_map(&cas, "noSuchGlobal(1);\nexport const unreachable = 1;\n");
         let archive = load_assembled_archive(&cas, &map_hash).unwrap();
         assert!(xsnap::run_xs_archive_loaded(&archive).is_err());
     }
@@ -1042,21 +1033,28 @@ mod tests {
                 None => blobs.push((path.to_string(), store_blob(cas, content))),
                 Some((dir, rest)) => match subtrees.iter_mut().find(|(d, _)| d == dir) {
                     Some((_, entries)) => entries.push((rest.to_string(), content.to_string())),
-                    None => {
-                        subtrees.push((dir.to_string(), vec![(rest.to_string(), content.to_string())]))
-                    }
+                    None => subtrees.push((
+                        dir.to_string(),
+                        vec![(rest.to_string(), content.to_string())],
+                    )),
                 },
             }
         }
         let mut entries = serde_json::Map::new();
         for (name, hash) in &blobs {
-            entries.insert(name.clone(), serde_json::json!({ "type": "blob", "hash": hash }));
+            entries.insert(
+                name.clone(),
+                serde_json::json!({ "type": "blob", "hash": hash }),
+            );
         }
         for (dir, sub) in &subtrees {
             let sub_refs: Vec<(&str, &str)> =
                 sub.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
             let subtree = store_file_tree(cas, &sub_refs);
-            entries.insert(dir.clone(), serde_json::json!({ "type": "tree", "hash": subtree }));
+            entries.insert(
+                dir.clone(),
+                serde_json::json!({ "type": "tree", "hash": subtree }),
+            );
         }
         let tree = serde_json::json!({ "entries": entries });
         cas.store_tree(&serde_json::to_vec(&tree).unwrap()).unwrap()
@@ -1501,7 +1499,10 @@ mod tests {
                 ),
                 ("index.js", "import n from '#nope'; export default n;\n"),
                 ("vendor/styles.js", "export default 'styled';\n"),
-                ("#nope.js", "export default 'file fallback must not load';\n"),
+                (
+                    "#nope.js",
+                    "export default 'file fallback must not load';\n",
+                ),
             ],
         );
         assert!(result.is_err());
@@ -1649,8 +1650,7 @@ mod tests {
         .unwrap();
 
         let archive = load_assembled_archive(&cas, &run.compartment_map_hash).unwrap();
-        xsnap::run_xs_archive_loaded(&archive)
-            .expect("XS execution of the CommonJS require graph");
+        xsnap::run_xs_archive_loaded(&archive).expect("XS execution of the CommonJS require graph");
     }
 
     /// ESM named imports of a CJS package link through the facade's
@@ -1847,8 +1847,7 @@ mod tests {
         .unwrap();
 
         let archive = load_assembled_archive(&cas, &run.compartment_map_hash).unwrap();
-        xsnap::run_xs_archive_loaded(&archive)
-            .expect("XS execution of the CommonJS entry point");
+        xsnap::run_xs_archive_loaded(&archive).expect("XS execution of the CommonJS entry point");
     }
 
     /// A require cycle observes the partially-populated exports of

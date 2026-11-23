@@ -1,0 +1,12 @@
+Mutant SNAP-4-e: from_u8 decodes byte 245 to the wrong opcode.
+--- a/ironhorse-vm/src/opcode.rs
++++ b/ironhorse-vm/src/opcode.rs
+@@ -1020,7 +1020,7 @@
+             242 => Opcode::XS_CODE_AT_2,
+             243 => Opcode::XS_CODE_SUPER_AT,
+             244 => Opcode::XS_CODE_SUPER_AT_2,
+-            245 => Opcode::XS_CODE_TRANSFER_JSON,
++            245 => Opcode::XS_CODE_SUPER_AT_2,
+             _ => return None,
+         })
+     }

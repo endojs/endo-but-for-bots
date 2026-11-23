@@ -1,0 +1,12 @@
+Mutant TXT-1-e: cesu8_decode combines a surrogate pair with the wrong shift.
+--- a/ironhorse-regexp/src/encoding.rs
++++ b/ironhorse-regexp/src/encoding.rs
+@@ -99,7 +99,7 @@
+     if (0xD800..=0xDBFF).contains(&character) {
+         let (surrogate, after) = utf8_decode(bytes, next);
+         if (0xDC00..=0xDFFF).contains(&surrogate) {
+-            character = 0x10000 + ((character & 0x3FF) << 10) + (surrogate & 0x3FF);
++            character = 0x10000 + ((character & 0x3FF) << 9) + (surrogate & 0x3FF);
+             return (character, after);
+         }
+     }

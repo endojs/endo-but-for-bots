@@ -581,10 +581,10 @@ impl Interp {
     }
 
     /// The constructor a `super(...)` in the running function calls (XS's
-    /// `XS_CODE_SUPER`): the derived constructor's [[Prototype]]. An arrow
-    /// function has no [[Construct]] and no class of its own, so from one XS
+    /// `XS_CODE_SUPER`): the derived constructor's `[[Prototype]]`. An arrow
+    /// function has no `[[Construct]]` and no class of its own, so from one XS
     /// takes the class its home object's own `constructor` names, and its
-    /// [[Prototype]]. `NULL` when there is none; the caller throws.
+    /// `[[Prototype]]`. `NULL` when there is none; the caller throws.
     pub(super) fn super_parent(&self) -> crate::value::SlotIndex {
         let function = if self.slot_is_constructor(self.cur_func) {
             self.cur_func
@@ -675,7 +675,7 @@ impl Interp {
         }
     }
 
-    /// [[Get]] of a property whose own descriptor is `own`: its value, or
+    /// `[[Get]]` of a property whose own descriptor is `own`: its value, or
     /// its getter called on `receiver` (undefined without one).
     fn own_descriptor_value(
         &mut self,

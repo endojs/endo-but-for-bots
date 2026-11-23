@@ -1,0 +1,12 @@
+Mutant MTR-1-a: tick_raw accrues with a plain += (overflow panics again).
+--- a/ironhorse-vm/src/meter.rs
++++ b/ironhorse-vm/src/meter.rs
+@@ -277,7 +277,7 @@
+     /// wrapping or panicking.
+     #[inline]
+     pub fn tick_raw(&mut self, n: u64) {
+-        self.index = self.index.saturating_add(n);
++        self.index += n;
+     }
+ 
+     /// Admit work before it allocates or executes. `n` is a raw 16.16

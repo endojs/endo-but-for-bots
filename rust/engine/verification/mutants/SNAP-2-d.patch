@@ -1,0 +1,12 @@
+Mutant SNAP-2-d: decode_payload swaps two bytes of an At index.
+--- a/ironhorse-snapshot/src/slot_codec.rs
++++ b/ironhorse-snapshot/src/slot_codec.rs
+@@ -188,7 +188,7 @@
+         P_AT => (
+             Payload::At(
+                 u16::from_be_bytes([d0, d1]),
+-                u32::from_be_bytes([d2, d3, d4, d5]),
++                u32::from_be_bytes([d3, d2, d4, d5]),
+             ),
+             6,
+         ),

@@ -1,0 +1,12 @@
+Mutant STR-3-a: the merge sweep mishandles a boundary shared by both sets.
+--- a/ironhorse-regexp/src/compile.rs
++++ b/ironhorse-regexp/src/compile.rs
+@@ -3355,7 +3355,7 @@
+     while i1 < lim1 && i2 < lim2 {
+         let test = c1[i1] - c2[i2];
+         let mut character = 0i32;
+-        if test <= 0 {
++        if test < 0 {
+             character = c1[i1];
+             flag ^= 1;
+             i1 += 1;

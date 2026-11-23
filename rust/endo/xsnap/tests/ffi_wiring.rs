@@ -96,7 +96,11 @@ fn panic_from_a_real_xs_callback_is_confined_to_its_worker() {
         machine.eval("recvFrame()");
         assert!(worker_io::ffi_panicked());
         let panic = worker_io::take_ffi_panic().expect("callback panic recorded");
-        assert!(panic.message.contains("WorkerTransport"), "{}", panic.message);
+        assert!(
+            panic.message.contains("WorkerTransport"),
+            "{}",
+            panic.message
+        );
     })
     .join()
     .expect("guard must prevent a process abort or thread unwind");

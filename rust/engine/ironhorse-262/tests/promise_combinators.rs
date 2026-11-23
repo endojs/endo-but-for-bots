@@ -20,6 +20,7 @@
 //!   2. **Observable resolution** — the combinator's *resolved value* is read
 //!      out of a post-drain global (`g`, rendered as ironhorse's async signal) and
 //!      checked against the analytically-known value XS's combinators produce.
+//!
 //! Plus a **determinism** gate: identical computrons across repeated ironhorse runs
 //! (the meter is deterministic-per-release; oracle agreement is advisory).
 

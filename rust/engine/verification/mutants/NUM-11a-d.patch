@@ -1,0 +1,16 @@
+Mutant NUM-11a-d: bi_canonical keeps a negative zero.
+--- a/ironhorse-vm/src/interp/bigint.rs
++++ b/ironhorse-vm/src/interp/bigint.rs
+@@ -24,11 +24,7 @@
+ /// trimmed (no zero high limb above the first), and zero never negative.
+ pub(super) fn bi_canonical(negative: bool, magnitude: Vec<u32>) -> (bool, Vec<u32>) {
+     let magnitude = bi_trim(magnitude);
+-    let negative = if bi_is_zero(&magnitude) {
+-        false
+-    } else {
+-        negative
+-    };
++    let negative = negative;
+     (negative, magnitude)
+ }
+ 

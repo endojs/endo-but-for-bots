@@ -976,8 +976,8 @@ impl Interp {
     /// length)`. The backing BYTES travel with the chunk arena (`BLOC`);
     /// this row is the geometry that makes them readable. Flags fold the
     /// two satellite brand sets and resizability in: bit 0 = detached
-    /// ([`Self::detached_buffers`]), bit 1 = shared
-    /// ([`Self::shared_buffers`]), bit 2 = resizable (growable when
+    /// (`Self::detached_buffers`), bit 1 = shared
+    /// (`Self::shared_buffers`), bit 2 = resizable (growable when
     /// shared), whose maximum is the fifth field — 0 for a fixed-length
     /// buffer.
     pub fn array_buffers_snapshot(&self) -> Vec<(u32, u32, u32, u8, u32)> {

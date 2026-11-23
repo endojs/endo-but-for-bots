@@ -204,3 +204,149 @@ mod tests {
         assert_eq!(find_character(GRIN_CESU8, 6, -1, 0), 3);
     }
 }
+
+/// The XS CESU-8 form of one code unit (NUL as `C0 80`), for the TXT-1
+/// tests and proofs below.
+#[cfg(any(test, kani))]
+fn cesu8_unit(u: u16, out: &mut [u8; 3]) -> usize {
+    match u {
+        1..=0x7F => {
+            out[0] = u as u8;
+            1
+        }
+        0 | 0x80..=0x7FF => {
+            out[0] = 0xC0 | (u >> 6) as u8;
+            out[1] = 0x80 | (u & 0x3F) as u8;
+            2
+        }
+        _ => {
+            out[0] = 0xE0 | (u >> 12) as u8;
+            out[1] = 0x80 | ((u >> 6) & 0x3F) as u8;
+            out[2] = 0x80 | (u & 0x3F) as u8;
+            3
+        }
+    }
+}
+
+/// TXT-1(c) for the regexp decoders: agreement with UTF-16 code point
+/// iteration (CodePointAt, ECMA-262 §11.1.4) on canonical CESU-8.
+#[cfg(test)]
+mod transcoder_properties {
+    use super::*;
+
+    fn encode(units: &[u16]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for &u in units {
+            let mut b = [0; 3];
+            let n = cesu8_unit(u, &mut b);
+            out.extend_from_slice(&b[..n]);
+        }
+        out.push(0);
+        out
+    }
+
+    /// Walking `cesu8_decode` over the CESU-8 of `units` yields the code
+    /// points `char::decode_utf16` does, a lone surrogate as itself.
+    fn agrees(units: &[u16]) {
+        let bytes = encode(units);
+        let mut got = Vec::new();
+        let mut at = 0;
+        loop {
+            let (c, next) = cesu8_decode(&bytes, at);
+            if c == C_EOF && bytes[at] == 0 {
+                break;
+            }
+            got.push(c);
+            at = next;
+        }
+        let want: Vec<i64> = char::decode_utf16(units.iter().copied())
+            .map(|r| match r {
+                Ok(c) => i64::from(u32::from(c)),
+                Err(e) => i64::from(e.unpaired_surrogate()),
+            })
+            .collect();
+        // NUL decodes as its own code point 0 from the two-byte form.
+        assert_eq!(got, want, "{units:x?}");
+    }
+
+    #[test]
+    fn cesu8_decode_is_code_point_at() {
+        for u in 1..=u16::MAX {
+            agrees(&[u]);
+        }
+        for hi in 0xD800..=0xDBFFu16 {
+            for lo in (0xDC00..=0xDFFFu16).step_by(3).chain([0x41, 0xD800]) {
+                agrees(&[hi, lo]);
+            }
+        }
+        let mut state = 0xC0DEu64;
+        for _ in 0..100_000 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1442695040888963407);
+            let n = (state >> 61) as usize;
+            let units: Vec<u16> = (0..n)
+                .map(|k| {
+                    let r = (state.rotate_left(13 * k as u32 + 7) >> 40) as u16;
+                    if r.is_multiple_of(3) {
+                        0xD800 | (r & 0x7FF)
+                    } else {
+                        r.max(1)
+                    }
+                })
+                .collect();
+            agrees(&units);
+        }
+    }
+}
+
+/// Kani harnesses for guarantee TXT-1 (`verification/proofs.d/framing.toml`).
+#[cfg(kani)]
+mod transcoder_proofs {
+    use super::*;
+
+    /// TXT-1(c): on the CESU-8 of a high surrogate followed by any unit,
+    /// `cesu8_decode` is CodePointAt (ECMA-262 §11.1.4): a following low
+    /// surrogate combines by UTF16SurrogatePairToCodePoint (§11.1.3) and
+    /// consumes both sequences; anything else leaves the lone surrogate as
+    /// its own code point, consuming only its three bytes.
+    #[kani::proof]
+    #[kani::unwind(7)]
+    fn txt1_cesu8_decode_combines_pairs() {
+        let hi: u16 = kani::any_where(|&u| (0xD800..=0xDBFF).contains(&u));
+        let next: u16 = kani::any_where(|&u| u != 0);
+        let mut bytes = [0u8; 7];
+        let mut first = [0; 3];
+        let mut second = [0; 3];
+        let n1 = cesu8_unit(hi, &mut first);
+        let n2 = cesu8_unit(next, &mut second);
+        bytes[..n1].copy_from_slice(&first[..n1]);
+        bytes[n1..n1 + n2].copy_from_slice(&second[..n2]);
+        let (c, after) = cesu8_decode(&bytes, 0);
+        if (0xDC00..=0xDFFF).contains(&next) {
+            let cp = (i64::from(hi) - 0xD800) * 0x400 + (i64::from(next) - 0xDC00) + 0x10000;
+            assert!(c == cp && after == n1 + n2);
+        } else {
+            assert!(c == i64::from(hi) && after == n1);
+        }
+        kani::cover!(
+            (0xDC00..=0xDFFF).contains(&next),
+            "a surrogate pair combined"
+        );
+    }
+
+    /// TXT-1(c): every non-NUL code unit's CESU-8 form decodes to that unit
+    /// with its exact width, unless it is a high surrogate (combined above).
+    #[kani::proof]
+    #[kani::unwind(7)]
+    fn txt1_utf8_decode_single_unit() {
+        let u: u16 = kani::any_where(|&u| u != 0 && !(0xD800..=0xDBFF).contains(&u));
+        let mut bytes = [0u8; 4];
+        let mut unit = [0; 3];
+        let n = cesu8_unit(u, &mut unit);
+        bytes[..n].copy_from_slice(&unit[..n]);
+        assert!(utf8_decode(&bytes, 0) == (i64::from(u), n));
+        assert!(cesu8_decode(&bytes, 0) == (i64::from(u), n));
+        kani::cover!(n == 3, "a three-byte unit");
+    }
+}

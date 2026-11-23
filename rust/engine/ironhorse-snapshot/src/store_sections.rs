@@ -40,7 +40,35 @@ macro_rules! define_small_sections {
             pub const fn id(self) -> u32 {
                 self as u32
             }
+            /// This section's entry in a per-section array.
+            pub(crate) fn of<T>(self, per_section: &[T; SMALL_SECTION_COUNT]) -> &T {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "a section's id is its position in `ALL` (asserted at \
+                              compile time below), so it is below SMALL_SECTION_COUNT"
+                )]
+                &per_section[self as usize]
+            }
+            /// This section's entry in a per-section array, mutably.
+            pub(crate) fn of_mut<T>(self, per_section: &mut [T; SMALL_SECTION_COUNT]) -> &mut T {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "a section's id is its position in `ALL` (asserted at \
+                              compile time below), so it is below SMALL_SECTION_COUNT"
+                )]
+                &mut per_section[self as usize]
+            }
         }
+        // The ids are persisted literals; `of`/`of_mut` and `from_id` rely on
+        // them numbering `ALL` densely from zero.
+        const _: () = {
+            let mut position = 0;
+            $(
+                assert!($id == position, "small section ids must number ALL densely");
+                position += 1;
+            )*
+            assert!(position == SMALL_SECTION_COUNT);
+        };
     };
 }
 ironhorse_vm::snapshot_sections!(define_small_sections);
@@ -87,18 +115,15 @@ fn split_sections(bytes: &[u8], count: usize) -> Result<Vec<&[u8]>, StoreError> 
     let mut sections = Vec::with_capacity(count);
     let mut rest = bytes;
     for _ in 0..count {
-        let header: [u8; 4] = rest
-            .get(..4)
-            .ok_or_else(|| corrupt("small section header"))?
-            .try_into()
-            .expect("four-byte header");
-        rest = &rest[4..];
-        let length = u32::from_be_bytes(header) as usize;
-        sections.push(
-            rest.get(..length)
-                .ok_or_else(|| corrupt("small section payload"))?,
-        );
-        rest = &rest[length..];
+        let (header, after_header) = rest
+            .split_first_chunk::<4>()
+            .ok_or_else(|| corrupt("small section header"))?;
+        let length = u32::from_be_bytes(*header) as usize;
+        let (payload, after_payload) = after_header
+            .split_at_checked(length)
+            .ok_or_else(|| corrupt("small section payload"))?;
+        sections.push(payload);
+        rest = after_payload;
     }
     if !rest.is_empty() {
         return Err(corrupt("extra small sections"));
@@ -110,7 +135,8 @@ fn split_sections(bytes: &[u8], count: usize) -> Result<Vec<&[u8]>, StoreError> 
 /// No payload decode/re-encode is permitted at the migration boundary.
 pub fn split_small_state(bytes: &[u8]) -> Result<[&[u8]; SMALL_SECTION_COUNT], StoreError> {
     let sections = split_sections(bytes, SMALL_SECTION_COUNT)?;
-    Ok(std::array::from_fn(|id| sections[id]))
+    // `split_sections` returns exactly the count it was asked for.
+    <[&[u8]; SMALL_SECTION_COUNT]>::try_from(sections).map_err(|_| corrupt("small section count"))
 }
 
 /// Borrow the payloads of a small state framed at the sectioned schema
@@ -243,7 +269,7 @@ pub fn batch_updates(
         .iter()
         .map(|&section| SectionUpdate {
             section,
-            bytes: sections[section.id() as usize].to_vec(),
+            bytes: section.of(&sections).to_vec(),
         })
         .collect())
 }
@@ -281,7 +307,7 @@ pub fn merge_framed(
             None => [&[][..]; SMALL_SECTION_COUNT],
         };
         for update in updates {
-            sections[update.section.id() as usize] = &update.bytes;
+            *update.section.of_mut(&mut sections) = &update.bytes;
         }
         frame_small_state(&sections)
     } else {
@@ -296,9 +322,10 @@ pub struct SectionLeaves {
 }
 impl SectionLeaves {
     pub fn from_payloads(sections: &[&[u8]; SMALL_SECTION_COUNT]) -> Self {
-        Self::from_hashes(std::array::from_fn(|id| {
-            section_digest(id as u32, sections[id])
-        }))
+        Self::from_hashes(
+            SmallSection::ALL
+                .map(|section| section_digest(section.id(), section.of::<&[u8]>(sections))),
+        )
     }
     pub fn from_hashes(leaves: [[u8; 32]; SMALL_SECTION_COUNT]) -> Self {
         Self { leaves }
@@ -309,8 +336,8 @@ impl SectionLeaves {
     pub fn apply(&mut self, updates: &[SectionUpdate]) -> Result<(), StoreError> {
         validate_updates(updates, false)?;
         for update in updates {
-            let id = update.section.id();
-            self.leaves[id as usize] = section_digest(id, &update.bytes);
+            *update.section.of_mut(&mut self.leaves) =
+                section_digest(update.section.id(), &update.bytes);
         }
         Ok(())
     }

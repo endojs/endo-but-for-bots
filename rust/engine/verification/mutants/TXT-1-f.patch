@@ -1,0 +1,12 @@
+Mutant TXT-1-f: units_to_be16 stores units little-endian.
+--- a/ironhorse-vm/src/interp/text.rs
++++ b/ironhorse-vm/src/interp/text.rs
+@@ -27,7 +27,7 @@
+         crate::value::host_allocation_failed();
+     }
+     for &u in units {
+-        out.extend_from_slice(&u.to_be_bytes());
++        out.extend_from_slice(&u.to_le_bytes());
+     }
+     out
+ }

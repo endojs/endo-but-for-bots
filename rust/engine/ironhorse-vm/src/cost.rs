@@ -23,7 +23,7 @@
 //!
 //! This module records the deterministic-safe observations: the per-opcode and
 //! per-builtin **histogram** wired at the existing `tick_code` /
-//! native-dispatch seams, plus the [`CostModel`] work-function table (data
+//! native-dispatch seams, plus the `CostModel` work-function table (data
 //! only, without wall-clock timing). The opcode histogram is
 //! `n_dispatched` generalized from a scalar to a per-opcode array; its
 //! total reconciles with `n_dispatched` exactly.

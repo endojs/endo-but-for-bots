@@ -1,0 +1,10 @@
+[package]
+name = "ironhorse-spec"
+description = "Integer reference models of ECMA-262 abstract operations, the trusted base for Ironhorse proofs."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true

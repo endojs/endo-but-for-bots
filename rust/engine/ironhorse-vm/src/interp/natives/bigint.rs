@@ -57,14 +57,7 @@ impl Interp {
         match value.value {
             Payload::BigInt(off) => {
                 let (neg, mag) = self.read_bigint(off);
-                let mut u: u64 = 0;
-                if let Some(&l0) = mag.first() {
-                    u |= l0 as u64;
-                }
-                if let Some(&l1) = mag.get(1) {
-                    u |= (l1 as u64) << 32;
-                }
-                Some(if neg { u.wrapping_neg() } else { u })
+                Some(bi_low_u64(neg, &mag))
             }
             Payload::Boolean(b) => Some(b as u64),
             _ => None,
@@ -95,57 +88,11 @@ impl Interp {
         (neg, bi_trim(mag))
     }
 
-    /// Convert a BigInt magnitude to the nearest IEEE-754 binary64 value,
-    /// using round-to-nearest, ties-to-even. Reading only the leading 53 bits
-    /// and the discarded round/sticky bits avoids an intermediate `f64`
-    /// accumulation (and therefore avoids double rounding for wide values).
+    /// Convert a BigInt to the nearest IEEE-754 binary64 value, using
+    /// round-to-nearest, ties-to-even ([`bi_to_f64`]).
     pub(in crate::interp) fn bigint_to_f64(&self, off: crate::value::ChunkOffset) -> f64 {
         let (negative, magnitude) = self.read_bigint(off);
-        if bi_is_zero(&magnitude) {
-            return 0.0;
-        }
-
-        let top = *magnitude.last().expect("a BigInt has at least one limb");
-        let bit_length = (magnitude.len() - 1) * 32 + (32 - top.leading_zeros() as usize);
-        let mut exponent = bit_length - 1;
-        let discarded = bit_length.saturating_sub(53);
-
-        let bit = |position: usize| -> bool {
-            magnitude
-                .get(position / 32)
-                .is_some_and(|limb| limb & (1u32 << (position % 32)) != 0)
-        };
-        let mut significand = 0u64;
-        for position in (discarded..bit_length).rev() {
-            significand = (significand << 1) | u64::from(bit(position));
-        }
-        if bit_length < 53 {
-            significand <<= 53 - bit_length;
-        }
-
-        if discarded > 0 {
-            let round = bit(discarded - 1);
-            let sticky = (0..discarded - 1).any(bit);
-            if round && (sticky || significand & 1 != 0) {
-                significand += 1;
-                if significand == 1u64 << 53 {
-                    significand >>= 1;
-                    exponent += 1;
-                }
-            }
-        }
-
-        if exponent > 1023 {
-            return if negative {
-                f64::NEG_INFINITY
-            } else {
-                f64::INFINITY
-            };
-        }
-        let sign = u64::from(negative) << 63;
-        let biased = (exponent as u64 + 1023) << 52;
-        let fraction = significand - (1u64 << 52);
-        f64::from_bits(sign | biased | fraction)
+        bi_to_f64(negative, &magnitude)
     }
 
     /// The BigInt primitive carried by a primitive or boxed receiver.
@@ -230,66 +177,17 @@ impl Interp {
         bits: u64,
         signed: bool,
     ) -> Result<Slot, Step> {
-        const MAX_BIGINT_WIDTH_BITS: u64 = 64 * 1024;
-
         let Payload::BigInt(off) = value.value else {
             return Err(self.catchable_type_error_msg(
                 "BigInt width conversion requires a BigInt value".into(),
             ));
         };
         let (negative, magnitude) = self.read_bigint(off);
-        if bits == 0 || bi_is_zero(&magnitude) {
-            return Ok(self.make_bigint(false, vec![0]));
+        match bi_as_n(negative, &magnitude, bits, signed) {
+            WidthResult::Unchanged => Ok(value),
+            WidthResult::Value(negative, limbs) => Ok(self.make_bigint(negative, limbs)),
+            WidthResult::TooLarge => Err(Step::Host(Halt::Refused("BigInt.asN:result-too-large"))),
         }
-        let top = *magnitude
-            .last()
-            .expect("a non-zero BigInt has a leading limb");
-        let magnitude_bits =
-            (magnitude.len() as u64 - 1) * 32 + u64::from(32 - top.leading_zeros());
-
-        if !negative && ((!signed && magnitude_bits <= bits) || (signed && magnitude_bits < bits)) {
-            return Ok(value);
-        }
-        if negative && signed {
-            let minimum_at_width = magnitude_bits == bits
-                && magnitude
-                    .iter()
-                    .take(magnitude.len() - 1)
-                    .all(|&limb| limb == 0)
-                && top.is_power_of_two();
-            if magnitude_bits < bits || minimum_at_width {
-                return Ok(value);
-            }
-        }
-        if bits > MAX_BIGINT_WIDTH_BITS {
-            return Err(Step::Host(Halt::Refused("BigInt.asN:result-too-large")));
-        }
-
-        let limb_count = bits.div_ceil(32) as usize;
-        let mut unsigned = vec![0u32; limb_count];
-        let copied = limb_count.min(magnitude.len());
-        unsigned[..copied].copy_from_slice(&magnitude[..copied]);
-        if negative {
-            for limb in &mut unsigned {
-                *limb = !*limb;
-            }
-            bi_add_one_in_place(&mut unsigned);
-        }
-        bi_mask_width(&mut unsigned, bits);
-
-        if signed {
-            let sign_index = (bits - 1) as usize;
-            let sign_set = unsigned[sign_index / 32] & (1u32 << (sign_index % 32)) != 0;
-            if sign_set {
-                for limb in &mut unsigned {
-                    *limb = !*limb;
-                }
-                bi_add_one_in_place(&mut unsigned);
-                bi_mask_width(&mut unsigned, bits);
-                return Ok(self.make_bigint(true, unsigned));
-            }
-        }
-        Ok(self.make_bigint(false, unsigned))
     }
 
     /// BigInt exponentiation (`base ** exponent`) using exponentiation by
@@ -385,8 +283,7 @@ impl Interp {
     /// meters it — at XS's allocation size, which for an arithmetic result is
     /// the pre-trim working size rather than the trimmed `bigint.size`).
     fn store_bigint(&mut self, neg: bool, mag: Vec<u32>) -> Slot {
-        let mag = bi_trim(mag);
-        let neg = if bi_is_zero(&mag) { false } else { neg };
+        let (neg, mag) = bi_canonical(neg, mag);
         let mut bytes = Vec::with_capacity(1 + mag.len() * 4);
         bytes.push(neg as u8);
         for limb in &mag {
@@ -586,9 +483,8 @@ impl Interp {
         })
     }
 
-    /// BigInt `&`/`|`/`^` over the spec's infinite two's-complement values.
-    /// One extra high limb preserves sign extension while the operation runs;
-    /// the result is converted back to canonical sign+magnitude form.
+    /// BigInt `&`/`|`/`^` over the spec's infinite two's-complement values
+    /// ([`bi_bitwise`]).
     pub(in crate::interp) fn bigint_bitwise(
         &mut self,
         op: BitOp,
@@ -597,20 +493,8 @@ impl Interp {
     ) -> Slot {
         let (a_negative, a_magnitude) = self.read_bigint(a);
         let (b_negative, b_magnitude) = self.read_bigint(b);
-        let width = a_magnitude.len().max(b_magnitude.len()) + 1;
-        let a_twos = bi_to_twos_complement(a_negative, &a_magnitude, width);
-        let b_twos = bi_to_twos_complement(b_negative, &b_magnitude, width);
-        let result = a_twos
-            .into_iter()
-            .zip(b_twos)
-            .map(|(a_limb, b_limb)| match op {
-                BitOp::And => a_limb & b_limb,
-                BitOp::Or => a_limb | b_limb,
-                BitOp::Xor => a_limb ^ b_limb,
-                _ => unreachable!("only the three logical BigInt ops call this helper"),
-            })
-            .collect();
-        let (negative, magnitude) = bi_from_twos_complement(result);
+        let (negative, magnitude) =
+            bi_bitwise(op, a_negative, &a_magnitude, b_negative, &b_magnitude);
         self.make_bigint(negative, magnitude)
     }
 

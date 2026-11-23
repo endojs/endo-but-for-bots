@@ -280,7 +280,7 @@ impl Interp {
                         value: Payload::Reference(entry),
                         ..
                     }
-                        if self.arrays.get(&entry).is_some_and(|entry_data| {
+                        if self.arrays.get(entry).is_some_and(|entry_data| {
                             entry_data.length >= 2
                                 && entry_data.items().contains_key(&0)
                                 && entry_data.items().contains_key(&1)
@@ -935,7 +935,7 @@ impl Interp {
     /// `Ok(Ok(None))` is the exhausted step. A throw out of `next`, a
     /// non-object step result, or a throwing `done`/`value` getter all
     /// propagate WITHOUT calling `return`: the spec's IteratorStepValue sets
-    /// [[Done]] before returning the abrupt completion, so its caller's
+    /// `[[Done]]` before returning the abrupt completion, so its caller's
     /// IfAbruptCloseIterator finds a closed record and skips the close. This
     /// function sets no latch itself — the caller latches the helper on the
     /// way out — so the distinction it implements is only "do not close".
@@ -2070,7 +2070,7 @@ impl Interp {
     /// `fx_Map_prototype_forEach` / `fx_Set_prototype_forEach`: call the
     /// callback for each live entry in insertion order. Map passes
     /// `(value, key, coll)`; Set passes `(value, value, coll)`. Meters the
-    /// native frame ([`COLLECTION_FOREACH_FRAME_METERING`]) plus, per entry,
+    /// native frame (`COLLECTION_FOREACH_FRAME_METERING`) plus, per entry,
     /// the call-frame residual ([`COLLECTION_FOREACH_PER_ENTRY_METERING`]) over
     /// the callback body the nested dispatch meters. Receiver and callback
     /// validation also applies to empty collections.
@@ -3057,7 +3057,8 @@ impl Interp {
     /// `NaN`).
     fn normalize_coll_key(&self, key: Slot) -> Slot {
         match key.value {
-            Payload::Number(n) if n == 0.0 => Slot::number(0.0),
+            // A float literal pattern compares with `==`, so `0.0` matches `-0`.
+            Payload::Number(0.0) => Slot::number(0.0),
             _ => key,
         }
     }

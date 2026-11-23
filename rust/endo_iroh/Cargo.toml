@@ -17,3 +17,6 @@ tokio = { version = "1", features = ["full"] }
 [[bin]]
 name = "endo-iroh"
 path = "src/bin/endo_iroh.rs"
+
+[lints]
+workspace = true

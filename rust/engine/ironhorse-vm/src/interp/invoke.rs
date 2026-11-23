@@ -461,7 +461,7 @@ impl Interp {
         result
     }
 
-    /// BoundFunctionExoticObject.[[Call]] for the chain of bound functions
+    /// BoundFunctionExoticObject.`[[Call]]` for the chain of bound functions
     /// from `f`, with `this` and the argument list `args` the call received:
     /// each link prepends its bound arguments and substitutes its bound
     /// receiver, charged as the recursive form charged it. Returns the first
@@ -1038,7 +1038,7 @@ impl Interp {
     }
 
     /// One bound layer of [`Self::construct_value_turns`]: BoundFunction
-    /// [[Construct]] (ECMA-262 10.4.1.2). Prepend the bound arguments to
+    /// `[[Construct]]` (ECMA-262 10.4.1.2). Prepend the bound arguments to
     /// `args`, returning the new list; let a `newTarget` naming the bound
     /// function `f` name its target instead; and turn `func` to the target.
     /// Charged as [`Self::invoke_value`] charges a bound call. Out of line, so
@@ -1146,7 +1146,7 @@ impl Interp {
 
     /// Run a user (bytecode) constructor to completion with an explicit
     /// argument list, returning the constructed object (ECMA-262 Ordinary
-    /// [[Construct]] shape, modeled on [`Self::run_callback`] but with the
+    /// `[[Construct]]` shape, modeled on [`Self::run_callback`] but with the
     /// construct flag set so the callee body's `this` is a fresh instance).
     /// A constructor retained from an earlier crank executes against its own
     /// persisted code segment, just like an ordinary cross-crank callback.

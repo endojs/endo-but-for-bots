@@ -1,0 +1,13 @@
+Mutant NUM-11a-a: bi_add_mag drops the final carry limb.
+--- a/ironhorse-vm/src/interp/bigint.rs
++++ b/ironhorse-vm/src/interp/bigint.rs
+@@ -222,9 +222,6 @@
+         let s = x + y + carry;
+         out.push((s & 0xFFFF_FFFF) as u32);
+         carry = s >> 32;
+-    }
+-    if carry != 0 {
+-        out.push(carry as u32);
+     }
+     bi_trim(out)
+ }

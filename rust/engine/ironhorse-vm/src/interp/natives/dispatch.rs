@@ -196,7 +196,7 @@ impl Interp {
                         .get("co")
                         .cloned()
                         .unwrap_or_else(|| "default".to_string()),
-                    numeric: locale.unicode.get("kn").map_or(false, |v| v == "true"),
+                    numeric: locale.unicode.get("kn").is_some_and(|v| v == "true"),
                     case_first: locale
                         .unicode
                         .get("kf")
@@ -4724,7 +4724,7 @@ impl Interp {
                 let length = self.arrays[&inst].length;
                 let c = argc as u32;
                 let args: Vec<Slot> = Self::fill_scratch(
-                    self.reserve_scratch(argc as usize)?,
+                    self.reserve_scratch(argc)?,
                     (0..argc).map(|i| {
                         self.stack
                             .get(base + 4 + i)
@@ -7237,9 +7237,9 @@ impl Interp {
                         continue;
                     }
                     let read_key = self.to_read_key(code, key)?;
-                    if !self
+                    if self
                         .mop_get_own_property_read(code, inst, read_key)?
-                        .is_some_and(|descriptor| descriptor.enumerable == Some(true))
+                        .is_none_or(|descriptor| descriptor.enumerable != Some(true))
                     {
                         continue;
                     }

@@ -202,9 +202,10 @@ impl Interp {
                 Slot::boolean(self.disposable_stacks[&inst].disposed)
             }
             Payload::Reference(inst)
-                if (obj.kind == Kind::Reference && self.array_buffers.contains_key(&inst))
-                    || (obj.kind == Kind::Reference && self.typed_arrays.contains_key(&inst))
-                    || (obj.kind == Kind::Reference && self.data_views.contains_key(&inst)) =>
+                if obj.kind == Kind::Reference
+                    && (self.array_buffers.contains_key(&inst)
+                        || self.typed_arrays.contains_key(&inst)
+                        || self.data_views.contains_key(&inst)) =>
             {
                 // These are real accessors on the intrinsic
                 // prototypes. Ordinary lookup preserves guest
@@ -257,7 +258,7 @@ impl Interp {
                     .unwrap_or_default();
                 let locale = self.locales[&inst].clone();
                 if name == "numeric" {
-                    Slot::boolean(locale.unicode.get("kn").map_or(false, |v| v == "true"))
+                    Slot::boolean(locale.unicode.get("kn").is_some_and(|v| v == "true"))
                 } else {
                     let (recognized, text) = match name.as_str().unwrap_or("") {
                         "baseName" => (true, Some(locale_base_name(&locale))),

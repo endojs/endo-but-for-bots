@@ -1,5 +1,5 @@
 //! `endot-ih`: the xst-analogue test262 runner (design
-//! [`designs/ironhorse-test262-convergence.md`] § Part 2). It plays for
+//! `designs/ironhorse-test262-convergence.md` § Part 2). It plays for
 //! the Rust engine the role `xs/tools/xst.c` + `xst262.c` play for XS —
 //! full YAML frontmatter, the not-yet-implemented feature skip list,
 //! sloppy+strict mode selection, negative verdicts, the xst-shaped `-o` YAML
@@ -49,10 +49,12 @@ use ironhorse_262::xst::{run_files, Config, SesMode, DEFAULT_CASE_TIMEOUT_SECOND
 use std::path::PathBuf;
 
 fn main() {
-    let mut cfg = Config::default();
-    // CLI policy: opt in to the per-case wall-clock bound the library leaves off
-    // by default (overridable with `--case-timeout`, `0` = unbounded).
-    cfg.per_case_timeout_seconds = DEFAULT_CASE_TIMEOUT_SECONDS;
+    let mut cfg = Config {
+        // CLI policy: opt in to the per-case wall-clock bound the library leaves off
+        // by default (overridable with `--case-timeout`, `0` = unbounded).
+        per_case_timeout_seconds: DEFAULT_CASE_TIMEOUT_SECONDS,
+        ..Default::default()
+    };
     let mut test262_dir: Option<PathBuf> = None;
     let mut report_path: Option<PathBuf> = None;
     let mut json_path: Option<PathBuf> = None;

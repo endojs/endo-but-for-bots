@@ -286,6 +286,172 @@ void fxRunLoop(txMachine* the)
 	fxCheckUnhandledRejections(the, 1);
 }
 
+/* ---- Guarded eval for Machine::eval ---- */
+
+/*
+ * Call the global `eval` on `source` inside an XS try frame.
+ *
+ * Machine::eval (src/lib.rs) calls this between fxBeginHost and
+ * fxEndHost.  fxBeginHost installs no jump record, so without this a
+ * throw longjmps to whatever `the->firstJump` holds: NULL at top level
+ * (fxJump then dereferences it), or a jump record below a Rust caller's
+ * frames when Machine::eval runs inside a host callback.  Here the jump
+ * lands in this C frame instead.
+ *
+ * On success the completion value is left in *result and 0 is returned.
+ * A value other than undefined, null, a boolean, a number or a string is
+ * converted to a string first, while the try is still in place, because
+ * that conversion runs JS (`toString`) that can throw.  The value is kept
+ * on the XS stack during the conversion so that it stays reachable, and
+ * once it is a primitive the caller can read it without calling into JS.
+ *
+ * If the evaluation or the conversion throws, returns -1.  A recoverable
+ * fxAbort (fxExitToHost) longjmps to the outermost jump record; when this
+ * try is the outermost one (Machine::eval at top level) it lands here and
+ * the exit status is returned.  Either way the stack, scope, frame and
+ * code are restored to what they were on entry.
+ */
+int fxEvalGuarded(txMachine* the, txString source, txSlot* result)
+{
+	int status = 0;
+	the->exitStatus = 0;
+	mxTry(the) {
+		/* `this`, the frame fxCallID builds, and the one argument. */
+		fxOverflow(the, -8, C_NULL, 0);
+		mxPush(mxGlobal);
+		fxCallID(the, fxID(the, "eval"));
+		mxPushStringC(source);
+		fxRunCount(the, 1);
+		switch (the->stack->kind) {
+		case XS_UNDEFINED_KIND:
+		case XS_NULL_KIND:
+		case XS_BOOLEAN_KIND:
+		case XS_INTEGER_KIND:
+		case XS_NUMBER_KIND:
+		case XS_STRING_KIND:
+		case XS_STRING_X_KIND:
+			break;
+		default:
+			fxToString(the, the->stack);
+			break;
+		}
+		*result = *(the->stack);
+		mxPop();
+	}
+	mxCatch(the) {
+		status = the->exitStatus ? the->exitStatus : -1;
+		the->exitStatus = 0;
+	}
+	return status;
+}
+
+/* ---- Guarded define and key lookup for Machine::define_function / id ---- */
+
+/*
+ * xs.h's xsDefine(xsGlobal, xsID(name), xsNewHostFunction(callback,
+ * length), flag) under an XS try frame.  fxDefineID throws a TypeError
+ * when the global already has a non-configurable property of that name
+ * (or is frozen), and fxID aborts when the key table is full; with no
+ * jump record installed either one longjmps through a NULL firstJump.
+ * Returns 0, -1 if it threw, or the exit status of an abort that landed
+ * here.  Must be called between fxBeginHost and fxEndHost.
+ */
+int fxDefineHostFunctionGuarded(txMachine* the, txString name, txCallback callback,
+	txInteger length, txInteger flag, txInteger mask)
+{
+	int status = 0;
+	the->exitStatus = 0;
+	mxTry(the) {
+		txID id = fxID(the, name);
+		/* the function, the global, and what fxNewHostFunction pushes. */
+		fxOverflow(the, -8, C_NULL, 0);
+		fxNewHostFunction(the, callback, length, id, XS_NO_ID);
+		mxPush(mxGlobal);
+		fxDefineID(the, id, (txFlag)flag, (txFlag)mask);
+		mxPop();
+	}
+	mxCatch(the) {
+		status = the->exitStatus ? the->exitStatus : -1;
+		the->exitStatus = 0;
+	}
+	return status;
+}
+
+/*
+ * fxID under an XS try frame, for the key-table-full abort.  Returns 0
+ * with the key in *id, or nonzero as fxDefineHostFunctionGuarded.
+ */
+int fxIDGuarded(txMachine* the, txString name, void* id)
+{
+	int status = 0;
+	the->exitStatus = 0;
+	mxTry(the) {
+		*(txID*)id = fxID(the, name);
+	}
+	mxCatch(the) {
+		status = the->exitStatus ? the->exitStatus : -1;
+		the->exitStatus = 0;
+	}
+	return status;
+}
+
+/* ---- Guarded drains for Machine::run_promise_jobs / quiesce / run_loop ---- */
+
+/*
+ * Run `run` with this C frame as the outermost jump record.
+ *
+ * fxRunPromiseJobs runs each job under its own mxTry, and its catch
+ * calls fxAbort(XS_UNHANDLED_EXCEPTION_EXIT); fxRunLoop does the same for
+ * a timer callback.  A recoverable abort inside a job (stack or memory
+ * exhaustion, metering) longjmps to the outermost jump record, which is
+ * that job's own try when Rust calls the drain at top level; its catch
+ * then aborts again with `the->firstJump` NULL, and fxExitToHost
+ * dereferences it.  Installing an outermost record here makes every such
+ * abort land in this frame.
+ *
+ * Returns 0 if `run` returned, or the exit status of the abort that
+ * landed here, with the stack, scope, frame and code restored.  (Called
+ * inside a host callback, an abort still longjmps to the outermost record
+ * below the callback's frames, as for fxEvalGuarded.)
+ */
+static int fxRunGuarded(txMachine* the, void (*run)(txMachine*))
+{
+	txJump aJump;
+	aJump.nextJump = the->firstJump;
+	aJump.stack = the->stack;
+	aJump.scope = the->scope;
+	aJump.frame = the->frame;
+	aJump.code = the->code;
+	aJump.flag = 0;
+	the->firstJump = &aJump;
+	the->exitStatus = 0;
+	if (c_setjmp(aJump.buffer) == 0) {
+		(*run)(the);
+		the->firstJump = aJump.nextJump;
+		return 0;
+	}
+	else {
+		int status = the->exitStatus ? the->exitStatus : -1;
+		the->stack = aJump.stack;
+		the->scope = aJump.scope;
+		the->frame = aJump.frame;
+		the->code = aJump.code;
+		the->firstJump = aJump.nextJump;
+		the->exitStatus = 0;
+		return status;
+	}
+}
+
+int fxRunPromiseJobsGuarded(txMachine* the)
+{
+	return fxRunGuarded(the, fxRunPromiseJobs);
+}
+
+int fxRunLoopGuarded(txMachine* the)
+{
+	return fxRunGuarded(the, fxRunLoop);
+}
+
 /* ---- Metering helpers ---- */
 
 #ifdef mxMetering

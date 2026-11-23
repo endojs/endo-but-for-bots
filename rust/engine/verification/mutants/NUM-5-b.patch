@@ -1,0 +1,12 @@
+Mutant NUM-5-b: strict equality says an Integer is never === a Number.
+--- a/ironhorse-vm/src/interp/numeric.rs
++++ b/ironhorse-vm/src/interp/numeric.rs
+@@ -508,7 +508,7 @@
+         (Payload::Boolean(x), Payload::Boolean(y)) => x == y,
+         (Payload::Integer(x), Payload::Integer(y)) => x == y,
+         (Payload::Number(x), Payload::Number(y)) => x == y, // NaN handled by IEEE
+-        (Payload::Integer(x), Payload::Number(y)) => (x as f64) == y,
++        (Payload::Integer(_), Payload::Number(_)) => false,
+         (Payload::Number(x), Payload::Integer(y)) => x == (y as f64),
+         // Reference identity: two references are `===` iff they name the
+         // same arena instance (XS compares `value.reference` pointers).

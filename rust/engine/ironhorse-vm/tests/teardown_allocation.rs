@@ -47,6 +47,8 @@ fn note_allocation() {
 // SAFETY: every method forwards its arguments to `System` unchanged, so each
 // upholds the `GlobalAlloc` contract exactly as `System` does. Counting only
 // touches a thread-local `Cell`, which never allocates or unwinds.
+// The workspace denies `unsafe_code`; this impl is the binary's only exemption.
+#[allow(unsafe_code)]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         note_allocation();
@@ -153,7 +155,7 @@ fn ast_shapes() -> Vec<(&'static str, Item)> {
             return Item::Null;
         }
         let children = vec![full(depth - 1), full(depth - 1), full(depth - 1)];
-        if depth % 2 == 0 {
+        if depth.is_multiple_of(2) {
             node(children)
         } else {
             Item::List(children)
@@ -211,7 +213,7 @@ fn json_source_shapes() -> Vec<(&'static str, JsonSourceTree)> {
             return JsonSourceTree::leaf();
         }
         let children = vec![full(depth - 1), full(depth - 1), full(depth - 1)];
-        if depth % 2 == 0 {
+        if depth.is_multiple_of(2) {
             JsonSourceTree::array(children)
         } else {
             JsonSourceTree::object(children)

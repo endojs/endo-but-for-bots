@@ -69,7 +69,7 @@ with this release.
 
 ## Crates
 
-The workspace has **eleven members**.
+The workspace has **twelve members**.
 See [Architecture](ARCHITECTURE.md) for dependency direction and the four seams.
 
 | Crate | Purpose |
@@ -82,6 +82,7 @@ See [Architecture](ARCHITECTURE.md) for dependency direction and the four seams.
 | `ironhorse-compile` | Lexer, parser, scoper and coder; budgeted compilation and bytecode/SYMB emission. |
 | `ironhorse-regexp` | XSRE-derived pattern compiler and backtracking matcher with admission and metering. |
 | `ironhorse-snapshot` | Atom codec, validated images, persistence ledger, heap-store and checkpoint/restore machinery. |
+| `ironhorse-spec` | Integer-only ECMA-262 reference models, the trusted base of the Kani proofs ([VERIFICATION.md](VERIFICATION.md)); no engine dependency. |
 | `ironhorse-262` | Test262 runner and IronHorse/XS differential harness; oracle cost differences are advisory. |
 | `ironhorse-fuzz` | Testable fuzz-target logic; the nested cargo-fuzz project supplies libFuzzer drivers. |
 | `xs-oracle` | Audited XS C/FFI compiler and execution reference for tests, not the production engine. |
@@ -318,6 +319,11 @@ recoverable host-abort paths; those allocations are now released without
 suppressing leak reports or duplicating XS's ordinary exception cleanup.
 
 The pure-Rust engine crates enforce `forbid(unsafe_code)` and run ordinary unit and fuzz tests.
+Named guarantees of small kernels (the meter, the numeric conversions, snapshot and bytecode
+framing, the transcoder kernels) are also proved with Kani over stated, bounded domains; the
+proved claims, their bounds and what fell back to tests are in [VERIFICATION.md](VERIFICATION.md).
+The `ironhorse-kani` CI job proves the `pr` tier on every relevant change, and
+`ironhorse-kani-nightly.yml` proves the rest and checks that the proofs kill seeded mutants.
 There is no Miri CI lane; the previously named `*_is_miri_clean` tests have descriptive
 behavior names and do not establish a Miri result.
 

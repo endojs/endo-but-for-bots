@@ -1,0 +1,12 @@
+Mutant SNAP-3-a: reserve_hint reserves the declared count unclamped.
+--- a/ironhorse-snapshot/src/wire.rs
++++ b/ironhorse-snapshot/src/wire.rs
+@@ -53,7 +53,7 @@
+ #[inline]
+ pub(crate) const fn reserve_hint(count: usize, payload_len: usize, width: usize) -> usize {
+     match payload_len.checked_div(width) {
+-        Some(room) if room < count => room,
++        Some(room) if room < count => count,
+         Some(_) => count,
+         None => 0,
+     }

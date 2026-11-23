@@ -1,0 +1,12 @@
+Mutant NUM-3-d: an overflowing sum wraps to int32 before widening.
+--- a/ironhorse-vm/src/interp/numeric.rs
++++ b/ironhorse-vm/src/interp/numeric.rs
+@@ -387,7 +387,7 @@
+         match op {
+             ArithOp::Add => match x.checked_add(y) {
+                 Some(v) => return Slot::integer(v),
+-                None => return Slot::number((i64::from(x) + i64::from(y)) as f64),
++                None => return Slot::number(f64::from(x.wrapping_add(y))),
+             },
+             ArithOp::Sub => match x.checked_sub(y) {
+                 Some(v) => return Slot::integer(v),

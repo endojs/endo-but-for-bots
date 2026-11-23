@@ -808,11 +808,10 @@ fn walk_options_for(name: &str) -> (WalkOptions, HookLogs) {
         // resolve field on both the node oracle and endor's walker.
         "fixtures-resolve" => WalkOptions::new(["browser".to_string()], std::iter::empty()),
         "fixtures-0" => WalkOptions::new(["development".to_string()], ["builtin".to_string()]),
-        "fixtures-dynamic-ancestor" => {
-            let mut options = WalkOptions::default();
-            options.dev = true;
-            options
-        }
+        "fixtures-dynamic-ancestor" => WalkOptions {
+            dev: true,
+            ..WalkOptions::default()
+        },
         "fixtures-common-deps" => {
             // Emulate the fixture's `commonDependencies` harness option:
             // the alias `unlisted-common-dep` resolves to the entry

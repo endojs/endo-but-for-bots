@@ -1,0 +1,12 @@
+Mutant MTR-2-c: charge_compilation admits a total of u64::MAX on an un-armed meter.
+--- a/ironhorse-vm/src/meter.rs
++++ b/ironhorse-vm/src/meter.rs
+@@ -404,7 +404,7 @@
+             return false;
+         };
+         self.index = next;
+-        if next == u64::MAX {
++        if next == u64::MAX && self.is_armed() {
+             return false;
+         }
+         match host {

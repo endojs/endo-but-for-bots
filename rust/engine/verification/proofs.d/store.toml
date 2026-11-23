@@ -1,0 +1,211 @@
+# Slot-arena allocation bookkeeping (STR-1b, STR-1c): designs/ironhorse-formal-verification.md,
+# "Structural invariants", STR-1(b) and (c). Merged into proofs.toml by verify.py.
+# The harnesses prove the FreeList kernel extracted from SlotArena
+# (ironhorse-vm/src/value/free_list.rs), not the whole arena: SlotArena's
+# property index is a HashMap, whose RandomState Kani 0.68 cannot execute (an
+# unsupported futex syscall), so a whole-arena harness fails before any check.
+# Budgets are 3x the time measured on the development host (4 shared cores),
+# rounded; memory budgets are the measured peak of the whole ironhorse-vm batch
+# (4.63 GB, one cargo kani process for all of these), rounded up, since the
+# runner measures per batch, not per harness.
+
+[[guarantee]]
+id = "STR-1b"
+title = "Slot-arena free-list invariant under alloc, free, mark and sweep (bounded)"
+claim = "On the FreeList kernel that SlotArena delegates every write of free, free_low, free_marks, marks and live to, and for every state at capacity <= 4 satisfying the invariant I (free_marks.len() == marks.len() == capacity; free_marks[i] iff i is on free; free entries distinct and below capacity; live + free.len() == capacity; free_low <= free.len()): FreeList::new and FreeList::restored (on what image_free_marks accepts, STR-1) establish I; alloc's bookkeeping (reserve_growth when the list is empty, take, then claim or append) never returns a live record, leaves it live and unmarked, adds one to live and changes no other record's bits; release of a live record frees exactly it and runs its callback once; mark of a live record sets exactly its bit and reports whether it was clear; clear_marks clears every bit; sweep_each frees exactly the records neither marked nor free, returns their number, leaves every mark as it was, and calls before(i) then after(i) once per reclaimed record in ascending i; each preserves I and none panics. clear_marks establishes, and alloc, mark and sweep preserve, the collection-phase property that no record is both free and marked; release does not (a record freed while marked keeps its stale mark until the next clear_marks or its reuse, which nothing reads). Since every operation preserves I, every state reached from a new or restored arena while the capacity is at most 4 satisfies it, after any number of operations. Not proved: that SlotArena calls the kernel as described (reviewed: its ceiling check, record writes, page faults, dirty bits and property index sit between the calls and only read free_marks), the vector reallocation path (the harnesses reserve spare capacity), capacities above 4, the ceiling's heap_exhausted refusal, and the deliberate double-free and mark-of-free-slot panics."
+spec = "ironhorse-vm/src/value.rs SlotArena::book: free_marks \"kept in exact sync by every free-list writer\"; SlotArena::alloc \"reusing the free list first (XS semantics)\"; SlotArena::sweep \"every allocated slot that is not marked and not already free returns to the free list\"; live mirrors currentHeapCount."
+trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses", "review of SlotArena's calls into FreeList"]
+
+[[guarantee]]
+id = "STR-1c"
+title = "Slot-arena free-list LIFO order and low-water mark (bounded)"
+claim = "On the FreeList kernel, for every state at capacity <= 4 satisfying STR-1b's invariant: an allocation that reuses returns the last free-list entry and leaves the other entries in order; one that grows leaves the list empty; release appends its record at the end; sweep_each keeps the existing entries in order and appends the reclaimed records in ascending index order; acknowledge leaves the list as it was. free_low becomes min(free_low, new length) on a reusing allocation and 0 on a growing one, is unchanged by release and sweep, and is the list's length after acknowledge, so every entry below the low-water mark is unchanged since the last acknowledgement, which is what lets a checkpoint ship only the free-list segments from the mark on. The same caveats as STR-1b: SlotArena's calls into the kernel are reviewed, not proved."
+spec = "ironhorse-vm/src/value.rs SlotArena::free_list: \"LIFO reuse order, so a restored arena reuses the same records in the same order\"; SlotArena::book free_low: \"every entry below the mark is as it was then, and a checkpoint ships only the segments from the mark on\"."
+trusted = ["Kani 0.68 / CBMC 6.11", "the harnesses", "review of SlotArena's calls into FreeList"]
+
+[[harness]]
+guarantee = "STR-1b"
+crate = "ironhorse-vm"
+name = "value::free_list::proofs::str1b_new_and_restored_establish"
+tier = "nightly"
+statement = "FreeList::new() satisfies I; FreeList::restored(free, free_marks, live) satisfies I, with every mark clear and free_low == free.len(), whenever free has distinct entries below the count, free_marks marks exactly them and free.len() + live == count (what image_free_marks accepts, STR-1)."
+domain = "every count in 0..=4 and free-list length n in 0..=count; every distinct u32 entries below count"
+unwind = 6
+flags = []
+time_budget_s = 126
+memory_budget_gb = 5
+unreachable = 12
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): kani::rustc_intrinsics::ptr_offset_from::<()> (5), core::num::<impl usize>::abs_diff (2), alloc::raw_vec::RawVecInner::grow_amortized (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1), std::vec::set_len_on_drop::SetLenOnDrop::<'_>::increment_len (1). The vector growth path is unreachable because the harness builds every vector with spare capacity."
+mutants = ["STR-1b-e"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-1b"
+crate = "ironhorse-vm"
+name = "value::free_list::proofs::str1b_alloc_preserves"
+tier = "nightly"
+statement = "alloc's bookkeeping returns either the capacity (growth) or a record that was free; that record is then not free and not marked; live grows by one; no other record's mark or free bit changes; I holds after; no-free-and-marked is preserved."
+domain = "every state satisfying I at capacity 0..=4 (every free-list length, distinct in-range entries, every mark pattern, every free_low <= length)"
+unwind = 6
+flags = []
+time_budget_s = 171
+memory_budget_gb = 5
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): kani::rustc_intrinsics::ptr_offset_from::<()> (5), core::num::<impl usize>::abs_diff (2), alloc::raw_vec::RawVecInner::grow_amortized (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The vector growth path is unreachable because the harness builds every vector with spare capacity."
+mutants = ["STR-1b-c"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-1b"
+crate = "ironhorse-vm"
+name = "value::free_list::proofs::str1b_release_preserves"
+tier = "nightly"
+statement = "release(i) of a live record i < capacity runs its callback exactly once, makes exactly i free, lowers live by one, leaves every mark as it was, and I holds after."
+domain = "every state satisfying I at capacity 0..=4; every live i < capacity"
+unwind = 6
+flags = []
+time_budget_s = 100
+memory_budget_gb = 5
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): kani::rustc_intrinsics::ptr_offset_from::<()> (5), core::num::<impl usize>::abs_diff (2), alloc::raw_vec::RawVecInner::grow_amortized (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The vector growth path is unreachable because the harness builds every vector with spare capacity."
+mutants = ["STR-1b-a"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-1b"
+crate = "ironhorse-vm"
+name = "value::free_list::proofs::str1b_mark_and_clear_preserve"
+tier = "nightly"
+statement = "mark(i) of a live record sets exactly bit i and returns whether it was clear; clear_marks clears every bit and leaves no record free and marked; neither changes free, free_marks, free_low or live; mark preserves no-free-and-marked; I holds after."
+domain = "every state satisfying I at capacity 0..=4; every live i < capacity"
+unwind = 6
+flags = []
+time_budget_s = 294
+memory_budget_gb = 5
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): kani::rustc_intrinsics::ptr_offset_from::<()> (5), core::num::<impl usize>::abs_diff (2), alloc::raw_vec::RawVecInner::grow_amortized (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The vector growth path is unreachable because the harness builds every vector with spare capacity."
+mutants = ["STR-1b-d"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-1b"
+crate = "ironhorse-vm"
+name = "value::free_list::proofs::str1b_sweep_frees_exactly_unmarked_cap_0_to_3"
+tier = "nightly"
+statement = "sweep_each(capacity) frees exactly the records neither marked nor free and returns their number; before(i) then after(i) run once per reclaimed i, ascending, never interleaved; marks are unchanged; live falls by the number; I and no-free-and-marked hold after."
+domain = "every state satisfying I at capacity 0..=3"
+unwind = 6
+flags = []
+time_budget_s = 247
+memory_budget_gb = 5
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): kani::rustc_intrinsics::ptr_offset_from::<()> (5), core::num::<impl usize>::abs_diff (2), alloc::raw_vec::RawVecInner::grow_amortized (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The vector growth path is unreachable because the harness builds every vector with spare capacity."
+mutants = ["STR-1b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-1b"
+crate = "ironhorse-vm"
+name = "value::free_list::proofs::str1b_sweep_frees_exactly_unmarked_cap_4_free_1_2"
+tier = "nightly"
+statement = "As str1b_sweep_frees_exactly_unmarked_cap_0_to_3."
+domain = "every state satisfying I at capacity 4 with 1 or 2 free records"
+unwind = 6
+flags = []
+time_budget_s = 233
+memory_budget_gb = 5
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): kani::rustc_intrinsics::ptr_offset_from::<()> (5), core::num::<impl usize>::abs_diff (2), alloc::raw_vec::RawVecInner::grow_amortized (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The vector growth path is unreachable because the harness builds every vector with spare capacity."
+mutants = ["STR-1b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-1b"
+crate = "ironhorse-vm"
+name = "value::free_list::proofs::str1b_sweep_frees_exactly_unmarked_cap_4_free_0_3_4"
+tier = "nightly"
+statement = "As str1b_sweep_frees_exactly_unmarked_cap_0_to_3."
+domain = "every state satisfying I at capacity 4 with 0, 3 or 4 free records"
+unwind = 6
+flags = []
+time_budget_s = 243
+memory_budget_gb = 5
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): kani::rustc_intrinsics::ptr_offset_from::<()> (5), core::num::<impl usize>::abs_diff (2), alloc::raw_vec::RawVecInner::grow_amortized (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The vector growth path is unreachable because the harness builds every vector with spare capacity."
+mutants = ["STR-1b-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-1c"
+crate = "ironhorse-vm"
+name = "value::free_list::proofs::str1c_alloc_pops_last"
+tier = "nightly"
+statement = "A reusing allocation returns free's last entry, leaves free[..len-1] as it was, and sets free_low = min(free_low, len - 1); a growing one returns the capacity with free empty and free_low 0; the remaining entries are unchanged."
+domain = "every state satisfying STR-1b's I at capacity 0..=4"
+unwind = 6
+flags = []
+time_budget_s = 107
+memory_budget_gb = 5
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): kani::rustc_intrinsics::ptr_offset_from::<()> (5), core::num::<impl usize>::abs_diff (2), alloc::raw_vec::RawVecInner::grow_amortized (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The vector growth path is unreachable because the harness builds every vector with spare capacity."
+mutants = ["STR-1c-a", "STR-1c-b"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-1c"
+crate = "ironhorse-vm"
+name = "value::free_list::proofs::str1c_release_appends_and_acknowledge"
+tier = "nightly"
+statement = "release(i) leaves free[..len] as it was, appends i, and keeps free_low; acknowledge leaves free as it was and sets free_low to its length."
+domain = "every state satisfying STR-1b's I at capacity 0..=4; every live i < capacity"
+unwind = 6
+flags = []
+time_budget_s = 125
+memory_budget_gb = 5
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): kani::rustc_intrinsics::ptr_offset_from::<()> (5), core::num::<impl usize>::abs_diff (2), alloc::raw_vec::RawVecInner::grow_amortized (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The vector growth path is unreachable because the harness builds every vector with spare capacity."
+mutants = ["STR-1c-d"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-1c"
+crate = "ironhorse-vm"
+name = "value::free_list::proofs::str1c_sweep_appends_ascending_cap_0_to_3"
+tier = "nightly"
+statement = "sweep_each leaves free[..len] as it was and keeps free_low, and the entries it appends are exactly the reclaimed records in ascending index order."
+domain = "every state satisfying STR-1b's I at capacity 0..=3"
+unwind = 6
+flags = []
+time_budget_s = 139
+memory_budget_gb = 5
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): kani::rustc_intrinsics::ptr_offset_from::<()> (5), core::num::<impl usize>::abs_diff (2), alloc::raw_vec::RawVecInner::grow_amortized (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The vector growth path is unreachable because the harness builds every vector with spare capacity."
+mutants = ["STR-1c-c"]
+expect = "pass"
+canary = false
+
+[[harness]]
+guarantee = "STR-1c"
+crate = "ironhorse-vm"
+name = "value::free_list::proofs::str1c_sweep_appends_ascending_cap_4"
+tier = "nightly"
+statement = "As str1c_sweep_appends_ascending_cap_0_to_3."
+domain = "every state satisfying STR-1b's I at capacity 4"
+unwind = 6
+flags = []
+time_budget_s = 218
+memory_budget_gb = 5
+unreachable = 11
+unreachable_reason = "Library checks on branches this harness's domain never takes, by function (measured from verify.py run's JSON): kani::rustc_intrinsics::ptr_offset_from::<()> (5), core::num::<impl usize>::abs_diff (2), alloc::raw_vec::RawVecInner::grow_amortized (1), std::alloc::Global::grow_impl_runtime (1), std::fmt::Arguments::<'_>::from_str (1), std::ptr::const_ptr::<impl *const ()>::is_aligned_to (1). The vector growth path is unreachable because the harness builds every vector with spare capacity."
+mutants = ["STR-1c-c"]
+expect = "pass"
+canary = false

@@ -655,16 +655,8 @@ impl Interp {
     }
 
     fn typed_array_relative_index(n: f64, length: u32) -> u32 {
-        if n == f64::NEG_INFINITY {
-            return 0;
-        }
-        if n < 0.0 {
-            return (length as f64 + n).max(0.0) as u32;
-        }
-        if n == f64::INFINITY {
-            return length;
-        }
-        n.min(length as f64) as u32
+        // In `0..=length`, so the narrowing is exact.
+        crate::numeric_kernel::relative_index(n, u64::from(length)) as u32
     }
 
     /// Coerce a TypedArray method's relative-index argument in spec order.
@@ -1961,7 +1953,7 @@ impl Interp {
     }
 
     /// Read a BigInt64/BigUint64 TypedArray element (kinds 0/1) into a freshly
-    /// allocated BigInt (the exotic index [[Get]] BigInt path), reading
+    /// allocated BigInt (the exotic index `[[Get]]` BigInt path), reading
     /// little-endian storage.
     pub(in crate::interp) fn typed_array_element_get_bigint(
         &mut self,

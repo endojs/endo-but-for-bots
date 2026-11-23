@@ -2,13 +2,24 @@
 
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use noise_protocol::patterns::noise_ik;
-use noise_protocol::{CipherState, HandshakeState, U8Array, DH};
+use noise_protocol::{CipherState, DH, HandshakeState, U8Array};
 use noise_rust_crypto::{Blake2s, ChaCha20Poly1305, X25519};
 use rand_core::{OsRng, RngCore};
 
 // These bindings are deliberately not thread safe.
 // The intention is that the JavaScript driver will create an instance
 // of this virtual machine for each OCapN session.
+//
+// The single-instance invariant, which every `// SAFETY:` comment in this
+// file relies on: the statics below are touched only by the exported
+// functions, each wasm instance is single-threaded (the crate is built for
+// wasm32-unknown-unknown without the atomics feature), and an export creates
+// a fresh borrow of a static for each use and holds none across a call to
+// the `buffer_callback` import. Exports therefore never observe one another
+// mid-call, even when JS re-enters one from that callback. A native build of
+// this crate (as `cargo build --workspace` produces) is not covered: its
+// exports are safe `fn`s over `static mut`, and calling them from two threads
+// would race.
 const SIZE: usize = 65535;
 static mut BUFFER: [u8; SIZE] = [0u8; SIZE];
 static mut HS: Option<HandshakeState<X25519, ChaCha20Poly1305, Blake2s>> = None;
@@ -88,6 +99,8 @@ unsafe fn prologue() -> [u8; PROLOGUE_PREFIX.len() + INTENDED_RESPONDER_KEY_LENG
     #[allow(static_mut_refs)]
     let mut out = [0u8; PROLOGUE_PREFIX.len() + INTENDED_RESPONDER_KEY_LENGTH];
     out[..PROLOGUE_PREFIX.len()].copy_from_slice(PROLOGUE_PREFIX);
+    // SAFETY: single-instance invariant (top of file); a shared read of BUFFER
+    // with no `&mut` alive.
     out[PROLOGUE_PREFIX.len()..].copy_from_slice(unsafe {
         &BUFFER[INTENDED_RESPONDER_KEY_OFFSET..][..INTENDED_RESPONDER_KEY_LENGTH]
     });
@@ -98,9 +111,10 @@ unsafe fn prologue() -> [u8; PROLOGUE_PREFIX.len() + INTENDED_RESPONDER_KEY_LENG
 /// point) corresponding to the Ed25519 seed at SIGNING_KEY_OFFSET.
 unsafe fn derive_local_static_keypair() -> Option<(<X25519 as DH>::Key, <X25519 as DH>::Pubkey)> {
     #[allow(static_mut_refs)]
-    let signing_key = unsafe {
-        SigningKey::try_from(&BUFFER[SIGNING_KEY_OFFSET..][..SIGNING_KEY_LENGTH]).ok()?
-    };
+    let signing_key =
+        // SAFETY: single-instance invariant; a shared read of BUFFER with no `&mut`
+        // alive.
+        unsafe { SigningKey::try_from(&BUFFER[SIGNING_KEY_OFFSET..][..SIGNING_KEY_LENGTH]).ok()? };
     let priv_bytes: [u8; 32] = signing_key.to_scalar_bytes();
     let priv_key = <X25519 as DH>::Key::from_slice(&priv_bytes);
     let pub_key = X25519::pubkey(&priv_key);
@@ -111,6 +125,8 @@ unsafe fn derive_local_static_keypair() -> Option<(<X25519 as DH>::Key, <X25519 
 /// key at INTENDED_RESPONDER_KEY_OFFSET.  Initiator only.
 unsafe fn derive_remote_static_pubkey() -> Option<<X25519 as DH>::Pubkey> {
     #[allow(static_mut_refs)]
+    // SAFETY: single-instance invariant; copies 32 bytes out of BUFFER with no
+    // `&mut` alive.
     let bytes = unsafe {
         let mut tmp = [0u8; 32];
         tmp.copy_from_slice(
@@ -136,6 +152,8 @@ unsafe fn derive_remote_static_pubkey() -> Option<<X25519 as DH>::Pubkey> {
 /// can use it as the post-handshake channel-binding value.
 unsafe fn snapshot_handshake_hash() {
     #[allow(static_mut_refs)]
+    // SAFETY: single-instance invariant; `&HS` is read and BUFFER written, no
+    // other reference to either is alive.
     unsafe {
         let hs = match &HS {
             None => return,
@@ -150,6 +168,10 @@ unsafe fn snapshot_handshake_hash() {
 
 #[unsafe(no_mangle)]
 fn buffer() {
+    // SAFETY: single-instance invariant; `buffer_callback` is the JS import,
+    // which receives the address of the whole SIZE-byte BUFFER and must only
+    // read it before returning (it may call back into these exports, which is
+    // fine: no Rust reference into BUFFER is held across the call).
     unsafe {
         #[allow(static_mut_refs)]
         buffer_callback(BUFFER.as_ptr());
@@ -162,6 +184,8 @@ fn buffer() {
 /// stays local.
 #[unsafe(no_mangle)]
 fn generate_initiator_keys() {
+    // SAFETY: single-instance invariant; the only access to BUFFER in this
+    // call is through the two in-bounds slice writes below.
     unsafe {
         let mut seed = [0u8; 32];
         OsRng.fill_bytes(&mut seed);
@@ -184,6 +208,8 @@ fn generate_initiator_keys() {
 /// JS layer fills before invoking the responder).
 #[unsafe(no_mangle)]
 fn generate_responder_keys() {
+    // SAFETY: single-instance invariant; the only access to BUFFER in this
+    // call is through the in-bounds slice writes below.
     unsafe {
         let mut seed = [0u8; 32];
         OsRng.fill_bytes(&mut seed);
@@ -223,6 +249,9 @@ fn generate_responder_keys() {
 #[unsafe(no_mangle)]
 fn initiator_write_syn() -> i32 {
     #[allow(static_mut_refs)]
+    // SAFETY: single-instance invariant. HS is assigned and BUFFER read and
+    // written through fresh borrows; the inputs are copied out of BUFFER before
+    // `write_message` writes into it, so no two borrows of it overlap.
     unsafe {
         let (initiator_priv, _initiator_pub) = match derive_local_static_keypair() {
             None => return 1,
@@ -293,6 +322,9 @@ fn initiator_write_syn() -> i32 {
 #[unsafe(no_mangle)]
 fn responder_read_syn() -> i32 {
     #[allow(static_mut_refs)]
+    // SAFETY: single-instance invariant. HS is reset, then assigned, and BUFFER
+    // read and written through fresh borrows; the SYN is copied out of BUFFER
+    // before the payload is written back into it.
     unsafe {
         // Every early return below leaves no handshake to continue.
         HS = None;
@@ -398,6 +430,9 @@ fn responder_read_syn() -> i32 {
 #[unsafe(no_mangle)]
 fn responder_write_synack() -> i32 {
     #[allow(static_mut_refs)]
+    // SAFETY: single-instance invariant. `hs` is the only borrow of HS; ENCRYPT
+    // and DECRYPT are assigned and BUFFER accessed through separate borrows, the
+    // payload copied out before `write_message` writes into BUFFER.
     unsafe {
         let hs = match &mut HS {
             None => return 1,
@@ -446,6 +481,8 @@ fn responder_write_synack() -> i32 {
 #[unsafe(no_mangle)]
 fn initiator_read_synack() -> i32 {
     #[allow(static_mut_refs)]
+    // SAFETY: single-instance invariant. `hs` is the only borrow of HS; the
+    // SYNACK is copied out of BUFFER before `read_message` writes into it.
     unsafe {
         let hs = match &mut HS {
             None => return 1,
@@ -486,6 +523,10 @@ fn initiator_read_synack() -> i32 {
 #[unsafe(no_mangle)]
 fn encrypt(length: usize) -> i32 {
     #[allow(static_mut_refs)]
+    // SAFETY: single-instance invariant. `encrypter` and `&mut BUFFER` borrow
+    // different statics, and both borrows end before `buffer_callback` (see
+    // `buffer`). `encrypt_in_place` panics, which traps the instance, if
+    // `length + 16` exceeds SIZE; it does not write out of bounds.
     unsafe {
         let encrypter = match &mut ENCRYPT {
             None => return 1,
@@ -503,6 +544,9 @@ fn encrypt(length: usize) -> i32 {
 #[unsafe(no_mangle)]
 fn decrypt(length: usize) -> i32 {
     #[allow(static_mut_refs)]
+    // SAFETY: single-instance invariant, as in `encrypt`. `decrypt_in_place`
+    // rejects or panics on a `length` outside BUFFER; it does not read or write
+    // out of bounds.
     unsafe {
         let decrypter = match &mut DECRYPT {
             None => return 1,

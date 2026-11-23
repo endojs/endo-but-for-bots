@@ -20,7 +20,11 @@ pub struct SpawnedWorker {
 }
 
 /// Spawn a child process with fd 3 (child writes) and fd 4 (child reads) pipes.
-pub fn spawn_with_pipes(command: &str, args: &[String], cmd: &mut tokio::process::Command) -> io::Result<SpawnedWorker> {
+pub fn spawn_with_pipes(
+    command: &str,
+    args: &[String],
+    cmd: &mut tokio::process::Command,
+) -> io::Result<SpawnedWorker> {
     let (child_write_r, child_write_w) = util::pipe()?;
     let (sup_write_r, sup_write_w) = util::pipe()?;
 
@@ -28,6 +32,16 @@ pub fn spawn_with_pipes(command: &str, args: &[String], cmd: &mut tokio::process
     let sup_write_r_raw = sup_write_r.as_raw_fd();
 
     cmd.args(args);
+    // SAFETY: the hook runs in the forked child before exec, where only
+    // async-signal-safe calls are allowed: it makes two `dup2` calls on
+    // plain integers and allocates nothing (`last_os_error` only reads
+    // errno). The two raw fds are open in the child because their
+    // `OwnedFd`s are dropped only after `spawn` returns. `dup2` onto 3 and
+    // 4 yields descriptors without close-on-exec; neither source can
+    // already be 3 or 4 respectively, because `util::pipe` hands out the
+    // lowest free descriptors read end first. The hook stays installed on
+    // the caller's `cmd`: spawning that `Command` again would dup2
+    // descriptors this function has closed.
     unsafe {
         cmd.pre_exec(move || {
             if libc::dup2(child_write_w_raw, 3) < 0 {
@@ -95,6 +109,9 @@ pub fn wire_worker_tasks(
         let raw_fd = write_file.as_raw_fd();
         let mut offset = 0;
         while offset < header.len() {
+            // SAFETY: the pointer and length describe the live tail of
+            // `header`, which `write` only reads; `raw_fd` is borrowed from
+            // `write_file`, which outlives the loop.
             let n = unsafe {
                 libc::write(
                     raw_fd,
@@ -109,8 +126,14 @@ pub fn wire_worker_tasks(
         }
     }
 
-    let async_read = AsyncFd::new(read_file)?;
-    let async_write = AsyncFd::new(write_file)?;
+    // SAFETY: `AsyncFd::register` requires the descriptor to be open and to
+    // name the same open file description until the `AsyncFd` is dropped.
+    // Both are owned `std::fs::File`s moved into their `AsyncFd`, so nothing
+    // else can close or reuse the descriptor while the `AsyncFd` holds it,
+    // and `File::as_raw_fd` returns the same descriptor on every call.
+    let async_read = unsafe { AsyncFd::register(read_file) }?;
+    // SAFETY: as above, for the owned write-end `File`.
+    let async_write = unsafe { AsyncFd::register(write_file) }?;
 
     // Read task: child -> supervisor.
     let sup_read = Arc::clone(sup);
@@ -181,7 +204,9 @@ pub fn wire_worker_tasks(
             },
             response_tx: None,
         });
-        eprintln!("endor: wait task for handle={handle} delivered exited to parent={parent_handle}");
+        eprintln!(
+            "endor: wait task for handle={handle} delivered exited to parent={parent_handle}"
+        );
         sup_wait.unregister(handle);
         if let Some(f) = on_exit {
             f();
@@ -234,7 +259,16 @@ pub fn spawn_process(
     };
     let inbox = sup.register(handle, Some(info));
 
-    wire_worker_tasks(spawned, handle, parent_handle, sup, inbox, None, "init", Vec::new())?;
+    wire_worker_tasks(
+        spawned,
+        handle,
+        parent_handle,
+        sup,
+        inbox,
+        None,
+        "init",
+        Vec::new(),
+    )?;
 
     Ok(handle)
 }
@@ -262,8 +296,15 @@ impl tokio::io::AsyncRead for PipeReader {
             let raw_fd = self.0.get_ref().as_raw_fd();
             let unfilled = buf.initialize_unfilled();
             match guard.try_io(|_| {
+                // SAFETY: `unfilled` is an initialised, exclusively borrowed
+                // buffer of `unfilled.len()` bytes, which `read` may write in
+                // full; `raw_fd` is the `AsyncFd`'s own open descriptor.
                 let n = unsafe {
-                    libc::read(raw_fd, unfilled.as_mut_ptr() as *mut libc::c_void, unfilled.len())
+                    libc::read(
+                        raw_fd,
+                        unfilled.as_mut_ptr() as *mut libc::c_void,
+                        unfilled.len(),
+                    )
                 };
                 if n < 0 {
                     Err(io::Error::last_os_error())
@@ -300,9 +341,10 @@ impl tokio::io::AsyncWrite for PipeWriter {
 
             let raw_fd = self.0.get_ref().as_raw_fd();
             match guard.try_io(|_| {
-                let n = unsafe {
-                    libc::write(raw_fd, buf.as_ptr() as *const libc::c_void, buf.len())
-                };
+                // SAFETY: `write` reads `buf.len()` bytes from the live `buf`;
+                // `raw_fd` is the `AsyncFd`'s own open descriptor.
+                let n =
+                    unsafe { libc::write(raw_fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
                 if n < 0 {
                     Err(io::Error::last_os_error())
                 } else {

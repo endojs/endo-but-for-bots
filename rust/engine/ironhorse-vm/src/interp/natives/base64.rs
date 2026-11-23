@@ -179,7 +179,7 @@ impl Interp {
         max_length: usize,
     ) -> Result<Decoded, Step> {
         let len = self.str_len(off);
-        if len % 2 != 0 {
+        if !len.is_multiple_of(2) {
             return Ok(Decoded {
                 read: 0,
                 bytes: Vec::new(),

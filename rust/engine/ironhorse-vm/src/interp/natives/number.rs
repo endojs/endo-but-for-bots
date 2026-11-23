@@ -119,7 +119,7 @@ impl Interp {
                 Some(s) => {
                     let mut a = self.to_number_f64(code, s)?;
                     if a.is_normal() && (-4503599627370495.0 < a) && (a < 4503599627370495.0) {
-                        if a < -0.5 || 0.5 <= a {
+                        if !(-0.5..0.5).contains(&a) {
                             a = (a + 0.5).floor();
                         } else if a < 0.0 {
                             a = -0.0;
@@ -156,7 +156,7 @@ impl Interp {
                     None => 0u32,
                     Some(s) => to_int32(self.to_number_f64(code, s)?) as u32,
                 };
-                Slot::integer(x.leading_zeros() as i32)
+                Slot::integer(math_clz32(x))
             }
             // `fx_Math_imul`: (ToInt32(a) * ToInt32(b)) as a 32-bit product.
             Imul => {
@@ -168,7 +168,7 @@ impl Interp {
                     Some(value) => to_int32(self.to_number_f64(code, value)?),
                     None => 0,
                 };
-                Slot::integer(a.wrapping_mul(b))
+                Slot::integer(math_imul(a, b))
             }
             Max => self.math_extremum(code, argc, base, true)?,
             Min => self.math_extremum(code, argc, base, false)?,

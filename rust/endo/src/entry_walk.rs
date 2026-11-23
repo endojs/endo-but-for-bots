@@ -1961,7 +1961,7 @@ impl BrowserField {
                 if key == main_key {
                     continue;
                 }
-                if (key.starts_with("./") || key == ".") && key != "." {
+                if key.starts_with("./") {
                     if let Some(target) = target {
                         map.insert(relativize(key), relativize(target));
                     }
@@ -5654,8 +5654,8 @@ mod tests {
                 Some(xsnap::archive::ModuleDescriptor::Link { compartment, .. })
                     if compartment == "installed-optional-v1.0.0"
             ));
-            assert!(app.modules.get("missing-optional").is_none());
-            assert!(app.modules.get("dev-only").is_none());
+            assert!(!app.modules.contains_key("missing-optional"));
+            assert!(!app.modules.contains_key("dev-only"));
             assert!(!ingested
                 .archive
                 .map

@@ -8,6 +8,7 @@
 //! list), at the fault for a heap row, and by both validator levels. Damage
 //! to derived state (a section digest, a page summary, the edge index) is
 //! the full validator's to find.
+#![forbid(unsafe_code)]
 
 mod common;
 

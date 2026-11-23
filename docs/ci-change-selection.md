@@ -54,6 +54,37 @@ The old `test262` job has been removed because it only installed dependencies an
 built the repository before executing `exit 0`.
 The real hardened262 baseline remains in the affected XS suite.
 
+The `cargo-deny` job checks the supply-chain policy in `deny.toml` for every
+Cargo root with a committed lockfile.
+Any `Cargo.toml`, any `Cargo.lock`, or `deny.toml` itself selects it, since each
+can introduce a crate, a licence or a source.
+New advisories arrive without a commit, so `cargo-deny-advisories.yml` also
+re-checks advisories weekly; editing that workflow selects the `cargo-deny` job.
+
+The `clippy-endo` job lints every member of the repository-root Cargo workspace.
+It runs when a member, or an engine crate a member compiles, is affected;
+prose does not select it, but bench sources do, because the job lints all
+targets.
+The `format-ironhorse` job checks the formatting of the engine workspace and of
+every root-workspace member, so any Rust source under either selects it, as does
+a `rustfmt.toml`.
+
+The `cargo-machete` job looks for unused dependencies in every Cargo manifest
+of the tree, so any `Cargo.toml` or Rust source selects it.
+It compares the findings with a committed list, so fixing a known finding also
+means removing it from the list.
+
+The `hack-ironhorse` feature matrix and the `ironhorse-kani` proofs check the
+engine workspace's members, so a change to a member, or to a crate a member
+depends on, selects both, as does the engine's manifest or lockfile.
+The proof manifest under `rust/engine/verification/`, the generated
+`rust/engine/VERIFICATION.md` ledger and the `verify` runner scripts also
+select `ironhorse-kani`, and so does editing `ironhorse-kani-nightly.yml`,
+which shares its install.
+That nightly workflow proves the slower tier and runs the proof mutation check;
+`rust-quality-weekly.yml` measures engine coverage and runs mutation testing.
+Neither gates a pull request.
+
 When adding a test job, register its package or crate roots and any non-manifest
 inputs in the detector, then wire its job-level condition to the returned flag.
 Add regression cases showing both relevant and unrelated changes.

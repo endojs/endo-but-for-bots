@@ -1,0 +1,12 @@
+Mutant NUM-2-a: the left shift masks its count with 63 instead of 31.
+--- a/ironhorse-vm/src/interp/numeric.rs
++++ b/ironhorse-vm/src/interp/numeric.rs
+@@ -456,7 +456,7 @@
+         BitOp::And => a & b,
+         BitOp::Or => a | b,
+         BitOp::Xor => a ^ b,
+-        BitOp::Shl => ((a as u32) << (b & 0x1f)) as i32,
++        BitOp::Shl => ((a as u32) << (b & 0x3f)) as i32,
+         BitOp::Sar => a >> (b & 0x1f),
+         BitOp::Shr => ((a as u32) >> (b & 0x1f)) as i32,
+     };

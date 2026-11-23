@@ -652,7 +652,7 @@ macro_rules! snapshot_payloads {
                         buffers
                             .binary_search_by_key(&slot, |b| b.owner)
                             .ok()
-                            .map(|i| &buffers[i])
+                            .and_then(|i| buffers.get(i))
                     };
                     let covers = |b: &crate::image::BufferImage, offset: u32, end: Option<u64>| {
                         if b.flags & crate::image::BUFFER_RESIZABLE != 0 {
@@ -1176,7 +1176,10 @@ macro_rules! snapshot_payloads {
                             .segments
                             .binary_search_by_key(&it.segments_inst.0, |(o, _)| *o);
                         let covered = match row {
-                            Ok(k) => it.pos <= intl.segments[k].1.segments.len(),
+                            Ok(k) => intl
+                                .segments
+                                .get(k)
+                                .is_some_and(|(_, row)| it.pos <= row.segments.len()),
                             Err(_) => false,
                         };
                         if it.segments_inst.0 >= slot_count || !covered {
@@ -1262,7 +1265,10 @@ macro_rules! snapshot_payloads {
                                 .collections
                                 .binary_search_by_key(&r.iterable, |c| c.owner);
                             let covered = match row {
-                                Ok(k) => r.index as usize <= tables.collections[k].entries.len(),
+                                Ok(k) => tables
+                                    .collections
+                                    .get(k)
+                                    .is_some_and(|c| r.index as usize <= c.entries.len()),
                                 Err(_) => false,
                             };
                             if !covered {
@@ -1486,8 +1492,13 @@ macro_rules! snapshot_payloads {
                                         "function state: body range outside segment",
                                     ));
                                 }
-                                let mut pc = start as usize;
-                                let end = end as usize;
+                                // `end <= code.len()` (checked above), so both
+                                // ends fit `usize`.
+                                let (Ok(mut pc), Ok(end)) = (usize::try_from(start), usize::try_from(end)) else {
+                                    return Err(SnapshotError::Corrupt(
+                                        "function state: body range outside segment",
+                                    ));
+                                };
                                 while pc < end {
                                     let Some(len) = ironhorse_vm::instruction_len(code, pc) else {
                                         return Err(SnapshotError::Corrupt(
@@ -1515,7 +1526,7 @@ macro_rules! snapshot_payloads {
                         || referenced_segments
                             .iter()
                             .copied()
-                            .ne(0..function_state.segments.len() as u32)
+                            .ne((0..=u32::MAX).take(function_state.segments.len()))
                     {
                         return Err(SnapshotError::Corrupt(
                             "function state: segments not densely referenced",
@@ -2231,7 +2242,7 @@ macro_rules! snapshot_payloads {
                             .functions
                             .binary_search_by_key(&owner.0, |f| f.function)
                             .ok()
-                            .map(|i| &promise_cluster.functions[i]),
+                            .and_then(|i| promise_cluster.functions.get(i)),
                         _ => None,
                     };
                     // An async-generator reaction (kinds 4-6) resumes exactly one
@@ -2257,7 +2268,7 @@ macro_rules! snapshot_payloads {
                             .async_generators
                             .binary_search_by_key(&reaction.a, |g| g.owner)
                             .ok()
-                            .map(|i| &promise_cluster.async_generators[i])
+                            .and_then(|i| promise_cluster.async_generators.get(i))
                             .is_some_and(|g| g.active.is_some() && g.state == expected_state);
                         if !anchored || !generator_anchors.insert(reaction.a) {
                             return Err(SnapshotError::Corrupt(
@@ -2335,8 +2346,7 @@ macro_rules! snapshot_payloads {
                             let pair = matches!((function(&request.resolve), function(&request.reject)), (Some(a), Some(b))
                                 if a.promise == b.promise
                                     && !a.reject && b.reject && a.guard == b.guard
-                                    && (a.guard as usize) < promise_cluster.guards.len()
-                                    && !promise_cluster.guards[a.guard as usize]
+                                    && promise_cluster.guards.get(a.guard as usize) == Some(&false)
                                     && promise_cluster
                                         .promises
                                         .binary_search_by_key(&a.promise, |p| p.owner)
@@ -2358,8 +2368,7 @@ macro_rules! snapshot_payloads {
                         let pair = matches!((function(&row.resolve), function(&row.reject)), (Some(a), Some(b))
                             if a.promise == row.result_promise && b.promise == row.result_promise
                                 && !a.reject && b.reject && a.guard == b.guard
-                                && (a.guard as usize) < promise_cluster.guards.len()
-                                && !promise_cluster.guards[a.guard as usize]);
+                                && promise_cluster.guards.get(a.guard as usize) == Some(&false));
                         if !pair
                             || !awaited.contains(&row.owner)
                             || promise_cluster
@@ -2404,15 +2413,17 @@ macro_rules! snapshot_payloads {
                     let mut results_lengths = Vec::with_capacity(promise_cluster.combinators.len());
                     for row in &promise_cluster.combinators {
                         owned(row.results)?;
-                        let Ok(k) = tables
+                        let Some(results) = tables
                             .arrays
                             .binary_search_by_key(&row.results, |a| a.owner)
+                            .ok()
+                            .and_then(|k| tables.arrays.get(k))
                         else {
                             return Err(SnapshotError::Corrupt(
                                 "promise cluster: combinator's results Array has no row",
                             ));
                         };
-                        let len = tables.arrays[k].length;
+                        let len = results.length;
                         // `remaining` starts at the ELEMENT COUNT — which is exactly
                         // the results Array's preset length — and only ever
                         // decrements, so a value above it can only be crafted (it
@@ -2601,9 +2612,9 @@ macro_rules! snapshot_payloads {
                     name_floor: Option<u32> = Default::default()],
                 legacy_label: "small state name-floor section",
                 decode_legacy(state, bytes): {
-                    state.name_floor = match bytes.len() {
-                        0 => None,
-                        4 => Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
+                    state.name_floor = match *bytes {
+                        [] => None,
+                        [a, b, c, d] => Some(u32::from_be_bytes([a, b, c, d])),
                         _ => {
                             return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                                 "small state name-floor section size",
@@ -2635,11 +2646,10 @@ macro_rules! snapshot_payloads {
                 decode_container: [WeakRefs, replace, (r, [], [small]) {
                     let name_floor = match r.find(crate::format::NFLR) {
                         Some(a) => {
-                            if a.payload.len() != 4 {
+                            let Ok(floor) = <[u8; 4]>::try_from(a.payload) else {
                                 return Err(SnapshotError::Corrupt("installed-names floor size"));
-                            }
-                            let floor =
-                                u32::from_be_bytes([a.payload[0], a.payload[1], a.payload[2], a.payload[3]]);
+                            };
+                            let floor = u32::from_be_bytes(floor);
                             // A floor past the name table cannot come from an honest
                             // suspension — installs only ever floor at a table length
                             // the machine actually had.
@@ -2926,17 +2936,16 @@ macro_rules! define_payloads {
         pub(crate) fn decode_legacy_payloads(p: &[u8]) -> Result<crate::store::SmallState, StoreError> {
             let mut i = 0usize;
             let mut read_small_section = |name: &'static str| -> Result<&[u8], StoreError> {
-                if p.len() - i < 4 {
+                let Some(len) = crate::wire::be_u32_at(p, i) else {
                     return Err(StoreError::Snapshot(SnapshotError::Corrupt(name)));
-                }
-                let len = u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]) as usize;
+                };
+                let len = len as usize;
                 i += 4;
                 // The wire length can exhaust usize on 32-bit targets.
-                let end = match i.checked_add(len).filter(|&end| end <= p.len()) {
-                    Some(end) => end,
-                    None => return Err(StoreError::Snapshot(SnapshotError::Corrupt(name))),
+                let Some((end, s)) = i.checked_add(len).and_then(|end| Some((end, p.get(i..end)?)))
+                else {
+                    return Err(StoreError::Snapshot(SnapshotError::Corrupt(name)));
                 };
-                let s = &p[i..end];
                 i = end;
                 Ok(s)
             };
@@ -3031,6 +3040,13 @@ macro_rules! define_payloads {
 }
 snapshot_payloads!(define_payloads);
 
+// Only ever evaluated into the `CANONICAL_ATOM_ORDER` const, so an index
+// past either array is a build error, not a runtime panic.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "const-evaluated into CANONICAL_ATOM_ORDER, so an out-of-range index \
+              fails the build rather than panicking at runtime"
+)]
 pub(crate) const fn canonical_atom_order() -> [FourCc; 38] {
     use crate::format::{BLOC, CREA, HEAP, SIGN, VERS};
     let mut tags = [VERS; 38];

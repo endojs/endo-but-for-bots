@@ -1,0 +1,12 @@
+Mutant TXT-1-b: code_point_units drops a bit of the low surrogate.
+--- a/ironhorse-vm/src/interp/natives/json.rs
++++ b/ironhorse-vm/src/interp/natives/json.rs
+@@ -2225,7 +2225,7 @@
+     } else {
+         let offset = point - 0x1_0000;
+         buffer[0] = 0xD800 | (offset >> 10) as u16;
+-        buffer[1] = 0xDC00 | (offset & 0x3FF) as u16;
++        buffer[1] = 0xDC00 | (offset & 0x1FF) as u16;
+         &buffer[..]
+     }
+ }

@@ -798,7 +798,7 @@ impl Interp {
     /// `@@unscopables` list — `obj[@@unscopables]` being an object whose `id`
     /// property is truthy hides the binding (ECMA-262 9.1.1.2.1). Meters the
     /// host-frame `mxHasID` walk exactly (the calibrated
-    /// [`WITH_SCOPABLE_BASE_METERING`] host teardown plus one
+    /// `WITH_SCOPABLE_BASE_METERING` host teardown plus one
     /// `XS_CODE_METERING` per prototype level the `HasProperty` recursion
     /// descends); the `@@unscopables` consultation is charged only on a hit
     /// via [`WITH_UNSCOPABLES_GET_METERING`], matching the extra host `mxGetID`
