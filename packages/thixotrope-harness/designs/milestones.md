@@ -1081,6 +1081,12 @@ never re-based. Rows and readings: J-10060..J-10064.
 Perf files held: `gateway` 329 s, `gateway-session` 602 s (exit 124), `ui` 438 s (exit 1:
 `ui.hubGrowth`). Section 5 against M2 as merged was checked by W3.8 (J-9609) and not rerun.
 
+Follow-up to acceptance 8, November 24. The conversation now retrieves the
+full transcript when a history page abbreviates a settled turn. Chromium on
+the pinned worker matched all four sampled replies to the stored text, both
+on opening the session and after reload.
+[Live transcript checks](../JOURNAL.md#j-13018-2026-11-24-complete-replies-after-settlement-and-reload)
+
 ---
 
 ## M4. Secrets manager and subscription pools

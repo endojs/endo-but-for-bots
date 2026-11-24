@@ -46,6 +46,10 @@ const SESSION_PAGE_ROWS = 50;
 const CONTENT_MAX_PAGES = 64;
 /** Most `listSessions` pages one rebuild reads (50 x 200 = 10,000 rows). */
 const LIST_MAX_PAGES = 200;
+// guest/lib/guards/session.js texts.turnSealed (the guard table requires
+// the vat prelude and cannot be loaded by the browser).
+const TURN_SEALED =
+  'This turn is archived; read it through the history service';
 
 /**
  * @typedef {'unconfigured'|'connecting'|'open'|'reconnecting'|'starting'|'refused'} ConnectionState
@@ -55,7 +59,8 @@ const LIST_MAX_PAGES = 200;
  * One turn of the conversation view. `record` is its `TurnStarted` record
  * as a history page delivered it, or the live `turn-start` event while no
  * page has shown it (MessageRendererProps.record). `records` are the
- * history page's preview records (absent for a turn seen only live).
+ * history records (absent for a turn seen only live). A cut terminal
+ * preview is replaced atomically when every full record page has arrived.
  * `fold` is the live fold of a turn this page watched (messages,
  * streamingText, phase, error), absent otherwise.
  *
@@ -66,6 +71,8 @@ const LIST_MAX_PAGES = 200;
  * @property {number} at
  * @property {Record<string, any>} record
  * @property {any[]} [records]
+ * @property {boolean} [cut] the history page contains only a preview
+ * @property {string} [contentError] reading the full records failed
  * @property {boolean} [sealed] an archived turn (History.page)
  * @property {string} [error]
  * @property {string} [resolution]
@@ -299,6 +306,9 @@ export const makeController = ({
   };
   /** turnId -> Turn */
   const turnsById = new Map();
+  const readingTurns = new Map();
+  let contentQueue = Promise.resolve();
+  const hydratedTurns = new Set();
   /** @type {string | undefined} */
   let earlierCursor;
   let earlierArchived = false;
@@ -543,25 +553,37 @@ export const makeController = ({
     for (const entry of entries) {
       if (entry.turn) turnsById.set(entry.turnId, entry.turn);
       const index = messages.findIndex(item => item.turnId === entry.turnId);
-      if (index >= 0) {
+      if (index < 0) {
+        added.push(entry);
+      } else if (
+        (!isLive(entry.state) || isLive(messages[index].state)) &&
+        (!messages[index].sealed || entry.sealed)
+      ) {
         const previous = messages[index];
+        const newlySealed = entry.sealed && !previous.sealed;
+        const resolved =
+          entry.resolution !== undefined &&
+          entry.resolution !== previous.resolution;
+        if (newlySealed || resolved) hydratedTurns.delete(entry.turnId);
         messages[index] = {
           ...previous,
           ...entry,
+          ...(newlySealed ? { turn: undefined, contentError: undefined } : {}),
           // a live fold outlives a page that shows the same turn
           ...(previous.fold && !entry.fold ? { fold: previous.fold } : {}),
-          // a live state is newer than a page read before it settled
-          ...(isLive(entry.state) && !isLive(previous.state)
-            ? { state: previous.state }
+          ...(entry.cut && hydratedTurns.has(entry.turnId)
+            ? { records: previous.records, record: previous.record, cut: false }
             : {}),
         };
-      } else {
-        added.push(entry);
       }
     }
     const next = prepend ? [...added, ...messages] : [...messages, ...added];
     next.sort((a, b) => a.at - b.at);
     updateView({ messages: next });
+    for (const entry of entries) {
+      if (entry.cut && !isLive(entry.state) && !hydratedTurns.has(entry.turnId))
+        void scheduleTurnContent(entry.turnId);
+    }
   };
 
   /**
@@ -575,6 +597,11 @@ export const makeController = ({
       preview.records.find(
         /** @param {any} record */ record => record.kind === 'turn-started',
       ) ?? preview.records[0];
+    const resolution =
+      preview.resolution ??
+      preview.records.find(
+        /** @param {any} record */ record => record.kind === 'turn-resolved',
+      )?.note;
     return {
       turnId: preview.turnId,
       ...(preview.turn ? { turn: preview.turn } : {}),
@@ -582,8 +609,9 @@ export const makeController = ({
       at: preview.at,
       record: started,
       records: preview.records,
+      cut: Boolean(preview.cut),
       ...(preview.sealed ? { sealed: true } : {}),
-      ...(preview.resolution ? { resolution: preview.resolution } : {}),
+      ...(resolution === undefined ? {} : { resolution }),
     };
   };
 
@@ -813,6 +841,118 @@ export const makeController = ({
     });
   };
 
+  /**
+   * A terminal history preview can cut both fields and entire records.
+   * Read its original log pages before replacing the preview. A kept turn
+   * can be sealed between pages, in which case restart at the archive.
+   *
+   * @param {string} turnId
+   */
+  const hydrateTurn = async turnId => {
+    if (state.view?.generation !== viewEpoch) return;
+    const entry = state.view.messages.find(item => item.turnId === turnId);
+    if (!entry?.cut || isLive(entry.state)) return;
+    const epoch = viewEpoch;
+    const session = viewSession;
+    const history = powers.history;
+    if (entry.contentError !== undefined)
+      setEntry(turnId, { contentError: undefined });
+    /** @param {boolean} archived */
+    const readPages = async archived => {
+      /** @type {any[]} */
+      const records = [];
+      /** @type {string | undefined} */
+      let cursor;
+      const seen = new Set();
+      do {
+        const args = cursor === undefined ? [] : [cursor];
+        // eslint-disable-next-line no-await-in-loop
+        const page = await (archived
+          ? E(history).turnContent(session, turnId, ...args)
+          : E(entry.turn).getContent(...args));
+        if (epoch !== viewEpoch) return undefined;
+        records.push(...page.records);
+        cursor = page.next;
+        if (seen.has(cursor)) throw Error('Turn content cursor repeated');
+        seen.add(cursor);
+      } while (cursor !== undefined);
+      return records;
+    };
+    try {
+      let archived = Boolean(entry.sealed);
+      let records;
+      if (!archived) {
+        try {
+          records = await readPages(false);
+        } catch (error) {
+          if (messageOf(error) !== TURN_SEALED) throw error;
+          archived = true;
+        }
+        if (epoch !== viewEpoch) return;
+        archived ||= Boolean(
+          state.view?.messages.find(item => item.turnId === turnId)?.sealed,
+        );
+      }
+      if (archived) records = await readPages(true);
+      if (!records || epoch !== viewEpoch) return;
+      const shown = state.view?.messages.find(item => item.turnId === turnId);
+      if (!shown?.cut) return;
+      const started = records.find(record => record.kind === 'turn-started');
+      const record =
+        shown.record?.type === 'turn-start' && started
+          ? {
+              ...shown.record,
+              input: started.input,
+              ...(started.attachments === undefined
+                ? {}
+                : { attachments: started.attachments }),
+            }
+          : (started ?? shown.record);
+      const resolution = records.find(
+        item => item.kind === 'turn-resolved',
+      )?.note;
+      hydratedTurns.add(turnId);
+      setEntry(turnId, {
+        ...(archived ? { sealed: true, turn: undefined } : {}),
+        ...(resolution === undefined ? {} : { resolution }),
+        records,
+        record,
+        cut: false,
+        contentError: undefined,
+      });
+    } catch (error) {
+      if (
+        epoch === viewEpoch &&
+        state.view?.messages.find(item => item.turnId === turnId)?.cut
+      )
+        setEntry(turnId, { contentError: messageOf(error) });
+    }
+  };
+
+  /**
+   * Read one turn at a time so scrollback cannot flood the gateway.
+   * Explicit retry is required after a transient content failure.
+   *
+   * @param {string} turnId
+   * @param {boolean} [retry]
+   */
+  const scheduleTurnContent = (turnId, retry = false) => {
+    const existing = readingTurns.get(turnId);
+    if (existing) return existing;
+    const entry = state.view?.messages.find(item => item.turnId === turnId);
+    if (!entry?.cut || (entry.contentError !== undefined && !retry))
+      return undefined;
+    const epoch = viewEpoch;
+    const pending = contentQueue
+      .then(() => (epoch === viewEpoch ? hydrateTurn(turnId) : undefined))
+      .finally(() => {
+        if (epoch === viewEpoch) readingTurns.delete(turnId);
+      });
+    readingTurns.set(turnId, pending);
+    contentQueue = pending;
+    return pending;
+  };
+
   /** @param {string} turnId */
   const attachFold = turnId => {
     if (!state.view) return;
@@ -874,6 +1014,9 @@ export const makeController = ({
     resetViewReady();
     entriesByKey.clear();
     turnsById.clear();
+    readingTurns.clear();
+    contentQueue = Promise.resolve();
+    hydratedTurns.clear();
     earlierCursor = undefined;
     earlierArchived = false;
     fold = makeFoldableStatus();
@@ -1517,6 +1660,9 @@ export const makeController = ({
         inspecting() ? undefined : E(await entryOf(entryKey)).cancel(),
       ),
 
+    /** @param {string} turnId */
+    retryTurnContent: turnId => scheduleTurnContent(turnId, true),
+
     /** Scrollback reads vat pages until `archived`, then `History`. */
     loadEarlier: () =>
       guarded(async () => {
@@ -1599,6 +1745,7 @@ export const makeController = ({
           turnsById.get(turnId) ?? (await E(viewSession).findTurn(turnId));
         turnsById.set(turnId, turn);
         await E(turn).resolve(note);
+        hydratedTurns.delete(turnId);
         setEntry(turnId, { resolution: note });
         await rewatch(viewEpoch);
       }),

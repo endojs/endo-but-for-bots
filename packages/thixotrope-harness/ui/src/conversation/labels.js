@@ -8,6 +8,8 @@
 export const labels = Object.freeze({
   emptyConversation: 'Say hello to Floot.',
   history: 'Conversation history',
+  historyReadFailed: 'Couldn’t load the full turn.',
+  retryHistory: 'Retry',
   /** @param {number} bytes */
   showAll: bytes => `Show all (${bytes} bytes)`,
   loadingText: 'Loading…',

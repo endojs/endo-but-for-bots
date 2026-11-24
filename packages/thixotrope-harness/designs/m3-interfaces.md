@@ -692,6 +692,11 @@ it knows and never copies records onto M2's keys, so an optional field a later m
   `E(turn).cancel()` of its own, which could reach the turn send-now has just started.
 - **Large content**: a `StagedText` shows its preview and loads the full text with `Content.read`
   in `blobPageBytes` pages on expand (a 1 MiB reply renders fully, acceptance 8).
+- A settled turn marked `cut` in a history page has an abbreviated transcript. The
+  conversation reads the full record pages automatically through `Turn.getContent`
+  for retained turns or `History.turnContent` for archived turns. A reply already
+  on screen keeps its streamed text while the read completes. If a read fails,
+  the turn offers a retry.
 
 ### 9.3 Spec items to views (W3.5, W3.6)
 

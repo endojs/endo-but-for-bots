@@ -59,6 +59,7 @@ import {
  * @property {string} [modelId]
  * @property {string} [effort]
  * @property {number} [turns] settled turns in its history (default 0)
+ * @property {string} [reply] assistant reply in seeded completed turns
  * @property {number} [archived] how many of the oldest of those are
  *   archived (served by `History.page`, no `Turn` object)
  * @property {string} [running] a turn running with this input
@@ -91,6 +92,8 @@ const previewOf = text => text.slice(0, 1024);
  *   presets?: any[],
  *   extras?: Array<{ label: string, service: any }>,
  *   pageTurns?: number,
+ *   contentPageRecords?: number,
+ *   beforeContentPage?: (cursor?: string) => Promise<void>,
  *   beforeChildLookup?: () => Promise<void>,
  * }} [options]
  */
@@ -101,6 +104,8 @@ export const makeFakePowers = ({
   presets,
   extras = [],
   pageTurns = 32,
+  contentPageRecords = Infinity,
+  beforeContentPage,
   beforeChildLookup,
 } = {}) => {
   let clock = 1_700_000_000_000;
@@ -406,6 +411,20 @@ export const makeFakePowers = ({
   };
 
   /**
+   * @param {FakeTurn} turn
+   * @param {string} [cursor]
+   */
+  const contentPage = async (turn, cursor) => {
+    await beforeContentPage?.(cursor);
+    const start = cursor === undefined ? 0 : Number(cursor.slice(1));
+    const end = start + contentPageRecords;
+    return harden({
+      records: turn.records.slice(start, end),
+      ...(end < turn.records.length ? { next: `c${end}` } : {}),
+    });
+  };
+
+  /**
    * @param {FakeSession} s
    * @param {FakeTurn} t
    */
@@ -448,7 +467,7 @@ export const makeFakePowers = ({
       /** @param {string} [cursor] */
       getContent: cursor => {
         enter('Turn', 'getContent', cursor === undefined ? [] : [cursor]);
-        return harden({ records: [...t.records] });
+        return contentPage(t, cursor);
       },
     });
 
@@ -662,7 +681,9 @@ export const makeFakePowers = ({
           turnId: t.turnId,
           status: t.state,
           at: tick(),
-          ...(t.state === 'completed' ? { final: `reply ${i + 1}` } : {}),
+          ...(t.state === 'completed'
+            ? { final: spec.reply ?? `reply ${i + 1}` }
+            : {}),
         }),
       );
       s.usage.turns += 1;
@@ -786,15 +807,24 @@ export const makeFakePowers = ({
    * @param {FakeTurn} t
    * @returns {any}
    */
-  const previewOfTurn = t =>
-    harden({
+  const previewOfTurn = t => {
+    const records = t.records.map(record => {
+      if (typeof record.final !== 'string') return record;
+      const final = previewOf(record.final);
+      return final === record.final ? record : { ...record, final };
+    });
+    return harden({
       ...(t.archived ? { sealed: true } : { turn: t.turn }),
       turnId: t.turnId,
       state: t.state,
       at: t.at,
-      records: [...t.records],
+      records,
+      ...(records.some((record, i) => record !== t.records[i])
+        ? { cut: true }
+        : {}),
       ...(t.archived && t.resolution ? { resolution: t.resolution } : {}),
     });
+  };
 
   /**
    * Newest first from ordinal `n` (1-based), kept or archived turns only.
@@ -1206,14 +1236,19 @@ export const makeFakePowers = ({
     /**
      * @param {any} session
      * @param {string} turnId
+     * @param {string} [cursor]
      */
-    turnContent: async (session, turnId) => {
-      enter('History', 'turnContent', [session, turnId]);
+    turnContent: async (session, turnId, cursor) => {
+      enter(
+        'History',
+        'turnContent',
+        cursor === undefined ? [session, turnId] : [session, turnId, cursor],
+      );
       const s = byFacet.get(session);
       const t =
         s && s.turns.find(/** @param {FakeTurn} x */ x => x.turnId === turnId);
-      if (!t) throw Error('unknown turn');
-      return harden({ records: [...t.records] });
+      if (!t?.archived) throw Error('unknown turn');
+      return contentPage(t, cursor);
     },
   });
 

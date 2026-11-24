@@ -7,6 +7,8 @@ import test from '@endo/ses-ava/prepare-endo.js';
 
 import { E } from '@endo/far';
 
+import { turnContent } from '../../ui/src/conversation/transcript.js';
+
 import { makeController } from '../../ui/src/controller/index.js';
 import { DRAFT_PREFIX } from '../../ui/src/controller/drafts.js';
 import {
@@ -545,6 +547,109 @@ test('Load earlier pages the session back across the archive, every turn once', 
   );
   t.true(view?.messages[0].sealed);
   t.is(view?.messages[0].turn, undefined, 'archived turns have no Turn');
+});
+
+const makeContentGate = () => {
+  let release = () => {};
+  /** @type {Promise<void>} */
+  const wait = new Promise(resolve => {
+    release = resolve;
+  });
+  return { wait, release };
+};
+
+/** @param {Record<string, any> | undefined} entry */
+const finalMessageText = entry =>
+  entry && turnContent(entry).messages.at(-1)?.text;
+
+test('a streamed inline reply stays complete on settlement and reload', async t => {
+  const reply = `${'a'.repeat(1024)} final sentence`;
+  const { wait, release } = makeContentGate();
+  const { controller, control, powers } = await setup({
+    sessions: [{ running: 'hello' }],
+    contentPageRecords: 1,
+    beforeContentPage: () => wait,
+  });
+  await controller.selectSession('s1');
+  control.delta('s1', reply);
+  await flush();
+  t.is(controller.getState().view?.streamingText, reply);
+  control.finish('s1', { final: reply });
+  await flush();
+  const lastEntry = () => controller.getState().view?.messages.at(-1);
+  t.is(finalMessageText(lastEntry()), reply);
+  release();
+  await flush();
+  t.is(finalMessageText(lastEntry()), reply);
+
+  const fresh = makeController({ storage: makeStorage() });
+  await fresh.attach(powers);
+  await fresh.selectSession('s1');
+  await flush();
+  const entry = fresh.getState().view?.messages.at(-1);
+  t.is(finalMessageText(entry), reply);
+  t.true(control.callsOf('Turn', 'getContent').some(call => call[2] === 'c1'));
+});
+
+test('archived scrollback reads all pages of a cut reply', async t => {
+  const reply = `${'b'.repeat(1024)} archived ending`;
+  const { controller, control } = await setup({
+    sessions: [{ turns: 2, archived: 1, reply }],
+    contentPageRecords: 1,
+    pageTurns: 1,
+  });
+  await controller.selectSession('s1');
+  await controller.loadEarlier();
+  await flush();
+  const archived = controller.getState().view?.messages[0];
+  t.true(archived?.sealed);
+  t.is(finalMessageText(archived), reply);
+  t.true(
+    control.callsOf('History', 'turnContent').some(call => call[4] === 'c1'),
+  );
+});
+
+test('a failed page read keeps the preview and retries from the first record', async t => {
+  const reply = `${'c'.repeat(1024)} recovered`;
+  let failOnce = true;
+  const { controller } = await setup({
+    sessions: [{ turns: 1, reply }],
+    contentPageRecords: 1,
+    beforeContentPage: async cursor => {
+      if (cursor && failOnce) {
+        failOnce = false;
+        throw Error('content read failed');
+      }
+    },
+  });
+  await controller.selectSession('s1');
+  await flush();
+  const entry = () => controller.getState().view?.messages[0];
+  t.is(entry()?.contentError, 'content read failed');
+  t.is(finalMessageText(entry()), reply.slice(0, 1024));
+  await controller.retryTurnContent('t1');
+  t.is(entry()?.contentError, undefined);
+  t.false(entry()?.cut);
+  t.is(finalMessageText(entry()), reply);
+});
+
+test('an outstanding full-content read cannot restore the previous conversation', async t => {
+  const { wait, release } = makeContentGate();
+  const { controller, control } = await setup({
+    sessions: [{ turns: 1, reply: 'x'.repeat(1025) }, { turns: 1 }],
+    beforeContentPage: () => wait,
+  });
+  const opening = controller.selectSession('s1');
+  await flush();
+  t.true(control.callsOf('Turn', 'getContent').length > 0);
+  await controller.selectSession('s2');
+  release();
+  await opening;
+  await flush();
+  const view = controller.getState().view;
+  t.is(controller.getState().activeKey, 's2');
+  t.is(view?.messages.length, 1);
+  t.is(finalMessageText(view?.messages[0]), 'reply 1');
 });
 
 test('recovery panel pages through History; readContent reads every page', async t => {

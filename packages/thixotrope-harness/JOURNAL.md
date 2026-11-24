@@ -20007,3 +20007,31 @@ The full unit and adapter suite passed 1,939 tests with eight gated skips.
 Package typechecking, ESLint and the duplicate-code gate passed.
 New sessions using the Thixotrope development preset now start from the verified
 implementation at `33ffecbf1c`.
+
+### J-13018 2026-11-24 Complete replies after settlement and reload
+
+In session `s23`, turn `t4`, Chromium displayed the first 1,024 of the
+2,519 characters in the saved reply. The text ended mid-word. The preceding
+650-character reply was intact. The session history page had shortened both
+the round text and the final text and marked the turn `cut`. The conversation
+discarded that flag and treated the preview as the whole reply, including
+when refreshing a turn it had just watched finish.
+
+The conversation now follows the record pages of each cut, settled turn.
+It keeps the streamed reply on screen until all pages arrive. Retained turns
+provide those pages through `Turn.getContent`. The history service provides
+them for archived turns. A failed read offers a retry on the affected turn.
+Staged fields keep their existing Show all control for large content.
+
+On the pinned worker, Chromium matched four displayed replies to the stored
+transcript character for character on opening each session and again after a
+reload. The replies measured 2,519 and 650 characters in `s23` and 2,495 and
+3,880 in `s22`. These checks used existing conversations.
+
+The Chromium regression sends a scripted reply longer than the preview and
+checks its final character at settlement and after a reload in a fresh browser
+context. The same suite exercises the 1 MiB staged reply and scrollback through
+300 turns. Controller tests cover paged reads from retained and archived
+turns, retry after an interrupted read, and switching sessions during a read.
+The unit and adapter suites passed 1,945 tests with eight gated skips. Package
+typechecking, ESLint and the duplicate-code gate passed.

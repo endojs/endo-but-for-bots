@@ -497,6 +497,22 @@ test.serial('composer without Web Locks is disabled with its text', async t => {
 });
 
 test.serial(
+  'a failed history read offers a retry on the affected turn',
+  async t => {
+    const reply = 'r'.repeat(1025);
+    const fake = makeFakePowers({ sessions: [{ key: 'a', turns: 1, reply }] });
+    fake.control.failNext('Turn', 'getContent', Error('history unavailable'));
+    const { dom, $ } = await open({ fake, key: 'a' });
+    t.teardown(() => dom.close());
+    const retry = $('.thix-turn [role="alert"] button');
+    t.is(retry?.textContent, 'Retry');
+    await act(dom, retry, 'click');
+    t.is($('.floot-msg-row.assistant .floot-msg')?.textContent, reply);
+    t.is($('.thix-turn [role="alert"]'), null);
+  },
+);
+
+test.serial(
   'large content: a staged text shows its preview and pages in on Show all',
   async t => {
     const fake = makeFakePowers({ sessions: [{ key: 'a' }] });

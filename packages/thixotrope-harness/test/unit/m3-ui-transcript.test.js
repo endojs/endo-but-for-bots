@@ -44,6 +44,23 @@ test('a settled turn with its turn-settled record shows its records', t => {
   t.false(shown.fromFold);
 });
 
+test('a cut history preview keeps the streamed reply through its final character', t => {
+  const prefix = 'a'.repeat(1024);
+  const text = `${prefix}!`;
+  const shown = turnContent({
+    turnId: 't1',
+    state: 'completed',
+    cut: true,
+    records: [
+      started,
+      { kind: 'round-settled', text: prefix },
+      { kind: 'turn-settled', final: prefix },
+    ],
+    fold: { ...fold, messages: [{ role: 'assistant', text }] },
+  });
+  t.is(shown.messages[0].text, text);
+});
+
 // M3-FIX, acceptance 8: a long reply watched live settles with its records,
 // so its staged text can be read in full; the fold keeps thoughts and tools.
 test('a watched settled turn shows the records’ staged text in the fold', t => {

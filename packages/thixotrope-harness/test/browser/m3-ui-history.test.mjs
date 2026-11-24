@@ -9,6 +9,7 @@
  *   its `code` highlighted; `</>` shows the raw JSON;
  * - scrolling up pages the 300-turn session back to turn 1
  *   across the archive with every turn once;
+ * - a reply longer than its history preview survives settling and reload;
  * - a 1 MiB reply watched live renders fully (Show all reads it in pages).
  *
  * Gated by THIX_HARNESS_BROWSER=1 and a Chromium (`_harness.mjs`):
@@ -38,6 +39,7 @@ const usage = {
 
 /** A reply of exactly 1 MiB in 16 chunks of 64 KiB. */
 const MEGA = 1_048_576;
+const inlineReply = `${'A complete sentence. '.repeat(120)}Final character ✓`;
 
 const historyScript = harden({
   turns: [
@@ -69,6 +71,10 @@ const historyScript = harden({
           usage,
         },
       ],
+    },
+    {
+      input: 'inline',
+      rounds: [{ chunks: [{ text: inlineReply }], usage }],
     },
     { rounds: [{ chunks: [{ text: 'ok' }], usage }] },
   ],
@@ -104,6 +110,8 @@ const turnIds = page =>
 /** @type {string} */
 let liveKey = '';
 /** @type {string} */
+let inlineKey = '';
+/** @type {string} */
 let longKey = '';
 
 run('setup: m3-300 template, scripted backend for live turns', async t => {
@@ -117,10 +125,15 @@ run('setup: m3-300 template, scripted backend for live turns', async t => {
   longKey = rows.find((/** @type {any} */ r) => r.title === 'm3-300').key;
   const [preset] = await E(factory).listPresets();
   const [backend] = await E(factory).listBackends();
-  const session = await E(factory).createSession(
-    harden({ title: 'live', preset, backend, at: Date.now() }),
-  );
-  liveKey = (await E(session).getInfo()).key;
+  /** @param {string} title */
+  const createSession = async title => {
+    const session = await E(factory).createSession(
+      harden({ title, preset, backend, at: Date.now() }),
+    );
+    return (await E(session).getInfo()).key;
+  };
+  liveKey = await createSession('live');
+  inlineKey = await createSession('inline replies');
   t.truthy(longKey);
 });
 
@@ -199,6 +212,40 @@ run(
     t.is(length, MEGA);
   },
 );
+
+run('an inline reply renders in full after settlement and reload', async t => {
+  if (!harness) throw Error('setup failed');
+  const page = await harness.newPage();
+  t.teardown(() => page.context().close());
+  const openInline = async () => {
+    await page
+      .locator(
+        `.floot-session-item[data-key="${inlineKey}"] .floot-session-name`,
+      )
+      .click();
+    await page
+      .locator('.floot-header-title', { hasText: 'inline replies' })
+      .waitFor();
+    await page.locator('textarea.floot-input').waitFor();
+  };
+  await openInline();
+  await send(page, 'inline');
+  const turn = page.locator('.thix-turn[data-state="completed"]');
+  const reply = turn.locator('.floot-msg-row.assistant .floot-msg');
+  const expectFullReply = async () => {
+    await turn.waitFor();
+    t.is(
+      await turn.locator('.floot-msg-row.user .floot-msg').textContent(),
+      'inline',
+    );
+    await reply.filter({ hasText: 'Final character ✓' }).waitFor();
+    t.is(await reply.textContent(), inlineReply);
+  };
+  await expectFullReply();
+  await page.reload();
+  await openInline();
+  await expectFullReply();
+});
 
 run(
   'acceptance 8: scrolling up preserves the reading position through every page to turn 1',

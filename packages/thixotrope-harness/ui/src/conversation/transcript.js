@@ -196,7 +196,9 @@ export const turnContent = entry => {
   const settled = (entry.records ?? []).some(
     (/** @type {any} */ record) => record?.kind === 'turn-settled',
   );
-  if (fold && (live || !entry.records || !settled)) {
+  // A history preview can contain the end marker and still abbreviate the
+  // reply. Keep the streamed text until the full records have arrived.
+  if (fold && (live || entry.cut || !settled)) {
     return {
       messages: fold.messages,
       streamingText: live ? fold.streamingText || '' : '',

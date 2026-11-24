@@ -14,6 +14,7 @@
 import { h } from 'preact';
 
 import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
+import { labels } from './labels.js';
 import { ConversationSlot } from './slots.js';
 import { StatusRow } from './StatusRow.js';
 import { LongText, linkify } from './text.js';
@@ -97,6 +98,7 @@ export const TurnView = ({ entry, view, controller, features, context }) => {
       class: `thix-turn${entry.sealed ? ' sealed' : ''}`,
       'data-turn': entry.turnId,
       'data-state': entry.state,
+      'aria-busy': !live && entry.cut && !entry.contentError ? true : undefined,
     },
     h(
       'div',
@@ -151,6 +153,23 @@ export const TurnView = ({ entry, view, controller, features, context }) => {
       : null,
     !live && showsStatusRow(entry.state)
       ? h(StatusRow, { entry, controller })
+      : null,
+    entry.contentError
+      ? h(
+          'div',
+          { class: 'thix-text-error', role: 'alert' },
+          labels.historyReadFailed,
+          ' ',
+          h(
+            'button',
+            {
+              type: 'button',
+              title: entry.contentError,
+              onClick: () => controller.retryTurnContent(entry.turnId),
+            },
+            labels.retryHistory,
+          ),
+        )
       : null,
   );
 };
