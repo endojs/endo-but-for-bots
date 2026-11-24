@@ -16,17 +16,13 @@
  *   away), a zoomed "recent readings" inset of the observed span;
  * - a text equivalent: the accessible label and a table of every record.
  *
- * The view keeps its own clock (`useNow`): an open panel drops a projection
+ * The parent pool view advances its clock: an open panel drops a projection
  * that went stale or reached its reset, and a reset marker that passed,
  * without asking the provider. A failed history read keeps the last graph
  * and says so beside it.
  */
 import { h } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
 
-/* eslint-disable import/no-relative-packages -- guest/ is its own private package */
-import { subscriptionLimits } from '../../../guest/lib/subscription-limits.js';
-/* eslint-enable import/no-relative-packages */
 import {
   BOTTOM,
   COLOURS,
@@ -42,7 +38,6 @@ import {
   scaleOf,
   timeAxis,
 } from './chart-frame.js';
-import { CreditGraph, reportsNumericCredits } from './CreditGraph.js';
 import { windowName } from './labels.js';
 import {
   analyseSeries,
@@ -75,18 +70,6 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 /** The inset is drawn when the observed span is narrower than this. */
 const SQUEEZED_PX = PLOT_WIDTH * 0.25;
-/** How often an open view advances its clock. */
-export const QUOTA_TICK_MS = 30_000;
-
-/**
- * @param {unknown} error
- * @returns {string}
- */
-const messageOf = error =>
-  error && typeof error === 'object' && 'message' in error
-    ? String(/** @type {{ message: unknown }} */ (error).message)
-    : String(error);
-
 /** @typedef {import('./quota-projection.js').SeriesAnalysis} SeriesAnalysis */
 /** @typedef {import('./quota-projection.js').Point} Point */
 
@@ -466,177 +449,5 @@ export const QuotaGraph = ({ series, account, nowMs }) => {
         ),
       ),
     ),
-  );
-};
-
-/**
- * The browser's clock, advanced every `tickMs` while mounted and `running`
- * (no provider call: only the projection rules are re-applied). Nothing
- * runs while there is no graph to keep current.
- *
- * @param {() => number} now
- * @param {number} tickMs
- * @param {boolean} running
- */
-export const useNow = (now, tickMs, running) => {
-  const [nowMs, setNowMs] = useState(now);
-  useEffect(() => {
-    if (!running) return undefined;
-    setNowMs(now());
-    const timer = globalThis.setInterval(() => setNowMs(now()), tickMs);
-    return () => globalThis.clearInterval(timer);
-  }, [now, tickMs, running]);
-  return nowMs;
-};
-
-const MAX_PAGES = Math.ceil(
-  subscriptionLimits.maxPoolMembers / subscriptionLimits.historyPageMembers,
-);
-
-/**
- * Every page of a pool's history, joined; `null` when the adapter no longer
- * knows the pool.
- *
- * @param {import('./feed.js').AccountsFeed} feed
- * @param {any} backend
- */
-const readHistory = async (feed, backend) => {
-  const first = await feed.history(backend);
-  if (first === undefined || first === null) return null;
-  const members = [...(first.members ?? [])];
-  let offset = Number(first.next);
-  for (
-    let page = 1;
-    page < MAX_PAGES && Number.isSafeInteger(offset) && offset > 0;
-    page += 1
-  ) {
-    // eslint-disable-next-line no-await-in-loop -- each page names the next
-    const more = await feed.history(backend, offset);
-    if (more === undefined || more === null) break;
-    members.push(...(more.members ?? []));
-    const next = Number(more.next);
-    offset = next > offset ? next : NaN;
-  }
-  return harden({ ...first, members });
-};
-
-/**
- * The quota history of one pool, asked again when `rev` moves.
- *
- * @param {{ feed: import('./feed.js').AccountsFeed, pool: any, rev: number, now?: () => number, tickMs?: number }} props
- */
-export const PoolQuotaHistory = ({
-  feed,
-  pool,
-  rev,
-  now = Date.now,
-  tickMs = QUOTA_TICK_MS,
-}) => {
-  const [state, setState] = useState(
-    /** @type {{ history?: any, error?: string }} */ ({}),
-  );
-  /**
-   * The member's credit records, when its current account (the pool view)
-   * reports a numeric balance; else none.
-   *
-   * @param {any} member
-   * @returns {readonly any[]}
-   */
-  const creditsOf = member => {
-    const current = (pool.members ?? []).find(
-      (/** @type {any} */ account) => account.label === member.label,
-    );
-    return reportsNumericCredits(current) && Array.isArray(member.credits)
-      ? member.credits
-      : [];
-  };
-  const graphs = (state.history?.members ?? []).some(
-    (/** @type {any} */ member) =>
-      (Array.isArray(member.windows) && member.windows.length !== 0) ||
-      creditsOf(member).length !== 0,
-  );
-  const nowMs = useNow(now, tickMs, graphs);
-  useEffect(() => {
-    let live = true;
-    readHistory(feed, pool.backend).then(
-      history => {
-        if (live) setState({ history });
-      },
-      thrown => {
-        // The last graph stays; the failure is said beside it.
-        if (live)
-          setState(previous => ({ ...previous, error: messageOf(thrown) }));
-      },
-    );
-    return () => {
-      live = false;
-    };
-  }, [feed, pool.backend, rev]);
-
-  /** @type {any} */
-  let body;
-  if (state.history === undefined && state.error !== undefined) {
-    body = null;
-  } else if (state.history === undefined) {
-    body = h('p', { class: 'm4-note' }, quotaGraphTexts.loading);
-  } else if (state.history === null) {
-    body = h(
-      'p',
-      { class: 'm4-note m4-quota-empty' },
-      quotaGraphTexts.noReadings,
-    );
-  } else {
-    body = (state.history.members ?? []).map((/** @type {any} */ member) =>
-      h(
-        'div',
-        {
-          class: 'm4-quota-member',
-          'data-provider': member.provider,
-        },
-        h(
-          'h4',
-          null,
-          member.label,
-          h('span', { class: 'm4-secret-facts' }, ` ${member.provider}`),
-        ),
-        member.windows.length === 0
-          ? h(
-              'p',
-              { class: 'm4-note m4-quota-empty' },
-              quotaGraphTexts.noReadings,
-            )
-          : member.windows.map((/** @type {any} */ series) =>
-              h(QuotaGraph, { series, account: member, nowMs }),
-            ),
-        creditsOf(member).length === 0
-          ? null
-          : h(CreditGraph, {
-              records: creditsOf(member),
-              account: member,
-              nowMs,
-            }),
-      ),
-    );
-  }
-  const failure =
-    state.error === undefined
-      ? null
-      : h(
-          'p',
-          { class: 'm4-note m4-quota-error', role: 'status' },
-          state.history === undefined
-            ? `${quotaGraphTexts.unavailable}: ${state.error}`
-            : `${quotaGraphTexts.stale}: ${state.error}`,
-        );
-  return h(
-    'section',
-    {
-      class: 'm4-quota',
-      'aria-label': `${quotaGraphTexts.title}: ${pool.label}`,
-      'data-kind': pool.kind,
-    },
-    h('h4', { class: 'm4-quota-title' }, quotaGraphTexts.title),
-    failure,
-    body,
   );
 };

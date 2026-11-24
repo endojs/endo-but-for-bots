@@ -50,7 +50,12 @@ const iso = (/** @type {number} */ ms) => new Date(ms).toISOString();
 const poolOf = (backend, label, members) =>
   harden({ backend, kind: 'claude-pool', label, selection: 'auto', members });
 
-const setup = async () => {
+/** @param {{ cold?: boolean, initiallyEmpty?: boolean, beforeRefresh?: () => Promise<void> }} [options] */
+const setup = async ({
+  cold = false,
+  initiallyEmpty = false,
+  beforeRefresh,
+} = {}) => {
   runEffectsPromptly();
   const dom = makeTestDom();
   const poolBackend = Far('Backend', {});
@@ -77,11 +82,17 @@ const setup = async () => {
     }),
   ];
   const sessionsToPools = new Map();
+  const pools = [poolOf(poolBackend, 'team-claude', members)];
   const accounts = makeFakeAccounts({
-    pools: [poolOf(poolBackend, 'team-claude', members)],
+    pools: cold || initiallyEmpty ? [] : pools,
+    coldPools: cold ? pools : [],
+    beforeRefresh,
     sessions: sessionsToPools,
   });
-  const secrets = makeFakeSecrets({ accounts: accounts.accounts });
+  const secrets = makeFakeSecrets({
+    accounts: accounts.accounts,
+    poolBackends: initiallyEmpty ? [] : [poolBackend],
+  });
   const features = [...accountFeatures];
   const { powers, control } = makeFakePowers({
     sessions: [{ key: 's-pool' }, { key: 's-api' }],
@@ -253,7 +264,7 @@ test.serial('labels: chip text, rows, provenance, blocked', t => {
 });
 
 test.serial(
-  'Subscriptions panel: list, then live batches; refresh on demand only',
+  'Subscriptions panel: list, then live batches; refresh on open and on demand',
   async t => {
     const s = await setup();
     s.controller.openPanel('accounts');
@@ -273,7 +284,11 @@ test.serial(
     t.deepEqual(s.accounts.callsOf('Accounts.watch'), [
       ['Accounts', 'watch', 1],
     ]);
-    t.is(s.accounts.callsOf('Accounts.refresh').length, 0, 'no first refresh');
+    t.is(
+      s.accounts.callsOf('Accounts.refresh').length,
+      1,
+      'opening refreshes all pools',
+    );
 
     // A push: the whole view, rev + 1.
     s.accounts.publish([
@@ -290,9 +305,89 @@ test.serial(
     await s.click(s.$('[data-action="refresh-pool"]'));
     t.deepEqual(
       s.accounts.callsOf('Accounts.refresh').map(call => call[2]),
-      [undefined, s.poolBackend],
+      [undefined, undefined, s.poolBackend],
     );
     await s.dom.close();
+  },
+);
+
+test.serial(
+  'opening a cold panel registers its pools before refreshing and shares pending work on reopen',
+  async t => {
+    let finish = () => {};
+    const pending = new Promise(
+      /** @param {(value?: any) => void} resolve */ resolve => {
+        finish = resolve;
+      },
+    );
+    const s = await setup({ cold: true, beforeRefresh: () => pending });
+    t.teardown(async () => {
+      finish();
+      s.shell.unmount();
+      await s.dom.close();
+    });
+    s.controller.openPanel('accounts');
+    await flush();
+    const names = s.accounts.calls.map(call => call[1]);
+    t.true(names.indexOf('forBackend') < names.indexOf('refresh'));
+    t.is(s.accounts.callsOf('Accounts.refresh').length, 1);
+    t.true(s.$('[data-action="refresh-all"]').disabled);
+    s.controller.closePanel();
+    await flush();
+    s.controller.openPanel('accounts');
+    await flush();
+    t.is(s.accounts.callsOf('Accounts.refresh').length, 1);
+    finish();
+    await flush();
+    t.false(s.$('[data-action="refresh-all"]').disabled);
+    s.controller.closePanel();
+    await flush();
+    s.controller.openPanel('accounts');
+    await flush();
+    t.is(s.accounts.callsOf('Accounts.refresh').length, 2);
+  },
+);
+
+test.serial(
+  'an open empty panel refreshes once when its first pool is registered',
+  async t => {
+    const s = await setup({ initiallyEmpty: true });
+    t.teardown(async () => {
+      s.shell.unmount();
+      await s.dom.close();
+    });
+    s.controller.openPanel('accounts');
+    await flush();
+    t.is(s.accounts.callsOf('Accounts.refresh').length, 0);
+    const pools = [poolOf(s.poolBackend, 'newly-registered', s.members)];
+    s.accounts.publish(pools);
+    await flush();
+    s.accounts.publish(pools);
+    await flush();
+    t.is(s.accounts.callsOf('Accounts.refresh').length, 1);
+  },
+);
+
+test.serial(
+  'failed opening refresh stays visible until a manual retry succeeds',
+  async t => {
+    let fail = true;
+    const s = await setup({
+      beforeRefresh: async () => {
+        if (fail) throw Error('usage unavailable');
+      },
+    });
+    t.teardown(async () => {
+      s.shell.unmount();
+      await s.dom.close();
+    });
+    s.controller.openPanel('accounts');
+    await flush();
+    t.is(s.$('.m4-error')?.textContent, 'usage unavailable');
+    fail = false;
+    await s.click(s.$('[data-action="refresh-all"]'));
+    t.is(s.$('.m4-error'), null);
+    t.is(s.accounts.callsOf('Accounts.refresh').length, 2);
   },
 );
 

@@ -19967,3 +19967,41 @@ accounts had weekly projections. All three accounts had provider-reported
 weekly reset markers.
 The open wallet chart moved from one reading to two and showed the one-hour
 forecast without a page reload.
+
+### J-13017 2026-11-24 Pool graphs and refresh on opening Subscriptions
+
+The operator asked for an opening refresh of every subscription and a combined
+graph for each pool. The pinned stack began with one ChatGPT member reporting
+a numeric balance and weekly quota, and two Claude members reporting weekly quota.
+Weekly reset times belong to the individual accounts.
+
+The pool credit measure sums the reported member balances. For a quota window,
+the provider supplies percentages, so the graph shows an equal-weight mean and
+the number of contributing accounts. Individual facts, readings and graphs now
+share one disclosure per pool. Expanding it uses the same paged history as the
+combined view.
+
+On the first live browser opening, the ChatGPT usage endpoint confirmed 62,500
+credits and 3% weekly quota remaining. The two Claude members kept their
+November 21 readings. The local audit showed a credential read for each member
+on both the automatic and manual refreshes. The operator usage reader used the
+stored access token, bypassing the broker that renews an expiring login on a turn.
+The operator refresh now uses the existing renewal broker. Model-initiated usage
+reads retain their stored-token behavior.
+
+At 00:33:45 UTC on November 24, a single browser opening on the pinned worker
+returned a new provider observation for every active member. ChatGPT reported
+62,500 credits and 2% weekly quota remaining. Primary Claude reported 100%
+remaining and Secondary Claude 65%. The pool graph showed their mean of 82.5%
+and identified the two resets, November 29 at 17:00 UTC for Primary and
+November 25 at 09:00 UTC for Secondary.
+
+Chromium verified the pool measures and disclosures at 375 and 1,280 pixels.
+Expanding one pool mounted only its individual graphs. A separate Refresh all
+check preserved the open and closed states. The fake-provider worker-restart and
+both M4 Chromium acceptance tests passed. The native credential regression
+verified one renewal per expired member under overlapping operator and model
+reads. The failed-read regression preserved a newer observation from another
+request.
+The full unit and adapter suite passed 1,939 tests with eight gated skips.
+Package typechecking, ESLint and the duplicate-code gate passed.

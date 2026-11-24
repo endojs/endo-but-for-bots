@@ -431,8 +431,9 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
 - **Push, never poll** (R4-85): every new reading or member state change publishes one
   `AccountsBatch` (the whole view, `rev` + 1) on an adapter-side channel with M2's channel
   bounds (`channelLimits`); `Accounts.watch(rev?)` subscribes (gateway, in process). Zero vat
-  deliveries per change and per viewer. `refresh(pool?)` reads the providers now (on demand
-  only; never on a first read).
+  deliveries per change and per viewer. `refresh(pool?)` is an explicit operator
+  action that reads usage from the providers. Opening Subscriptions sends this action
+  once after discovering the configured pools. List, history and watch use saved state.
 - **Abandoned viewers** (M3 closes only its own `Live` subscriptions at connection close, M3
   4.5): the accounts channel itself evicts them. A `next()` that has waited
   `accountsKeepaliveMs` (30 s) with no change answers the current view again (same `rev`), so a
@@ -528,6 +529,17 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   increase starts a new spending forecast. Weekly reset timestamps apply to
   quota windows.
 
+  Opening **Subscriptions** discovers the configured pools and requests a refresh
+  of their members. The account chip and history reads continue to use the shared
+  accounts feed. Live view revisions and the chart clock update the display.
+  Each pool shows one combined history with a selector for the reported measures.
+  Numeric balances use an exact decimal sum. For a quota window with a known
+  duration, the combined value is the unweighted mean of the remaining percentages
+  for members with usable readings. Each graph identifies its contributing count.
+  Each weekly marker keeps the reporting account and confirmed UTC reset time.
+  A per-pool **Individual subscriptions** disclosure starts closed. Expanding it
+  draws the account graphs from the same history and shows each member’s status.
+
 ---
 
 ## 7. Renewal and sign-in (W4.4; R7-16, R7-29, R7-30, R8-35..R8-38)
@@ -562,8 +574,10 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   6) conditioned on the intent's generation. An answer naming another `accountId` is refused
   (`INVALID`). A failure the request provably never left (connection refused before sending)
   undoes the intent; any other failure leaves it (fail closed). A concurrent renewal elsewhere
-  fails `GENERATION_CONFLICT` and the loser re-reads (R7-30). A renewal never runs on a first
-  account read (it is on the round's path only).
+  fails `GENERATION_CONFLICT` and the loser re-reads (R7-30). Explicit operator
+  usage refreshes use the same broker as provider rounds and can renew an expiring
+  local login before reading usage. A model’s `accountStatus` refresh uses its stored
+  access token. Passive list, history and watch reads leave the credentials untouched.
 - **Sign-in** (`scripts/subscription-login.mjs`, `[real-provider]`, owner-run): the operator
   runs it against the control socket; it prints the provider's authorization URL (PKCE), reads the
   pasted `code#state`, exchanges it, and writes the credential through

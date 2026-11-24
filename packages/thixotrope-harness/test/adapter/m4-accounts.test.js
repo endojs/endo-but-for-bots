@@ -954,3 +954,29 @@ test('usage reader: headers by provider, redirects refused, failures carry a sta
   });
   t.is(await noUrl(pool, memberEntry('one', 'k1')), undefined);
 });
+
+test('a failed refresh cannot demote a newer concurrent observation', async t => {
+  /** @type {() => void} */
+  let finish = () => {};
+  const { core } = await setup(t, {
+    readers: {
+      usage: async () => {
+        await new Promise(resolve => {
+          finish = () => resolve(undefined);
+        });
+        throw Error('usage read failed');
+      },
+    },
+  });
+  const pool = Far('Backend', {});
+  const entry = memberEntry('active', 'k1');
+  core.register(pool, { kind: 'claude-pool', label: 'pool', members: [entry] });
+  core.observe(pool, entry, readingOf(10));
+  const pending = core.accounts.refresh(pool);
+  await settle();
+  core.observe(pool, entry, readingOf(20, T0 + 1000));
+  finish();
+  const view = await pending;
+  t.is(view.pools[0].members[0].provenance, 'observed');
+  t.is(view.pools[0].members[0].at, new Date(T0 + 1000).toISOString());
+});

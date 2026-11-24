@@ -1,20 +1,15 @@
 // @ts-check
 /**
  * The Subscriptions panel (P-45; R4-84..R4-86, R6-54; m4-interfaces.md 6,
- * 9.1; W4.7): every pool's accounts from the accounts channel, live
- * (`feed.js`), with Refresh for all pools or one (`Accounts.refresh`, on
- * demand only). Per member: plan, windows (percent used, reset), status,
- * credits, banked resets (read-only: no redeem, decision 8) and the
- * provenance of the figures. Selection is always `auto` (D-M4-6). Under
- * each pool, the members' observed quota history as graphs with
- * projections and confirmed weekly resets (`QuotaGraph.js`).
+ * 9.1; W4.7) refreshes every configured subscription on opening. Each pool
+ * shows its combined history and confirmed weekly resets. Individual
+ * subscriptions disclose their plan, windows, status, balances and graphs.
  */
 import { h } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 
 import { accountsFeed } from './feed.js';
-import { accountBlocked, accountRows } from './labels.js';
-import { PoolQuotaHistory } from './QuotaGraph.js';
+import { PoolQuotaHistory } from './PoolQuotaHistory.js';
 
 /** @import { FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
@@ -62,22 +57,64 @@ export const SubscriptionsPanel = ({ context, now = Date.now }) => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const { view, error: feedError } = feed ? feed.state() : {};
-  const nowMs = now();
 
-  /** @param {any} [backend] */
-  const refresh = async backend => {
-    await null;
+  // Keep request state tied to this opening and these connection powers.
+  const requestToken = useRef(0);
+  const refresh = async (
+    /** @type {any} */ backend = undefined,
+    register = false,
+  ) => {
     if (!feed) return;
+    requestToken.current += 1;
+    const token = requestToken.current;
     setBusy(true);
     setError('');
+    await null;
     try {
-      await context.call(() => feed.refresh(backend));
+      await context.call(async () => {
+        await (register ? feed.registerPools() : undefined);
+        if (requestToken.current === token) await feed.refresh(backend);
+      });
     } catch (thrown) {
-      setError(messageOf(thrown));
+      if (requestToken.current === token) setError(messageOf(thrown));
     } finally {
-      setBusy(false);
+      if (requestToken.current === token) setBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!feed) return undefined;
+    let live = true;
+    let registered = false;
+    let started = false;
+    const refreshWhenReady = () => {
+      if (!live || !registered || started || !feed.state().view?.pools.length)
+        return;
+      started = true;
+      void refresh();
+    };
+    const unsubscribe = feed.subscribe(refreshWhenReady);
+    setBusy(true);
+    setError('');
+    feed.registerPools().then(
+      () => {
+        if (!live) return;
+        registered = true;
+        setBusy(false);
+        refreshWhenReady();
+      },
+      thrown => {
+        if (!live) return;
+        setBusy(false);
+        setError(messageOf(thrown));
+      },
+    );
+    return () => {
+      live = false;
+      requestToken.current += 1;
+      unsubscribe();
+    };
+  }, [feed]);
 
   /**
    * @param {string} action
@@ -97,37 +134,11 @@ export const SubscriptionsPanel = ({ context, now = Date.now }) => {
       text,
     );
 
-  /** @param {Record<string, any>} account */
-  const member = account =>
-    h(
-      'li',
-      {
-        class: `m4-account ${account.state}${
-          accountBlocked(account, nowMs) ? ' blocked' : ''
-        }`,
-        'data-provenance': account.provenance,
-      },
-      h(
-        'div',
-        { class: 'm4-account-head' },
-        h('span', { class: 'm4-account-label' }, account.label),
-        h('span', { class: 'm4-secret-facts' }, account.provider),
-      ),
-      h(
-        'dl',
-        { class: 'm4-account-rows' },
-        accountRows(account, nowMs).flatMap(([name, value]) => [
-          h('dt', null, name),
-          h('dd', null, value),
-        ]),
-      ),
-    );
-
   /** @param {Record<string, any>} pool */
   const poolView = pool =>
     h(
       'section',
-      { class: 'm4-pool', 'data-kind': pool.kind },
+      { key: pool.backend, class: 'm4-pool', 'data-kind': pool.kind },
       h(
         'div',
         { class: 'm4-pool-head' },
@@ -143,15 +154,13 @@ export const SubscriptionsPanel = ({ context, now = Date.now }) => {
       ),
       pool.members.length === 0
         ? h('p', { class: 'm4-note' }, subscriptionsTexts.noMembers)
-        : h('ul', { class: 'm4-account-list' }, pool.members.map(member)),
-      feed && pool.members.length !== 0
-        ? h(PoolQuotaHistory, {
-            feed,
-            pool,
-            rev: Number(view?.rev ?? 0),
-            now,
-          })
-        : null,
+        : feed &&
+            h(PoolQuotaHistory, {
+              feed,
+              pool,
+              rev: Number(view?.rev ?? 0),
+              now,
+            }),
     );
 
   const shownError = error || feedError;
@@ -165,7 +174,9 @@ export const SubscriptionsPanel = ({ context, now = Date.now }) => {
     h(
       'div',
       { class: 'm4-secret-actions' },
-      button('refresh-all', subscriptionsTexts.refreshAll, () => refresh()),
+      button('refresh-all', subscriptionsTexts.refreshAll, () =>
+        refresh(undefined, true),
+      ),
     ),
     view === undefined
       ? h('p', { class: 'm4-note' }, subscriptionsTexts.loading)

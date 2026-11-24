@@ -12,6 +12,72 @@
   align-items: center;
   gap: 0.6rem;
 }
+.m4-pool-head {
+  flex-wrap: wrap;
+}
+.m4-pool-head h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.m4-pool-head button {
+  margin-left: auto;
+}
+.m4-pool-overview {
+  max-width: 36rem;
+  padding: 0.75rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 0.5rem;
+  background: var(--fl-surface);
+}
+.m4-pool-overview select,
+.m4-pool-overview button {
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 0.35rem;
+  color: var(--fl-text);
+  background: var(--fl-surface2);
+  font: inherit;
+  cursor: pointer;
+}
+.m4-pool-overview label,
+.m4-pool-overview figcaption {
+  font-size: 0.85rem;
+}
+.m4-pool-graph {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+}
+.m4-pool-graph figcaption {
+  padding-top: 0.3rem;
+  font-variant-numeric: tabular-nums;
+}
+.m4-pool-graph figcaption strong {
+  font-size: 1.2rem;
+}
+.m4-pool-graph [data-pool-reset] {
+  stroke: var(--fl-red);
+}
+.m4-pool-graph ul {
+  margin: 0;
+  padding-left: 1.15rem;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+.m4-individual-subscriptions {
+  min-width: 0;
+}
+.m4-individual-subscriptions > summary {
+  width: fit-content;
+  padding: 0.4rem 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.m4-individual-subscriptions .m4-account + .m4-account {
+  margin-top: 0.6rem;
+  border-top: 1px solid var(--fl-border);
+}
 .m4-account-list {
   margin: 0;
   padding: 0;
@@ -28,7 +94,8 @@
 }
 .m4-account-rows {
   display: grid;
-  grid-template-columns: max-content 1fr;
+  grid-template-columns: fit-content(45%) minmax(0, 1fr);
+  overflow-wrap: anywhere;
   gap: 0.15rem 0.8rem;
   margin: 0.25rem 0 0;
   font-size: 0.85rem;

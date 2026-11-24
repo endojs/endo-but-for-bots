@@ -22,7 +22,8 @@
  *   open reading lifts a dated mark) and the accounts oracle.
  * - **Credentials**: one `MemberCredential` (`renewal.js`) per member and
  *   incarnation, holding `secrets().credentialFor(key)` only (W-5). A usage
- *   read parses the stored credential without renewing (section 7).
+ *   read for a model uses the stored credential; an operator refresh may
+ *   renew it through the same broker as inference.
  * - **Catalogue**: the pool catalogue (`catalog.js`) over the same members
  *   and credentials.
  * - `credentialOps`: the `CredentialOps` facet (`ops.credentials()`, H-3).
@@ -148,7 +149,7 @@ export const makeSubscriptions = ({
     }
     await flight;
   };
-  /** @type {WeakMap<any, ReturnType<typeof makeMemberCredential>>} */
+  /** @type {WeakMap<any, { tokenUrl: string, holder: ReturnType<typeof makeMemberCredential> }>} */
   const memberCredentials = new WeakMap();
   /** The spec of the first pool a member was loaded in (its `tokenUrl`). */
   /** @type {WeakMap<any, any>} */
@@ -167,21 +168,36 @@ export const makeSubscriptions = ({
    * The member's renewing credential, one per member and incarnation.
    * @param {MemberEntry} entry
    * @param {any} [spec]
+   * @param {boolean} [requirePoolEndpoint] operator usage must renew only
+   * at the endpoint of the pool it is reading
    */
-  const credentialOf = (entry, spec = specOfMember.get(entry.member) ?? {}) => {
+  const credentialOf = (
+    entry,
+    spec = specOfMember.get(entry.member) ?? {},
+    requirePoolEndpoint = false,
+  ) => {
     const known = memberCredentials.get(entry.member);
-    if (known !== undefined) return known;
     const endpoint = endpoints[entry.provider];
+    const tokenUrl = spec.tokenUrl ?? endpoint.tokenUrl;
+    if (requirePoolEndpoint) {
+      const prior = specOfMember.get(entry.member);
+      const ownerUrl =
+        known?.tokenUrl ??
+        (prior ? (prior.tokenUrl ?? endpoint.tokenUrl) : tokenUrl);
+      if (ownerUrl !== tokenUrl)
+        throw Error('Conflicting token endpoints for the same pool member');
+    }
+    if (known !== undefined) return known.holder;
     const made = makeMemberCredential({
       access: accessOf(entry),
       provider: entry.provider,
-      tokenUrl: spec.tokenUrl ?? endpoint.tokenUrl,
+      tokenUrl,
       clientId: endpoint.clientId,
       ...fetchOption,
       now,
       settings: { refreshSkewMs: settings.refreshSkewMs },
     });
-    memberCredentials.set(entry.member, made);
+    memberCredentials.set(entry.member, { tokenUrl, holder: made });
     return made;
   };
 
@@ -345,8 +361,14 @@ export const makeSubscriptions = ({
         return undefined;
       }
     },
-    // Section 7: an account read never renews; it reads what is stored.
-    credential: async member => {
+    credential: async (member, backend, operator) => {
+      if (operator) {
+        const pool = pools.get(backend);
+        if (!pool) throw Error('Pool specification unavailable');
+        return (await credentialOf(member, pool.spec, true).current())
+          .credential;
+      }
+      // Model-initiated usage reads may only use the stored access token.
       const { value } = await accessOf(member).read();
       return parseCredential(value, member.provider);
     },
@@ -360,9 +382,9 @@ export const makeSubscriptions = ({
     timers,
     now,
     readers: {
-      usage: async (backend, entry) => {
+      usage: async (backend, entry, operator) => {
         await ensureUsageSpec(backend);
-        const reading = await usageReader(backend, entry);
+        const reading = await usageReader(backend, entry, operator);
         if (reading !== undefined) {
           const previous = readings.get(entry.member);
           if (previous === undefined || previous.at <= reading.at)

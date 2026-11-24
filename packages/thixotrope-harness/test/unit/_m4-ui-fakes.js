@@ -32,9 +32,13 @@ export const runEffectsPromptly = () => {
 export const secretFailed = code => `Secret operation failed: "${code}"`;
 
 /**
- * @param {{ pageEntries?: number, accounts?: any }} [options]
+ * @param {{ pageEntries?: number, accounts?: any, poolBackends?: any[] }} [options]
  */
-export const makeFakeSecrets = ({ pageEntries = 64, accounts } = {}) => {
+export const makeFakeSecrets = ({
+  pageEntries = 64,
+  accounts,
+  poolBackends = [],
+} = {}) => {
   /** @type {any[][]} */
   const calls = [];
   let clock = 1_800_000_000_000;
@@ -180,6 +184,7 @@ export const makeFakeSecrets = ({ pageEntries = 64, accounts } = {}) => {
   });
 
   const subscriptions = Far('SubscriptionsAdmin', {
+    listPools: () => harden({ pools: poolBackends }),
     accounts: () => {
       calls.push(['SubscriptionsAdmin', 'accounts']);
       if (!accounts) throw Error('no accounts in this fake');
@@ -262,7 +267,7 @@ export const memberAccount = (fields = {}) =>
  * `evict(index)` closes that subscriber (its waiting or next `next()`
  * answers `{ closed: true, reason: 'idle' }`, as the adapter's does).
  *
- * @param {{ pools?: any[], sessions?: Map<any, any>, histories?: Map<any, any> }} [options]
+ * @param {{ pools?: any[], sessions?: Map<any, any>, histories?: Map<any, any>, coldPools?: any[], beforeRefresh?: () => Promise<void> }} [options]
  *   `histories`: by pool backend, for `history(pool, offset?)`: one
  *   `PoolHistory`, an array of pages (by page index, offsets 0, 4, 8...),
  *   an `Error` to reject with, or a function of the offset
@@ -271,6 +276,8 @@ export const makeFakeAccounts = ({
   pools = [],
   sessions = new Map(),
   histories = new Map(),
+  coldPools = [],
+  beforeRefresh,
 } = {}) => {
   /** @type {any[][]} */
   const calls = [];
@@ -298,14 +305,26 @@ export const makeFakeAccounts = ({
     }
   };
 
+  /** @param {any[]} next */
+  const publish = next => {
+    view = harden({ rev: view.rev + 1, pools: harden([...next]) });
+    for (const sub of subs) if (!sub.closed) answer(sub);
+  };
+
   const accounts = Far('Accounts', {
     list: () => {
       calls.push(['Accounts', 'list']);
       return view;
     },
     /** @param {any} backend */
-    forBackend: backend =>
-      view.pools.find(pool => pool.backend === backend) ?? undefined,
+    forBackend: backend => {
+      calls.push(['Accounts', 'forBackend', backend]);
+      const pool = view.pools.find(row => row.backend === backend);
+      if (pool) return pool;
+      const cold = coldPools.find(row => row.backend === backend);
+      if (cold) publish([...view.pools, cold]);
+      return cold;
+    },
     /** @param {any} session */
     forSession: session => {
       calls.push(['Accounts', 'forSession', session]);
@@ -325,8 +344,9 @@ export const makeFakeAccounts = ({
       return offset === 0 ? held : undefined;
     },
     /** @param {any} [backend] */
-    refresh: backend => {
+    refresh: async backend => {
       calls.push(['Accounts', 'refresh', backend]);
+      await beforeRefresh?.();
       return view;
     },
     /** @param {number} [rev] */
@@ -361,11 +381,7 @@ export const makeFakeAccounts = ({
     accounts,
     calls,
     subs,
-    /** @param {any[]} next */
-    publish: next => {
-      view = harden({ rev: view.rev + 1, pools: harden([...next]) });
-      for (const sub of subs) if (!sub.closed) answer(sub);
-    },
+    publish,
     /** @param {number} index */
     evict: index => {
       const sub = subs[index];

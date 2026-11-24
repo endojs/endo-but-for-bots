@@ -56,19 +56,19 @@ for chat, mail, delegation, workspace images and voice.
 
 ### See subscription quota and weekly resets
 
-Open **Subscriptions** from the harness menu. Under each pool, **Quota history**
-shows the percentage remaining for each account and window. The solid line
-shows provider readings. A dashed line projects the observed usage rate to the
-reported reset, or to exhaustion if it comes sooner. Weekly reset markers and
-observation times use UTC. Expand **Readings** for the exact values.
+Open **Subscriptions** from the harness menu to refresh all configured pools.
+Each pool shows one combined graph. Use **Measure** to switch between numeric
+credits and quota windows when the provider reports both.
 
-Accounts that report a numeric credit balance also get a separate **Credit
-balance** graph. Its forecast uses spending since the latest observed top-up
-and labels how far ahead it projects.
+**Credit balance** sums the reported member balances. A quota graph shows the
+mean percentage remaining per reporting account for the selected window.
+The caption shows how many accounts contributed. Weekly reset markers identify
+the account and the provider-reported time in UTC.
 
-The harness records usage reported during provider calls and when you select
-**Refresh**. Opening the chart reads existing history. A forecast requires
-two observations at least ten minutes apart in the same quota period.
+Expand **Individual subscriptions** under a pool for each account’s status,
+readings and graphs. A dashed line shows a forecast when the account histories
+supply enough recent observations. **Refresh all** and each pool’s **Refresh**
+button are available while the page is open.
 
 ### Develop the harness from a session
 

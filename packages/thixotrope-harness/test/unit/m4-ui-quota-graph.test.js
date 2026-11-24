@@ -29,7 +29,8 @@ import {
   staleMs,
   timeTicks,
 } from '../../ui/src/accounts/quota-projection.js';
-import { PoolQuotaHistory, QuotaGraph } from '../../ui/src/accounts/QuotaGraph.js';
+import { PoolQuotaHistory } from '../../ui/src/accounts/PoolQuotaHistory.js';
+import { QuotaGraph } from '../../ui/src/accounts/QuotaGraph.js';
 import { makeFakePowers, makeTestDom } from './_m3-fake-powers.js';
 import {
   makeFakeAccounts,
@@ -380,7 +381,13 @@ test.serial('panel: Claude and Codex graphs with time axis, observed, projected,
   ];
   const s = await mountPanel(t, histories, pools);
   t.is(s.accounts.callsOf('Accounts.history').length, 2);
-  const graphs = s.$$('.m4-quota-graph');
+  const disclosures = s.$$('details.m4-individual-subscriptions');
+  t.is(disclosures.length, 2);
+  t.true(disclosures.every(details => !details.open));
+  t.is(s.$('.m4-quota-member svg'), null, 'individual charts mount on expansion');
+  for (const details of disclosures) openSubscriptions(details);
+  await flush();
+  const graphs = s.$$('.m4-quota-member .m4-quota-graph');
   t.is(graphs.length, 3);
   const [five, week, codexWeek] = graphs;
 
@@ -444,10 +451,11 @@ test.serial('panel: Claude and Codex graphs with time axis, observed, projected,
   // No credential or store key in the rendered panel.
   t.false(/k[0-9]+\b|sk-|Bearer/.test(String(s.$('.m4-subscriptions')?.textContent)));
 
-  // A push re-reads the history.
+  // A push re-reads the history without closing the disclosure.
   s.accounts.publish(pools);
   await flush();
   t.is(s.accounts.callsOf('Accounts.history').length, 4);
+  t.true(disclosures.every(details => details.open));
 });
 
 test.serial('panel: history unavailable or unknown pool shows a clear state', async t => {
@@ -676,6 +684,11 @@ const feedOf = answer => {
   };
 };
 
+const openSubscriptions = (/** @type {any} */ details) => {
+  details.open = true;
+  details.dispatchEvent(new details.ownerDocument.defaultView.Event('toggle'));
+};
+
 const tick = (/** @type {number} */ ms) =>
   new Promise(resolve => setTimeout(resolve, ms));
 
@@ -709,14 +722,16 @@ test.serial('review: the open view advances its own clock: projection and passed
     t,
     h(PoolQuotaHistory, {
       feed,
-      pool: { backend: pool, label: 'claude', kind: 'claude-pool' },
+      pool: { backend: pool, label: 'claude', kind: 'claude-pool', members: history.members.map(m => memberAccount({ label: m.label })) },
       rev: 1,
       now: () => clock,
       tickMs: 5,
     }),
   );
   await flush();
-  t.is(s.$('.m4-quota-graph')?.getAttribute('data-status'), 'projected');
+  openSubscriptions(s.$('details.m4-individual-subscriptions'));
+  await flush();
+  t.is(s.$('.m4-quota-member .m4-quota-graph')?.getAttribute('data-status'), 'projected');
   t.truthy(s.$('[data-reset="weekly"]'));
   t.truthy(s.$('polyline.m4-quota-projected'));
 
@@ -729,6 +744,30 @@ test.serial('review: the open view advances its own clock: projection and passed
   t.is(s.$('[data-reset="weekly"]'), null);
   t.regex(String(s.$('.m4-quota-status')?.textContent), /has reset since/);
   t.deepEqual(calls, [0], 'no provider or history call to move the clock');
+});
+
+test.serial('fresh pool history appears immediately between chart clock ticks', async t => {
+  const backend = Far('Backend', {});
+  const reset = NOW + DAY;
+  const window = { name: 'secondary', windowMinutes: 10_080 };
+  const account = memberAccount({ label: 'team', windows: [window] });
+  const pool = { backend, label: 'Claude', kind: 'claude-pool', members: [account] };
+  let clock = NOW;
+  let used = 10;
+  const { feed } = feedOf(() => ({
+    members: [{ ...account, windows: [seriesOf(10_080, [[clock, used, reset]], 'secondary')] }],
+  }));
+  const props = { pool, feed, now: () => clock, tickMs: 60_000 };
+  const s = renderAlone(t, h(PoolQuotaHistory, { ...props, rev: 1 }));
+  await flush();
+  t.is(s.$('[data-pool-value]')?.textContent, '90%');
+
+  clock += 5000;
+  used = 35;
+  render(h(PoolQuotaHistory, { ...props, rev: 2 }), s.dom.root);
+  await flush();
+  t.is(s.$('[data-pool-value]')?.textContent, '65%');
+  t.falsy(s.$('details.m4-individual-subscriptions')?.open);
 });
 
 test.serial('review: stale without a reset passing drops the projection on its own', async t => {
@@ -756,14 +795,16 @@ test.serial('review: stale without a reset passing drops the projection on its o
     t,
     h(PoolQuotaHistory, {
       feed,
-      pool: { backend: pool, label: 'codex', kind: 'codex-pool' },
+      pool: { backend: pool, label: 'codex', kind: 'codex-pool', members: history.members.map(m => memberAccount({ label: m.label, provider: m.provider })) },
       rev: 1,
       now: () => clock,
       tickMs: 5,
     }),
   );
   await flush();
-  t.is(s.$('.m4-quota-graph')?.getAttribute('data-status'), 'projected');
+  openSubscriptions(s.$('details.m4-individual-subscriptions'));
+  await flush();
+  t.is(s.$('.m4-quota-member .m4-quota-graph')?.getAttribute('data-status'), 'projected');
   clock = NOW + staleMs(300);
   await tick(30);
   await flush();
@@ -792,12 +833,14 @@ test.serial('review: a failed history read is shown beside the cached graph', as
   });
   const props = {
     feed,
-    pool: { backend: pool, label: 'claude', kind: 'claude-pool' },
+    pool: { backend: pool, label: 'claude', kind: 'claude-pool', members: history.members.map(m => memberAccount({ label: m.label })) },
     now: () => NOW,
   };
   const { dom } = renderAlone(t, h(PoolQuotaHistory, { ...props, rev: 1 }));
   await flush();
-  t.truthy(dom.root.querySelector('.m4-quota-graph'));
+  openSubscriptions(dom.root.querySelector('details.m4-individual-subscriptions'));
+  await flush();
+  t.truthy(dom.root.querySelector('.m4-quota-member .m4-quota-graph'));
   t.is(dom.root.querySelector('.m4-quota-error'), null);
   render(h(PoolQuotaHistory, { ...props, rev: 2 }), dom.root);
   await flush();
@@ -849,7 +892,7 @@ test.serial('review: a pool of more than one page is read page by page', async t
     t,
     h(PoolQuotaHistory, {
       feed,
-      pool: { backend: pool, label: 'claude', kind: 'claude-pool' },
+      pool: { backend: pool, label: 'claude', kind: 'claude-pool', members: pages.flatMap(page => page.members.map(m => memberAccount({ label: m.label }))) },
       rev: 1,
       now: () => NOW,
     }),

@@ -17,7 +17,7 @@ import {
   formatCredits,
 } from '../../ui/src/accounts/credit-projection.js';
 import { creditAxisTop } from '../../ui/src/accounts/CreditGraph.js';
-import { PoolQuotaHistory } from '../../ui/src/accounts/QuotaGraph.js';
+import { PoolQuotaHistory } from '../../ui/src/accounts/PoolQuotaHistory.js';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -74,6 +74,10 @@ const mountPool = async ({ current, members, nowMs }) => {
     }),
     dom.root,
   );
+  await flush();
+  const details = dom.root.querySelector('details.m4-individual-subscriptions');
+  details.open = true;
+  details.dispatchEvent(new dom.window.Event('toggle'));
   await flush();
   return {
     calls,

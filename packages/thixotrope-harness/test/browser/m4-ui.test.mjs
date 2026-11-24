@@ -328,11 +328,32 @@ run(
     const chip = page.locator(`.m4-chips[data-pool="${label}"] .m4-chip`);
     await chip.waitFor();
     const panelButton = page.locator('button[data-panel="accounts"]');
+    const usageReads = () =>
+      server.requests().filter(r => r.path === '/backend-api/wham/usage')
+        .length;
+    const beforeOpen = usageReads();
     await panelButton.click();
     const pool = page.locator('.m4-subscriptions .m4-pool', { hasText: label });
-    await pool.locator('button[data-action="refresh-pool"]').click();
+    const refresh = pool.locator('button[data-action="refresh-pool"]');
+    await waitFor(
+      async () => usageReads() > beforeOpen && refresh.isEnabled(),
+      30_000,
+      'opening refreshed the Codex pool',
+    );
+    const beforeManual = usageReads();
+    await refresh.click();
+    await waitFor(
+      async () => usageReads() > beforeManual && refresh.isEnabled(),
+      30_000,
+      'manual Codex refresh completed',
+    );
+    t.is(
+      usageReads() - beforeManual,
+      1,
+      'manual Refresh read the Codex member once',
+    );
+    await pool.locator('details.m4-individual-subscriptions > summary').click();
     await pool.locator('.m4-account[data-provenance="observed"]').waitFor();
-    t.true(server.requests().some(r => r.path === '/backend-api/wham/usage'));
     await panelButton.click();
     await waitFor(
       async () => {
@@ -527,26 +548,31 @@ run('[browser] M4 acceptance 14, 15 (browser part) and rule 4a', async t => {
     );
 
     // ---- Subscriptions panel: SecretsAdmin.subscriptions() -> accounts ----
+    const usageReads = () =>
+      server.requests().filter(r => r.path === '/api/oauth/usage').length;
+    const beforeOpen = usageReads();
     await page.locator('button[data-panel="accounts"]').click();
     const pool = page.locator('.m4-subscriptions .m4-pool', {
       hasText: POOL,
     });
-    await pool.waitFor();
-    t.is(await pool.locator('.m4-account').count(), 2);
-    const usageReads = () =>
-      server.requests().filter(r => r.path === '/api/oauth/usage').length;
-    const readsBefore = usageReads();
-    await pool.locator('button[data-action="refresh-pool"]').click();
+    const refresh = pool.locator('button[data-action="refresh-pool"]');
     await waitFor(
-      async () =>
-        (await pool
-          .locator('.m4-account[data-provenance="observed"]')
-          .count()) === 2,
+      async () => usageReads() >= beforeOpen + 2 && refresh.isEnabled(),
       30_000,
-      'both members observed after Refresh',
-      100,
+      'opening refreshed both Claude members',
+    );
+    const readsBefore = usageReads();
+    await refresh.click();
+    await waitFor(
+      async () => usageReads() >= readsBefore + 2 && refresh.isEnabled(),
+      30_000,
+      'manual Claude refresh completed',
     );
     t.is(usageReads() - readsBefore, 2, 'Refresh read both members');
+    t.is(
+      await pool.locator('.m4-account[data-provenance="observed"]').count(),
+      2,
+    );
     await page.locator('button[data-panel="accounts"]').click(); // close
     mark('subscriptions');
 

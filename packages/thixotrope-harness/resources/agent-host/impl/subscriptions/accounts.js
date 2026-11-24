@@ -31,10 +31,9 @@
  *   refused: every subscriber left has called within 60 s or is waiting.
  * - **Refresh on demand only** (R4-85): `refresh(pool?)` reads the
  *   providers now; nothing reads a provider on a first `list`,
- *   `forBackend`, `forSession` or `watch`. A renewal never runs on an
- *   account read (m4-interfaces 7): the usage reader is given the
- *   credential as it stands. Each member is read by one flight at a time
- *   (concurrent refreshes share it), and the model's refresh
+ *   `forBackend`, `forSession` or `watch`. Operator refreshes may renew an
+ *   expiring credential. Model usage reads use the stored access token.
+ *   Each member is read by one flight at a time, and the model's refresh
  *   (`accountStatus { refresh: true }`, `refreshForModel`) reads a member
  *   at most once per `modelRefreshMs` (60 s), counting reads by any path,
  *   so a looping model cannot hammer the providers' usage endpoints.
@@ -115,7 +114,7 @@ harden(isoOf);
 
 /**
  * @typedef {object} AccountReaders
- * @property {(backend: any, member: MemberEntry) => Promise<Reading | undefined>} [usage]
+ * @property {(backend: any, member: MemberEntry, operator: boolean) => Promise<Reading | undefined>} [usage]
  *   one on-demand usage read of a member (W4.6 builds it with
  *   `makeUsageReader` and the member's credential); called by `refresh` only
  * @property {(session: any) => Promise<any>} [poolOf] the session's pool
@@ -670,7 +669,7 @@ export const makeAccounts = ({
   /**
    * The usage read of each member in flight (single flight per member;
    * bounded by the members registered).
-   * @type {Map<any, Promise<Reading | undefined>>}
+   * @type {Map<any, { operator: boolean, result: Promise<Reading | undefined> }>}
    */
   const readsInFlight = new Map();
   /**
@@ -681,19 +680,27 @@ export const makeAccounts = ({
 
   /**
    * One usage read of a member, shared by concurrent refreshes.
-   * @param {(backend: any, member: MemberEntry) => Promise<Reading | undefined>} usage
+   * @param {NonNullable<AccountReaders['usage']>} usage
    * @param {any} backend
    * @param {MemberEntry} entry
+   * @param {boolean} operator
    */
-  const readOnce = (usage, backend, entry) => {
+  const readOnce = (usage, backend, entry, operator) => {
     const known = readsInFlight.get(entry.member);
-    if (known !== undefined) return known;
+    if (known && (!operator || known.operator)) return known.result;
     lastReadAt.set(entry.member, now());
-    const flight = usage(backend, entry).finally(() => {
-      readsInFlight.delete(entry.member);
+    const read = () => usage(backend, entry, operator);
+    // If the operator joined a model read, share a success. Only the
+    // operator may retry a failed read using the renewing credential.
+    const pending = known
+      ? known.result.catch(() => undefined).then(reading => reading ?? read())
+      : read();
+    const result = pending.finally(() => {
+      if (readsInFlight.get(entry.member)?.result === result)
+        readsInFlight.delete(entry.member);
     });
-    readsInFlight.set(entry.member, flight);
-    return flight;
+    readsInFlight.set(entry.member, { operator, result });
+    return result;
   };
 
   /**
@@ -701,13 +708,14 @@ export const makeAccounts = ({
    * once, however many pools it is in); one publish at the end. A member
    * read less than `minIntervalMs` ago and not in flight is skipped.
    * @param {any[]} backends
-   * @param {number} [minIntervalMs]
+   * @param {boolean} operator
    */
-  const refreshPools = async (backends, minIntervalMs = 0) => {
+  const refreshPools = async (backends, operator) => {
+    const minIntervalMs = operator ? 0 : modelRefreshMs;
     ensureLoaded();
     if (readers.usage === undefined) return;
     const usage = readers.usage;
-    /** @type {Map<any, { backend: any, entry: MemberEntry }>} */
+    /** @type {Map<any, { backend: any, entry: MemberEntry, before: Reading | undefined }>} */
     const targets = new Map();
     for (const backend of backends) {
       for (const entry of pools.get(backend)?.members ?? []) {
@@ -718,22 +726,29 @@ export const makeAccounts = ({
           last !== undefined &&
           now() - last < minIntervalMs;
         if (entry.state === 'active' && !recent && !targets.has(entry.member))
-          targets.set(entry.member, { backend, entry });
+          targets.set(entry.member, {
+            backend,
+            entry,
+            before: readingOfMember.get(entry.member),
+          });
       }
     }
     const results = await Promise.allSettled(
       [...targets.values()].map(async ({ backend, entry }) => ({
         entry,
-        reading: await readOnce(usage, backend, entry),
+        reading: await readOnce(usage, backend, entry, operator),
       })),
     );
     let changed = false;
     const entries = [...targets.values()];
     results.forEach((result, index) => {
-      const { entry } = entries[index];
+      const { entry, before } = entries[index];
       if (result.status === 'fulfilled' && result.value.reading !== undefined) {
         if (keepReading(entry, result.value.reading)) changed = true;
-      } else if (demote(entry)) {
+      } else if (
+        readingOfMember.get(entry.member) === before &&
+        demote(entry)
+      ) {
         changed = true;
       }
     });
@@ -773,9 +788,9 @@ export const makeAccounts = ({
     },
     /** @param {any} [backend] */
     refresh: async backend => {
-      if (backend === undefined) await refreshPools([...pools.keys()]);
+      if (backend === undefined) await refreshPools([...pools.keys()], true);
       else if ((await poolInfoOf(backend)) !== undefined)
-        await refreshPools([backend]);
+        await refreshPools([backend], true);
       return view();
     },
     /** @param {number} [fromRev] */
@@ -821,7 +836,7 @@ export const makeAccounts = ({
      */
     refreshForModel: async backend => {
       if ((await poolInfoOf(backend)) !== undefined)
-        await refreshPools([backend], modelRefreshMs);
+        await refreshPools([backend], false);
     },
     sessionOpened: (backend, session) => {
       poolOfSession.set(session, backend);
@@ -1198,17 +1213,17 @@ const boundedJson = async response => {
  * (claude-sandbox `makeClaudeAccountRead`, codex-sandbox
  * `makeCodexAccountRead`). The URL and the access token come from the
  * caller (W4.6: the pool spec's `usageUrl` or the provider default, and the
- * member's credential as it stands: no renewal on an account read). A
+ * credential appropriate to the requesting caller). A
  * member or pool with no URL is not read (undefined). Redirects are
  * refused; a non-2xx answer fails with its status only.
  *
  * @param {object} options
  * @param {(backend: any, member: MemberEntry) => string | undefined} options.url
- * @param {(member: MemberEntry) => Promise<{ accessToken: string, accountId?: string }>} options.credential
+ * @param {(member: MemberEntry, backend: any, operator: boolean) => Promise<{ accessToken: string, accountId?: string }>} options.credential
  * @param {typeof globalThis.fetch} [options.fetch]
  * @param {() => number} [options.now]
  * @param {number} [options.timeoutMs]
- * @returns {(backend: any, member: MemberEntry) => Promise<Reading | undefined>}
+ * @returns {(backend: any, member: MemberEntry, operator?: boolean) => Promise<Reading | undefined>}
  */
 export const makeUsageReader =
   ({
@@ -1218,10 +1233,14 @@ export const makeUsageReader =
     now = Date.now,
     timeoutMs = USAGE_TIMEOUT_MS,
   }) =>
-  async (backend, member) => {
+  async (backend, member, operator = false) => {
     const target = url(backend, member);
     if (target === undefined) return undefined;
-    const { accessToken, accountId } = await credential(member);
+    const { accessToken, accountId } = await credential(
+      member,
+      backend,
+      operator,
+    );
     /** @type {Record<string, string>} */
     const headers = {
       authorization: `Bearer ${accessToken}`,

@@ -122,6 +122,7 @@ const setup = async (t, { kind, settings = {}, tokens, defaults }) => {
   const members = Object.fromEntries(
     Object.keys(given).map(tag => [tag, Far('PoolMember', {})]),
   );
+  /** @type {import('../../resources/agent-host/impl/subscriptions/types.js').MemberEntry[]} */
   const entries = Object.keys(given).map(tag =>
     harden({
       member: members[tag],
@@ -700,4 +701,116 @@ test('explicit cold account refresh recovers the durable usage URL once, without
   );
   await accounts.refresh(backend);
   t.is(forwards, 2, 'the genuine spec stays available for this incarnation');
+});
+
+test('operator usage refresh renews two expired Claude credentials once using the pool endpoints; model reads never renew', async t => {
+  const route = '/api/oauth/usage';
+  const s = await setup(t, {
+    kind: 'claude-pool',
+    defaults: {
+      [`GET ${route}`]: { body: { five_hour: { utilization: 18 } } },
+    },
+  });
+  const members = ['a', 'b'];
+  const issued = members.map(() => s.oauth.issue());
+  await Promise.all(
+    members.map((tag, index) =>
+      s.store.replace(
+        `k${tag}`,
+        storedCredential({
+          provider: 'claude',
+          accessToken: tokenOf(tag),
+          refreshToken: issued[index].refreshToken,
+          expiresAtMs: Date.now() - 1000,
+          scopes: ['user:inference'],
+        }),
+      ),
+    ),
+  );
+  s.subscriptions.know(
+    s.backend,
+    harden({ ...s.spec, usageUrl: s.server.url + route }),
+  );
+  const core = s.subscriptions.accounts;
+  const facet = core.accounts;
+  await facet.forBackend(s.backend);
+  await facet.history(s.backend);
+  t.is(s.server.requests().length, 0);
+  s.server.setPlan(
+    members.map(tag => ({
+      match: { method: 'GET', credential: tag, path: route },
+      status: 401,
+      firstByteDelayMs: 100,
+    })),
+  );
+  const model = core.refreshForModel(s.backend);
+  const deadline = Date.now() + 5000;
+  while (s.server.requests().length < 2 && Date.now() < deadline) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  t.deepEqual(
+    s.server
+      .requests()
+      .map(r => r.credential)
+      .sort(),
+    members,
+  );
+  t.is(s.server.pending(), 0, 'both delayed 401 responses were matched');
+  t.deepEqual(
+    issued.map(i => s.oauth.presented(i.serial)),
+    [0, 0],
+  );
+  const [, fresh] = await Promise.all([
+    model,
+    facet.refresh(s.backend),
+    facet.refresh(s.backend),
+  ]);
+  t.deepEqual(
+    issued.map(i => s.oauth.presented(i.serial)),
+    [1, 1],
+  );
+  t.deepEqual(
+    fresh.pools[0].members.map(member => member.provenance),
+    ['observed', 'observed'],
+  );
+  t.deepEqual(
+    s.server.requests().map(r => [r.method, r.path]),
+    Array(4).fill(['GET', route]),
+  );
+  t.deepEqual(
+    s.server
+      .requests()
+      .slice(2)
+      .map(r => r.credential),
+    ['other', 'other'],
+    'both successful usage GETs carried renewed credentials',
+  );
+  await core.refreshForModel(s.backend);
+  t.is(
+    s.server.requests().length,
+    4,
+    'model throttling also applies after an operator read',
+  );
+});
+
+test('operator refresh does not reuse a member holder from another token endpoint', async t => {
+  const s = await setup(t, { kind: 'claude-pool' });
+  const other = Far('Backend', {});
+  const spec = harden({
+    ...s.spec,
+    usageUrl: `${s.server.url}/api/oauth/usage`,
+    tokenUrl: `${s.oauth.tokenUrl}/different`,
+  });
+  s.subscriptions.know(other, spec);
+  s.entries.forEach(entry => s.subscriptions.credentialOf(entry, s.spec));
+  const facet = s.subscriptions.accounts.accounts;
+  const result = await facet.refresh(other);
+  t.true(result.pools[0].members.every(m => m.provenance !== 'observed'));
+  t.is(s.server.requests().length, 0);
+  t.is(
+    s.subscriptions.credentialOf(s.entries[0], spec),
+    s.subscriptions.credentialOf(s.entries[0], s.spec),
+    'existing non-operator holder behavior is preserved',
+  );
 });

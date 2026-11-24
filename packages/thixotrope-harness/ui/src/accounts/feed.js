@@ -32,6 +32,7 @@ export const REWATCH_LIMIT = 3;
  * @property {() => { view?: any, error?: string }} state the newest
  *   `AccountsView` / `AccountsBatch` and the error that stopped the feed
  * @property {(listener: () => void) => () => void} subscribe
+ * @property {() => Promise<void>} registerPools discover the durable pools on this adapter
  * @property {(backend?: any) => Promise<void>} refresh `Accounts.refresh`
  *   (on demand only, R4-85)
  * @property {(session: any) => Promise<any>} forSession `PoolAccounts` of
@@ -57,11 +58,13 @@ const messageOf = error =>
 const makeFeed = powers => {
   /** @type {Promise<any> | undefined} */
   let accountsP;
+  /** @type {any} */
+  let subscriptions;
   const accounts = () => {
     if (!accountsP) {
       const made = (async () => {
         const secrets = await E(powers.operator).getSecrets();
-        const subscriptions = await E(secrets).subscriptions();
+        subscriptions = await E(secrets).subscriptions();
         return E(subscriptions).accounts();
       })();
       accountsP = made;
@@ -118,8 +121,9 @@ const makeFeed = powers => {
     const target = await accounts();
     if (mine !== epoch) return;
     if (view === undefined) {
-      take(await E(target).list());
+      const listed = await E(target).list();
       if (mine !== epoch) return;
+      take(listed);
     }
     const watching = await watchFrom(target, mine);
     if (!watching) return;
@@ -166,6 +170,47 @@ const makeFeed = powers => {
     }
   };
 
+  /** @type {Promise<void> | undefined} */
+  let registration;
+  const registerPools = () => {
+    if (!registration) {
+      registration = (async () => {
+        const target = await accounts();
+        const { pools } = await E(subscriptions).listPools();
+        await Promise.all(
+          pools.map((/** @type {any} */ pool) => E(target).forBackend(pool)),
+        );
+      })().finally(() => {
+        registration = undefined;
+      });
+    }
+    return registration;
+  };
+
+  // Reopening joins an in-flight refresh-all. A refresh-all following a
+  // pool-specific request waits for it, so provider calls cannot overlap.
+  /** @type {Map<any, Promise<void>>} */
+  const refreshing = new Map();
+  /** @param {any} [backend] */
+  const refresh = backend => {
+    const existing = refreshing.get(undefined) ?? refreshing.get(backend);
+    if (existing) return existing;
+    const previous = [...refreshing.values()];
+    const pending = (async () => {
+      await Promise.allSettled(previous);
+      const target = await accounts();
+      const next =
+        backend === undefined
+          ? await E(target).refresh()
+          : await E(target).refresh(backend);
+      take(next);
+    })().finally(() => {
+      refreshing.delete(backend);
+    });
+    refreshing.set(backend, pending);
+    return pending;
+  };
+
   return harden({
     state: () => ({ view, error }),
     subscribe: listener => {
@@ -176,14 +221,8 @@ const makeFeed = powers => {
         if (listeners.size === 0) stop();
       };
     },
-    refresh: async backend => {
-      const target = await accounts();
-      take(
-        await (backend === undefined
-          ? E(target).refresh()
-          : E(target).refresh(backend)),
-      );
-    },
+    registerPools,
+    refresh,
     forSession: async session => {
       const target = await accounts();
       return E(target).forSession(session);
