@@ -19994,7 +19994,7 @@ returned a new provider observation for every active member. ChatGPT reported
 62,500 credits and 2% weekly quota remaining. Primary Claude reported 100%
 remaining and Secondary Claude 65%. The pool graph showed their mean of 82.5%
 and identified the two resets, November 29 at 17:00 UTC for Primary and
-November 25 at 09:00 UTC for Secondary.
+November 25 at 08:59:59.564 UTC for Secondary.
 
 Chromium verified the pool measures and disclosures at 375 and 1,280 pixels.
 Expanding one pool mounted only its individual graphs. A separate Refresh all
@@ -20005,3 +20005,5 @@ reads. The failed-read regression preserved a newer observation from another
 request.
 The full unit and adapter suite passed 1,939 tests with eight gated skips.
 Package typechecking, ESLint and the duplicate-code gate passed.
+New sessions using the Thixotrope development preset now start from the verified
+implementation at `33ffecbf1c`.
