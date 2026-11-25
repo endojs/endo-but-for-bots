@@ -496,6 +496,7 @@ the build. Slots (`uiSlots`) and the props each slot's `component` receives:
 | `header.chip` | M7 Network | `{ context }` |
 | `statusbar.chip` | M4 account chips | `{ context }` |
 | `composer.addon` | M5 mentions, M11 voice | `{ context, input: { text, caret }, replaceRange(start, end, text) }` (`ComposerAddonProps`); optional `send(ComposerSendRequest)`, 9.2 |
+| `composer.action` | M11 spoken-mode switch (m11-interfaces.md 9.1) | `{ context }`; inside the compose bar, before Send |
 | `newSession.field` | M7 internet toggle | `{ context }` |
 | `session.settings` | M6 emergency stop | `{ context }`; part of the Settings view's "This session" section, listed only for an open session once one of them renders something (a component may answer `null`) |
 | `message.renderer` | M5 attachment chips, M9 captions, M12 widgets | `{ context, turn, record }` (`MessageRendererProps`): once per turn, under the turn's user message; `record` is the turn's `TurnStarted` (or live `turn-start`) record with unknown optional fields kept |

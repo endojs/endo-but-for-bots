@@ -1680,9 +1680,10 @@ providers. The M9 live repeat of attachment adoption, forwarding and asking
 a child passed in J-12586 through J-12588.
 M11 passed live local speech recognition, automatic reply playback and manual
 Replay in Chromium, including replay after a restart and a fragmentless reconnect.
-Refresh the signed-in tab, choose **Start listening** and allow microphone access
-to check the physical input. **Speak replies** enables audio for new replies on
-that page. **Play message** sits to the right of the assistant bubble, aligned with its bottom edge.
+Refresh the signed-in tab, press the **Spoken mode** switch in the compose bar and
+allow microphone access to check the physical input. In spoken mode every reply on
+that page is read aloud while the Voice panel's **Spoken replies** is on
+(m11-interfaces.md 9.1). **Play message** sits to the right of the assistant bubble, aligned with its bottom edge.
 The transcript leaves a small vertical gap between messages and between turns.
 The operator reported that the physical microphone and speaker check passed,
 including dictation, automatic playback and playing the saved reply.
