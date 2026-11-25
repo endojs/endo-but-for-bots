@@ -599,9 +599,24 @@ const m4InterfaceBuilders = {
     M.interface('AuditReader', {
       page: M.callWhen().optional(T.AuditQuery).returns(T.AuditReaderPage),
     }),
-  /** Adapter-local: account status (R4-84, R4-85); read-only, no reset authority. */
+  /**
+   * Adapter-local: account status (R4-84, R4-85; no reset authority), and
+   * the adapter-kept pool additions (3.5) for a manager that predates
+   * `SubscriptionsAdmin.addMember`. Only the adapter guards these methods
+   * (the manager answers `accounts()` as any remotable), so a pinned
+   * manager's older copy of this table never sees them.
+   */
   Accounts: () =>
     M.interface('Accounts', {
+      addMember: M.callWhen(R('Backend'), T.NewPoolMember).returns(
+        R('PoolMember'),
+      ),
+      checkCredential: M.callWhen(R('Backend'), R('Secret')).returns(
+        T.CredentialCheck,
+      ),
+      poolMembers: M.callWhen(R('Backend')).returns(
+        list(R('PoolMember'), subscriptionLimits.maxPoolMembers),
+      ),
       list: M.call().returns(T.AccountsView),
       forBackend: M.callWhen(R('Backend')).returns(M.or(done, T.PoolAccounts)),
       forSession: M.callWhen(R('Session')).returns(M.or(done, T.PoolAccounts)),
@@ -670,7 +685,17 @@ export const m4MethodNames = harden({
     'checkCredential',
   ],
   AuditReader: ['page'],
-  Accounts: ['list', 'forBackend', 'forSession', 'history', 'refresh', 'watch'],
+  Accounts: [
+    'addMember',
+    'checkCredential',
+    'poolMembers',
+    'list',
+    'forBackend',
+    'forSession',
+    'history',
+    'refresh',
+    'watch',
+  ],
   AccountsSubscription: ['next', 'close'],
 });
 

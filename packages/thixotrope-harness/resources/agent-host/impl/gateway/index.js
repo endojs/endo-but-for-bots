@@ -238,13 +238,10 @@ export const makeGatewayService = ({
     if (kept !== undefined) return kept;
     /** @type {GatewayContext} */
     const made = harden(
-      Object.defineProperties(
-        /** @type {GatewayContext} */ ({}),
-        {
-          ...Object.getOwnPropertyDescriptors(context),
-          ...Object.getOwnPropertyDescriptors(powers),
-        },
-      ),
+      Object.defineProperties(/** @type {GatewayContext} */ ({}), {
+        ...Object.getOwnPropertyDescriptors(context),
+        ...Object.getOwnPropertyDescriptors(powers),
+      }),
     );
     contexts.set(extension, made);
     return made;
@@ -429,6 +426,12 @@ export const makeGatewayService = ({
     binding: harden({ bind, unbind }),
     attached,
     close: unbind,
+    /**
+     * The `Operator` of the current bind (undefined before the first):
+     * the subscriptions' adapter-kept pool additions reach the manager's
+     * admin objects through it (`subscriptions/pool-additions.js`).
+     */
+    operator: () => operatorOf.current,
     /** Tests: the port served now, if any. */
     port: () => serving?.server.port,
   });

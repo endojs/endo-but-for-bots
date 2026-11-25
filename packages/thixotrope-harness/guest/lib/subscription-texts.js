@@ -75,12 +75,18 @@ export const subscriptionTexts = harden({
   firstReadRejected:
     'The provider rejected the credential. Retire this subscription, or replace the secret and try again.',
   /**
-   * Harness: the installed subscriptions manager has no `addMember` (a
-   * state provisioned before it keeps its manager until provisioned
-   * fresh).
+   * Harness: neither the installed subscriptions manager (`addMember`) nor
+   * the running agent-host adapter (`Accounts.addMember`, the adapter-kept
+   * additions) can add a member: the adapter predates them too.
    */
   managerPredatesAdd:
-    "This installation's subscriptions manager predates adding members, so subscriptions cannot be added here. Provision the subscriptions manager fresh to add them.",
+    "This installation's agent host predates adding subscriptions, so they cannot be added here yet. Restart the agent-host adapter from a current checkout to add them.",
+  /**
+   * Harness: an add kept by the adapter (an installation whose manager
+   * predates `addMember`) found no operator to reach the manager through.
+   */
+  additionsUnreachable:
+    'The subscriptions manager could not be reached through the gateway; try again',
   /** Harness: `addPoolMember` to a pool at `maxPoolMembers`. */
   poolFull: 'This pool already has as many members as a pool can hold',
   /** Harness: a credential check of a staged import not yet activated. */

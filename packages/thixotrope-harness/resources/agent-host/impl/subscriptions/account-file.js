@@ -239,7 +239,7 @@ harden(formatReadings);
  * @param {string} file
  * @param {string} text
  */
-const writeAtomic = async (file, text) => {
+export const writeAtomic = async (file, text) => {
   const dir = dirname(file);
   await mkdir(dir, { recursive: true });
   const temp = `${file}.tmp-${pid}`;

@@ -41,7 +41,11 @@ import { join } from 'node:path';
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { E } from '@endo/far';
 
-import { poolKinds } from '../../../../guest/lib/subscription-texts.js';
+import {
+  poolKinds,
+  providerOfKind,
+  subscriptionTexts,
+} from '../../../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { subscriptionDefaults } from '../../../../config/subscription-defaults.js';
 import { providerBaseUrl } from '../providers/http.js';
@@ -50,6 +54,7 @@ import { makePoolCatalog } from './catalog.js';
 import { makeCredentialOps, makeSecretResolver } from './credential-ops.js';
 import { parseCredential } from './credentials.js';
 import { makePoolCore } from './pool.js';
+import { makePoolAdditions } from './pool-additions.js';
 import { initialFromPoolState, makePoolStateBridge } from './pool-state.js';
 import { makeMemberCredential } from './renewal.js';
 
@@ -73,6 +78,12 @@ export const providerEndpoints = harden({
 });
 
 /**
+ * Adapter-kept additions waiting for an operator (before the gateway's
+ * first bind) are looked for again at a pool's next load after this long.
+ */
+const ADDITIONS_RETRY_MS = 5000;
+
+/**
  * One pool as this incarnation knows it.
  * @typedef {object} PoolRecord
  * @property {any} backend
@@ -80,7 +91,11 @@ export const providerEndpoints = harden({
  * @property {PoolStateBridge & { pending: () => number }} bridge
  * @property {any} [loaded] the last `PoolState` loaded
  * @property {'active' | 'retired'} state
- * @property {readonly MemberEntry[]} members in declaration order
+ * @property {readonly MemberEntry[]} members in declaration order, then
+ *   the adapter-kept additions (`pool-additions.js`)
+ * @property {number} [additionsRev] the additions' `rev` they were read at
+ * @property {boolean} [additionsPending] some wait for an operator
+ * @property {number} [additionsAskedAt] when they were last looked for
  * @property {ReturnType<typeof makePoolCore> | undefined} core
  */
 
@@ -108,6 +123,9 @@ const lazy = value =>
  * @param {typeof providerEndpoints} [options.endpoints]
  * @param {(error: unknown) => void} [options.onError] a failed readings
  *   file write
+ * @param {() => any} [options.currentOperator] the `Operator` the gateway serves
+ *   now (undefined before its first bind): how adapter-kept pool
+ *   additions reach the manager's `SecretsAdmin` and `SubscriptionsAdmin`
  */
 export const makeSubscriptions = ({
   sink,
@@ -119,6 +137,7 @@ export const makeSubscriptions = ({
   settings = subscriptionDefaults,
   endpoints = providerEndpoints,
   onError,
+  currentOperator = () => undefined,
 }) => {
   const sinkNow = () => lazy(sink);
   const fetchOption = fetch === undefined ? {} : { fetch };
@@ -241,6 +260,64 @@ export const makeSubscriptions = ({
     return made;
   };
 
+  /**
+   * The manager's admin objects through the operator the gateway serves
+   * (undefined while it has none), asked at each use.
+   */
+  const admins = async () => {
+    const current = currentOperator();
+    if (current === undefined) return undefined;
+    const secretsAdmin = await E(current).getSecrets();
+    const subscriptionsAdmin = await E(secretsAdmin).subscriptions();
+    return harden({ secrets: secretsAdmin, subscriptions: subscriptionsAdmin });
+  };
+
+  const additions = makePoolAdditions({
+    file: () =>
+      join(stateDir(), 'agent-host', 'subscriptions', 'pool-additions.json'),
+    admins,
+    resolveSecret,
+    checkCredential: (secret, provider) =>
+      credentialOps.checkCredential(secret, provider),
+    livePools: async () => {
+      const reached = await admins();
+      const target = sinkNow();
+      if (reached === undefined || target === undefined) return [];
+      const { pools: listed } = await E(reached.subscriptions).listPools();
+      return Promise.all(
+        listed.map(async (/** @type {any} */ backend) => {
+          const [info, state] = await Promise.all([
+            E(backend).describe(),
+            E(target).poolState(backend),
+          ]);
+          return harden({
+            kind: info.kind,
+            label: info.label,
+            specKeys: state.members.map((/** @type {any} */ m) => m.key),
+          });
+        }),
+      );
+    },
+    ...(onError === undefined ? {} : { onError }),
+  });
+
+  /**
+   * A pool's adapter-kept additions over its manager state; a failure
+   * serves the spec members alone (and looks again at the next load).
+   * @param {{ kind: string, label: string }} info
+   * @param {any} state a `PoolState`
+   * @returns {Promise<{ members: MemberEntry[], pending: boolean }>}
+   */
+  const withAdditions = async (info, state) => {
+    if (state.state === 'retired') return { members: [], pending: false };
+    try {
+      return await additions.extrasOf(info, state.members);
+    } catch (error) {
+      onError?.(error);
+      return { members: [], pending: true };
+    }
+  };
+
   /** @type {ReturnType<typeof makeAccounts>} */
   let accounts;
 
@@ -291,15 +368,28 @@ export const makeSubscriptions = ({
   const loadPool = async (backend, spec) => {
     const pool = recordOf(backend, spec);
     const loaded = await pool.bridge.load();
-    if (pool.loaded !== loaded) {
+    if (
+      pool.loaded !== loaded ||
+      pool.additionsRev !== additions.rev() ||
+      (pool.additionsPending === true &&
+        now() - (pool.additionsAskedAt ?? 0) >= ADDITIONS_RETRY_MS)
+    ) {
+      const rev = additions.rev();
+      const extras = await withAdditions(spec, loaded);
+      const members = harden([...loaded.members, ...extras.members]);
       const unchanged =
         pool.loaded !== undefined &&
         pool.state === loaded.state &&
-        sameMembers(pool.members, loaded.members);
+        sameMembers(pool.members, members);
       pool.loaded = loaded;
       pool.state = loaded.state;
-      pool.members = loaded.members;
-      for (const entry of loaded.members)
+      pool.members = members;
+      pool.additionsRev = rev;
+      pool.additionsPending = extras.pending;
+      pool.additionsAskedAt = now();
+      if (loaded.state === 'retired')
+        additions.poolRetired(pool.spec, loaded.members);
+      for (const entry of members)
         if (!specOfMember.has(entry.member))
           specOfMember.set(entry.member, pool.spec);
       if (pool.core === undefined) {
@@ -321,7 +411,7 @@ export const makeSubscriptions = ({
         accounts.register(backend, {
           kind: pool.spec.kind,
           label: pool.spec.label,
-          members: loaded.members,
+          members,
         });
     }
     return pool;
@@ -426,15 +516,81 @@ export const makeSubscriptions = ({
           return undefined;
         }
         const state = await E(target).poolState(backend);
+        const extras = await withAdditions(info, state);
         return harden({
           kind: info.kind,
           label: info.label,
-          members: state.members,
+          members: [...state.members, ...extras.members],
         });
+      },
+    },
+    methods: {
+      addMember: (backend, request) => addMember(backend, request),
+      /**
+       * The format check of a Secret for a pool's provider (the value
+       * stays here): ok or a code.
+       * @param {any} backend
+       * @param {any} secret
+       */
+      checkCredential: async (backend, secret) => {
+        const { provider } = await poolFacts(backend);
+        return credentialOps.checkCredential(secret, provider);
+      },
+      /**
+       * The active members a pool serves (its spec's and the additions),
+       * so the page can tell an interrupted add from a member in a pool.
+       * @param {any} backend
+       */
+      poolMembers: async backend => {
+        const { info, state } = await poolFacts(backend);
+        const extras = await withAdditions(info, state);
+        return harden(
+          [...state.members, ...extras.members]
+            .filter(entry => entry.state === 'active')
+            .map(entry => entry.member),
+        );
       },
     },
     ...(onError === undefined ? {} : { onError }),
   });
+
+  /**
+   * A pool backend's `describe()` and current `PoolState` (two manager
+   * cranks), refused when it is not an active pool.
+   * @param {any} backend
+   */
+  const poolFacts = async backend => {
+    const target = sinkNow();
+    if (target === undefined) throw Error('the agent host is not attached');
+    const info = await E(backend).describe();
+    const provider = providerOfKind[info.kind];
+    if (provider === undefined) throw Error(subscriptionTexts.memberKind);
+    const state = await E(target).poolState(backend);
+    if (state.state === 'retired') throw Error(subscriptionTexts.retired);
+    return { info, provider, state };
+  };
+
+  /**
+   * `Accounts.addMember`: the manager's own `addMember` when it has one
+   * (introspected each time: a state provisioned later has it); else an
+   * adapter-kept addition (`pool-additions.js`). Either way the pool's
+   * loads see the member next, and the accounts view reads the pool again.
+   * @param {any} backend
+   * @param {{ label: string, credential: any, weight?: number, declared?: any }} request
+   */
+  const addMember = async (backend, request) => {
+    const reached = await admins();
+    if (reached !== undefined) {
+      // eslint-disable-next-line no-underscore-dangle -- the Endo introspection method
+      const names = await E(reached.subscriptions).__getMethodNames__();
+      if (names.includes('addMember'))
+        return E(reached.subscriptions).addMember(backend, request);
+    }
+    const { info, state } = await poolFacts(backend);
+    const member = await additions.add(info, state.members, request);
+    accounts.poolsChanged();
+    return member;
+  };
 
   const poolCatalog = makePoolCatalog({
     ...fetchOption,
@@ -484,6 +640,8 @@ export const makeSubscriptions = ({
     }),
     credentialOps,
     accounts,
+    /** The adapter-kept pool additions (`pool-additions.js`; tests). */
+    additions,
     /**
      * The pool's manager bridge, loaded (`types.js` `Subscriptions.poolOf`).
      * @param {any} backend

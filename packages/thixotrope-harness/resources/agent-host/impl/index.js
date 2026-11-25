@@ -263,6 +263,8 @@ export const makeAgentHostImpl = ({
     stateDir: stateDirNow,
     timers,
     ...(fetch === undefined ? {} : { fetch }),
+    // The gateway's operator, read at each use (pool additions, 3.5).
+    currentOperator: () => gateway.operator(),
   });
   /**
    * An API backend's key, through its grant, read at every use (R4-82).

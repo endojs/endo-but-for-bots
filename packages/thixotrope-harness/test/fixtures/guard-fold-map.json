@@ -298,8 +298,8 @@
   "shapes.PresetView": "Development presets may identify a pinned workspace seed.",
   "interfaces.PresetCatalog": "Development presets may identify a pinned workspace seed.",
   "interfaces.Preset": "Development presets may identify a pinned workspace seed.",
-  "m4Interfaces.Accounts": "Accounts.history(backend, offset?) returns a bounded page of observed quota history, or undefined for an unknown pool.",
-  "m4MethodNames.Accounts": "Accounts gains history, a method name already in the gateway vocabulary.",
+  "m4Interfaces.Accounts": "Accounts.history(backend, offset?) returns a bounded page of observed quota history, or undefined for an unknown pool; Accounts.addMember, checkCredential and poolMembers keep pool additions in the adapter for a manager that predates SubscriptionsAdmin.addMember (m4-interfaces.md 3.5).",
+  "m4MethodNames.Accounts": "Accounts gains history, addMember and checkCredential (method names already in the gateway vocabulary) and poolMembers (added to it).",
   "shapes.TurnStarted": "M11 (m11-interfaces.md 9.1): optional spoken and dictated facts of the turn's message.",
   "shapes.Receipt": "M11 (m11-interfaces.md 9.1): optional unmarked: true, set by Composer.submit when the session's program predates the marker.",
   "shapes.ExportEntry": "M11 (m11-interfaces.md 9.1): a queued entry carries its spoken and dictated facts.",
@@ -506,7 +506,8 @@
    "transcribe",
    "addPoolMember",
    "checkCredential",
-   "addMember"
+   "addMember",
+   "poolMembers"
   ]
  }
 }

@@ -202,6 +202,9 @@ const labelText = text => String(text ?? '').slice(0, limits.labelUnits);
  * @param {AccountReaders} [options.readers]
  * @param {AccountsSettings} [options.settings]
  * @param {(error: unknown) => void} [options.onError] a failed file write
+ * @param {Record<string, (...args: any[]) => any>} [options.methods] the
+ *   adding methods of the `Accounts` exo (`addMember`, `checkCredential`,
+ *   `poolMembers`: `makeSubscriptions`, over the adapter-kept additions)
  * @returns {AccountsCoreM4}
  */
 export const makeAccounts = ({
@@ -211,6 +214,7 @@ export const makeAccounts = ({
   readers = {},
   settings = {},
   onError,
+  methods = {},
 }) => {
   const keepaliveMs =
     settings.keepaliveMs ?? subscriptionLimits.accountsKeepaliveMs;
@@ -890,7 +894,14 @@ export const makeAccounts = ({
 
   // ---------------------------------------------------------- the exo
 
+  /** @param {string} name */
+  const absent = name => () => {
+    throw Error(`${name} is not offered by this adapter`);
+  };
   const accounts = makeExo('Accounts', m4Interfaces.Accounts, {
+    addMember: methods.addMember ?? absent('addMember'),
+    checkCredential: methods.checkCredential ?? absent('checkCredential'),
+    poolMembers: methods.poolMembers ?? absent('poolMembers'),
     list: () => view(),
     /** @param {any} backend */
     forBackend: async backend => {
