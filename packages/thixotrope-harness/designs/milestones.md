@@ -1590,7 +1590,7 @@ build has a credential import form and lacks a **Continue with ChatGPT** action
 The operator kept the pool design for the single-account trial (J-12583).
 To attach the first account in the current build:
 
-1. In the signed-in local gateway, open the header menu and choose **Secrets**.
+1. In the signed-in local gateway, open **Settings** in the header and choose **Secrets**.
 2. On **ChatGPT Account 1**, choose **Replace value**. In **or a text file**,
    select the tester's own Codex ChatGPT login JSON (up to 8,192 UTF-8 bytes).
    For a default file-backed Codex login the path is `~/.codex/auth.json`.

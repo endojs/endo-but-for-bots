@@ -722,11 +722,15 @@ it knows and never copies records onto M2's keys, so an optional field a later m
 ### 9.4 Settings view
 
 One Settings view holds what configures the harness and the open session. The header's Settings
-control (an icon with the accessible name and tooltip "Settings") opens and closes it with or
-without a session open; it is absent only while a subagent is inspected, which shows no features.
-The view replaces the main region and hides the composer and the status bar. A vertical list on
-the left selects a section, which renders on the right; at `drawerMaxWidthPx` or less the list is
-a scrolling row on top.
+control (⚙ and the visible label "Settings", the label hidden at `drawerMaxWidthPx` or less;
+accessible name "Settings"; tooltip "Open settings" or "Close settings (Esc)"; `aria-expanded`,
+and `aria-controls` while the view exists) opens and closes it with or without a session open; it
+is absent only while a subagent is inspected, which shows no features. The view replaces the main
+region and hides the composer and the status bar; a page-wide error (`state.status`) shows above
+the section instead, and the account chips' readings are in the Subscriptions section. To send
+after acting in "This session" (Emergency stop, then a refused send), the user closes the view.
+A vertical list on the left selects a section, which renders on the right; at `drawerMaxWidthPx`
+or less the list is a scrolling row on top.
 
 - **Sections**: "This session" (id `session`, the `session.settings` features of the active
   session) and one per `app.panel` feature that `when(context)` shows, in slot order, by
@@ -735,9 +739,17 @@ a scrolling row on top.
   an empty pane.
 - **State**: `settings: { section? } | undefined`. `openSettings(section?)` opens at
   `section` or the last section selected; `selectSettingsSection(section)` selects and
-  remembers; a section absent or no longer listed shows "This session" when listed, else the first
-  global section. `selectSession`, `newSession` and subagent navigation close the view.
-- **Closing**: Escape (outside a text field) or the Settings control; the session shows again.
+  remembers. With no section chosen, the view waits up to `settingsSettleMs` (1 s) for "This
+  session" before mounting a global section (no panel is mounted only to be replaced:
+  Subscriptions reads provider usage on mount), then keeps the section it showed until the user
+  picks one; a chosen section no longer listed falls back to the first listed. `selectSession`,
+  `newSession` and subagent navigation close the view.
+- **Keyboard and focus**: the list is a `tablist` (vertical, horizontal at phone width) of `tab`s,
+  each controlling its `tabpanel`; arrow keys, Home and End move between tabs, Enter or Space
+  selects (manual activation). Opening focuses the selected tab; closing returns focus to the
+  Settings control.
+- **Closing**: Escape or the Settings control; the session shows again. Escape in a text field, in
+  a dialog, or while the New session dialog is open is left to that layer.
 - **Layout**: every section gets one content width and heading size from one rule in
   `UI/src/shell/settings.css`; a panel's own rules inside stay its own. The header keeps one line
   (`flex-wrap: nowrap`) and the title truncates.
