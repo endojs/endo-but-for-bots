@@ -43,7 +43,9 @@
  * a row of the parent's backend catalogue (`listModels`, at most
  * `MODEL_PAGES` pages; a scripted backend has none and takes any id, as
  * `createSession` does); a `reasoningEffort` must be one the model offers,
- * as the pool's `resolveEffort` answers (any other backend takes none). A
+ * as its catalogue row lists it, with the pool's `ultra`/`max` spelling
+ * (any other backend takes none; the creation's `resolveEffort` checks it
+ * again). A
  * new model without an effort keeps the parent's effort when the model
  * offers it, else gets the model's default. The child stays on the
  * parent's backend. Refusals are fixed texts that name what is offered.
@@ -67,7 +69,6 @@ import {
   subagentNameSource,
 } from '../lib/guards/session.js';
 import { utf8Bytes } from '../lib/bounded.js';
-import { subscriptionTexts } from '../lib/subscription-texts.js';
 import { stagePrompt } from '../session/prompt.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -526,24 +527,22 @@ export const makeSubagents = ({
   };
 
   /**
-   * Whether a pool backend takes `reasoningEffort` on `modelId`: its own
-   * `resolveEffort` decides (spellings included); only its refusal of the
-   * effort answers false, any other failure is the spawn's.
-   * @param {any} backend
-   * @param {string} modelId
+   * Whether a pool model's catalogue row offers `reasoningEffort`: the row's
+   * `reasoningEfforts`, with the pool's one spelling rule (R4-23: a Codex
+   * row lists Fae's `ultra` as `max`). Data, not a refusal's text: the
+   * creation's `resolveEffort` (`subscription-options.js`) still checks the
+   * chosen effort, and its failure is the spawn's.
+   * @param {string} kind the backend's kind
+   * @param {any} row the model's catalogue row, or undefined
    * @param {string} reasoningEffort
    */
-  const takesEffort = (backend, modelId, reasoningEffort) =>
-    E(backend)
-      .resolveEffort(harden({ modelId, reasoningEffort }))
-      .then(
-        () => true,
-        error => {
-          if (error?.message === subscriptionTexts.unsupportedEffort)
-            return false;
-          throw error;
-        },
-      );
+  const offersEffort = (kind, row, reasoningEffort) => {
+    const listed =
+      kind === 'codex-pool' && reasoningEffort === 'ultra'
+        ? 'max'
+        : reasoningEffort;
+    return row?.reasoningEfforts?.includes(listed) === true;
+  };
 
   /**
    * The model and effort of a child (D-M9-25).
@@ -573,10 +572,10 @@ export const makeSubagents = ({
       row = found.row;
     }
     if (!pooled) return { modelId: target };
+    row ??= (await modelRow(from.backend, label, target)).row;
     if (reasoningEffort !== undefined) {
-      if (await takesEffort(from.backend, target, reasoningEffort))
+      if (offersEffort(kind, row, reasoningEffort))
         return { modelId: target, reasoningEffort };
-      row ??= (await modelRow(from.backend, label, target)).row;
       throw Error(
         postOfficeTextOf.subagentEffortUnknown(
           target,
@@ -589,7 +588,7 @@ export const makeSubagents = ({
     // else the model's default (the creation's `subscriptionEffort`).
     if (
       from.reasoningEffort !== undefined &&
-      (await takesEffort(from.backend, target, from.reasoningEffort))
+      offersEffort(kind, row, from.reasoningEffort)
     )
       return { modelId: target, reasoningEffort: from.reasoningEffort };
     return { modelId: target };

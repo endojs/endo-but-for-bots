@@ -801,6 +801,31 @@ test('D-M9-25: an unknown model or effort is refused with what is offered, befor
   );
 });
 
+test('D-M9-25: an effort is decided from the catalogue row, not from a refusal text; a Codex pool takes ultra where it lists max', async t => {
+  const tree = makeTree();
+  const pool = makePool();
+  const parent = tree.addParent('Lead', {
+    backend: pool.backend,
+    modelId: 'claude-fable-5-2',
+    reasoningEffort: 'medium',
+  });
+  await spawnWith(parent.delegation, 'a', { modelId: 'claude-haiku-4-5' });
+  t.false('reasoningEffort' in tree.created[0].options, 'not offered: none');
+  await spawnWith(parent.delegation, 'b', { reasoningEffort: 'high' });
+  t.is(tree.created[1].options.reasoningEffort, 'high');
+  t.false(
+    pool.calls.some(call => call.startsWith('resolveEffort')),
+    pool.calls.join(' '),
+  );
+  const codex = makePool({ kind: 'codex-pool' });
+  const coder = tree.addParent('Coder', {
+    backend: codex.backend,
+    modelId: 'claude-fable-5-2',
+  });
+  await spawnWith(coder.delegation, 'c', { reasoningEffort: 'ultra' });
+  t.is(tree.created[2].options.reasoningEffort, 'ultra');
+});
+
 test('D-M9-25: an effort on a backend that takes none is refused; a scripted backend takes any model', async t => {
   const tree = makeTree();
   const api = makePool({ kind: 'anthropic' });

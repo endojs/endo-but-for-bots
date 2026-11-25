@@ -363,11 +363,12 @@ and forwards them in `SpawnRequest`. The factory decides, in the spawn, after th
   8 pages of `modelPageRows`; `postOfficeTextOf.subagentModelUnknown` names up to 24 offered ids,
   `subagentCatalogUnavailable` when a page answers `unavailable`). A scripted backend has no
   catalogue and takes any id, as `createSession` does;
-- `reasoningEffort` given: on a pool backend the pool's own `resolveEffort` decides (it knows the
-  Codex `ultra`/`max` spelling); its refusal becomes `subagentEffortUnknown`, naming the model row's
+- `reasoningEffort` given: on a pool backend the model's catalogue row decides (its
+  `reasoningEfforts`, with the pool's Codex `ultra`/`max` spelling), as data: no refusal text is
+  matched across the vat boundary. One it does not list is `subagentEffortUnknown`, naming the row's
   efforts. Any other backend takes no effort (`subagentEffortNone`);
-- a new model without an effort keeps the parent's effort when the pool takes it for that model,
-  else none is passed and the creation's `subscriptionEffort` stores the model's default.
+- a new model without an effort keeps the parent's effort when the model's row lists it, else none
+  is passed and the creation's `subscriptionEffort` stores the model's default.
 The creation's resolvers then check the choice again as for any `createSession`. Each refusal is the
 tool's failed result before any child exists, and the name is free again. The child stays on the
 parent's backend (and so its subscription pool): naming another backend would need a `Backend`
