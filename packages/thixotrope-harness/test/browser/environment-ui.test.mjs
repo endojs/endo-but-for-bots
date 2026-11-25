@@ -149,6 +149,9 @@ const statusBecomes = (page, text) =>
       await statusBecomes(page, executionTexts.stopped);
       t.like(await E(session).getExecutionState(), { state: 'stopped' });
 
+      // Back to the conversation (Settings hides the composer): Escape.
+      await page.keyboard.press('Escape');
+      await page.locator('.thix-settings').waitFor({ state: 'detached' });
       // The composer is blocked with the session's text; the draft stays.
       const input = page.locator('textarea.floot-input');
       await input.fill('while stopped');
@@ -163,6 +166,8 @@ const statusBecomes = (page, text) =>
       t.is(held.entries.length, 0, 'nothing was queued');
       t.is(held.hold?.reason, 'stopped');
 
+      // Settings reopens on This session (its default here).
+      await page.locator('button[aria-label="Settings"]').click();
       await page.locator('.floot-execution [data-action="resume"]').click();
       await statusBecomes(page, executionTexts.running);
       const after = await E(session).listPending();
