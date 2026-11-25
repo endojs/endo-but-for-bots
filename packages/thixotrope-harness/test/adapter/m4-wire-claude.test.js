@@ -201,10 +201,24 @@ test('effort: adaptive thinking with the effort (R4-23); refused before any requ
     'claude-fable-5',
     'claude-fable-5-1',
     'claude-fable-5-2',
+    'claude-fable-5-2-20260101',
+    'claude-mythos-5',
+    'claude-mythos-5-1',
+    'claude-mythos-5-2',
     'claude-opus-5-5',
   ])
-    t.true(claudeEfforts(id).includes('medium'), id);
-  t.deepEqual(claudeEfforts('claude-fake-1'), []);
+    t.deepEqual(claudeEfforts(id), claudeEfforts('claude-sonnet-5'), id);
+  for (const id of [
+    'claude-fake-1',
+    'claude-fable-5-3',
+    'claude-fable-5-21',
+    'claude-fable-52',
+    'claude-mythos-5-2-preview',
+    'claude-mythos-5-3',
+    'xclaude-fable-5-2',
+    'claude-fable-5-2-2026',
+  ])
+    t.deepEqual(claudeEfforts(id), [], id);
   const server = await serverFor(t);
   server.setPlan([{ sse: 'claude-text.sse' }]);
   const ok = await drain(
