@@ -137,6 +137,7 @@ harden(isoOf);
 /**
  * @typedef {AccountsCore & {
  *   register: (backend: any, info: PoolInfo) => void,
+ *   poolsChanged: () => void,
  *   refreshForModel: (backend: any) => Promise<void>,
  *   rev: () => number,
  *   subscriberCount: () => number,
@@ -654,13 +655,26 @@ export const makeAccounts = ({
     );
   };
 
+  /**
+   * Pools whose kept info predates the manager's last `poolsChanged` (a
+   * member added or retired): asked again (`describe`) at their next read.
+   * Bounded by `pools`.
+   * @type {WeakSet<any>}
+   */
+  let stalePools = new WeakSet();
+
   /** @param {any} backend */
   const poolInfoOf = async backend => {
     const known = pools.get(backend);
-    if (known !== undefined) return known;
-    if (readers.describe === undefined) return undefined;
-    const info = await readers.describe(backend);
-    if (info === undefined) return undefined;
+    if (known !== undefined && !stalePools.has(backend)) return known;
+    if (readers.describe === undefined) return known;
+    // A failed or empty re-read keeps what was known (the next read asks again).
+    const info = await readers.describe(backend).catch(error => {
+      if (known === undefined) throw error;
+      return undefined;
+    });
+    if (info === undefined) return known;
+    stalePools.delete(backend);
     keepPool(backend, info);
     publish();
     return pools.get(backend);
@@ -843,8 +857,13 @@ export const makeAccounts = ({
     },
     register: (backend, info) => {
       ensureLoaded();
+      stalePools.delete(backend);
       keepPool(backend, info);
       publish();
+    },
+    /** The manager changed pool membership: every kept pool is read again. */
+    poolsChanged: () => {
+      stalePools = new WeakSet(pools.keys());
     },
     statusText: (backend, usage) =>
       renderAccountStatus(

@@ -10,8 +10,12 @@
  * and `Accounts` (R7-63, R4-84). No method answers a value (R7-26).
  * `poolsChanged()` (answered, XB, X-FIX: the manager's retirement returns
  * only after this answer) is the manager's word that it retired a
- * pool or a member: every pool this incarnation loaded is asked again at
- * its next use (m4-interfaces 3.1: the next turn fails or skips the member).
+ * pool or a member, or added a member to a pool: every pool this
+ * incarnation loaded is asked again at its next use (m4-interfaces 3.1:
+ * the next turn fails or skips the member, or may choose the new one).
+ * `checkCredential(secret, provider)` reads the Secret once (resolved by
+ * presence; an audited store read) and answers `{ ok: true }` or
+ * `{ ok: false, code }` (`checkCredentialValue`): the value stays here.
  *
  * The store is the incarnation's one Secrets store (m4-interfaces 8,
  * assumption 4): read from `secrets().store` at call time, so this facet
@@ -32,6 +36,7 @@ import { limits } from '../../../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { makeAuditReader } from '../secrets/audit.js';
 import { describeKeys } from '../secrets/catalog.js';
+import { checkCredentialValue } from './credentials.js';
 
 const { makeExo } = /** @type {any} */ (globalThis);
 
@@ -65,6 +70,9 @@ export const makeSecretResolver = sink => {
 };
 harden(makeSecretResolver);
 
+/** Store failure codes a check answers as they are; any other is `READ_FAILED`. */
+const STORE_CODES = harden(['REVOKED', 'UNKNOWN_SECRET']);
+
 /**
  * @param {object} options
  * @param {any} options.secrets the Secrets operations (or a function
@@ -75,12 +83,15 @@ harden(makeSecretResolver);
  *   the audit reader's `Secret` filter
  * @param {() => void} [options.poolsChanged] marks the loaded pool states
  *   stale (`makeSubscriptions`)
+ * @param {() => number} [options.now] the clock of `checkCredential`'s
+ *   expiry rule
  */
 export const makeCredentialOps = ({
   secrets,
   accounts,
   resolveSecret,
   poolsChanged = () => {},
+  now = () => Date.now(),
 }) => {
   const storeOf = () => {
     const store = lazy(secrets)?.store;
@@ -109,6 +120,26 @@ export const makeCredentialOps = ({
     poolsChanged: () => {
       poolsChanged();
       return undefined;
+    },
+    /**
+     * @param {any} secret
+     * @param {'claude' | 'codex'} provider
+     */
+    checkCredential: async (secret, provider) => {
+      const key = await resolveSecret(secret);
+      if (key === null) return harden({ ok: false, code: 'UNKNOWN_SECRET' });
+      /** @type {string} */
+      let value;
+      try {
+        ({ value } = await storeOf().read(key));
+      } catch (error) {
+        const code = /** @type {any} */ (error)?.code;
+        return harden({
+          ok: false,
+          code: STORE_CODES.includes(code) ? code : 'READ_FAILED',
+        });
+      }
+      return checkCredentialValue(value, provider, now());
     },
   });
 };

@@ -596,6 +596,30 @@ test('forBackend of an unregistered pool asks the readers once; not a pool is un
   t.is(await core.accounts.forBackend(api), undefined);
 });
 
+test('poolsChanged: a kept pool is described again at its next read (a member added shows at once)', async t => {
+  const pool = Far('Backend', {});
+  const m1 = memberEntry('one', 'k1');
+  const m2 = memberEntry('two', 'k2');
+  let members = [m1];
+  let describes = 0;
+  const { core } = await setup(t, {
+    readers: {
+      describe: async () => {
+        describes += 1;
+        return { kind: 'claude-pool', label: 'p', members };
+      },
+    },
+  });
+  core.register(pool, { kind: 'claude-pool', label: 'p', members: [m1] });
+  t.is((await core.accounts.forBackend(pool))?.members.length, 1);
+  t.is(describes, 0, 'a registered pool is not described');
+  members = [m1, m2];
+  core.poolsChanged();
+  t.is((await core.accounts.forBackend(pool))?.members.length, 2);
+  await core.accounts.history(pool);
+  t.is(describes, 1, 'described once after the change');
+});
+
 test('keepalive: a waiting next() is answered again after 30 s with the same rev', async t => {
   const { core, clock } = await setup(t);
   const sub = core.accounts.watch(core.rev());

@@ -450,11 +450,15 @@ export const makeSubscriptions = ({
     secrets,
     accounts: () => accounts.accounts,
     resolveSecret,
-    // 3.1 (XB): a retirement in the manager; each loaded pool asks
-    // `poolState` again at its next use (one manager crank per used pool).
+    // 3.1 (XB): a retirement or a member added in the manager; each loaded
+    // pool asks `poolState` again at its next use (one manager crank per
+    // used pool), and the accounts view asks again at its next read of a
+    // pool, so an added member shows without waiting for a round.
     poolsChanged: () => {
       for (const pool of pools.values()) pool.bridge.invalidate();
+      accounts.poolsChanged();
     },
+    now,
   });
 
   return harden({

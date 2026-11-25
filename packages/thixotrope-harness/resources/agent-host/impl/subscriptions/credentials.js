@@ -336,6 +336,51 @@ export const parseRenewalCredential = (text, provider) => {
 };
 harden(parseRenewalCredential);
 
+/** @typedef {{ ok: true } | { ok: false, code: string }} CredentialCheck */
+
+/** @param {string} code */
+const checkFailed = code => harden({ ok: false, code });
+
+/**
+ * Whether a Secret's value can serve as a member credential of `provider`
+ * (`CredentialOps.checkCredential`, m4-interfaces 3.2): every form
+ * `parseRenewalCredential` accepts (the stored form, the provider logins,
+ * an activated Claude refresh-only import). A value that is a credential
+ * of the other provider is `WRONG_PROVIDER` (the read path's `INVALID`);
+ * one consumed by an interrupted renewal (`pendingRefresh`) is `CONSUMED`;
+ * an access token with no refresh token past its expiry is `EXPIRED` (as
+ * `renewal.js`: it could neither serve nor be renewed). Answers a fixed
+ * code, never the value or a parse message.
+ * @param {string} text
+ * @param {import('./types.js').Provider} provider
+ * @param {number} nowMs
+ * @returns {CredentialCheck}
+ */
+export const checkCredentialValue = (text, provider, nowMs) => {
+  /** @type {StoredCredential | LocalClaudeRefresh} */
+  let credential;
+  try {
+    credential = parseRenewalCredential(text, provider);
+  } catch {
+    const other = provider === 'claude' ? 'codex' : 'claude';
+    try {
+      parseRenewalCredential(text, other);
+    } catch {
+      return checkFailed('INVALID');
+    }
+    return checkFailed('WRONG_PROVIDER');
+  }
+  if (credential.pendingRefresh !== undefined) return checkFailed('CONSUMED');
+  if (
+    'accessToken' in credential &&
+    credential.refreshToken === undefined &&
+    nowMs >= credential.expiresAtMs
+  )
+    return checkFailed('EXPIRED');
+  return harden({ ok: true });
+};
+harden(checkCredentialValue);
+
 /**
  * The stored form, keys in a fixed order. Refused (`INVALID`) when it would
  * not parse back (over 8,192 bytes), so the renewal never writes a value
