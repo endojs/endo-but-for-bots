@@ -34,12 +34,17 @@ import { subscriptionDefaults } from '../../config/subscription-defaults.js';
 import { makeCredentialAccess } from '../../resources/agent-host/impl/secrets/credential-access.js';
 import { makeSubscriptions } from '../../resources/agent-host/impl/subscriptions/index.js';
 import { loadPoolAdditions } from '../../resources/agent-host/impl/subscriptions/pool-additions.js';
+import { makeBridge } from '../../resources/agent-host/impl/gateway/bridge.js';
+import { makeBootstrapFactory } from '../../resources/agent-host/impl/gateway/powers.js';
+import { harnessNames } from '../../resources/agent-host/impl/gateway/vocabulary.js';
+import { gatewayTexts } from '../../resources/agent-host/impl/gateway/protocol.js';
+import { makeClient } from './_m3-captp-client.js';
 import { makeController } from '../../ui/src/controller/index.js';
 import { mount } from '../../ui/src/shell/index.js';
 import { feature as accountFeatures } from '../../ui/src/accounts/feature.js';
 import { addMemberTexts } from '../../ui/src/accounts/AddMember.js';
 import { makeFakePowers, makeTestDom } from '../unit/_m3-fake-powers.js';
-import { runEffectsPromptly } from '../unit/_m4-ui-fakes.js';
+import { openAccountsPanel, runEffectsPromptly } from '../unit/_m4-ui-fakes.js';
 import { importOldManager, OLD_REVISION } from './_old-manager.js';
 import { makeStoreDirs, openStore, storedCredential } from './_m4-renewal.js';
 import { timers } from './_m2-w21b-round.js';
@@ -47,6 +52,8 @@ import { timers } from './_m2-w21b-round.js';
 const { E, Far } = /** @type {any} */ (globalThis);
 
 const HOUR = 3_600_000;
+/** A gateway sign-in value built at run time (not a real secret). */
+const SIGN_IN = ['fedcba9876543210'].join('').repeat(4);
 /**
  * A placeholder token, joined at run time (never key-shaped).
  * @param {string} tag
@@ -473,7 +480,7 @@ test.serial(
     });
     await controller.attach(powers);
     await flush();
-    controller.openPanel('accounts');
+    openAccountsPanel(controller);
     await flush();
     const $ = (/** @type {string} */ selector) =>
       dom.document.querySelector(selector);
@@ -540,10 +547,10 @@ test.serial(
  * An Operator whose `SecretsAdmin` and `SubscriptionsAdmin` override some
  * methods of the old manager's (a failure, a later manager's methods).
  * @param {any} s the setup
- * @param {{ secrets?: Record<string, Function>, subscriptions?: Record<string, Function> }} overrides
+ * @param {{ secrets?: Record<string, (...args: any[]) => any>, subscriptions?: Record<string, (...args: any[]) => any> }} overrides
  */
 const operatorWith = (s, { secrets = {}, subscriptions = {} }) => {
-  /** @type {Record<string, Function>} */
+  /** @type {Record<string, (...args: any[]) => any>} */
   const delegated = {};
   // eslint-disable-next-line no-underscore-dangle -- the Endo introspection method
   for (const name of s.admin.__getMethodNames__())
@@ -886,4 +893,95 @@ test('H: on a later manager with addPoolMember the kept additions move into its 
   s.advance(10_000);
   await s.served();
   t.is(calls.length, 1, 'once');
+});
+
+test('A: through the real gateway guard and bridge, the page adds "ChatGPT Account 2" with the adapter\'s Accounts; __getMethodNames__ is refused', async t => {
+  const s = await setup(t);
+  const s2 = await s.makeSecret('ChatGPT login 2', codexValue('2'));
+  const { keys: vocabulary, methods } = harnessNames();
+  const stub = (/** @type {string} */ name) => Far(name, {});
+  const makeBootstrap = makeBootstrapFactory({
+    signIn: { matches: (/** @type {string} */ c) => c === SIGN_IN },
+    limiter: {
+      check: () => ({ ok: /** @type {const} */ (true) }),
+      failed: () => {},
+      succeeded: () => {},
+    },
+    operator: s.operator,
+    live: stub('Live'),
+    content: stub('Content'),
+    composer: stub('Composer'),
+    history: () => stub('History'),
+    extras: [],
+  });
+  const bridge = makeBridge({
+    makeBootstrap,
+    vocabulary,
+    methods,
+    isLargeCall: () => false,
+    log: () => {},
+  });
+  /** @type {((bytes: Uint8Array | string) => void) | undefined} */
+  let toServer;
+  let gone = false;
+  const client = makeClient({
+    send: bytes =>
+      setImmediate(() => {
+        if (!gone) toServer?.(bytes);
+      }),
+    onClose: () => {
+      gone = true;
+    },
+  });
+  bridge.connect({
+    address: '127.0.0.1',
+    send: (/** @type {Uint8Array} */ bytes) =>
+      setImmediate(() => client.receive(bytes)),
+    close: () => {
+      gone = true;
+      client.close();
+    },
+    onMessage: (/** @type {any} */ handler) => {
+      toServer = handler;
+    },
+    onClose: () => {},
+  });
+  t.teardown(() => {
+    gone = true;
+    client.close();
+  });
+
+  const powers = await E(client.bootstrap()).fetch(SIGN_IN);
+  const secrets = E(powers.operator).getSecrets();
+  const subscriptions = E(secrets).subscriptions();
+  const accounts = E(subscriptions).accounts();
+  // What the page used to ask, and the guard refuses.
+  // eslint-disable-next-line no-underscore-dangle -- the Endo introspection method
+  await t.throwsAsync(() => E(subscriptions).__getMethodNames__(), {
+    message: gatewayTexts.unknownMethod,
+  });
+  // eslint-disable-next-line no-underscore-dangle -- the Endo introspection method
+  await t.throwsAsync(() => E(accounts).__getMethodNames__(), {
+    message: gatewayTexts.unknownMethod,
+  });
+
+  // The page's calls: the pool, the Secret, the check, the add.
+  const { pools } = await E(subscriptions).listPools();
+  t.is(pools.length, 1);
+  const backend = pools[0];
+  const { entries } = await E(secrets).catalog();
+  const credential = entries.find(
+    (/** @type {any} */ entry) => entry.label === 'ChatGPT login 2',
+  ).secret;
+  t.deepEqual(await E(accounts).checkCredential(backend, credential), {
+    ok: true,
+  });
+  const member = await E(accounts).addMember(
+    backend,
+    harden({ label: 'ChatGPT Account 2', credential }),
+  );
+  t.is((await E(member).describe()).label, 'ChatGPT Account 2');
+  t.is((await E(accounts).poolMembers(backend)).length, 2);
+  t.deepEqual(await s.served(), ['ChatGPT Account 1', 'ChatGPT Account 2']);
+  t.truthy(s2);
 });

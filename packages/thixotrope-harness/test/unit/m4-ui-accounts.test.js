@@ -24,6 +24,10 @@ import {
 } from '../../ui/src/accounts/labels.js';
 import { addMemberTexts } from '../../ui/src/accounts/AddMember.js';
 import {
+  additionsNoteText,
+  subscriptionsTexts,
+} from '../../ui/src/accounts/SubscriptionsPanel.js';
+import {
   subscriptionTextOf,
   subscriptionTexts,
 } from '../../guest/lib/subscription-texts.js';
@@ -32,6 +36,7 @@ import {
   makeFakeAccounts,
   makeFakeSecrets,
   memberAccount,
+  openAccountsPanel,
   runEffectsPromptly,
 } from './_m4-ui-fakes.js';
 
@@ -44,16 +49,10 @@ const flush = async (rounds = 20) => {
 };
 
 /**
- * Open the Subscriptions panel: the one navigation call of this file (a
- * branch that moves the panel under Settings changes only this line).
+ * Open the Subscriptions panel (`openAccountsPanel`, shared).
  * @param {{ controller: any }} s
  */
-const openAccounts = s =>
-  // The Settings view's Subscriptions section (openSettings), or the
-  // header panel of a controller from before it (openPanel).
-  s.controller.openSettings
-    ? s.controller.openSettings('accounts')
-    : s.controller.openPanel('accounts');
+const openAccounts = s => openAccountsPanel(s.controller);
 
 /**
  * Unmount the shell and close the DOM when the test ends.
@@ -141,6 +140,9 @@ const setup = async ({
           ),
       ),
   });
+  // The adapter adds through the manager's own methods (an old manager
+  // has none: the adapter refuses, as one that predates adding).
+  accounts.withManager(secrets.admin.subscriptions());
   const features = [...accountFeatures];
   const { powers, control } = makeFakePowers({
     sessions: [{ key: 's-pool' }, { key: 's-api' }],
@@ -802,13 +804,21 @@ test.serial(
 );
 
 test.serial(
-  'neither the installed manager nor the adapter adds members: a note instead of the form',
+  'neither the installed manager nor the adapter adds members: a note instead of the form, once the adapter refuses (nothing introspects)',
   async t => {
     const s = await setup({ oldManager: true });
     tearDownAfter(t, s);
+    s.secrets.add('kept', 'fake-a');
     openAccounts(s);
     await flush();
+    t.is(s.$('[data-note="manager-predates-add"]'), null, 'not up front');
+    await s.click(s.$('[data-action="add-subscription"]'));
+    await formOf(s).choose('kept');
+    await s.click(s.$('[data-action="check-credential"]'));
     t.is(s.$('[data-action="add-subscription"]'), null, 'no form');
+    const asked = s.accounts.calls.map(c => c[1]);
+    t.true(asked.includes('checkCredential'), 'the page asked the adapter');
+    t.false(asked.includes('__getMethodNames__'), 'never introspected');
     t.is(
       s.$('[data-note="manager-predates-add"]')?.textContent,
       subscriptionTexts.managerPredatesAdd,
@@ -908,5 +918,83 @@ test.serial(
     t.is(form(), null, 'closed: done');
     t.true(s.$('.m4-add-member').textContent.includes(addMemberTexts.added));
     t.deepEqual(s.secrets.poolMembers.get(s.poolBackend), [kept]);
+  },
+);
+
+test('openAccountsPanel: openSettings("accounts") when the controller has it, else openPanel("accounts")', t => {
+  /** @type {string[]} */
+  const opened = [];
+  openAccountsPanel({
+    openSettings: (/** @type {string} */ id) => opened.push(`settings ${id}`),
+    openPanel: (/** @type {string} */ id) => opened.push(`panel ${id}`),
+  });
+  openAccountsPanel({
+    openPanel: (/** @type {string} */ id) => opened.push(`panel ${id}`),
+  });
+  t.deepEqual(opened, ['settings accounts', 'panel accounts']);
+});
+
+test.serial(
+  'a pool with added subscriptions that could not be restored, or an unreadable additions file, says so',
+  async t => {
+    const s = await setup();
+    tearDownAfter(t, s);
+    openAccounts(s);
+    await flush();
+    t.is(s.$('[data-note="additions"]'), null, 'no note when all is well');
+    s.accounts.publish([
+      harden({
+        ...poolOf(s.poolBackend, 'team-claude', s.members),
+        additionsNote: { code: 'UNREACHABLE', unrestored: 1 },
+      }),
+    ]);
+    await flush();
+    t.is(
+      s.$('[data-note="additions"]')?.textContent,
+      '1 added subscription could not be restored: UNREACHABLE',
+    );
+    s.accounts.publish([
+      harden({
+        ...poolOf(s.poolBackend, 'team-claude', s.members),
+        additionsNote: { code: 'FILE_CORRUPT' },
+      }),
+    ]);
+    await flush();
+    t.is(
+      s.$('[data-note="additions"]')?.textContent,
+      subscriptionsTexts.additionsFile('FILE_CORRUPT'),
+    );
+    t.is(
+      additionsNoteText({ code: 'MAKE_FAILED', unrestored: 2 }),
+      '2 added subscriptions could not be restored: MAKE_FAILED',
+    );
+  },
+);
+
+test.serial(
+  'an interrupted add over a manager that predates addPoolMember: Add to this pool is refused, and the note says to add it again',
+  async t => {
+    const s = await setup({ oldManager: true });
+    tearDownAfter(t, s);
+    s.secrets.add('kept', 'fake-a');
+    const subs = await s.secrets.admin.subscriptions();
+    subs.makeMember({
+      provider: 'claude',
+      label: 'kept',
+      credential: s.secrets.records.find(r => r.label === 'kept')?.secret,
+    });
+    openAccounts(s);
+    await flush();
+    await s.click(s.$('[data-action="add-subscription"]'));
+    t.true(
+      s.$('.m4-unpooled').textContent.includes(addMemberTexts.unpooledNote),
+    );
+    await s.click(s.$('[data-unpooled="kept"] [data-action="add-existing"]'));
+    t.true(
+      s
+        .$('.m4-unpooled')
+        .textContent.includes(addMemberTexts.unpooledAgainNote),
+    );
+    t.is(s.$('[data-action="add-existing"]'), null, 'offered no more');
   },
 );

@@ -14,8 +14,12 @@
  * A passing check is format only: the add's first usage read is what asks
  * the provider, and `MemberStatus` shows its result on the new member.
  *
- * A manager installed before `addMember` (`__getMethodNames__()` lacks
- * it) gets a plain note instead of the form.
+ * The page never asks which way an add goes (the gateway refuses
+ * `__getMethodNames__`): it always calls the adapter's `Accounts`, which
+ * uses the manager's own `addMember` or keeps the addition over a pinned
+ * manager (m4-interfaces 3.5). Only an adapter that itself predates
+ * adding (its refusal says the method is missing) gets a plain note
+ * instead of the form.
  *
  * Members an interrupted add left in no pool (a crash between the
  * manager's make and add) of this provider are listed, only when there
@@ -86,6 +90,16 @@ const messageOf = error =>
   error && typeof error === 'object' && 'message' in error
     ? String(/** @type {{ message: unknown }} */ (error).message)
     : String(error);
+
+/**
+ * Whether a refusal says the method is missing: an adapter (or, for
+ * `addPoolMember`, a manager) that predates it.
+ * @param {unknown} error
+ */
+const isMissingMethod = error =>
+  /not offered by this adapter|has no method|no such method|unknownMethod/u.test(
+    messageOf(error),
+  );
 
 /**
  * @param {{ ok: boolean, code?: string }} check
@@ -344,15 +358,12 @@ export const AddMember = ({
   const provider = /** @type {Record<string, string>} */ (providerOfKind)[
     pool.kind
   ];
-  /** @type {[boolean | undefined, (v: boolean | undefined) => void]} */
-  const [canAdd, setCanAdd] = useState(
-    /** @type {boolean | undefined} */ (undefined),
-  );
-  /** Who adds (`feed.addPath`): the manager, or the adapter over a pinned one. */
-  /** @type {[string | undefined, (v: string | undefined) => void]} */
-  const [path, setPath] = useState(
-    /** @type {string | undefined} */ (undefined),
-  );
+  // False once the adapter refused for want of the method (no up-front
+  // probe: the gateway refuses introspection).
+  const [canAdd, setCanAdd] = useState(true);
+  // An existing member could not be put in the pool (a manager that
+  // predates addPoolMember): the note says to add it again instead.
+  const [againOnly, setAgainOnly] = useState(false);
   const [open, setOpen] = useState(false);
   /** @type {[any[] | undefined, (v: any[] | undefined) => void]} */
   const [secrets, setSecrets] = useState(
@@ -388,23 +399,6 @@ export const AddMember = ({
     }
     return id;
   };
-
-  useEffect(() => {
-    let live = true;
-    call(() => feed.addPath()).then(
-      answer => {
-        if (!live) return;
-        setPath(answer);
-        setCanAdd(answer !== undefined);
-      },
-      () => {
-        if (live) setCanAdd(false);
-      },
-    );
-    return () => {
-      live = false;
-    };
-  }, [feed]);
 
   const load = async () => {
     epoch.current += 1;
@@ -457,7 +451,10 @@ export const AddMember = ({
     try {
       await call(body);
     } catch (thrown) {
-      setError(messageOf(thrown));
+      // Only a real refusal shows the note: the adapter lacks the method.
+      if ((what === 'check' || what === 'add') && isMissingMethod(thrown))
+        setCanAdd(false);
+      else setError(messageOf(thrown));
     } finally {
       setBusy('');
     }
@@ -507,10 +504,14 @@ export const AddMember = ({
 
   /** @param {any} member */
   const addExisting = member =>
-    act('add', async () => {
+    act('add-existing', async () => {
       try {
         await feed.addUnpooled(pool.backend, member);
         setNotice(addMemberTexts.added);
+      } catch (thrown) {
+        if (!isMissingMethod(thrown)) throw thrown;
+        setAgainOnly(true);
+        setNotice(addMemberTexts.unpooledAgainNote);
       } finally {
         await load();
       }
@@ -557,16 +558,11 @@ export const AddMember = ({
     return h(
       'div',
       { class: 'm4-add-member' },
-      button(
-        'add-subscription',
-        addMemberTexts.open,
-        () => {
-          setError('');
-          setNotice('');
-          setOpen(true);
-        },
-        { disabled: canAdd !== true },
-      ),
+      button('add-subscription', addMemberTexts.open, () => {
+        setError('');
+        setNotice('');
+        setOpen(true);
+      }),
       notice ? h('div', { class: 'm4-notice', role: 'status' }, notice) : null,
     );
   }
@@ -682,7 +678,7 @@ export const AddMember = ({
           h(
             'p',
             { class: 'm4-note' },
-            path === 'adapter'
+            againOnly
               ? addMemberTexts.unpooledAgainNote
               : addMemberTexts.unpooledNote,
           ),
@@ -694,7 +690,7 @@ export const AddMember = ({
                 'li',
                 { key: idOf(member), 'data-unpooled': name },
                 h('span', null, name),
-                path === 'adapter'
+                againOnly
                   ? null
                   : button(
                       'add-existing',

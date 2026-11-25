@@ -27,7 +27,32 @@ export const subscriptionsTexts = harden({
   none: 'No subscription pools.',
   selection: 'selection: auto',
   noMembers: 'No members.',
+  /**
+   * A pool's `additionsNote` (m4-interfaces 3.5): some subscriptions added
+   * here over a manager that predates adding are not served yet.
+   * @param {number} count
+   * @param {string} code
+   */
+  unrestored: (count, code) =>
+    `${count} added subscription${count === 1 ? '' : 's'} could not be restored: ${code}`,
+  /**
+   * The adapter's file of added subscriptions could not be read.
+   * @param {string} code
+   */
+  additionsFile: code =>
+    `The added subscriptions could not be read (${code}); none can be added until the agent host is restarted after checking pool-additions.json`,
 });
+
+/**
+ * The words of a pool's `additionsNote`, or '' for none.
+ * @param {{ code: string, unrestored?: number } | undefined} note
+ */
+export const additionsNoteText = note => {
+  if (note === undefined) return '';
+  if (note.unrestored !== undefined && note.unrestored > 0)
+    return subscriptionsTexts.unrestored(note.unrestored, note.code);
+  return subscriptionsTexts.additionsFile(note.code);
+};
 
 /**
  * Re-render the calling component on every change of the connection's
@@ -172,6 +197,18 @@ export const SubscriptionsPanel = ({ context, now = Date.now }) => {
           refresh(pool.backend),
         ),
       ),
+      pool.additionsNote === undefined
+        ? null
+        : h(
+            'p',
+            {
+              class: 'm4-note',
+              role: 'status',
+              'data-note': 'additions',
+              'data-code': pool.additionsNote.code,
+            },
+            additionsNoteText(pool.additionsNote),
+          ),
       feed &&
         h(AddMember, {
           feed,

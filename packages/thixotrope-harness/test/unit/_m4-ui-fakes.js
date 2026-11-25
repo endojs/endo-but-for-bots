@@ -19,6 +19,17 @@ const encoder = new TextEncoder();
  * Run Preact's effects (`useEffect`) on the next turn instead of after an
  * animation frame or its 35 ms fallback, so a test's `flush()` sees them.
  */
+/**
+ * Open the Subscriptions panel: the one navigation helper of the M4 UI
+ * tests. A controller that keeps the panel under Settings
+ * (`openSettings`) opens it there; else as a panel of its own.
+ * @param {any} controller
+ */
+export const openAccountsPanel = controller =>
+  typeof controller.openSettings === 'function'
+    ? controller.openSettings('accounts')
+    : controller.openPanel('accounts');
+
 export const runEffectsPromptly = () => {
   /** @type {any} */ (preactOptions).requestAnimationFrame = (
     /** @type {() => void} */ callback,
@@ -440,7 +451,31 @@ export const makeFakeAccounts = ({
     for (const sub of subs) if (!sub.closed) answer(sub);
   };
 
+  /**
+   * The manager the adapter adds through (`withManager`): its own
+   * `checkCredential`, `addMember` and pool members; one that has none
+   * is refused as by an adapter that predates adding.
+   * @type {any}
+   */
+  let manager;
+  /** @param {string} name */
+  const viaManager =
+    name =>
+    (/** @type {any[]} */ ...args) => {
+      calls.push(['Accounts', name]);
+      if (typeof manager?.[name] !== 'function')
+        throw Error(`${name} is not offered by this adapter`);
+      return manager[name](...args);
+    };
   const accounts = Far('Accounts', {
+    checkCredential: viaManager('checkCredential'),
+    addMember: viaManager('addMember'),
+    /** @param {any} backend */
+    poolMembers: backend => {
+      calls.push(['Accounts', 'poolMembers']);
+      if (manager === undefined) return harden([]);
+      return harden([...manager.describePool(backend).members]);
+    },
     list: () => {
       calls.push(['Accounts', 'list']);
       return view;
@@ -511,6 +546,14 @@ export const makeFakeAccounts = ({
     calls,
     subs,
     publish,
+    /**
+     * The manager the adapter's `Accounts` adds through (as the real
+     * adapter, which asks it in process; the page never introspects).
+     * @param {any} admin a `SubscriptionsAdmin` (plain methods)
+     */
+    withManager: admin => {
+      manager = admin;
+    },
     /** @param {number} index */
     evict: index => {
       const sub = subs[index];

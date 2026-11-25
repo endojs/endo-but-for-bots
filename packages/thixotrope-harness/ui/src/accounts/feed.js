@@ -44,28 +44,24 @@ export const REWATCH_LIMIT = 3;
  *   Secrets catalogue (`{ secret, label, description, ... }`; every page,
  *   at most `maxMembers`; never a value)
  * @property {(backend: any, secret: any) => Promise<{ ok: boolean, code?: string }>} checkCredential
- *   `checkCredential` of the adder (`addPath`): ok or a code, never the
+ *   the adapter's `Accounts.checkCredential`: ok or a code, never the
  *   value
- * @property {() => Promise<boolean>} canAddMembers whether anyone here
- *   adds members (`addPath`)
- * @property {() => Promise<'manager' | 'adapter' | undefined>} addPath
- *   who adds: the manager when its `__getMethodNames__()` has
- *   `addMember` and `checkCredential`; else the adapter's `Accounts`
- *   when it has them (a state provisioned before them keeps the old
- *   manager, pinned; the adapter keeps the additions, m4-interfaces
- *   3.5); asked once per connection
  * @property {(backend: any, member: { secret: any, label: string }) => Promise<any>} addSubscription
- *   `addMember` of the adder: the pool rules and the credential check,
- *   then the member made and added (a refusal makes nothing); then
+ *   the adapter's `Accounts.addMember`: the pool rules and the credential
+ *   check, then the member made and added (a refusal makes nothing); then
  *   refresh that pool, which is the member's first usage read. Answers
- *   the `PoolMember`.
+ *   the `PoolMember`. The page never asks which way: the adapter uses
+ *   the manager's own `addMember` when it has one, else keeps the
+ *   addition over a pinned manager (m4-interfaces 3.5); the gateway
+ *   refuses `__getMethodNames__`, so nothing here introspects.
  * @property {(backend: any, member: any) => Promise<void>} addUnpooled
  *   `addPoolMember` of a member an interrupted add left in no pool, then
- *   refresh (the manager path only: over a pinned manager the same add
- *   again, same Secret and label, answers that member)
+ *   refresh; a manager that predates it refuses (the page then says to
+ *   add it again with the same Secret and label)
  * @property {(provider: string) => Promise<{ member: any, label: string }[]>} unpooledMembers
- *   active members of `provider` in no pool: only what an interrupted add
- *   leaves (m4-interfaces 10)
+ *   active members of `provider` in no pool (the adapter's
+ *   `Accounts.poolMembers`, additions included): only what an
+ *   interrupted add leaves (m4-interfaces 10)
  * @property {(member: any) => Promise<void>} retireMember `PoolMember.retire()`
  */
 
@@ -270,44 +266,6 @@ const makeFeed = powers => {
     return all;
   };
 
-  /** @type {Promise<'manager' | 'adapter' | undefined> | undefined} */
-  let pathP;
-  /**
-   * Who adds a member here (asked once per connection, by
-   * `__getMethodNames__()`): the manager when it has `addMember` and
-   * `checkCredential`; else the adapter's `Accounts` when it has them (it
-   * keeps the additions over a pinned manager's pools, m4-interfaces
-   * 3.5); else nobody.
-   */
-  const addPath = () => {
-    if (!pathP) {
-      const asked = (async () => {
-        const both = (/** @type {string[]} */ names) =>
-          ['addMember', 'checkCredential'].every(name => names.includes(name));
-        const target = await accounts();
-        const [managerNames, accountsNames] = await Promise.all([
-          // eslint-disable-next-line no-underscore-dangle -- the Endo introspection method
-          E(subscriptions).__getMethodNames__(),
-          // eslint-disable-next-line no-underscore-dangle -- the Endo introspection method
-          E(target).__getMethodNames__(),
-        ]);
-        if (both(managerNames)) return 'manager';
-        if (both(accountsNames)) return 'adapter';
-        return undefined;
-      })();
-      pathP = asked;
-      // A failed ask (the connection went away) is asked again next time.
-      asked.catch(() => {
-        if (pathP === asked) pathP = undefined;
-      });
-    }
-    return pathP;
-  };
-  const canAddMembers = async () => (await addPath()) !== undefined;
-  /** The object that adds: the manager or the adapter's `Accounts`. */
-  const adder = async () =>
-    (await addPath()) === 'manager' ? admin() : accounts();
-
   /** @param {any} backend */
   const added = async backend => {
     // The adapter took `poolsChanged`: this reads the pool's new members.
@@ -348,11 +306,9 @@ const makeFeed = powers => {
       return entries.filter(entry => entry.state === 'active');
     },
     checkCredential: async (backend, secret) =>
-      E(await adder()).checkCredential(backend, secret),
-    canAddMembers,
-    addPath,
+      E(await accounts()).checkCredential(backend, secret),
     addSubscription: async (backend, { secret, label }) => {
-      const target = await adder();
+      const target = await accounts();
       const member = await E(target).addMember(
         backend,
         harden({ label, credential: secret }),
@@ -368,6 +324,7 @@ const makeFeed = powers => {
     },
     unpooledMembers: async provider => {
       const target = await admin();
+      const accountsView = await accounts();
       const [members, { pools }] = await Promise.all([
         allPages(
           cursor =>
@@ -378,18 +335,12 @@ const makeFeed = powers => {
         ),
         E(target).listPools(),
       ]);
-      // The manager's spec members, and the adapter-kept additions when
-      // the adapter keeps them (a manager that predates addMember).
-      const viaAdapter = (await addPath()) === 'adapter';
-      const accountsView = await accounts();
+      // Each pool's members as the adapter serves them: the manager's,
+      // and the additions it keeps over a manager that predates addMember.
       const described = await Promise.all(
-        pools.map(async (/** @type {any} */ pool) => {
-          const [spec, kept] = await Promise.all([
-            E(target).describePool(pool),
-            viaAdapter ? E(accountsView).poolMembers(pool) : [],
-          ]);
-          return [...spec.members, ...kept];
-        }),
+        pools.map((/** @type {any} */ pool) =>
+          E(accountsView).poolMembers(pool),
+        ),
       );
       const pooled = new Set(described.flat());
       const infos = await Promise.all(
