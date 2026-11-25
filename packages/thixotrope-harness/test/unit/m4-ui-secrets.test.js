@@ -64,7 +64,7 @@ const setup = async ({ secrets = makeFakeSecrets() } = {}) => {
     schedule: fn => fn(),
   });
   await controller.attach(powers);
-  controller.openPanel('secrets');
+  controller.openSettings('secrets');
   await flush();
   const $ = (/** @type {string} */ selector) =>
     dom.document.querySelector(selector);

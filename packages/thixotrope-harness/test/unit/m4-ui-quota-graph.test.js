@@ -295,7 +295,7 @@ const mountPanel = async (t, histories, pools) => {
   });
   await controller.attach(powers);
   await flush();
-  controller.openPanel('accounts');
+  controller.openSettings('accounts');
   await flush();
   return {
     accounts,

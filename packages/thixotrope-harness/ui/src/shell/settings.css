@@ -1,0 +1,109 @@
+/*
+ * The Settings view (`Settings.js`) and the header's Settings control. The
+ * section list is a column on the left; at 640 px and less (the drawer
+ * width, `drawerMaxWidthPx`) a scrolling row on top. Every section gets
+ * the same content width and heading size from the one rule below; the
+ * panels' own rules inside stay as they are.
+ */
+.thix-settings-toggle {
+  width: auto;
+  gap: 0.35rem;
+  padding-inline: 0.5rem;
+  white-space: nowrap;
+}
+.thix-settings-label {
+  font-size: 0.85rem;
+}
+.thix-app .thix-settings {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.thix-settings-nav {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  width: 12rem;
+  padding: 0.75rem 0.5rem;
+  overflow-y: auto;
+  border-right: 1px solid var(--fl-border);
+}
+.thix-settings-item {
+  border: none;
+  border-radius: 6px;
+  padding: 0.45rem 0.7rem;
+  background: transparent;
+  color: var(--fl-text-muted);
+  font: inherit;
+  font-size: 0.9rem;
+  text-align: start;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.thix-settings-item:hover {
+  color: var(--fl-text);
+  background: var(--fl-surface2);
+}
+.thix-settings-item.on {
+  color: var(--fl-text);
+  background: var(--fl-surface2);
+  box-shadow: inset 3px 0 0 var(--fl-accent);
+}
+.thix-settings-content {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 1rem 1.25rem;
+}
+.thix-settings .thix-settings-section[hidden] {
+  display: none;
+}
+/* The shared rules: one content width and one heading for every section
+   (a panel's root sets its own max-width; this one wins inside Settings). */
+.thix-settings .thix-settings-section > * {
+  max-width: 56rem;
+}
+.thix-settings .thix-settings-section h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.thix-settings-section[data-section='session'] {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.thix-settings-section[data-section='session'] > .thix-slot {
+  flex-direction: column;
+  align-items: stretch;
+}
+.thix-settings-empty {
+  color: var(--fl-text-muted);
+}
+@media (max-width: 640px) {
+  .thix-settings-label {
+    display: none;
+  }
+  .thix-app .thix-settings {
+    flex-direction: column;
+  }
+  .thix-settings-nav {
+    flex-direction: row;
+    width: auto;
+    padding: 0.5rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: none;
+    border-bottom: 1px solid var(--fl-border);
+  }
+  .thix-settings-item.on {
+    box-shadow: inset 0 -3px 0 var(--fl-accent);
+  }
+  .thix-settings-content {
+    padding: 0.75rem;
+  }
+}

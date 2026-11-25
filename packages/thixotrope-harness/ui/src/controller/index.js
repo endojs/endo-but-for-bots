@@ -118,10 +118,12 @@ const TURN_SEALED =
  * @property {{ rows: any[], state: string, next?: string, error?: string, backendIndex?: number }} models
  * @property {ConversationView | null} view
  * @property {{ turns: any[], next?: string, loading: boolean } | null} recovery
- * @property {boolean} settingsOpen
+ * @property {{ section?: string } | undefined} settings the open Settings
+ *   view and its selected section (an `app.panel` feature's id, or
+ *   `'session'` for the `session.settings` slot); `section` absent: the
+ *   view's default
  * @property {boolean} drawerOpen
  * @property {string} status a page-wide status line ('' when none)
- * @property {string} [panel] the open `app.panel` feature's id
  * @property {boolean} newSessionOpen the "Start a new session" dialog
  */
 
@@ -183,7 +185,7 @@ const initialState = () => ({
   models: { rows: [], state: 'idle' },
   view: null,
   recovery: null,
-  settingsOpen: false,
+  settings: undefined,
   drawerOpen: false,
   status: '',
   newSessionOpen: false,
@@ -251,6 +253,8 @@ export const makeController = ({
   /** @type {undefined | (()=>ReadingPosition | undefined)} */
   let readPosition;
   let navigationEpoch = 0;
+  /** @type {string | undefined} the Settings section last selected */
+  let lastSettingsSection;
   const inspecting = () => state.sessionPath.length > 1;
   const rememberInput = () => {
     if (
@@ -1417,8 +1421,7 @@ export const makeController = ({
           view: null,
           recovery: null,
           drawerOpen: false,
-          settingsOpen: false,
-          panel: undefined,
+          settings: undefined,
         });
         await openView(key);
       }),
@@ -1460,8 +1463,7 @@ export const makeController = ({
           view: null,
           recovery: null,
           drawerOpen: false,
-          settingsOpen: false,
-          panel: undefined,
+          settings: undefined,
         });
         await openView(info.key);
       }),
@@ -1488,8 +1490,7 @@ export const makeController = ({
           view: null,
           recovery: null,
           drawerOpen: false,
-          settingsOpen: false,
-          panel: undefined,
+          settings: undefined,
         });
         const bookmark = readingPositions.get(key);
         readingPositions.delete(key);
@@ -1550,7 +1551,7 @@ export const makeController = ({
           view: null,
           drawerOpen: false,
           newSessionOpen: false,
-          panel: undefined,
+          settings: undefined,
         });
         await openView(info.key);
         return info.key;
@@ -1806,17 +1807,38 @@ export const makeController = ({
     },
 
     toggleDrawer: () => update({ drawerOpen: !state.drawerOpen }),
-    toggleSettings: () => {
-      if (!inspecting()) update({ settingsOpen: !state.settingsOpen });
-    },
 
     /**
-     * Open an `app.panel` feature by its id (the header menu).
+     * Open the Settings view (the header's Settings control) at `section`,
+     * or at the section selected last; not while a subagent is inspected.
      *
-     * @param {string} id
+     * @param {string} [section] an `app.panel` feature's id, or `'session'`
      */
-    openPanel: id => update({ panel: id, drawerOpen: false }),
-    closePanel: () => update({ panel: undefined }),
+    openSettings: section => {
+      if (inspecting()) return;
+      if (section !== undefined) lastSettingsSection = section;
+      const shown = section ?? lastSettingsSection;
+      update({
+        settings: shown === undefined ? {} : { section: shown },
+        drawerOpen: false,
+      });
+    },
+    /**
+     * Select a section of the open Settings view; it is remembered for the
+     * next opening.
+     *
+     * @param {string} section
+     */
+    selectSettingsSection: section => {
+      lastSettingsSection = section;
+      if (state.settings) update({ settings: { section } });
+    },
+    /** Close the Settings view and return to the session. */
+    closeSettings: () => update({ settings: undefined }),
+    toggleSettings: () => {
+      if (state.settings) api.closeSettings();
+      else api.openSettings();
+    },
     openNewSession: () => update({ newSessionOpen: true, drawerOpen: false }),
     closeNewSession: () => update({ newSessionOpen: false }),
 

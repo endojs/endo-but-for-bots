@@ -1,9 +1,9 @@
 // @ts-check
 /**
  * The app shell (m3-interfaces.md 9, 17; W3.4): overlay, sidebar (a drawer
- * at `drawerMaxWidthPx` or less, R6-61), header, the main region (an open
- * `app.panel`, the settings panel, the recovery panel or the conversation),
- * the status bar and the composer. It renders the controller's state as it
+ * at `drawerMaxWidthPx` or less, R6-61), header, the main region (the
+ * Settings view, the recovery panel or the conversation), the status bar
+ * and the composer; the Settings view hides the last two. It renders the controller's state as it
  * is; it calls no daemon method itself.
  *
  * Region views come from the directories that own them (`views`):
@@ -18,7 +18,7 @@ import { useState } from 'preact/hooks';
 import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
 import { Header } from './Header.js';
 import { Overlay } from './Overlay.js';
-import { FeatureHost, Slot } from './Slot.js';
+import { Settings } from './Settings.js';
 import { StatusBar } from './StatusBar.js';
 
 /** @import { UiFeature } from '../../../resources/agent-host/impl/gateway/protocol.js' */
@@ -83,15 +83,10 @@ export const App = ({ controller, features, views = {}, narrow = false }) => {
   const drawerOpen = narrow && state.drawerOpen;
   const sidebarOpen = !narrow || drawerOpen;
 
-  const panel =
-    state.panel === undefined
-      ? undefined
-      : features.find(
-          feature => feature.slot === 'app.panel' && feature.id === state.panel,
-        );
+  const settingsOpen = state.settings !== undefined;
 
   const inventory =
-    state.activeKey && !panel && sessions.SessionInventory
+    state.activeKey && !settingsOpen && sessions.SessionInventory
       ? h(sessions.SessionInventory, {
           state,
           controller,
@@ -101,12 +96,14 @@ export const App = ({ controller, features, views = {}, narrow = false }) => {
 
   /** @returns {any} */
   const body = () => {
-    if (panel) {
-      return h(
-        'div',
-        { class: 'thix-panel', 'data-panel': panel.id },
-        h(FeatureHost, { key: panel.id, feature: panel, props: { context } }),
-      );
+    if (settingsOpen) {
+      return h(Settings, {
+        state,
+        controller,
+        features,
+        context,
+        sessionFeatures: Boolean(state.view) && !inspecting,
+      });
     }
     if (!state.view) {
       return h(
@@ -121,13 +118,6 @@ export const App = ({ controller, features, views = {}, narrow = false }) => {
           },
           uiTexts.startNewSession,
         ),
-      );
-    }
-    if (state.settingsOpen) {
-      return h(
-        'div',
-        { class: 'thix-settings' },
-        h(Slot, { slot: 'session.settings', features, context }),
       );
     }
     if (state.recovery && conversation.Recovery) {
@@ -167,7 +157,7 @@ export const App = ({ controller, features, views = {}, narrow = false }) => {
         toggleSidebar: () => controller.toggleDrawer(),
         inventoryOpen,
         toggleInventory:
-          state.activeKey && !panel && sessions.SessionInventory
+          state.activeKey && !settingsOpen && sessions.SessionInventory
             ? () => setInventoryOpen(open => !open)
             : undefined,
       }),
@@ -179,8 +169,8 @@ export const App = ({ controller, features, views = {}, narrow = false }) => {
           'div',
           { class: 'thix-session-content' },
           body(),
-          h(StatusBar, shared),
-          state.view && !inspecting && !panel && conversation.Composer
+          settingsOpen ? null : h(StatusBar, shared),
+          state.view && !inspecting && !settingsOpen && conversation.Composer
             ? h(conversation.Composer, shared)
             : null,
         ),

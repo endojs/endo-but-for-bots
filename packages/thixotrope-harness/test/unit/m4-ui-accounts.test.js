@@ -267,7 +267,7 @@ test.serial(
   'Subscriptions panel: list, then live batches; refresh on open and on demand',
   async t => {
     const s = await setup();
-    s.controller.openPanel('accounts');
+    s.controller.openSettings('accounts');
     await flush();
     t.truthy(s.$('[data-panel="accounts"] .m4-subscriptions'));
     t.is(s.$('.m4-pool h3')?.textContent, 'team-claude');
@@ -326,23 +326,23 @@ test.serial(
       s.shell.unmount();
       await s.dom.close();
     });
-    s.controller.openPanel('accounts');
+    s.controller.openSettings('accounts');
     await flush();
     const names = s.accounts.calls.map(call => call[1]);
     t.true(names.indexOf('forBackend') < names.indexOf('refresh'));
     t.is(s.accounts.callsOf('Accounts.refresh').length, 1);
     t.true(s.$('[data-action="refresh-all"]').disabled);
-    s.controller.closePanel();
+    s.controller.closeSettings();
     await flush();
-    s.controller.openPanel('accounts');
+    s.controller.openSettings('accounts');
     await flush();
     t.is(s.accounts.callsOf('Accounts.refresh').length, 1);
     finish();
     await flush();
     t.false(s.$('[data-action="refresh-all"]').disabled);
-    s.controller.closePanel();
+    s.controller.closeSettings();
     await flush();
-    s.controller.openPanel('accounts');
+    s.controller.openSettings('accounts');
     await flush();
     t.is(s.accounts.callsOf('Accounts.refresh').length, 2);
   },
@@ -356,7 +356,7 @@ test.serial(
       s.shell.unmount();
       await s.dom.close();
     });
-    s.controller.openPanel('accounts');
+    s.controller.openSettings('accounts');
     await flush();
     t.is(s.accounts.callsOf('Accounts.refresh').length, 0);
     const pools = [poolOf(s.poolBackend, 'newly-registered', s.members)];
@@ -381,7 +381,7 @@ test.serial(
       s.shell.unmount();
       await s.dom.close();
     });
-    s.controller.openPanel('accounts');
+    s.controller.openSettings('accounts');
     await flush();
     t.is(s.$('.m4-error')?.textContent, 'usage unavailable');
     fail = false;
@@ -395,7 +395,7 @@ test.serial(
   're-watch after accountsWatchClosed, from the last rev',
   async t => {
     const s = await setup();
-    s.controller.openPanel('accounts');
+    s.controller.openSettings('accounts');
     await flush();
     s.accounts.publish([poolOf(s.poolBackend, 'team-claude', [s.members[1]])]);
     await flush();
@@ -419,7 +419,7 @@ test.serial(
 
 test.serial('a watch that keeps closing stops with the text shown', async t => {
   const s = await setup();
-  s.controller.openPanel('accounts');
+  s.controller.openSettings('accounts');
   await flush();
   for (let i = 0; i <= REWATCH_LIMIT; i += 1) {
     s.accounts.evict(i);
@@ -478,16 +478,16 @@ test.serial(
   'the feed closes its subscription when nothing listens',
   async t => {
     const s = await setup();
-    s.controller.openPanel('accounts');
+    s.controller.openSettings('accounts');
     await flush();
     t.is(s.accounts.live(), 1);
-    s.controller.closePanel();
+    s.controller.closeSettings();
     await flush();
     t.is(s.accounts.live(), 0);
     t.is(s.accounts.callsOf('AccountsSubscription.close').length, 1);
     // One feed per connection: the panel and the chip share it.
     t.is(accountsFeed(s.powers), accountsFeed(s.powers));
-    s.controller.openPanel('accounts');
+    s.controller.openSettings('accounts');
     await s.controller.selectSession('s-pool');
     await flush();
     t.is(s.accounts.live(), 1, 'one watch for panel and chip together');

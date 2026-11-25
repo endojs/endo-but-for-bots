@@ -21,7 +21,7 @@ body {
   flex-direction: column;
 }
 .thix-app .floot-header {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 .thix-app .floot-header-title,
 .thix-app .floot-header-title-input {

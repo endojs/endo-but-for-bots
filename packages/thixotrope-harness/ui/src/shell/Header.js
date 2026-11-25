@@ -2,14 +2,18 @@
 /**
  * The header (R6-37, R6-61; m3-interfaces.md 9.3): ☰ (narrow screens), the
  * active session's title (double-click to rename: Enter saves, Esc
- * cancels), `header.chip` features, a button per `app.panel` feature (its
- * `label`), and the session settings toggle.
+ * cancels), `header.chip` features and the Settings control, which opens
+ * and closes the Settings view (`Settings.js`: the `app.panel` features and
+ * the session's `session.settings`) with or without a session open (not
+ * while a subagent is inspected, which shows no features). The
+ * header keeps one line (`flex-wrap: nowrap`); the title truncates.
  */
 import { h } from 'preact';
 import { useState } from 'preact/hooks';
 
 import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
-import { Slot, visibleFeatures } from './Slot.js';
+import { settingsTexts } from './Settings.js';
+import { Slot } from './Slot.js';
 
 /** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
@@ -48,7 +52,6 @@ export const Header = ({
       controller.renameSession(state.activeKey, next);
     }
   };
-  const panels = visibleFeatures(features, 'app.panel', context);
   return h(
     'div',
     { class: 'floot-header' },
@@ -142,33 +145,21 @@ export const Header = ({
             title,
           ),
     h(Slot, { slot: 'header.chip', features, context, class: 'thix-chips' }),
-    panels.map(feature =>
-      h(
-        'button',
-        {
-          key: feature.id,
-          type: 'button',
-          class: `floot-header-btn chip${state.panel === feature.id ? ' on' : ''}`,
-          'data-panel': feature.id,
-          onClick: () =>
-            state.panel === feature.id
-              ? controller.closePanel()
-              : controller.openPanel(feature.id),
-        },
-        feature.label ?? feature.id,
-      ),
-    ),
-    view && !state.sessionPath?.[1]
-      ? h(
+    state.sessionPath?.[1]
+      ? null
+      : h(
           'button',
           {
             type: 'button',
-            class: `floot-header-btn${state.settingsOpen ? ' on' : ''}`,
-            'aria-label': 'Settings',
+            class: `floot-header-btn thix-settings-toggle${state.settings ? ' on' : ''}`,
+            'aria-label': settingsTexts.title,
+            title: state.settings ? settingsTexts.close : settingsTexts.open,
+            'aria-expanded': Boolean(state.settings),
+            'aria-controls': 'thix-settings',
             onClick: () => controller.toggleSettings(),
           },
-          '⚙',
-        )
-      : null,
+          h('span', { 'aria-hidden': 'true' }, '⚙'),
+          h('span', { class: 'thix-settings-label' }, settingsTexts.title),
+        ),
   );
 };

@@ -1,8 +1,8 @@
 // @ts-check
 /* eslint-disable import/no-relative-packages */
 // The app shell (m3-interfaces.md 6.2, 9; W3.4) in happy-dom: overlay
-// texts, slot rendering with a throwing feature isolated, app.panel from the
-// header menu, the drawer at 640 px and not at 641 px, the status bar,
+// texts, slot rendering with a throwing feature isolated, the Settings view
+// (app.panel and session.settings sections), the drawer at 640 px and not at 641 px, the status bar,
 // header rename, and region views.
 import test from '@endo/ses-ava/prepare-endo.js';
 
@@ -137,7 +137,7 @@ test.serial(
 );
 
 test.serial(
-  'app.panel opens from the header menu; hooks in a feature re-render',
+  'app.panel is a Settings section; hooks in a feature re-render',
   async t => {
     const Panel = ({ context }) => {
       const [count, setCount] = useState(0);
@@ -158,16 +158,19 @@ test.serial(
     const { dom, controller, powers } = await setup({ features });
     await controller.attach(powers);
     await flush();
-    const button = dom.document.querySelector('[data-panel="secrets"]');
+    t.is(dom.document.querySelector('[data-panel]'), null, 'no header chip');
+    dom.document.querySelector('button[aria-label="Settings"]').click();
+    const button = dom.document.querySelector('button[data-section="secrets"]');
     t.is(button.textContent, 'Secrets');
     button.click();
-    t.is(controller.getState().panel, 'secrets');
+    t.deepEqual(controller.getState().settings, { section: 'secrets' });
     t.is(dom.document.querySelector('.has-powers').textContent, 'yes');
     dom.document.querySelector('.bump').click();
     await flush();
     t.is(dom.document.querySelector('.bump').textContent, 'n=1');
-    dom.document.querySelector('button[data-panel="secrets"]').click();
+    dom.document.querySelector('button[aria-label="Settings"]').click();
     t.is(dom.document.querySelector('.panel-body'), null);
+    t.is(controller.getState().settings, undefined);
     await dom.close();
   },
 );
@@ -316,6 +319,139 @@ test.serial(
       'chat one',
     );
     t.truthy(dom.document.querySelector('.view-composer'));
+    await dom.close();
+  },
+);
+
+test.serial(
+  'Settings: one labelled control, with or without a session; Escape closes it',
+  async t => {
+    const views = {
+      conversation: {
+        Conversation: () => h('div', { class: 'view-conversation' }),
+        Composer: () => h('div', { class: 'view-composer' }),
+      },
+    };
+    const features = [
+      { id: 'zeta', slot: 'app.panel', label: 'Zeta', component: () => 'Z' },
+      { id: 'alpha', slot: 'app.panel', label: 'Alpha', component: () => 'A' },
+      {
+        id: 'hidden',
+        slot: 'app.panel',
+        label: 'Hidden',
+        when: () => false,
+        component: () => 'H',
+      },
+      // Answers nothing (an environment's section without a shell).
+      { id: 'empty', slot: 'session.settings', component: () => null },
+    ];
+    const { dom, controller, powers } = await setup({ features, views });
+    const $ = (/** @type {string} */ selector) =>
+      dom.document.querySelector(selector);
+    const sectionIds = () =>
+      [...dom.document.querySelectorAll('.thix-settings-nav button')].map(
+        button => button.getAttribute('data-section'),
+      );
+    await controller.attach(powers);
+    await flush();
+    const toggle = () => $('button[aria-label="Settings"]');
+    t.truthy(toggle(), 'available with no session open');
+    t.is(toggle().getAttribute('title'), 'Open settings');
+    t.is(toggle().getAttribute('aria-expanded'), 'false');
+    t.regex(toggle().textContent, /Settings/);
+    toggle().click();
+    await flush();
+    t.is(toggle().getAttribute('aria-expanded'), 'true');
+    t.deepEqual(sectionIds(), ['zeta', 'alpha'], 'slot order, when() kept');
+    t.is($('.thix-settings-section[data-panel="zeta"]')?.textContent, 'Z');
+    t.is(
+      $('.thix-settings-nav [aria-current="page"]')?.getAttribute(
+        'data-section',
+      ),
+      'zeta',
+    );
+    $('button[data-section="alpha"]').click();
+    await flush();
+    t.is($('.thix-settings-section[data-panel="alpha"]')?.textContent, 'A');
+    fire(dom.window, dom.document.body, 'keydown', { key: 'Escape' });
+    await flush();
+    t.is(controller.getState().settings, undefined);
+    t.is($('.thix-settings'), null);
+
+    await controller.selectSession('s1');
+    await flush();
+    t.truthy($('.view-composer'));
+    t.truthy($('.floot-status-bar'));
+    toggle().click();
+    await flush();
+    t.deepEqual(
+      controller.getState().settings,
+      { section: 'alpha' },
+      'the last section is remembered',
+    );
+    t.is($('.thix-settings-section[data-panel="alpha"]')?.textContent, 'A');
+    t.deepEqual(sectionIds(), ['zeta', 'alpha'], 'no empty This session');
+    t.is($('.view-composer'), null, 'no composer under Settings');
+    t.is($('.view-conversation'), null);
+    t.is($('.floot-status-bar'), null, 'no status bar under Settings');
+    toggle().click();
+    await flush();
+    t.truthy($('.view-conversation'), 'back to the session');
+    t.truthy($('.view-composer'));
+    await dom.close();
+  },
+);
+
+test.serial(
+  'Settings: This session is listed once a session.settings section shows something',
+  async t => {
+    /** @type {(value: boolean) => void} */
+    let reveal = () => {};
+    const Late = () => {
+      const [shown, setShown] = useState(false);
+      reveal = setShown;
+      return shown ? h('section', { class: 'late-section' }, 'late') : null;
+    };
+    const features = [
+      { id: 'alpha', slot: 'app.panel', label: 'Alpha', component: () => 'A' },
+      { id: 'late', slot: 'session.settings', component: Late },
+    ];
+    const { dom, controller, powers } = await setup({ features });
+    const $ = (/** @type {string} */ selector) =>
+      dom.document.querySelector(selector);
+    await controller.attach(powers);
+    await controller.selectSession('s1');
+    await flush();
+    controller.openSettings();
+    await flush();
+    t.is($('button[data-section="session"]'), null, 'nothing to show yet');
+    t.is($('.thix-settings')?.getAttribute('data-selected'), 'alpha');
+    reveal(true);
+    await flush();
+    t.is($('button[data-section="session"]')?.textContent, 'This session');
+    t.is(
+      $('.thix-settings')?.getAttribute('data-selected'),
+      'session',
+      'the session section is the default',
+    );
+    t.false($('.thix-settings-section[data-section="session"]').hidden);
+    t.is($('.late-section')?.textContent, 'late');
+    $('button[data-section="alpha"]').click();
+    await flush();
+    t.true($('.thix-settings-section[data-section="session"]').hidden);
+    $('button[data-section="session"]').click();
+    await flush();
+    t.deepEqual(controller.getState().settings, { section: 'session' });
+    reveal(false);
+    await flush();
+    t.is($('button[data-section="session"]'), null);
+    t.is(
+      $('.thix-settings')?.getAttribute('data-selected'),
+      'alpha',
+      'an emptied section falls back to the first listed',
+    );
+    await controller.selectSession('s1');
+    t.is(controller.getState().settings, undefined, 'navigation closes it');
     await dom.close();
   },
 );
