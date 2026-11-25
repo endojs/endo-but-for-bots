@@ -32,12 +32,18 @@ export const runEffectsPromptly = () => {
 export const secretFailed = code => `Secret operation failed: "${code}"`;
 
 /**
- * @param {{ pageEntries?: number, accounts?: any, poolBackends?: any[] }} [options]
+ * @param {{ pageEntries?: number, accounts?: any, poolBackends?: any[], poolProviders?: Map<any, string>, checks?: Map<string, { ok: boolean, code?: string }>, onAdded?: (pool: any, label: string) => void }} [options]
+ *   `poolProviders`: each pool backend's provider (default `claude`);
+ *   `checks`: the credential check's answer by Secret label (default ok);
+ *   `onAdded`: told after each `addPoolMember` (to publish the new view)
  */
 export const makeFakeSecrets = ({
   pageEntries = 64,
   accounts,
   poolBackends = [],
+  poolProviders = new Map(),
+  checks = new Map(),
+  onAdded = () => {},
 } = {}) => {
   /** @type {any[][]} */
   const calls = [];
@@ -183,8 +189,86 @@ export const makeFakeSecrets = ({
     },
   });
 
+  /**
+   * @typedef {{ member: any, label: string, provider: string,
+   *   secret: any, state: 'active' | 'retired' }} FakeMember
+   */
+  /** @type {FakeMember[]} */
+  const members = [];
+  /** @type {Map<any, any[]>} */
+  const poolMembers = new Map(poolBackends.map(pool => [pool, []]));
+  const providerOf = (/** @type {any} */ pool) =>
+    poolProviders.get(pool) ?? 'claude';
   const subscriptions = Far('SubscriptionsAdmin', {
     listPools: () => harden({ pools: poolBackends }),
+    listMembers: () => {
+      calls.push(['SubscriptionsAdmin', 'listMembers']);
+      return harden({ members: members.map(entry => entry.member) });
+    },
+    /** @param {any} pool */
+    describePool: pool =>
+      harden({
+        kind: `${providerOf(pool)}-pool`,
+        label: 'pool',
+        members: [...(poolMembers.get(pool) ?? [])],
+        state: 'active',
+      }),
+    /**
+     * @param {any} pool
+     * @param {any} secret
+     */
+    checkCredential: (pool, secret) => {
+      const record = recordOf(secret);
+      calls.push(['SubscriptionsAdmin', 'checkCredential', record.label]);
+      if (!poolMembers.has(pool)) throw Error('not a pool');
+      if (record.state === 'revoked')
+        return harden({ ok: false, code: 'REVOKED' });
+      return harden(checks.get(record.label) ?? { ok: true });
+    },
+    /** @param {{ provider: string, label: string, credential: any }} spec */
+    makeMember: ({ provider, label, credential }) => {
+      recordOf(credential);
+      calls.push(['SubscriptionsAdmin', 'makeMember', { provider, label }]);
+      const same = members.find(entry => entry.label === label);
+      if (same) {
+        if (same.secret !== credential) throw Error('member conflict');
+        return same.member;
+      }
+      /** @type {FakeMember} */
+      const entry = {
+        member: undefined,
+        label,
+        provider,
+        secret: credential,
+        state: 'active',
+      };
+      entry.member = Far('PoolMember', {
+        describe: () =>
+          harden({ label, provider, weight: 1, state: entry.state }),
+        retire: () => {
+          calls.push(['PoolMember', 'retire', label]);
+          entry.state = 'retired';
+        },
+      });
+      members.push(entry);
+      return entry.member;
+    },
+    /**
+     * @param {any} pool
+     * @param {any} member
+     */
+    addPoolMember: (pool, member) => {
+      const entry = members.find(row => row.member === member);
+      calls.push(['SubscriptionsAdmin', 'addPoolMember', entry?.label]);
+      const list = poolMembers.get(pool);
+      if (!list || !entry) throw Error('unknown');
+      if (list.includes(member))
+        throw Error('This member is already in the pool');
+      const check = checks.get(recordOf(entry.secret).label);
+      if (check && !check.ok) throw Error(`check failed: ${check.code}`);
+      list.push(member);
+      onAdded(pool, entry.label);
+    },
     accounts: () => {
       calls.push(['SubscriptionsAdmin', 'accounts']);
       if (!accounts) throw Error('no accounts in this fake');
@@ -240,6 +324,8 @@ export const makeFakeSecrets = ({
       if (value !== undefined) writer.replace(record.secret, value);
       return record;
     },
+    members,
+    poolMembers,
     /** @param {string} op */
     callsOf: op => calls.filter(call => `${call[0]}.${call[1]}` === op),
   };

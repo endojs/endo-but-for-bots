@@ -4,10 +4,13 @@
  * 9.1; W4.7) refreshes every configured subscription on opening. Each pool
  * shows its combined history and confirmed weekly resets. Individual
  * subscriptions disclose their plan, windows, status, balances and graphs.
+ * Each pool offers "Add subscription" (`AddMember.js`); an add refreshes
+ * that pool, so its list and graphs follow.
  */
 import { h } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 
+import { AddMember } from './AddMember.js';
 import { accountsFeed } from './feed.js';
 import { PoolQuotaHistory } from './PoolQuotaHistory.js';
 
@@ -152,6 +155,12 @@ export const SubscriptionsPanel = ({ context, now = Date.now }) => {
           refresh(pool.backend),
         ),
       ),
+      feed &&
+        h(AddMember, {
+          feed,
+          pool,
+          call: context.call,
+        }),
       pool.members.length === 0
         ? h('p', { class: 'm4-note' }, subscriptionsTexts.noMembers)
         : feed &&

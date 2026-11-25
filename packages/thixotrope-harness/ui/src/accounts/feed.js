@@ -22,7 +22,10 @@
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
-import { subscriptionTexts } from '../../../guest/lib/subscription-texts.js';
+import {
+  subscriptionTextOf,
+  subscriptionTexts,
+} from '../../../guest/lib/subscription-texts.js';
 
 /** Re-watches in a row with no batch in between before the feed gives up. */
 export const REWATCH_LIMIT = 3;
@@ -40,7 +43,24 @@ export const REWATCH_LIMIT = 3;
  * @property {(backend: any, offset?: number) => Promise<any>} history one
  *   `PoolHistory` page of a pool (observed quota records; `next` names the
  *   following page), or undefined; asked on demand, read-only
+ * @property {() => Promise<any[]>} activeSecrets the active entries of the
+ *   Secrets catalogue (`{ secret, label, description, ... }`; every page,
+ *   at most `maxMembers`; never a value)
+ * @property {(backend: any, secret: any) => Promise<{ ok: boolean, code?: string }>} checkCredential
+ *   `SubscriptionsAdmin.checkCredential`: ok or a code, never the value
+ * @property {(backend: any, member: { secret: any, label: string, provider: string }) => Promise<void>} addSubscription
+ *   check, `makeMember`, `addPoolMember`, then refresh that pool (a
+ *   failed check makes no member)
+ * @property {(backend: any, member: any) => Promise<void>} addMember `addPoolMember`
+ *   of a member already made (one left in no pool), then refresh
+ * @property {(provider: string) => Promise<{ member: any, label: string }[]>} unpooledMembers
+ *   active members of `provider` in no pool (m4-interfaces 10: what a
+ *   break between `makeMember` and `addPoolMember` leaves)
+ * @property {(member: any) => Promise<void>} retireMember `PoolMember.retire()`
  */
+
+/** At most this many catalogue or member pages are read for the form. */
+const MAX_PAGES = 4;
 
 /**
  * @param {unknown} error
@@ -60,10 +80,13 @@ const makeFeed = powers => {
   let accountsP;
   /** @type {any} */
   let subscriptions;
+  /** @type {any} */
+  let secretsAdmin;
   const accounts = () => {
     if (!accountsP) {
       const made = (async () => {
         const secrets = await E(powers.operator).getSecrets();
+        secretsAdmin = secrets;
         subscriptions = await E(secrets).subscriptions();
         return E(subscriptions).accounts();
       })();
@@ -211,6 +234,38 @@ const makeFeed = powers => {
     return pending;
   };
 
+  /** The `SubscriptionsAdmin` (after the first `accounts()`). */
+  const admin = async () => {
+    await accounts();
+    return subscriptions;
+  };
+
+  /**
+   * Every page of a paged list, at most `MAX_PAGES`.
+   * @param {(cursor?: string) => Promise<any>} read
+   * @param {string} field
+   */
+  const allPages = async (read, field) => {
+    /** @type {any[]} */
+    const all = [];
+    /** @type {string | undefined} */
+    let cursor;
+    for (let page = 0; page < MAX_PAGES; page += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const answer = await read(cursor);
+      all.push(...answer[field]);
+      cursor = answer.next;
+      if (cursor === undefined) break;
+    }
+    return all;
+  };
+
+  /** @param {any} backend */
+  const added = async backend => {
+    // The adapter took `poolsChanged`: this reads the pool's new members.
+    await refresh(backend);
+  };
+
   return harden({
     state: () => ({ view, error }),
     subscribe: listener => {
@@ -232,6 +287,64 @@ const makeFeed = powers => {
       return offset === 0
         ? E(target).history(backend)
         : E(target).history(backend, offset);
+    },
+    activeSecrets: async () => {
+      await accounts();
+      const entries = await allPages(
+        cursor =>
+          cursor === undefined
+            ? E(secretsAdmin).catalog()
+            : E(secretsAdmin).catalog(cursor),
+        'entries',
+      );
+      return entries.filter(entry => entry.state === 'active');
+    },
+    checkCredential: async (backend, secret) =>
+      E(await admin()).checkCredential(backend, secret),
+    addSubscription: async (backend, { secret, label, provider }) => {
+      const target = await admin();
+      const check = await E(target).checkCredential(backend, secret);
+      if (!check.ok)
+        throw Error(subscriptionTextOf.credentialCheckFailed(check.code));
+      const member = await E(target).makeMember(
+        harden({ provider, label, credential: secret }),
+      );
+      await E(target).addPoolMember(backend, member);
+      await added(backend);
+    },
+    addMember: async (backend, member) => {
+      await E(await admin()).addPoolMember(backend, member);
+      await added(backend);
+    },
+    unpooledMembers: async provider => {
+      const target = await admin();
+      const [members, { pools }] = await Promise.all([
+        allPages(
+          cursor =>
+            cursor === undefined
+              ? E(target).listMembers()
+              : E(target).listMembers(cursor),
+          'members',
+        ),
+        E(target).listPools(),
+      ]);
+      const described = await Promise.all(
+        pools.map((/** @type {any} */ pool) => E(target).describePool(pool)),
+      );
+      const pooled = new Set(described.flatMap(pool => pool.members));
+      const infos = await Promise.all(
+        members
+          .filter(member => !pooled.has(member))
+          .map(async member => ({ member, info: await E(member).describe() })),
+      );
+      return infos
+        .filter(
+          ({ info }) => info.state === 'active' && info.provider === provider,
+        )
+        .map(({ member, info }) => harden({ member, label: info.label }));
+    },
+    retireMember: async member => {
+      await E(member).retire();
     },
   });
 };

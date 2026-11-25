@@ -22,7 +22,11 @@ import {
   formatSpan,
   provenanceText,
 } from '../../ui/src/accounts/labels.js';
-import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
+import { addMemberTexts } from '../../ui/src/accounts/AddMember.js';
+import {
+  subscriptionTextOf,
+  subscriptionTexts,
+} from '../../guest/lib/subscription-texts.js';
 import { makeFakePowers, makeTestDom } from './_m3-fake-powers.js';
 import {
   makeFakeAccounts,
@@ -50,11 +54,12 @@ const iso = (/** @type {number} */ ms) => new Date(ms).toISOString();
 const poolOf = (backend, label, members) =>
   harden({ backend, kind: 'claude-pool', label, selection: 'auto', members });
 
-/** @param {{ cold?: boolean, initiallyEmpty?: boolean, beforeRefresh?: () => Promise<void> }} [options] */
+/** @param {{ cold?: boolean, initiallyEmpty?: boolean, beforeRefresh?: () => Promise<void>, checks?: Map<string, any> }} [options] */
 const setup = async ({
   cold = false,
   initiallyEmpty = false,
   beforeRefresh,
+  checks,
 } = {}) => {
   runEffectsPromptly();
   const dom = makeTestDom();
@@ -92,6 +97,19 @@ const setup = async ({
   const secrets = makeFakeSecrets({
     accounts: accounts.accounts,
     poolBackends: initiallyEmpty ? [] : [poolBackend],
+    checks,
+    // The adapter's view after `poolsChanged`: the pool with the new member.
+    onAdded: (_pool, label) =>
+      accounts.publish(
+        accounts
+          .view()
+          .pools.map(pool =>
+            poolOf(pool.backend, pool.label, [
+              ...pool.members,
+              memberAccount({ label }),
+            ]),
+          ),
+      ),
   });
   const features = [...accountFeatures];
   const { powers, control } = makeFakePowers({
@@ -133,6 +151,7 @@ const setup = async ({
     accounts,
     poolBackend,
     members,
+    secrets,
     nowMs,
     $,
     $$,
@@ -511,5 +530,166 @@ test.serial(
     const context = /** @type {any} */ ({ controller: {}, powers });
     t.is(await activeSessionOf(context, 'k1'), control.session('k1'));
     t.is(await activeSessionOf(context, undefined), undefined);
+  },
+);
+
+test.serial(
+  'Add subscription: choose an active secret, check it in plain words, add it; the pool refreshes; no secret content shown',
+  async t => {
+    const s = await setup({
+      checks: new Map([['bad-login', { ok: false, code: 'WRONG_PROVIDER' }]]),
+    });
+    // Fake values only; the page must never show them.
+    const goodValue = ['fake', 'good', 'credential'].join('-');
+    const badValue = ['fake', 'other', 'credential'].join('-');
+    s.secrets.add('team-login', goodValue);
+    s.secrets.add('bad-login', badValue);
+    const gone = s.secrets.add('old-login', 'fake-revoked');
+    await gone.secret.revoke();
+    s.controller.openPanel('accounts');
+    await flush();
+    const panel = () => s.$('[data-panel="accounts"] .m4-subscriptions');
+    await s.click(s.$('[data-action="add-subscription"]'));
+    const form = () => s.$('.m4-add-member.open');
+    t.truthy(form());
+    t.true(form().textContent.includes(addMemberTexts.provider('claude')));
+    const select = () => form().querySelector('select[name="secret"]');
+    const options = [...select().querySelectorAll('option')].map(
+      o => o.textContent,
+    );
+    t.is(options.length, 3, 'the placeholder and the two active secrets');
+    t.false(
+      options.some(text => text.includes('old-login')),
+      'revoked: not offered',
+    );
+
+    // Nothing chosen: Add refuses inline, with no call.
+    await s.click(form().querySelector('[data-action="add-member"]'));
+    t.is(
+      form().querySelector('[role="alert"]').textContent,
+      addMemberTexts.needSecret,
+    );
+    t.is(s.secrets.callsOf('SubscriptionsAdmin.makeMember').length, 0);
+
+    /** @param {number} index */
+    const choose = async index => {
+      select().value = String(index);
+      select().dispatchEvent(
+        new s.dom.window.Event('change', { bubbles: true }),
+      );
+      await flush();
+    };
+    /** @param {string} text */
+    const typeLabel = async text => {
+      const input = form().querySelector('input[name="label"]');
+      input.value = text;
+      input.dispatchEvent(new s.dom.window.Event('input', { bubbles: true }));
+      await flush();
+    };
+
+    // The wrong-provider secret: the check says so, Add is held back.
+    await choose(1);
+    t.is(form().querySelector('input[name="label"]').value, 'bad-login');
+    await s.click(form().querySelector('[data-action="check-credential"]'));
+    const failed = form().querySelector('[data-check]');
+    t.is(failed.dataset.check, 'WRONG_PROVIDER');
+    t.is(
+      failed.textContent,
+      subscriptionTextOf.credentialCheckFailed('WRONG_PROVIDER'),
+    );
+    t.true(form().querySelector('[data-action="add-member"]').disabled);
+
+    // The good one: checked ok, then added under the typed label.
+    await choose(0);
+    t.is(
+      form().querySelector('[data-check]'),
+      null,
+      'a new choice clears the check',
+    );
+    await typeLabel('');
+    await typeLabel('team member');
+    await s.click(form().querySelector('[data-action="check-credential"]'));
+    t.is(
+      form().querySelector('[data-check]').textContent,
+      subscriptionTexts.credentialReady,
+    );
+    const refreshesBefore = s.accounts.callsOf('Accounts.refresh').length;
+    await s.click(form().querySelector('[data-action="add-member"]'));
+    t.deepEqual(
+      s.secrets.callsOf('SubscriptionsAdmin.makeMember').map(c => c[2]),
+      [{ provider: 'claude', label: 'team member' }],
+    );
+    t.deepEqual(
+      s.secrets.callsOf('SubscriptionsAdmin.addPoolMember').map(c => c[2]),
+      ['team member'],
+    );
+    t.is(s.secrets.poolMembers.get(s.poolBackend)?.length, 1);
+    // Each add asked the admin first, passing the Secret presence itself.
+    t.deepEqual(
+      s.secrets.callsOf('SubscriptionsAdmin.checkCredential').map(c => c[2]),
+      ['bad-login', 'team-login', 'team-login'],
+    );
+    t.true(form().textContent.includes(addMemberTexts.added));
+    t.true(
+      s.accounts.callsOf('Accounts.refresh').length > refreshesBefore,
+      'the pool was refreshed after the add',
+    );
+    t.true(
+      panel().textContent.includes('team member'),
+      'the pool shows the new member',
+    );
+    for (const value of [goodValue, badValue, 'fake-revoked'])
+      t.false(
+        s.dom.document.body.innerHTML.includes(value),
+        'no secret content',
+      );
+  },
+);
+
+test.serial(
+  'Add subscription: a member left in no pool is shown; it can be added or retired; a refused add is shown inline',
+  async t => {
+    const s = await setup();
+    s.secrets.add('kept', 'fake-a');
+    s.secrets.add('dropped', 'fake-b');
+    const subs = await s.secrets.admin.subscriptions();
+    // makeMember committed, addPoolMember never ran (a break between them).
+    const [kept, dropped] = ['kept', 'dropped'].map(label =>
+      subs.makeMember({
+        provider: 'claude',
+        label,
+        credential: s.secrets.records.find(r => r.label === label)?.secret,
+      }),
+    );
+    subs.makeMember({
+      provider: 'codex',
+      label: 'elsewhere',
+      credential: s.secrets.records[0].secret,
+    });
+    s.controller.openPanel('accounts');
+    await flush();
+    await s.click(s.$('[data-action="add-subscription"]'));
+    const rows = () =>
+      s.$$('.m4-unpooled [data-unpooled]').map(row => row.dataset.unpooled);
+    t.deepEqual(rows(), ['kept', 'dropped'], 'only this provider, in no pool');
+    await s.click(
+      s.$('[data-unpooled="dropped"] [data-action="retire-member"]'),
+    );
+    t.deepEqual(rows(), ['kept']);
+    await s.click(s.$('[data-unpooled="kept"] [data-action="add-existing"]'));
+    t.deepEqual(rows(), []);
+    t.deepEqual(s.secrets.poolMembers.get(s.poolBackend), [kept]);
+    t.not(kept, dropped);
+    // The same label and Secret again: the manager answers the member,
+    // the pool refuses it; the text shows inline.
+    const select = s.$('.m4-add-member.open select[name="secret"]');
+    select.value = '0';
+    select.dispatchEvent(new s.dom.window.Event('change', { bubbles: true }));
+    await flush();
+    await s.click(s.$('.m4-add-member.open [data-action="add-member"]'));
+    t.is(
+      s.$('.m4-add-member.open [role="alert"]').textContent,
+      'This member is already in the pool',
+    );
   },
 );

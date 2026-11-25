@@ -275,3 +275,43 @@
   padding: 0.1rem 0.5rem 0.1rem 0;
   text-align: left;
 }
+.m4-add-member {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+.m4-add-member.open {
+  max-width: 36rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 0.5rem;
+  background: var(--fl-surface);
+}
+.m4-add-member label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: 100%;
+  font-size: 0.85rem;
+}
+.m4-add-member .m4-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.m4-unpooled h4 {
+  margin: 0.3rem 0 0.2rem;
+  font-size: 0.85rem;
+}
+.m4-unpooled ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.m4-unpooled li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  overflow-wrap: anywhere;
+}
