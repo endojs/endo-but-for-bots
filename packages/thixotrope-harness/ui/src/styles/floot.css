@@ -1196,18 +1196,47 @@
   opacity: 0.6;
 }
 
-/* Keyboard focus: one ring for buttons, inputs, links and the other
-   focusable controls. Its specificity (0,2,1) puts it over the
-   `outline: none` (at most 0,2,0) that inputs above set for pointer focus. */
+/* Focus. Text fields (textareas, and inputs one types into) match
+   :focus-visible on a click too, so they get one treatment, by any means
+   of focus: an accent border and no outline, as the composer has always
+   had. Everything else (links, buttons, selects, summaries, checkboxes,
+   sliders, file pickers, [tabindex]) gets the ring on keyboard focus only.
+   Both have specificity (0,2,1), over the `outline: none` (at most 0,2,0)
+   that controls above set for pointer focus. */
+:is(
+  textarea,
+  input:not(
+    [type='checkbox'],
+    [type='radio'],
+    [type='range'],
+    [type='file'],
+    [type='color'],
+    [type='button'],
+    [type='submit'],
+    [type='reset'],
+    [type='image']
+  )
+):focus {
+  outline: none;
+  border-color: var(--fl-accent);
+}
 :is(
   a[href],
   button,
-  input,
   select,
-  textarea,
   summary,
-  [tabindex],
-  [contenteditable]
+  input:is(
+    [type='checkbox'],
+    [type='radio'],
+    [type='range'],
+    [type='file'],
+    [type='color'],
+    [type='button'],
+    [type='submit'],
+    [type='reset'],
+    [type='image']
+  ),
+  [tabindex]:not(input, textarea)
 ):focus-visible {
   outline: var(--fl-focus-ring);
   outline-offset: 2px;
