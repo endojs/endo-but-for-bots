@@ -70,12 +70,14 @@ const git = (cwd, args) =>
   }).trim();
 
 /**
- * 53,600 bytes of sha-256 lines, which compress to about half: a bundle of
- * about 42,000 base64 characters, so 17 pieces of 2,500. The child runs it in
- * its checkout and the test in its own, so the commit is the same.
+ * 54,400 bytes of 64-hex-digit lines, which compress to about half: a bundle
+ * of about 42,000 base64 characters, so 17 pieces of 2,500. The child runs it
+ * in its checkout and the test in its own, so the commit is the same. The
+ * lines come from awk (an LCG below 2**53, exact in every awk), not from
+ * sha256sum, which is not on every shell's PATH (macOS keeps it in /sbin).
  */
 const makeBig =
-  'i=0; while [ $i -lt 800 ]; do printf %s $i | sha256sum; i=$((i + 1)); done > big';
+  'awk \'BEGIN { x = 1; for (i = 0; i < 800; i++) { s = ""; for (j = 0; j < 8; j++) { x = (x * 69069 + 1) % 2147483648; s = s sprintf("%08x", x) } print s "  -" } }\' > big';
 
 /**
  * The child's commit command: its files, then a commit with fixed dates.
