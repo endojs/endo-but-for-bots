@@ -53,16 +53,21 @@
 .thix-session-inventory[data-expanded='true'] .thix-inventory-sheet {
   transform: translateX(0);
 }
-/* The same bar as .floot-sidebar-head and .floot-header (floot.css). */
+/* The same bar as .floot-sidebar-head and .floot-header (floot.css).
+   A block, not a flex box, so text-overflow can cut its text; the line
+   height centres it in the icon-button row the other bars have. */
 .thix-inventory-title {
-  display: flex;
-  align-items: center;
+  display: block;
   box-sizing: border-box;
-  min-height: var(--fl-bar-height);
+  height: var(--fl-bar-height);
+  line-height: var(--fl-icon-btn);
   font-size: 0.95rem;
   margin: 0;
   padding: var(--fl-bar-pad-y) var(--fl-bar-pad-x);
   border-bottom: 1px solid var(--fl-border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 @media (max-width: 640px) {
   .thix-session-inventory {
@@ -172,21 +177,28 @@
   text-align: start;
   font: inherit;
   text-decoration: underline;
-  overflow-wrap: anywhere;
 }
+/* One line in the fixed-height header: every step shrinks to an ellipsis
+   (its title holds the full text), the open session last. A step keeps
+   at least a few characters so it stays a target. */
 .thix-session-path {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: baseline;
   flex: 1;
   min-width: 0;
-  gap: 0.15rem 0.4rem;
+  overflow: hidden;
+  gap: 0.4rem;
 }
 .thix-session-path > * {
-  max-width: 100%;
+  flex: 0 1 auto;
+  min-width: 3em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.thix-session-path > :last-child {
+  flex-shrink: 0.25;
 }
 .thix-session-path > * + *::before {
   content: '›';

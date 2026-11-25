@@ -20,12 +20,14 @@ body {
   display: flex;
   flex-direction: column;
 }
-.thix-app .floot-header {
-  flex-wrap: nowrap;
-}
 .thix-app .floot-header-title,
 .thix-app .floot-header-title-input {
   flex-basis: 8rem;
+}
+/* The header's chips and panel buttons keep their size; the title or the
+   session path beside them is what shrinks. */
+.thix-app .floot-header > .thix-chips {
+  flex: none;
 }
 .thix-inventory-toggle {
   width: auto;

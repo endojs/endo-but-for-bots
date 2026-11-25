@@ -91,14 +91,19 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.5rem;
   box-sizing: border-box;
-  min-height: var(--fl-bar-height);
+  height: var(--fl-bar-height);
   padding: var(--fl-bar-pad-y) var(--fl-bar-pad-x);
   border-bottom: 1px solid var(--fl-border);
 }
 .floot-sidebar-title {
+  min-width: 0;
   font-size: 0.95rem;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .floot-new-btn {
   flex: none;
@@ -261,7 +266,12 @@
   align-items: center;
   gap: 0.5rem;
   box-sizing: border-box;
-  min-height: var(--fl-bar-height);
+  /* Fixed, like the sidebar head and the inventory title: one line that
+     never wraps; long text in it is cut with an ellipsis and has its full
+     form as a title. */
+  height: var(--fl-bar-height);
+  flex-wrap: nowrap;
+  overflow: hidden;
   padding: var(--fl-bar-pad-y) var(--fl-bar-pad-x);
   background: var(--fl-surface);
   border-bottom: 1px solid var(--fl-border);
