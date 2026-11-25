@@ -140,7 +140,8 @@ const valueBecomes = async (locator, value) => {
       await pageB.goto(url);
       /** @param {any} p */
       const openPresets = async p => {
-        await p.locator('button[data-panel="presets"]').click();
+        await p.locator('button[aria-label="Settings"]').click();
+        await p.locator('button[data-section="presets"]').click();
         await p
           .locator('.thix-preset-item', { hasText: /general/i })
           .first()
@@ -213,7 +214,7 @@ const valueBecomes = async (locator, value) => {
         'nothing was sent',
       );
       await page.locator('button[name="discard"]').click();
-      await page.locator('button[data-panel="presets"]').click(); // close
+      await page.locator('button[aria-label="Settings"]').click(); // close
 
       // Mentions: @ lists inventory labels; Send attaches the object.
       await sessionItem(mentionsSession.key).click();

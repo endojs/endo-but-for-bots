@@ -327,12 +327,13 @@ run(
       .click();
     const chip = page.locator(`.m4-chips[data-pool="${label}"] .m4-chip`);
     await chip.waitFor();
-    const panelButton = page.locator('button[data-panel="accounts"]');
+    const settingsButton = page.locator('button[aria-label="Settings"]');
     const usageReads = () =>
       server.requests().filter(r => r.path === '/backend-api/wham/usage')
         .length;
     const beforeOpen = usageReads();
-    await panelButton.click();
+    await settingsButton.click();
+    await page.locator('button[data-section="accounts"]').click();
     const pool = page.locator('.m4-subscriptions .m4-pool', { hasText: label });
     const refresh = pool.locator('button[data-action="refresh-pool"]');
     await waitFor(
@@ -354,7 +355,7 @@ run(
     );
     await pool.locator('details.m4-individual-subscriptions > summary').click();
     await pool.locator('.m4-account[data-provenance="observed"]').waitFor();
-    await panelButton.click();
+    await settingsButton.click(); // close
     await waitFor(
       async () => {
         const text = await chip.innerText();
@@ -551,7 +552,8 @@ run('[browser] M4 acceptance 14, 15 (browser part) and rule 4a', async t => {
     const usageReads = () =>
       server.requests().filter(r => r.path === '/api/oauth/usage').length;
     const beforeOpen = usageReads();
-    await page.locator('button[data-panel="accounts"]').click();
+    await page.locator('button[aria-label="Settings"]').click();
+    await page.locator('button[data-section="accounts"]').click();
     const pool = page.locator('.m4-subscriptions .m4-pool', {
       hasText: POOL,
     });
@@ -573,11 +575,12 @@ run('[browser] M4 acceptance 14, 15 (browser part) and rule 4a', async t => {
       await pool.locator('.m4-account[data-provenance="observed"]').count(),
       2,
     );
-    await page.locator('button[data-panel="accounts"]').click(); // close
+    await page.locator('button[aria-label="Settings"]').click(); // close
     mark('subscriptions');
 
     // ---- Secrets panel ----
-    await page.locator('button[data-panel="secrets"]').click();
+    await page.locator('button[aria-label="Settings"]').click();
+    await page.locator('button[data-section="secrets"]').click();
     const panel = page.locator('.m4-secrets');
     await panel.waitFor();
     const values = {
