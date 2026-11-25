@@ -54,6 +54,13 @@ export const Header = ({
     refocus.current = false;
     titleRef.current.focus();
   });
+  // Opening the field moves focus into it: `autofocus` is ignored for an
+  // element inserted while another one (the title button) has focus.
+  const inputRef = useRef(/** @type {any} */ (null));
+  const isEditing = editing !== null;
+  useLayoutEffect(() => {
+    if (isEditing) inputRef.current?.focus();
+  }, [isEditing]);
   const view = state.view;
   const title = view ? view.info.title : uiTexts.pageTitle;
   const commit = () => {
@@ -134,12 +141,13 @@ export const Header = ({
       : editing !== null
         ? h('input', {
             class: 'floot-header-title-input',
+            ref: inputRef,
             value: editing,
             autofocus: true,
             /** @param {any} event */
             onInput: event => setEditing(event.target.value),
-            /** @param {any} event */
             'aria-label': uiTextOf.renameSession(title),
+            /** @param {any} event */
             onKeyDown: event => {
               if (event.key === 'Enter') {
                 refocus.current = true;

@@ -68,6 +68,8 @@ export const Sidebar = ({ state, controller, open }) => {
   /** @param {any} row */
   const beginRename = row => {
     editingRef.current = row.key;
+    // The field's `autofocus` is ignored while Rename has focus.
+    focusNext.current = `[data-key="${row.key}"] .floot-session-title-input`;
     setConfirming(null);
     setEditing(row.key);
     setDraft(row.title);
