@@ -39,8 +39,8 @@
  * factory's closed record answers false: the choice is made here
  * (`chooseModel`, the factory's rule against this session's own backend)
  * and the spawn carries it as the child's `subagent-model` endowment
- * (D-M9-27). An answer that cannot be read (no guard) is unknown, and the
- * spawn is sent with the fields as it is.
+ * (D-M9-27). An answer that cannot be read (no guard) is unknown and is
+ * treated the same way, since the endowment works on every factory.
  *
  * Nothing here is exported with the session (D-M9-21): an imported row has
  * a `Delegation` of its own and no children. Guest rules.

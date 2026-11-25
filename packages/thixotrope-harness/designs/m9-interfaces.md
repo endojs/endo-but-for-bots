@@ -379,8 +379,8 @@ and spawns in flight across a restart are valid as they are. A factory installed
 has the closed `SpawnRequest` without the fields. The session program reads that from the
 `Delegation`'s own interface guard (`__getInterfaceGuard__`, matching a request naming both against
 the `spawn` argument pattern), once per incarnation and only when a spawn names a field: on such a
-factory the choice travels as an attachment (D-M9-27). A guard that cannot be read leaves the spawn
-to the factory. No probe spawn is sent. The rule itself is `guest/lib/subagent-model.js`
+factory, or when the guard cannot be read, the choice travels as an attachment (D-M9-27), which
+every factory passes through. No probe spawn is sent. The rule itself is `guest/lib/subagent-model.js`
 `chooseSubagentModel`, which the factory and the session program share.
 
 **D-M9-27. On a factory installed before D-M9-25 the parent sends the choice as an attachment.**

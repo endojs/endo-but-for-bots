@@ -786,18 +786,4 @@ test('spawnSubagent on a current factory: its guard admits the options and the d
     spawnTool.describe(undefined, undefined, runtime).parameters,
     /reasoningEffort/,
   );
-  // A Delegation without a readable guard is unknown: the spawn is sent.
-  const bare = Far('Delegation', {
-    spawn: async () =>
-      harden({ handle: Far('SubagentHandle', {}), title: 'parent / x' }),
-    children: () => harden([]),
-  });
-  const other = setup({ delegation: bare });
-  t.deepEqual(
-    await outcome(
-      other.call(spawnTool, { name: 'x', modelId: 'claude-opus-5-5' }).result,
-    ),
-    ['ok', mailTextOf.spawned('x')],
-  );
-  t.is(other.part.spawnOptions(), undefined);
 });

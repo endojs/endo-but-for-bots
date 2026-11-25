@@ -112,8 +112,8 @@ const makeChild = (request, parentConfig) => {
   return { made, rounds, seeded };
 };
 
-/** @param {{ projectSource?: any }} [options] */
-const setup = ({ projectSource } = {}) => {
+/** @param {{ projectSource?: any, guarded?: boolean }} [options] */
+const setup = ({ projectSource, guarded = true } = {}) => {
   const parentConfig = harden({
     modelId: 'claude-fable-5-2',
     reasoningEffort: 'medium',
@@ -123,8 +123,8 @@ const setup = ({ projectSource } = {}) => {
   const spawns = [];
   /** @type {Map<string, ReturnType<typeof makeChild>>} */
   const children = new Map();
-  const delegation = makeExo('Delegation', olderDelegationGuard, {
-    spawn: async request => {
+  const methods = {
+    spawn: async (/** @type {any} */ request) => {
       spawns.push(request);
       const child = makeChild(request, parentConfig);
       children.set(request.name, child);
@@ -134,7 +134,11 @@ const setup = ({ projectSource } = {}) => {
       });
     },
     children: () => harden([]),
-  });
+  };
+  // `guarded: false`: a Delegation whose guard cannot be read.
+  const delegation = guarded
+    ? makeExo('Delegation', olderDelegationGuard, /** @type {any} */ (methods))
+    : Far('Delegation', methods);
   /** @type {any[]} */
   const catalogueReads = [];
   const backend = Far('Backend', {
@@ -329,4 +333,17 @@ test('a legacy project source goes to every child, which opens its checkout from
   const without = setup();
   await without.spawn({ name: 'plain' });
   t.deepEqual(without.spawns[0].attachments, [], 'no source, none sent');
+});
+
+test('a factory whose guard cannot be read gets the choice as the endowment, not the fields', async t => {
+  const s = setup({ guarded: false });
+  await s.spawn({ name: 'impl', modelId: 'claude-opus-5-5' });
+  t.is(s.part.spawnOptions(), undefined);
+  t.false('modelId' in s.spawns[0]);
+  t.deepEqual(
+    s.spawns[0].attachments.map((/** @type {any} */ a) => a.label),
+    [subagentModelLabel],
+  );
+  const { round } = await s.firstRound('impl');
+  t.is(round.options.modelId, 'claude-opus-5-5');
 });

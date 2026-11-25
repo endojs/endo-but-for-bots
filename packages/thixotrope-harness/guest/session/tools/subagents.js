@@ -368,10 +368,12 @@ const spawnEntry = harden({
       const attached = attachmentsOf(values.get('attachments'), context);
       if ('outcome' in attached) return attached.outcome;
       const chosen = modelId !== undefined || reasoningEffort !== undefined;
-      // D-M9-27: an older factory's closed SpawnRequest takes neither
-      // option (its guard says so, read once): the choice is checked here
-      // and travels as the child's `subagentModelLabel` endowment.
-      const direct = !chosen || (await part.whenSpawnOptions()) !== false;
+      // D-M9-27: the fields go to the factory only when its guard, read
+      // once, says spawn takes them. Otherwise (an older factory's closed
+      // SpawnRequest, or a guard that cannot be read) the choice is
+      // checked here and travels as the child's `subagentModelLabel`
+      // endowment, which every factory passes through.
+      const direct = !chosen || (await part.whenSpawnOptions()) === true;
       let { attachments } = attached;
       // D-M9-28: the legacy project source goes to every child, which
       // opens its own checkout of the same revision from it.
