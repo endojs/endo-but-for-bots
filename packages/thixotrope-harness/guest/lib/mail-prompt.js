@@ -74,32 +74,21 @@ helpers when finished.`;
  * system text is the session program's and arrives with a program load.
  * It reconciles the Delegation section's "Do work you can simply do
  * yourself" with a preset that delegates everything: a subagent does its
- * task itself. Its heading is what preset texts key on
- * (`scripts/project-preset.mjs` `subagentRoleHeading`).
+ * task itself. It limits nothing else: whether a subagent may spawn its own
+ * is its preset's to say (the project preset's instructions do). It is not
+ * scoped to presets that set up the roles: the session program cannot see
+ * a preset's instructions (the factory drops them from
+ * `SessionConfig.preset`, and the composed prompt that holds them is
+ * usually staged), and what it says is true of every subagent.
  */
-/**
- * The section's heading. A subagent gets the section only when its
- * preset's instructions name this heading (they set up the roles the
- * section settles: `scripts/project-preset.mjs`); other presets' subagents
- * keep the Delegation section's own advice (D-M9-26).
- */
+/** The section's heading, which preset texts key on (`scripts/project-preset.mjs`). */
 export const subagentRoleHeading = 'Subagent role';
-
-/**
- * Whether a session's rounds carry `subagentRoleSection`: a subagent
- * (`userInitiated` false) whose preset instructions name the heading.
- * @param {{ userInitiated?: boolean, preset?: { instructions?: string } }} config
- */
-export const takesSubagentRole = config =>
-  config.userInitiated === false &&
-  (config.preset?.instructions?.includes(subagentRoleHeading) ?? false);
-harden(takesSubagentRole);
 
 export const subagentRoleSection = `${subagentRoleHeading} ${DASH} you are a subagent: a parent session created you with
 spawnSubagent, and every task you receive comes from it through askSubagent,
 which answers it with your reply. Do the task yourself; your instructions'
-advice to delegate is for the parent, not for you. Spawn subagents of your own
-only when the brief asks for it. Your reply is what the parent receives: give it
+advice to delegate everything is for the parent, not for you. Your reply is
+what the parent receives: give it
 what it needs to check your work, and say plainly what you could not do.`;
 
 /**

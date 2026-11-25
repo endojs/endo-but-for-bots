@@ -52,8 +52,8 @@ export const implementerModel = 'claude-opus-5-5';
 /**
  * The heading of the session program's section for a subagent
  * (`guest/lib/mail-prompt.js` `subagentRoleSection`), which the roles below
- * key on. Naming it is also what makes the session program add the
- * section to a subagent of this preset (`takesSubagentRole`).
+ * key on. The section adds no limit on spawning: the roles below say an
+ * implementer spawns none unless its brief asks.
  */
 export const subagentRoleHeading = roleHeading;
 // The two roles share this one text: a subagent spawned without a

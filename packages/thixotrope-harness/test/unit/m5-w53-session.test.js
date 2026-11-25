@@ -19,10 +19,7 @@ import test from '@endo/ses-ava/test.js';
 /* eslint-disable import/no-relative-packages */
 import { shapes, textOf } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
-import {
-  subagentRoleHeading,
-  subagentRoleSection,
-} from '../../guest/lib/mail-prompt.js';
+import { subagentRoleSection } from '../../guest/lib/mail-prompt.js';
 import { RETIRED_TEXT } from '../../guest/lib/retired.js';
 import { makeQueue } from '../../guest/session/queue.js';
 import { runtimeParts } from '../../guest/session/runtime-parts.js';
@@ -363,18 +360,9 @@ test('S2, S3: onClaim sees the entry; the note joins every round of that turn on
   t.false('attachments' in started2);
 });
 
-const rolePreset = harden({
-  label: 'Development',
-  instructions: `If this prompt has a "${subagentRoleHeading}" section, implement.`,
-});
-
-test('D-M9-26: a subagent (userInitiated false) of a preset naming the role is told it on every round, whatever its brief', async t => {
+test('D-M9-26: a subagent (userInitiated false) is told its role on every round, whatever its brief', async t => {
   const child = await makeM5Session({
-    config: {
-      systemPrompt: 'You are helpful.',
-      userInitiated: false,
-      preset: rolePreset,
-    },
+    config: { systemPrompt: 'You are helpful.', userInitiated: false },
   });
   await child.submit('Please fix the bug.');
   t.is(child.last().system, `You are helpful.\n\n${subagentRoleSection}`);
@@ -382,11 +370,7 @@ test('D-M9-26: a subagent (userInitiated false) of a preset naming the role is t
   t.regex(subagentRoleSection, /Do the task yourself/);
   t.true(matches(child.last(), shapes.RoundRequest));
   const noted = await makeM5Session({
-    config: {
-      systemPrompt: 'You are helpful.',
-      userInitiated: false,
-      preset: rolePreset,
-    },
+    config: { systemPrompt: 'You are helpful.', userInitiated: false },
     sessionOptions: {
       parts: withProbe({
         hooks: harden({
@@ -407,23 +391,19 @@ test('D-M9-26: a subagent (userInitiated false) of a preset naming the role is t
   });
   await operator.submit('a');
   t.is(operator.last().system, 'You are helpful.', 'a user session: none');
-  // F6: a subagent of another preset (or none) keeps the earlier prompt.
-  /* eslint-disable no-await-in-loop -- one case at a time */
-  for (const preset of [
-    undefined,
-    harden({ label: 'General', instructions: 'Be brief.' }),
-  ]) {
-    const other = await makeM5Session({
-      config: {
-        systemPrompt: 'You are helpful.',
-        userInitiated: false,
-        ...(preset === undefined ? {} : { preset }),
-      },
-    });
-    await other.submit('a');
-    t.is(other.last().system, 'You are helpful.', preset?.label ?? 'none');
-  }
-  /* eslint-enable no-await-in-loop */
+  // F6: it reaches a subagent of any preset (the factory's SessionConfig
+  // carries no preset instructions) and limits nothing but delegating its
+  // own task: whether to spawn is the preset's to say.
+  const other = await makeM5Session({
+    config: {
+      systemPrompt: 'You are helpful.',
+      userInitiated: false,
+      preset: harden({ label: 'General' }),
+    },
+  });
+  await other.submit('a');
+  t.is(other.last().system, `You are helpful.\n\n${subagentRoleSection}`);
+  t.notRegex(subagentRoleSection, /[Ss]pawn subagents|brief asks/);
 });
 
 test('S2: a staged prompt, or a joined text over inlineBytes, goes as two parts', async t => {
