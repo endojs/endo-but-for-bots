@@ -212,8 +212,9 @@ const modelRow = async (backend, modelId) => {
 /**
  * The refusal or note for an effort the model's catalogue row does not
  * start at. A row with no efforts at all, for a model the efforts table
- * should know, means the running agent-host has an older table: it is
- * loaded from the source tree when the supervisor starts
+ * should know, means the running agent-host adapter has an older table:
+ * it is loaded from the source tree whenever the adapter process starts
+ * (an adapter reload; a supervisor restart is one)
  * (`resources/agent-host/impl/subscriptions/messages.js` `claudeEfforts`).
  * @param {string} modelId
  * @param {any} row
@@ -222,7 +223,7 @@ const modelRow = async (backend, modelId) => {
 export const effortMismatch = (modelId, row, effort) => {
   const efforts = row.reasoningEfforts ?? [];
   if (efforts.length === 0)
-    return `${modelId} has no reasoning efforts in the running agent-host's model catalogue, so it cannot be checked at ${effort}. If the model takes efforts, that agent-host has a stale efforts table: restart the supervisor on a tree that has the fix, then publish again`;
+    return `${modelId} has no reasoning efforts in the running agent-host's model catalogue, so it cannot be checked at ${effort}. If the model takes efforts, the running agent-host adapter has a stale efforts table: reload the adapter (a supervisor restart does) on a tree that has the fix, then publish again`;
   return `${modelId} starts sessions at reasoning effort ${row.defaultReasoningEffort ?? 'none'}, not ${effort} (offered: ${efforts.join(', ')}); presets carry no effort, so pick it per session`;
 };
 harden(effortMismatch);

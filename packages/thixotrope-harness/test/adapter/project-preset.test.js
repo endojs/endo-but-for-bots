@@ -355,7 +355,7 @@ test('a preset without a backend gets the Claude pool, Fable 5.2, checked at med
   // A row with no efforts at all: the running agent-host's efforts table
   // is stale. The implied medium only notes it; --effort fails with it.
   const stale =
-    "claude-fable-5-2 has no reasoning efforts in the running agent-host's model catalogue, so it cannot be checked at medium. If the model takes efforts, that agent-host has a stale efforts table: restart the supervisor on a tree that has the fix, then publish again";
+    "claude-fable-5-2 has no reasoning efforts in the running agent-host's model catalogue, so it cannot be checked at medium. If the model takes efforts, the running agent-host adapter has a stale efforts table: reload the adapter (a supervisor restart does) on a tree that has the fix, then publish again";
   const old = makeBackend('Claude', 'claude-pool', {
     'claude-fable-5-2': { efforts: [] },
   });
