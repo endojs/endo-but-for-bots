@@ -22,10 +22,7 @@
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
-import {
-  subscriptionTextOf,
-  subscriptionTexts,
-} from '../../../guest/lib/subscription-texts.js';
+import { subscriptionTexts } from '../../../guest/lib/subscription-texts.js';
 
 /** Re-watches in a row with no batch in between before the feed gives up. */
 export const REWATCH_LIMIT = 3;
@@ -48,14 +45,21 @@ export const REWATCH_LIMIT = 3;
  *   at most `maxMembers`; never a value)
  * @property {(backend: any, secret: any) => Promise<{ ok: boolean, code?: string }>} checkCredential
  *   `SubscriptionsAdmin.checkCredential`: ok or a code, never the value
- * @property {(backend: any, member: { secret: any, label: string, provider: string }) => Promise<void>} addSubscription
- *   check, `makeMember`, `addPoolMember`, then refresh that pool (a
- *   failed check makes no member)
- * @property {(backend: any, member: any) => Promise<void>} addMember `addPoolMember`
- *   of a member already made (one left in no pool), then refresh
+ * @property {() => Promise<boolean>} canAddMembers whether this
+ *   installation's manager has `addMember` and `checkCredential` (its
+ *   `__getMethodNames__()`; a state provisioned before them keeps the
+ *   old manager): asked once per connection
+ * @property {(backend: any, member: { secret: any, label: string }) => Promise<any>} addSubscription
+ *   `SubscriptionsAdmin.addMember`: the pool rules and the credential
+ *   check, then the member made and added in one step (a refusal makes
+ *   nothing); then refresh that pool, which is the member's first usage
+ *   read. Answers the `PoolMember`.
+ * @property {(backend: any, member: any) => Promise<void>} addUnpooled
+ *   `addPoolMember` of a member an interrupted add left in no pool, then
+ *   refresh
  * @property {(provider: string) => Promise<{ member: any, label: string }[]>} unpooledMembers
- *   active members of `provider` in no pool (m4-interfaces 10: what a
- *   break between `makeMember` and `addPoolMember` leaves)
+ *   active members of `provider` in no pool: only what an interrupted add
+ *   leaves (m4-interfaces 10)
  * @property {(member: any) => Promise<void>} retireMember `PoolMember.retire()`
  */
 
@@ -260,6 +264,26 @@ const makeFeed = powers => {
     return all;
   };
 
+  /** @type {Promise<boolean> | undefined} */
+  let canAddP;
+  const canAddMembers = () => {
+    if (!canAddP) {
+      const asked = (async () => {
+        // eslint-disable-next-line no-underscore-dangle -- the Endo introspection method
+        const names = await E(await admin()).__getMethodNames__();
+        return ['addMember', 'checkCredential'].every(name =>
+          names.includes(name),
+        );
+      })();
+      canAddP = asked;
+      // A failed ask (the connection went away) is asked again next time.
+      asked.catch(() => {
+        if (canAddP === asked) canAddP = undefined;
+      });
+    }
+    return canAddP;
+  };
+
   /** @param {any} backend */
   const added = async backend => {
     // The adapter took `poolsChanged`: this reads the pool's new members.
@@ -301,18 +325,19 @@ const makeFeed = powers => {
     },
     checkCredential: async (backend, secret) =>
       E(await admin()).checkCredential(backend, secret),
-    addSubscription: async (backend, { secret, label, provider }) => {
+    canAddMembers,
+    addSubscription: async (backend, { secret, label }) => {
       const target = await admin();
-      const check = await E(target).checkCredential(backend, secret);
-      if (!check.ok)
-        throw Error(subscriptionTextOf.credentialCheckFailed(check.code));
-      const member = await E(target).makeMember(
-        harden({ provider, label, credential: secret }),
+      const member = await E(target).addMember(
+        backend,
+        harden({ label, credential: secret }),
       );
-      await E(target).addPoolMember(backend, member);
-      await added(backend);
+      // The add is done: a failed refresh is not a failed add (the
+      // member shows its first read, or its failure, when it comes).
+      await added(backend).catch(() => {});
+      return member;
     },
-    addMember: async (backend, member) => {
+    addUnpooled: async (backend, member) => {
       await E(await admin()).addPoolMember(backend, member);
       await added(backend);
     },

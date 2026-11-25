@@ -315,3 +315,29 @@
   gap: 0.4rem;
   overflow-wrap: anywhere;
 }
+.m4-member-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.4rem 0;
+  padding: 0;
+  list-style: none;
+}
+.m4-member-status li {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 0.5rem;
+}
+.m4-member-status li.failed {
+  border-color: var(--fl-red);
+}
+.m4-member-status .m4-secret-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}

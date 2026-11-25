@@ -5,12 +5,14 @@
  * shows its combined history and confirmed weekly resets. Individual
  * subscriptions disclose their plan, windows, status, balances and graphs.
  * Each pool offers "Add subscription" (`AddMember.js`); an add refreshes
- * that pool, so its list and graphs follow.
+ * that pool, so its list and graphs follow, and the new member shows its
+ * first usage read result (`MemberStatus`), as every member shows its last
+ * failed usage or model list read.
  */
 import { h } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 
-import { AddMember } from './AddMember.js';
+import { AddMember, MemberStatus } from './AddMember.js';
 import { accountsFeed } from './feed.js';
 import { PoolQuotaHistory } from './PoolQuotaHistory.js';
 
@@ -59,6 +61,21 @@ export const SubscriptionsPanel = ({ context, now = Date.now }) => {
   const feed = useAccountsFeed(context);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // The member each pool added last in this opening, until dismissed.
+  /** @type {[Map<any, { label: string, member: any }>, (v: Map<any, { label: string, member: any }>) => void]} */
+  const [added, setAdded] = useState(
+    /** @type {Map<any, { label: string, member: any }>} */ (new Map()),
+  );
+  /**
+   * @param {any} backend
+   * @param {{ label: string, member: any } | undefined} entry
+   */
+  const markAdded = (backend, entry) => {
+    const next = new Map(added);
+    if (entry === undefined) next.delete(backend);
+    else next.set(backend, entry);
+    setAdded(next);
+  };
   const { view, error: feedError } = feed ? feed.state() : {};
 
   // Keep request state tied to this opening and these connection powers.
@@ -160,6 +177,15 @@ export const SubscriptionsPanel = ({ context, now = Date.now }) => {
           feed,
           pool,
           call: context.call,
+          onAdded: entry => markAdded(pool.backend, entry),
+        }),
+      feed &&
+        h(MemberStatus, {
+          feed,
+          pool,
+          added: added.get(pool.backend),
+          call: context.call,
+          onDone: () => markAdded(pool.backend, undefined),
         }),
       pool.members.length === 0
         ? h('p', { class: 'm4-note' }, subscriptionsTexts.noMembers)

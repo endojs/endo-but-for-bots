@@ -11,6 +11,7 @@ import { Far } from '@endo/far';
 import { options as preactOptions } from 'preact';
 
 /* eslint-disable import/no-relative-packages */
+import { subscriptionTextOf } from '../../guest/lib/subscription-texts.js';
 
 const encoder = new TextEncoder();
 
@@ -32,10 +33,13 @@ export const runEffectsPromptly = () => {
 export const secretFailed = code => `Secret operation failed: "${code}"`;
 
 /**
- * @param {{ pageEntries?: number, accounts?: any, poolBackends?: any[], poolProviders?: Map<any, string>, checks?: Map<string, { ok: boolean, code?: string }>, onAdded?: (pool: any, label: string) => void }} [options]
+ * @param {{ pageEntries?: number, accounts?: any, poolBackends?: any[], poolProviders?: Map<any, string>, checks?: Map<string, { ok: boolean, code?: string }>, onAdded?: (pool: any, label: string) => void, oldManager?: boolean }} [options]
  *   `poolProviders`: each pool backend's provider (default `claude`);
  *   `checks`: the credential check's answer by Secret label (default ok);
- *   `onAdded`: told after each `addPoolMember` (to publish the new view)
+ *   `onAdded`: told after each member that `addMember` or
+ *   `addPoolMember` puts in a pool (to publish the new view);
+ *   `oldManager`: a manager installed before `checkCredential`,
+ *   `addPoolMember` and `addMember` (none of the three)
  */
 export const makeFakeSecrets = ({
   pageEntries = 64,
@@ -44,6 +48,7 @@ export const makeFakeSecrets = ({
   poolProviders = new Map(),
   checks = new Map(),
   onAdded = () => {},
+  oldManager = false,
 } = {}) => {
   /** @type {any[][]} */
   const calls = [];
@@ -199,20 +204,40 @@ export const makeFakeSecrets = ({
   const poolMembers = new Map(poolBackends.map(pool => [pool, []]));
   const providerOf = (/** @type {any} */ pool) =>
     poolProviders.get(pool) ?? 'claude';
-  const subscriptions = Far('SubscriptionsAdmin', {
-    listPools: () => harden({ pools: poolBackends }),
-    listMembers: () => {
-      calls.push(['SubscriptionsAdmin', 'listMembers']);
-      return harden({ members: members.map(entry => entry.member) });
-    },
-    /** @param {any} pool */
-    describePool: pool =>
-      harden({
-        kind: `${providerOf(pool)}-pool`,
-        label: 'pool',
-        members: [...(poolMembers.get(pool) ?? [])],
-        state: 'active',
-      }),
+  /** @param {{ provider: string, label: string, credential: any }} spec */
+  const makeMember = ({ provider, label, credential }) => {
+    recordOf(credential);
+    calls.push(['SubscriptionsAdmin', 'makeMember', { provider, label }]);
+    const same = members.find(entry => entry.label === label);
+    if (same) {
+      if (same.secret !== credential) throw Error('member conflict');
+      return same.member;
+    }
+    /** @type {FakeMember} */
+    const entry = {
+      member: undefined,
+      label,
+      provider,
+      secret: credential,
+      state: 'active',
+    };
+    entry.member = Far('PoolMember', {
+      describe: () =>
+        harden({ label, provider, weight: 1, state: entry.state }),
+      retire: () => {
+        calls.push(['PoolMember', 'retire', label]);
+        entry.state = 'retired';
+        // As the manager: a retired member leaves every pool.
+        for (const list of poolMembers.values()) {
+          const at = list.indexOf(entry.member);
+          if (at >= 0) list.splice(at, 1);
+        }
+      },
+    });
+    members.push(entry);
+    return entry.member;
+  };
+  const newMethods = {
     /**
      * @param {any} pool
      * @param {any} secret
@@ -224,34 +249,6 @@ export const makeFakeSecrets = ({
       if (record.state === 'revoked')
         return harden({ ok: false, code: 'REVOKED' });
       return harden(checks.get(record.label) ?? { ok: true });
-    },
-    /** @param {{ provider: string, label: string, credential: any }} spec */
-    makeMember: ({ provider, label, credential }) => {
-      recordOf(credential);
-      calls.push(['SubscriptionsAdmin', 'makeMember', { provider, label }]);
-      const same = members.find(entry => entry.label === label);
-      if (same) {
-        if (same.secret !== credential) throw Error('member conflict');
-        return same.member;
-      }
-      /** @type {FakeMember} */
-      const entry = {
-        member: undefined,
-        label,
-        provider,
-        secret: credential,
-        state: 'active',
-      };
-      entry.member = Far('PoolMember', {
-        describe: () =>
-          harden({ label, provider, weight: 1, state: entry.state }),
-        retire: () => {
-          calls.push(['PoolMember', 'retire', label]);
-          entry.state = 'retired';
-        },
-      });
-      members.push(entry);
-      return entry.member;
     },
     /**
      * @param {any} pool
@@ -269,6 +266,52 @@ export const makeFakeSecrets = ({
       list.push(member);
       onAdded(pool, entry.label);
     },
+    /**
+     * As the manager: the pool rules and the check first, then make and
+     * add in one step; idempotent by label and Secret.
+     * @param {any} pool
+     * @param {{ label: string, credential: any }} spec
+     */
+    addMember: (pool, { label, credential }) => {
+      const record = recordOf(credential);
+      calls.push(['SubscriptionsAdmin', 'addMember', label]);
+      const list = poolMembers.get(pool);
+      if (!list) throw Error('unknown pool');
+      const same = members.find(entry => entry.label === label);
+      if (same && same.secret !== credential)
+        throw Error(`A member labelled "${label}" holds another secret`);
+      if (same && list.includes(same.member)) return same.member;
+      const check = checks.get(record.label);
+      if (check && !check.ok)
+        throw Error(
+          subscriptionTextOf.credentialCheckFailed(String(check.code)),
+        );
+      const member = makeMember({
+        provider: providerOf(pool),
+        label,
+        credential,
+      });
+      list.push(member);
+      onAdded(pool, label);
+      return member;
+    },
+  };
+  const subscriptions = Far('SubscriptionsAdmin', {
+    ...(oldManager ? {} : newMethods),
+    listPools: () => harden({ pools: poolBackends }),
+    listMembers: () => {
+      calls.push(['SubscriptionsAdmin', 'listMembers']);
+      return harden({ members: members.map(entry => entry.member) });
+    },
+    /** @param {any} pool */
+    describePool: pool =>
+      harden({
+        kind: `${providerOf(pool)}-pool`,
+        label: 'pool',
+        members: [...(poolMembers.get(pool) ?? [])],
+        state: 'active',
+      }),
+    makeMember,
     accounts: () => {
       calls.push(['SubscriptionsAdmin', 'accounts']);
       if (!accounts) throw Error('no accounts in this fake');
