@@ -157,7 +157,8 @@ test('every interface guard of a table module contributes its names', async t =>
 
 test('the key and method sets are the ones before HR-SYN-7 plus WX.1s', t => {
   const { keys, methods } = harnessNames();
-  t.is(keys.size, 258 + 70 + 3 + 3);
+  // + 2: M11's spoken marker (`spoken`, `dictated`; m11-interfaces.md 9.1).
+  t.is(keys.size, 258 + 70 + 3 + 3 + 2);
   t.is(methods.size, 141 + 33 + 3);
   t.deepEqual([...keys].sort(), [...before.keys, ...added.keys].sort());
   t.deepEqual(
