@@ -274,6 +274,78 @@ Nothing a session or exec vat can call returns a `PoolMember`, a `Secret`, a `Re
 | audit events | the Secrets store's audit file (M2) | every read, replace, create, revoke, delete | newest 10,000 (M2) |
 | account readings | adapter file `<state>/agent-host/subscriptions/readings.json` (no secret: windows, plan, credits, times), keyed by the credential's store key | at most every `readingsFlushMs` (5 s), temp + rename + fsync | one entry per member |
 | selection state, single-flight renewals, catalogue caches, accounts channel | adapter memory | - | lost at restart by design |
+| pool additions over a pinned manager (3.5: pool kind, label and spec store keys; each addition's store key, label, provider; never a value) | adapter file `<state>/agent-host/subscriptions/pool-additions.json`, format `thixotrope-harness-pool-additions-1` | each `Accounts.addMember` before it answers; a retired member or pool drops its entries; temp + rename + fsync | `maxPools` 8 pools, `maxPoolMembers` 16 active per pool |
+
+### 3.5 Adding to a pool over a pinned manager
+
+A state provisioned before `addMember` (for example at `51760a3996`) keeps
+its subscriptions manager: the durable half cannot be reinstalled, and a
+same-name install with other code is refused. That manager has
+`makeMember`, `makePool`, `retirePool`, `PoolMember.retire` and
+`accounts()`, but no `addMember`, `addPoolMember` or `checkCredential`,
+and its pool serves its spec's members only: `poolState` reads the
+immutable `spec.members`, and `poolChanged` ignores a member not in them.
+
+The adapter, which is reloaded from the checkout, keeps the additions
+instead (`impl/subscriptions/pool-additions.js`):
+
+- `Accounts.addMember(backend, { label, credential })`. The UI asks
+  `__getMethodNames__()` once per connection. It uses the manager's
+  `addMember` and `checkCredential` when it has them, else these on
+  `Accounts`, else it shows the note.
+  - The adapter path first resolves the Secret to its store key
+    (`resolveSecrets`). It refuses a label held by another key, a key
+    already serving the pool (`memberConflict`), and a pool of
+    `maxPoolMembers` active members (`poolFull`). It checks the format
+    (`checkCredential`, the value stays in the adapter).
+  - Only then does it ask the old `makeMember`, which makes the
+    `PoolMember` and checks the provider and label. It writes the
+    addition and then answers. A retry with the same Secret and label
+    answers the same member and makes nothing.
+- The pool record serves the spec's active members plus the active
+  additions. `Accounts.poolMembers(backend)` lists both;
+  `checkCredential(backend, secret)` is the format check.
+- After a restart the adapter has the file but no object. It finds them
+  through the gateway's operator: `getSecrets().catalog()` gives the
+  Secret with the kept key, and `subscriptions().listMembers()` gives the
+  active members.
+  - For a kept label some active member has, `makeMember(label, Secret)`
+    answers that member (the old manager answers the existing one when
+    the Secret matches), so the search never makes one.
+  - A kept label no active member has was retired, and the entry is
+    dropped.
+  - Until the gateway has an operator (its first bind), the pool serves
+    its spec members only and asks again every 5 s.
+- Retirement stays the manager's. `PoolMember.retire` announces
+  `poolsChanged`, and the next load drops the member. A retired pool
+  drops its entries.
+
+**What is lost on a pinned manager.**
+
+- An added member's marks and last-served records are sent to the
+  manager, which ignores them (not a spec member). They hold for the
+  adapter's life and are lost at its restart. A refused member is asked
+  again, once, after a restart.
+- The manager's `describePool` lists spec members only; the UI adds
+  `Accounts.poolMembers`.
+- An interrupted add (member made, file not written) leaves an unpooled
+  member. The form offers no "add to this pool" button there (no
+  `addPoolMember`). Adding again with the same Secret and label finishes
+  it.
+- Failure reasons (`usageFailure`, `catalogFailure`) and the last-good
+  model list (`member-reads.json`) pass only adapter guards (`Accounts`,
+  `MemberAccount`), so they work unchanged. The old manager's
+  `accounts()` forwards the adapter's `Accounts` as a remotable.
+
+The other shapes are blocked by the old manager's checks:
+
+- `makeMember` plus an existing call is blocked by the spec-only
+  `poolState` and `poolChanged`.
+- A successor pool under the same label: `makePool` refuses it while the
+  old pool is active (`poolConflict`). After `retirePool`, every
+  session's `Backend` throws `retired` (`assertActivePool`).
+- Re-running provisioning with an amended spec: `makePool` compares
+  specs (`sameSpec`) and refuses with `poolConflict`.
 
 ---
 
