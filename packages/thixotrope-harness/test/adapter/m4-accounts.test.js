@@ -843,6 +843,7 @@ test('member reads file: round trip; a list past 24 h, a bad model, a bad key or
     description: '',
     reasoningEfforts: [],
   };
+  /** @type {import('../../resources/agent-host/impl/subscriptions/member-reads.js').MemberReadsEntry} */
   const good = {
     key: 'k1',
     provider: 'claude',
