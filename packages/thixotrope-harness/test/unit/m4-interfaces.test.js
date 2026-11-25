@@ -98,6 +98,8 @@ const memberAccount = {
   at: ISO,
   markedUntil: ISO,
   code: 'EXHAUSTED',
+  usageFailure: { code: 'REJECTED', status: 401, at: ISO },
+  catalogFailure: { code: 'UNREACHABLE', at: ISO },
 };
 const poolAccounts = {
   backend,
@@ -204,6 +206,7 @@ const shapeSamples = {
   Provenance: 'remembered',
   Window: window,
   BankedCredit: { expiresAt: ISO, label: 'reset' },
+  ReadFailure: { code: 'READ_FAILED', status: 500, at: ISO },
   MemberAccount: memberAccount,
   PoolAccounts: poolAccounts,
   AccountsView: { rev: 3, pools: [poolAccounts] },

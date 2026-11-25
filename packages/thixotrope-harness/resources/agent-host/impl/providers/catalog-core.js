@@ -47,12 +47,19 @@ export const CATALOG_MAX_MODELS = 4096;
 export const CATALOG_BODY_BYTES = 16 * 1024 * 1024;
 
 /**
- * A read failure: the message is fixed and names no URL, key or body.
+ * A read failure: the message is fixed and names no URL, key or body. Its
+ * `code` is fixed too: `UNREACHABLE` (no response), `REJECTED` (HTTP 401
+ * or 403), else `READ_FAILED`; `status` the HTTP status of a refusal.
  */
 export class CatalogReadError extends Error {
-  /** @param {string} what */
-  constructor(what) {
+  /**
+   * @param {string} what
+   * @param {{ code?: string, status?: number }} [cause]
+   */
+  constructor(what, { code = 'READ_FAILED', status } = {}) {
     super(`model catalogue read failed: ${what}`);
+    this.code = code;
+    if (status !== undefined) this.status = status;
   }
 }
 harden(CatalogReadError);
@@ -60,12 +67,58 @@ harden(CatalogReadError);
 /**
  * Fail a read with a fixed text.
  * @param {string} what
+ * @param {{ code?: string, status?: number }} [cause]
  * @returns {never}
  */
-export const catalogFail = what => {
-  throw new CatalogReadError(what);
+export const catalogFail = (what, cause) => {
+  throw new CatalogReadError(what, cause);
 };
 harden(catalogFail);
+
+/**
+ * Whether a value is an HTTP status (100 to 599).
+ * @param {unknown} value
+ * @returns {value is number}
+ */
+export const isHttpStatus = value =>
+  typeof value === 'number' &&
+  Number.isInteger(value) &&
+  value >= 100 &&
+  value <= 599;
+harden(isHttpStatus);
+
+/** A failure code: a fixed upper-case word, never a message. */
+const FAILURE_CODE = /^[A-Z][A-Z0-9_]{0,31}$/;
+
+/**
+ * A read failure as a code, an HTTP status at most, and its time: a
+ * `CatalogReadError`'s, or the `code` of a coded failure (a credential
+ * read's), else `READ_FAILED`. Never a message.
+ * @param {unknown} error
+ * @param {number} atMs
+ * @returns {CatalogFailure}
+ */
+export const catalogFailureOf = (error, atMs) => {
+  const { code, status } = /** @type {any} */ (
+    error !== null && typeof error === 'object' ? error : {}
+  );
+  return harden({
+    code:
+      typeof code === 'string' && FAILURE_CODE.test(code)
+        ? code
+        : 'READ_FAILED',
+    ...(isHttpStatus(status) ? { status } : {}),
+    atMs,
+  });
+};
+harden(catalogFailureOf);
+
+/**
+ * @typedef {object} CatalogFailure
+ * @property {string} code
+ * @property {number} [status]
+ * @property {number} atMs
+ */
 
 /**
  * @typedef {object} CatalogModel
@@ -196,12 +249,16 @@ export const readJson = async ({
       ...(fetch === undefined ? {} : { fetch }),
     });
   } catch {
-    return catalogFail('no response');
+    return catalogFail('no response', { code: 'UNREACHABLE' });
   }
   if (!response.ok) {
     // R4-79: a refusal's body is never read.
     discardBody(response);
-    return catalogFail(`HTTP ${response.status}`);
+    const { status } = response;
+    return catalogFail(`HTTP ${status}`, {
+      code: status === 401 || status === 403 ? 'REJECTED' : 'READ_FAILED',
+      status,
+    });
   }
   try {
     return await boundedJson(response, maxBytes);
@@ -249,10 +306,34 @@ harden(byTitleThenId);
  * @param {(kind: string, fields?: Record<string, unknown>) => void} [options.log]
  *   `catalog-read` with the model count after a read, `catalog-failed` with
  *   the fixed message after a failure (once per message)
+ * @param {{ readAt: number, models: T[] }} [options.initial] a remembered
+ *   observation (a restart): used while it is under 24 hours old, read
+ *   again as any stale one
+ * @param {(outcome: { ok: true, readAt: number, models: T[] } | ({ ok: false } & CatalogFailure)) => void} [options.onRead]
+ *   told after each read: the models, or the failure's code, status and
+ *   time (never a message)
  */
-export const makeCatalogOwner = ({ read, readKey, now, log = () => {} }) => {
+export const makeCatalogOwner = ({
+  read,
+  readKey,
+  now,
+  log = () => {},
+  initial,
+  onRead = () => {},
+}) => {
   /** @type {Observation<T> | undefined} */
-  let observation;
+  let observation =
+    initial === undefined
+      ? undefined
+      : {
+          readAt: initial.readAt,
+          models: initial.models,
+          indexOf: new Map(
+            initial.models.map((model, index) => [model.id, index]),
+          ),
+        };
+  /** @type {CatalogFailure | undefined} the last failure, until a read succeeds */
+  let failure;
   let failed = false;
   /** @type {number | undefined} */
   let failedAt;
@@ -304,12 +385,16 @@ export const makeCatalogOwner = ({ read, readKey, now, log = () => {} }) => {
         };
         failed = false;
         failedAt = undefined;
+        failure = undefined;
         lastLogged = undefined;
         log('catalog-read', { models: models.length });
+        onRead(harden({ ok: true, readAt: observation.readAt, models }));
       } catch (error) {
         failed = true;
         failedAt = now();
+        failure = catalogFailureOf(error, failedAt);
         counters.failures += 1;
+        onRead(harden({ ok: false, ...failure }));
         // Fixed texts only (CatalogReadError); anything else is unnamed.
         const message =
           error instanceof CatalogReadError
@@ -350,6 +435,8 @@ export const makeCatalogOwner = ({ read, readKey, now, log = () => {} }) => {
       return usable() ? observation : undefined;
     },
     stats: () => harden({ ...counters, failed }),
+    /** The last read's failure (code, status, time), until a read succeeds. */
+    failure: () => failure,
   });
 };
 harden(makeCatalogOwner);

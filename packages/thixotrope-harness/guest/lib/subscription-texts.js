@@ -132,6 +132,52 @@ export const subscriptionTextOf = harden({
    * token or a parse message.
    * @param {string} code a `credentialCheckCodes` entry
    */
+  /**
+   * Harness: why a member's last catalogue or usage read failed, from its
+   * code and HTTP status only (`ReadFailure`); never a body or a value.
+   * @param {{ code: string, status?: number }} failure
+   */
+  readFailure: ({ code, status }) => {
+    const http = status === undefined ? '' : ` (HTTP ${status})`;
+    switch (code) {
+      case 'REJECTED':
+        return `the provider rejected the credential${http}`;
+      case 'UNREACHABLE':
+        return 'the provider did not answer';
+      case 'UNREADABLE':
+        return 'its credential could not be read';
+      case 'READ_FAILED':
+        return status === undefined
+          ? "the provider's answer could not be read"
+          : `the provider answered HTTP ${status}`;
+      default:
+        return `the credential could not be used (${code})`;
+    }
+  },
+  /**
+   * Harness: what the operator can do about a failed read, or ''.
+   * @param {{ code: string }} failure
+   */
+  readFailureAdvice: ({ code }) =>
+    code === 'REJECTED' || code === 'RENEWAL_FAILED' || code === 'REVOKED'
+      ? 'sign in again and replace the secret'
+      : '',
+  /**
+   * Harness: the members of a pool whose model list could not be read, for
+   * the pool's unavailable catalogue (labels are operator labels).
+   * @param {readonly { label: string, failure?: { code: string, status?: number } }[]} members
+   */
+  catalogMembersFailed: members =>
+    members
+      .map(
+        ({ label, failure }) =>
+          `"${label}": ${
+            failure === undefined
+              ? 'not read yet'
+              : subscriptionTextOf.readFailure(failure)
+          }`,
+      )
+      .join('; '),
   credentialCheckFailed: code => {
     switch (code) {
       case 'INVALID':

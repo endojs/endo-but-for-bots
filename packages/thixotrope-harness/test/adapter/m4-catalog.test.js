@@ -58,8 +58,14 @@ const memberEntry = (label, provider, state = 'active') =>
  *   fixture (`undefined`: that member's read is refused)
  * @param {any} [options.spec]
  * @param {Set<string>} [options.unreadable] labels whose credential fails
+ * @param {number} [options.status] the refusal's HTTP status (default 503)
+ * @param {(entry: any) => any} [options.remembered] a member's list from
+ *   before a restart
  */
-const setup = async (t, { kind, files, spec: extra = {}, unreadable }) => {
+const setup = async (
+  t,
+  { kind, files, spec: extra = {}, unreadable, status = 503, remembered },
+) => {
   const provider = kind === 'claude-pool' ? 'claude' : 'codex';
   const path =
     provider === 'claude' ? '/v1/models' : '/backend-api/codex/models';
@@ -77,7 +83,7 @@ const setup = async (t, { kind, files, spec: extra = {}, unreadable }) => {
       file === undefined
         ? {
             match: { method: 'GET', path, credential: label },
-            status: 503,
+            status,
             repeat: 1000,
           }
         : {
@@ -96,9 +102,13 @@ const setup = async (t, { kind, files, spec: extra = {}, unreadable }) => {
     baseUrl: server.url,
     ...extra,
   });
+  /** @type {[string, any][]} */
+  const outcomes = [];
   const catalog = makePoolCatalog({
     now: () => clock,
     members: async () => entries,
+    onMemberRead: (entry, outcome) => outcomes.push([entry.label, outcome]),
+    ...(remembered === undefined ? {} : { remembered }),
     readCredential: async entry => {
       if (unreadable?.has(entry.label)) throw Error('UNREADABLE');
       return harden({
@@ -113,6 +123,8 @@ const setup = async (t, { kind, files, spec: extra = {}, unreadable }) => {
     backend,
     spec,
     entries,
+    outcomes,
+    now: () => clock,
     advance: (/** @type {number} */ ms) => {
       clock += ms;
     },
@@ -388,11 +400,17 @@ test('unavailable when no member answers; a failed member is not asked again for
     unreadable: new Set(['a']),
   });
   const none = await s.catalog.listModels({ backend: s.backend, spec: s.spec });
+  // The text names which members failed and why (codes, statuses only).
+  const why = `${texts.catalogUnavailable}: "a": its credential could not be read; "b": the provider answered HTTP 503`;
   t.deepEqual(none, {
     rows: [],
     state: 'unavailable',
-    error: texts.catalogUnavailable,
+    error: why,
   });
+  t.deepEqual(s.outcomes, [
+    ['a', { ok: false, code: 'UNREADABLE', atMs: s.now() }],
+    ['b', { ok: false, code: 'READ_FAILED', status: 503, atMs: s.now() }],
+  ]);
   t.false(JSON.stringify(none).includes(BODY_MARKER));
   t.is(s.reads(), 1, 'a unreadable credential sends nothing; b refused');
   await t.throwsAsync(
@@ -401,7 +419,7 @@ test('unavailable when no member answers; a failed member is not asked again for
       spec: s.spec,
       modelId: 'gpt-fake-1',
     }),
-    { message: texts.catalogUnavailable },
+    { message: why },
   );
   t.is(s.reads(), 1, 'not asked again within 60 s');
   s.advance(60_000);
@@ -412,6 +430,70 @@ test('unavailable when no member answers; a failed member is not asked again for
     failures: 2,
     failed: true,
   });
+});
+
+test('failure reasons: a 401 is REJECTED with its status in the outcome and the text; a remembered list serves after a restart and is replaced by a read', async t => {
+  const s = await setup(t, {
+    kind: 'codex-pool',
+    // @ts-expect-error a member the provider refuses
+    files: { a: undefined },
+    status: 401,
+  });
+  const none = await s.catalog.listModels({ backend: s.backend, spec: s.spec });
+  t.is(
+    none.error,
+    `${texts.catalogUnavailable}: "a": the provider rejected the credential (HTTP 401)`,
+  );
+  t.deepEqual(s.outcomes, [
+    ['a', { ok: false, code: 'REJECTED', status: 401, atMs: s.now() }],
+  ]);
+
+  // A restart: the member's last good list, read 23 hours ago, serves at
+  // once while the provider refuses (the refusal is still reported).
+  const remembered = harden({
+    readAt: 1_000_000 - 23 * 60 * 60_000,
+    models: [
+      {
+        id: 'gpt-remembered',
+        title: 'Remembered',
+        description: '',
+        reasoningEfforts: ['low', 'high'],
+      },
+    ],
+  });
+  const r = await setup(t, {
+    kind: 'codex-pool',
+    // @ts-expect-error a member the provider refuses
+    files: { a: undefined },
+    status: 401,
+    remembered: () => remembered,
+  });
+  const page = await r.catalog.listModels({ backend: r.backend, spec: r.spec });
+  t.is(page.state, 'ok');
+  t.deepEqual(
+    page.rows.map((/** @type {any} */ row) => row.modelId),
+    ['gpt-remembered'],
+  );
+  t.is(r.reads(), 1, 'stale: read again, refused');
+  t.is(r.outcomes[0][1].code, 'REJECTED');
+  // Past 24 hours the remembered list is gone.
+  r.advance(60 * 60_000);
+  t.is(
+    (await r.catalog.listModels({ backend: r.backend, spec: r.spec })).state,
+    'unavailable',
+  );
+
+  // A good read reports its models (what the member reads file keeps).
+  const g = await setup(t, {
+    kind: 'codex-pool',
+    files: { a: 'codex-models.json' },
+  });
+  await g.catalog.listModels({ backend: g.backend, spec: g.spec });
+  const [[label, outcome]] = g.outcomes;
+  t.is(label, 'a');
+  t.true(outcome.ok);
+  t.is(outcome.readAt, g.now());
+  t.true(outcome.models.some((/** @type {any} */ m) => m.id === 'gpt-fake-1'));
 });
 
 test('cache: a fresh listing reads nothing, a stale one reads again, one past 24 h without an answer is unavailable', async t => {

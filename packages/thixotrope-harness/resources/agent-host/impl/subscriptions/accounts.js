@@ -54,6 +54,7 @@
  * Node only (reads the guest prelude for `makeExo`, `makePromiseKit`).
  */
 import { Buffer } from 'node:buffer';
+import { dirname, join } from 'node:path';
 
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { m4Interfaces } from '../../../../guest/lib/interfaces-m4.js';
@@ -70,11 +71,19 @@ import {
   makeReadingsWriter,
 } from './account-file.js';
 import { isCreditBalance, observeCredits } from './credit-history.js';
+import {
+  checkFailure,
+  checkModels,
+  formatMemberReads,
+  loadMemberReads,
+  MAX_REMEMBERED_MODELS,
+} from './member-reads.js';
 import { recordObservation } from './quota-history.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { MemberEntry, Reading, ReadingWindow, AccountsCore } from './types.js' */
 /** @import { ReadingsEntry } from './account-file.js' */
+/** @import { MemberReadsEntry, ReadFailureRecord } from './member-reads.js' */
 
 const { makeExo, makePromiseKit } = /** @type {GuestGlobals} */ (globalThis);
 
@@ -139,6 +148,8 @@ harden(isoOf);
  *   register: (backend: any, info: PoolInfo) => void,
  *   poolsChanged: () => void,
  *   refreshForModel: (backend: any) => Promise<void>,
+ *   catalogRead: (entry: MemberEntry, outcome: any) => void,
+ *   rememberedModels: (entry: MemberEntry) => { readAt: number, models: any[] } | undefined,
  *   rev: () => number,
  *   subscriberCount: () => number,
  *   close: () => Promise<void>,
@@ -214,6 +225,18 @@ export const makeAccounts = ({
     flushMs: settings.readingsFlushMs ?? 5000,
     ...(onError === undefined ? {} : { onError }),
   });
+  // The member reads file, next to the readings (`member-reads.js`): each
+  // member's last good model list and last read failures.
+  const memberReadsFile = () => join(dirname(fileOf()), 'member-reads.json');
+  const readsWriter = makeReadingsWriter({
+    file: memberReadsFile,
+    timers,
+    flushMs: settings.readingsFlushMs ?? 5000,
+    format: formatMemberReads,
+    ...(onError === undefined ? {} : { onError }),
+  });
+  /** @type {Map<string, MemberReadsEntry>} by store key */
+  const memberReads = new Map();
 
   // Pools in registration order, at most `maxPools`.
   /** @type {Map<any, PoolInfo>} */
@@ -241,6 +264,76 @@ export const makeAccounts = ({
       if (fileEntries.size >= subscriptionLimits.maxMembers) break;
       fileEntries.set(entry.key, entry);
     }
+    for (const entry of loadMemberReads(memberReadsFile(), now())) {
+      if (memberReads.size >= subscriptionLimits.maxMembers) break;
+      memberReads.set(entry.key, entry);
+    }
+  };
+
+  /**
+   * This member's reads record (same provider), or undefined.
+   * @param {MemberEntry} entry
+   */
+  const readsOf = entry => {
+    const known = memberReads.get(entry.key);
+    return known?.provider === entry.provider ? known : undefined;
+  };
+
+  /**
+   * Change a member's reads record; written at the next flush. A new key
+   * past `maxMembers` is not kept (the file never outgrows the manager).
+   * @param {MemberEntry} entry
+   * @param {(prior: MemberReadsEntry) => MemberReadsEntry} change
+   * @returns {boolean} whether anything changed
+   */
+  const changeReads = (entry, change) => {
+    ensureLoaded();
+    if (
+      !memberReads.has(entry.key) &&
+      memberReads.size >= subscriptionLimits.maxMembers
+    )
+      return false;
+    const prior = readsOf(entry) ?? {
+      key: entry.key,
+      provider: entry.provider,
+    };
+    const next = change(prior);
+    if (next === prior) return false;
+    memberReads.set(entry.key, next);
+    readsWriter.update(() => harden([...memberReads.values()]));
+    return true;
+  };
+
+  /**
+   * @param {MemberReadsEntry} prior
+   * @param {'catalogFailure' | 'usageFailure'} field
+   * @param {ReadFailureRecord | undefined} failure
+   * @returns {MemberReadsEntry}
+   */
+  const withFailure = (prior, field, failure) => {
+    const old = prior[field];
+    if (
+      old?.code === failure?.code &&
+      old?.status === failure?.status &&
+      (failure === undefined || old?.atMs === failure.atMs)
+    )
+      return prior;
+    const { [field]: _dropped, ...rest } = prior;
+    return failure === undefined ? rest : { ...rest, [field]: failure };
+  };
+
+  /**
+   * A failure as the view shows it (`ReadFailure`).
+   * @param {ReadFailureRecord | undefined} failure
+   */
+  const failureView = failure => {
+    const at = isoOf(failure?.atMs);
+    if (failure === undefined || at === undefined) return undefined;
+    return harden({
+      code: failure.code.slice(0, limits.secretCodeUnits),
+      ...(failure.status === undefined ? {} : { status: failure.status }),
+      at,
+    });
   };
 
   /**
@@ -327,6 +420,13 @@ export const makeAccounts = ({
       account.markedUntil = isoOf(markedUntilMs);
     if (known?.code !== undefined)
       account.code = known.code.slice(0, limits.secretCodeUnits);
+    // The last failed reads (codes, statuses and times only), until a read
+    // of the same kind succeeds.
+    const reads = readsOf(entry);
+    const usageFailure = failureView(reads?.usageFailure);
+    if (usageFailure !== undefined) account.usageFailure = usageFailure;
+    const catalogFailure = failureView(reads?.catalogFailure);
+    if (catalogFailure !== undefined) account.catalogFailure = catalogFailure;
     return harden(account);
   };
 
@@ -759,12 +859,31 @@ export const makeAccounts = ({
       const { entry, before } = entries[index];
       if (result.status === 'fulfilled' && result.value.reading !== undefined) {
         if (keepReading(entry, result.value.reading)) changed = true;
-      } else if (
-        readingOfMember.get(entry.member) === before &&
-        demote(entry)
-      ) {
-        changed = true;
+        if (
+          changeReads(entry, prior =>
+            withFailure(prior, 'usageFailure', undefined),
+          )
+        )
+          changed = true;
+        return;
       }
+      if (result.status === 'rejected') {
+        // Keep why (a code and an HTTP status at most, never the message).
+        const { code, status } = /** @type {any} */ (result.reason ?? {});
+        const failure = checkFailure({
+          code: typeof code === 'string' ? code : 'READ_FAILED',
+          status,
+          atMs: now(),
+        }) ?? { code: 'READ_FAILED', atMs: now() };
+        if (
+          changeReads(entry, prior =>
+            withFailure(prior, 'usageFailure', failure),
+          )
+        )
+          changed = true;
+      }
+      if (readingOfMember.get(entry.member) === before && demote(entry))
+        changed = true;
     });
     if (changed) publish();
   };
@@ -852,6 +971,49 @@ export const makeAccounts = ({
       if ((await poolInfoOf(backend)) !== undefined)
         await refreshPools([backend], false);
     },
+    /**
+     * A member's model list was read (`makePoolCatalog` `onMemberRead`):
+     * keep the list for a restart, or the failure's code and time.
+     * @param {MemberEntry} entry
+     * @param {any} outcome
+     */
+    catalogRead: (entry, outcome) => {
+      ensureLoaded();
+      const before = readsOf(entry)?.catalogFailure;
+      changeReads(entry, prior => {
+        if (!outcome.ok)
+          return withFailure(
+            prior,
+            'catalogFailure',
+            checkFailure(outcome) ?? { code: 'READ_FAILED', atMs: now() },
+          );
+        const cleared = withFailure(prior, 'catalogFailure', undefined);
+        const models =
+          Number(outcome.models.length) <= MAX_REMEMBERED_MODELS
+            ? checkModels(
+                { readAt: outcome.readAt, list: outcome.models },
+                now(),
+              )
+            : undefined;
+        const { models: _old, ...rest } = cleared;
+        return models === undefined ? rest : { ...rest, models };
+      });
+      // A model list alone changes no view; a failure set or cleared does.
+      if (readsOf(entry)?.catalogFailure !== before) publish();
+    },
+    /**
+     * A member's model list from before a restart, under 24 hours old.
+     * @param {MemberEntry} entry
+     * @returns {{ readAt: number, models: any[] } | undefined}
+     */
+    rememberedModels: entry => {
+      ensureLoaded();
+      const models = readsOf(entry)?.models;
+      const fresh = models && checkModels(models, now());
+      return fresh
+        ? { readAt: fresh.readAt, models: [...fresh.list] }
+        : undefined;
+    },
     sessionOpened: (backend, session) => {
       poolOfSession.set(session, backend);
     },
@@ -872,12 +1034,16 @@ export const makeAccounts = ({
           : undefined,
         usage,
       ),
-    flush: () => writer.flush(),
+    flush: async () => {
+      await writer.flush();
+      await readsWriter.flush();
+    },
     rev: () => rev,
     subscriberCount: () => subscribers.size,
     close: async () => {
       for (const sub of [...subscribers]) closeSubscriber(sub, 'stopped');
       await writer.close();
+      await readsWriter.close();
     },
   });
 };

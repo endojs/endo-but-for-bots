@@ -444,6 +444,10 @@ export const makeSubscriptions = ({
     members: async (backend, spec) => [
       ...(await loadPool(backend, spec)).members,
     ],
+    // Each member's last good list survives a restart (the member reads
+    // file); each read's outcome (a code at most) shows on its account.
+    remembered: entry => accounts.rememberedModels(entry),
+    onMemberRead: (entry, outcome) => accounts.catalogRead(entry, outcome),
   });
 
   const credentialOps = makeCredentialOps({

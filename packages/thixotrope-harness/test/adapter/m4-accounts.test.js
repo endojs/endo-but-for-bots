@@ -32,6 +32,11 @@ import {
   makeReadingsWriter,
 } from '../../resources/agent-host/impl/subscriptions/account-file.js';
 import {
+  MEMBER_READS_FORMAT,
+  formatMemberReads,
+  loadMemberReads,
+} from '../../resources/agent-host/impl/subscriptions/member-reads.js';
+import {
   accountStatusDescription,
   makeAccountStatusTool,
 } from '../../resources/agent-host/impl/subscriptions/account-tool.js';
@@ -510,6 +515,97 @@ test('refresh reads on demand, once per member; a failed read demotes to remembe
   sub.close();
 });
 
+test('failure reasons: a failed usage read and a failed catalogue read show on the member as codes; both and the last model list survive a restart', async t => {
+  let refuse = true;
+  const readers = {
+    usage: async () => {
+      if (refuse)
+        throw Object.assign(Error('usage read failed: REJECTED'), {
+          code: 'REJECTED',
+          status: 401,
+          secret: 'tok-never-kept',
+        });
+      return readingOf(20, clock.now());
+    },
+  };
+  const { core, clock, file } = await setup(t, { readers });
+  const pool = Far('Backend', {});
+  const member = memberEntry('dead', 'k1', 'codex');
+  core.register(pool, { kind: 'codex-pool', label: 'p', members: [member] });
+  core.observe(pool, member, readingOf(5));
+  await clock.advance(1000);
+  const failedAt = new Date(clock.now()).toISOString();
+  let shown = (await core.accounts.refresh(pool)).pools[0].members[0];
+  t.is(shown.provenance, 'remembered');
+  t.deepEqual(shown.usageFailure, {
+    code: 'REJECTED',
+    status: 401,
+    at: failedAt,
+  });
+  t.true(matches(shown, m4Shapes.MemberAccount));
+  const models = [
+    {
+      id: 'gpt-fake-1',
+      title: 'Fake',
+      description: '',
+      reasoningEfforts: ['low'],
+    },
+  ];
+  core.catalogRead(member, {
+    ok: true,
+    readAt: clock.now(),
+    models: harden(models),
+  });
+  core.catalogRead(member, {
+    ok: false,
+    code: 'UNREACHABLE',
+    atMs: clock.now(),
+  });
+  shown = core.accounts.list().pools[0].members[0];
+  t.deepEqual(shown.catalogFailure, { code: 'UNREACHABLE', at: failedAt });
+  await core.flush();
+  const text = await readFile(join(file, '..', 'member-reads.json'), 'utf8');
+  t.false(text.includes('tok-never-kept'), 'no value on disk');
+  t.false(text.includes('usage read failed'), 'no message on disk');
+
+  // A new incarnation keeps both failures and the model list (< 24 h).
+  const again = makeAccounts({
+    file,
+    timers: clock.timers,
+    now: clock.now,
+    readers,
+  });
+  t.teardown(() => again.close());
+  again.register(pool, { kind: 'codex-pool', label: 'p', members: [member] });
+  const kept = again.accounts.list().pools[0].members[0];
+  t.deepEqual(kept.usageFailure, shown.usageFailure);
+  t.deepEqual(kept.catalogFailure, shown.catalogFailure);
+  t.deepEqual(again.rememberedModels(member), {
+    readAt: T0 + 1000,
+    models,
+  });
+  t.is(
+    again.rememberedModels(memberEntry('dead', 'k1', 'claude')),
+    undefined,
+    'another provider under the key is not this member',
+  );
+  // A good read clears the usage failure, a good list the catalogue's.
+  refuse = false;
+  await clock.advance(61_000);
+  again.catalogRead(member, {
+    ok: true,
+    readAt: clock.now(),
+    models: harden(models),
+  });
+  const cleared = (await again.accounts.refresh(pool)).pools[0].members[0];
+  t.is(cleared.provenance, 'observed');
+  t.is(cleared.usageFailure, undefined);
+  t.is(cleared.catalogFailure, undefined);
+  // Past 24 hours the list is not offered.
+  await clock.advance(24 * 60 * 60_000);
+  t.is(again.rememberedModels(member), undefined);
+});
+
 test('M4-FIX: refresh is single flight per member; the model refreshes a member at most once a minute', async t => {
   let reads = 0;
   /** @type {(() => void)[]} */
@@ -735,6 +831,61 @@ test('readings file: round trip, no source written, atomic replace, bad file is 
   await writeFile(file, '{not json');
   t.deepEqual(loadReadings(file), []);
   t.deepEqual(loadReadings(join(dir, 'missing.json')), []);
+});
+
+test('member reads file: round trip; a list past 24 h, a bad model, a bad key or a message are dropped', async t => {
+  const dir = await tempDir();
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+  const file = join(dir, 'member-reads.json');
+  const model = {
+    id: 'claude-fake',
+    title: 'Fake',
+    description: '',
+    reasoningEfforts: [],
+  };
+  const good = {
+    key: 'k1',
+    provider: 'claude',
+    models: { readAt: T0, list: [model] },
+    usageFailure: { code: 'REJECTED', status: 401, atMs: T0 },
+  };
+  await writeFile(file, formatMemberReads([good]));
+  t.deepEqual(loadMemberReads(file, T0 + 1000), [good]);
+  t.deepEqual(
+    loadMemberReads(file, T0 + 24 * 60 * 60_000),
+    [{ key: 'k1', provider: 'claude', usageFailure: good.usageFailure }],
+    'a list at 24 h is dropped; the failure stays',
+  );
+  await writeFile(
+    file,
+    JSON.stringify({
+      format: MEMBER_READS_FORMAT,
+      members: [
+        {
+          key: 'k2',
+          provider: 'codex',
+          models: { readAt: T0, list: [model, { ...model, id: 'a b' }] },
+          catalogFailure: { code: 'HTTP 401 body', atMs: T0 },
+        },
+        { key: '../x', provider: 'codex', usageFailure: good.usageFailure },
+        { key: 'k3', provider: 'api', usageFailure: good.usageFailure },
+        {
+          key: 'k4',
+          provider: 'codex',
+          usageFailure: { code: 'REJECTED', status: 7, atMs: T0 },
+        },
+      ],
+    }),
+  );
+  t.deepEqual(loadMemberReads(file, T0), [
+    {
+      key: 'k4',
+      provider: 'codex',
+      usageFailure: { code: 'REJECTED', atMs: T0 },
+    },
+  ]);
+  await writeFile(file, 'not json');
+  t.deepEqual(loadMemberReads(file, T0), []);
 });
 
 test('readings writer: a burst within flushMs is one write of the newest state', async t => {

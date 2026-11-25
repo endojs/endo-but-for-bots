@@ -270,7 +270,7 @@ const writeAtomic = async (file, text) => {
 
 /**
  * @typedef {object} ReadingsWriter
- * @property {(entries: () => readonly ReadingsEntry[]) => void} update
+ * @property {(entries: () => readonly any[]) => void} update
  *   the entries changed; `entries` is called when the write happens, so a
  *   burst of updates within `flushMs` costs one write of the newest state
  * @property {() => Promise<void>} flush write a pending update now
@@ -285,6 +285,8 @@ const writeAtomic = async (file, text) => {
  * @param {number} [options.flushMs] default 5,000
  * @param {(error: unknown) => void} [options.onError] a failed write (the
  *   next update tries again); never given a reading's content
+ * @param {(entries: readonly any[]) => string} [options.format] the file's
+ *   text (default `formatReadings`; the member reads file passes its own)
  * @returns {ReadingsWriter}
  */
 export const makeReadingsWriter = ({
@@ -292,6 +294,7 @@ export const makeReadingsWriter = ({
   timers,
   flushMs = 5000,
   onError = () => {},
+  format = formatReadings,
 }) => {
   const fileOf = typeof file === 'function' ? file : () => file;
   /** @type {(() => readonly ReadingsEntry[]) | undefined} */
@@ -311,7 +314,7 @@ export const makeReadingsWriter = ({
     if (source === undefined) return chain;
     chain = chain.then(async () => {
       try {
-        await writeAtomic(fileOf(), formatReadings(source()));
+        await writeAtomic(fileOf(), format(source()));
         writes += 1;
       } catch (error) {
         onError(error);

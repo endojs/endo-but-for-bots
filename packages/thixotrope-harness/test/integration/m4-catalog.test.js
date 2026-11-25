@@ -207,7 +207,11 @@ run(
     const unavailable = await E(gone.backend).listModels();
     t.is(unavailable.state, 'unavailable');
     t.deepEqual(unavailable.rows, []);
-    t.is(unavailable.error, texts.catalogUnavailable);
+    // The text names the member that failed and why (a code, no body).
+    t.is(
+      unavailable.error,
+      `${texts.catalogUnavailable}: "unreachable member": the provider did not answer`,
+    );
 
     // ---- 13. efforts at creation ----
     await t.throwsAsync(

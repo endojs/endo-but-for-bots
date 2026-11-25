@@ -306,7 +306,10 @@
   "m4Interfaces.SubscriptionsAdmin": "Add a subscription to a pool: checkCredential(pool, secret) answers ok or a code, never a value; addPoolMember(pool, member) applies makePool's rules and the credential check; addMember(pool, newPoolMember) checks first, then makes and adds in one step (m4-interfaces.md 3.1)",
   "m4MethodNames.SubscriptionsAdmin": "SubscriptionsAdmin gains checkCredential, addPoolMember and addMember",
   "m4Interfaces.CredentialOps": "checkCredential(secret, provider): the adapter reads the Secret and answers ok or a code, never the value (m4-interfaces.md 3.2)",
-  "m4MethodNames.CredentialOps": "CredentialOps gains checkCredential"
+  "m4MethodNames.CredentialOps": "CredentialOps gains checkCredential",
+  "m4Shapes.MemberAccount": "A member account may carry usageFailure and catalogFailure: the last failed read of each kind as a fixed code, an HTTP status and a time, never a body or a value",
+  "m4Shapes.PoolAccounts": "Its member accounts may carry usageFailure and catalogFailure (m4Shapes.ReadFailure)",
+  "m4Shapes.AccountsView": "Its member accounts may carry usageFailure and catalogFailure (m4Shapes.ReadFailure)"
  },
  "exportsRemoved": [
   "m1bInterfaces",
@@ -378,7 +381,8 @@
   "textOf.subagentEffortNone": "D-M9-25: a refusal of a spawn model or effort that names what is offered",
   "textOf.reservedAttachment": "D-M9-27, D-M9-28: a refusal of a spawn attachment under a label only the session program attaches",
   "m4Shapes.CredentialCheck": "A credential check answer: { ok: true } or { ok: false, code } with a fixed code, keys already in the gateway vocabulary",
-  "m4Shapes.NewPoolMember": "addMember's argument: a label and a Secret, weight and declared profile optional (the pool decides the provider); keys already in the gateway vocabulary"
+  "m4Shapes.NewPoolMember": "addMember's argument: a label and a Secret, weight and declared profile optional (the pool decides the provider); keys already in the gateway vocabulary",
+  "m4Shapes.ReadFailure": "Why a member read failed: a fixed code, an optional HTTP status and a time"
  },
  "vocabularyAdded": {
   "keys": [
@@ -459,7 +463,9 @@
    "warning",
    "workspace",
    "dictated",
-   "unmarked"
+   "unmarked",
+   "usageFailure",
+   "catalogFailure"
   ],
   "methods": [
    "alarm",

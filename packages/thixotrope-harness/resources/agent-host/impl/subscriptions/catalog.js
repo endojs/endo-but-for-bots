@@ -53,6 +53,7 @@ import { limits } from '../../../../guest/lib/limits.js';
 import { subscriptionLimits } from '../../../../guest/lib/subscription-limits.js';
 import {
   providerOfKind,
+  subscriptionTextOf,
   subscriptionTexts,
 } from '../../../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
@@ -392,6 +393,11 @@ harden(pooledClaudeModels);
  *   the pool's members in declaration order (`PoolStateBridge.load`)
  * @param {{ claudeContextLength: number, claudeMaxOutputTokens: number }} [options.settings]
  * @param {string} [options.clientVersion] the Codex model list's
+ * @param {(entry: import('./types.js').MemberEntry) => { readAt: number, models: PoolModel[] } | undefined} [options.remembered]
+ *   a member's last good model list from before a restart (under 24 h)
+ * @param {(entry: import('./types.js').MemberEntry, outcome: any) => void} [options.onMemberRead]
+ *   told after each read of a member's list: `{ ok: true, readAt,
+ *   models }` or `{ ok: false, code, status?, atMs }` (codes only)
  */
 export const makePoolCatalog = ({
   fetch,
@@ -400,6 +406,8 @@ export const makePoolCatalog = ({
   members,
   settings = subscriptionDefaults,
   clientVersion = CODEX_CLIENT_VERSION,
+  remembered = () => undefined,
+  onMemberRead = () => {},
 }) => {
   /**
    * Observations per member presence (a member read once serves every pool
@@ -408,6 +416,22 @@ export const makePoolCatalog = ({
    * @type {ReturnType<typeof makeOwnerTable<ReturnType<typeof makeCatalogOwner<PoolModel>>>>}
    */
   const owners = makeOwnerTable(MAX_OWNERS);
+
+  /**
+   * The member's credential; a failure keeps only its code (a credential
+   * failure's `subscriptionCodes` entry, else `UNREADABLE`).
+   * @param {import('./types.js').MemberEntry} entry
+   */
+  const credentialFor = async entry => {
+    try {
+      return await readCredential(entry);
+    } catch (error) {
+      const { code } = /** @type {any} */ (error ?? {});
+      throw Object.assign(Error('member credential unreadable'), {
+        code: typeof code === 'string' ? code : 'UNREADABLE',
+      });
+    }
+  };
 
   /**
    * @param {import('./types.js').MemberEntry} entry
@@ -420,7 +444,7 @@ export const makePoolCatalog = ({
         const read =
           entry.provider === 'claude'
             ? async () => {
-                const credential = await readCredential(entry);
+                const credential = await credentialFor(entry);
                 return readClaudeModels({
                   baseUrl: providerBaseUrl(spec.baseUrl, CLAUDE_BASE_URL),
                   accessToken: credential.accessToken,
@@ -428,7 +452,7 @@ export const makePoolCatalog = ({
                 });
               }
             : async () => {
-                const credential = await readCredential(entry);
+                const credential = await credentialFor(entry);
                 return readCodexModels({
                   baseUrl: providerBaseUrl(spec.baseUrl, CODEX_BASE_URL),
                   credential,
@@ -437,14 +461,35 @@ export const makePoolCatalog = ({
                 });
               };
         // No key of its own (the member's credential is read in `read`)
-        // and no log line per member: the listing logs the pool's.
-        return makeCatalogOwner({ read, now });
+        // and no log line per member: the listing logs the pool's. Each
+        // outcome (a code at most) goes to the member's account view.
+        const initial = remembered(entry);
+        return makeCatalogOwner({
+          read,
+          now,
+          ...(initial === undefined ? {} : { initial }),
+          onRead: outcome => onMemberRead(entry, outcome),
+        });
       })
     );
 
   /**
-   * The pool's combined, sorted models, or undefined when no member has a
-   * usable observation.
+   * The pool's unavailable text: which members failed and why (codes and
+   * HTTP statuses only), within the `Reason` bound.
+   * @param {readonly { label: string, failure?: { code: string, status?: number } }[]} failed
+   */
+  const unavailableText = failed =>
+    failed.length === 0
+      ? texts.catalogUnavailable
+      : cutUnits(
+          `${texts.catalogUnavailable}: ${subscriptionTextOf.catalogMembersFailed(failed)}`,
+          limits.reasonUnits,
+        );
+
+  /**
+   * The pool's combined, sorted models, or `{ failed }` (each active
+   * member's label and last failure) when no member has a usable
+   * observation.
    * @param {PoolCatalogRequest} request
    * @param {'snapshot' | 'admitting'} how
    */
@@ -452,26 +497,38 @@ export const makePoolCatalog = ({
     const entries = (await members(backend, spec)).filter(
       entry => entry.state === 'active',
     );
+    const memberOwners = entries.map(entry => ownerOf(entry, spec));
     const observations = await Promise.all(
-      entries.map(entry => ownerOf(entry, spec)[how]()),
+      memberOwners.map(owner => owner[how]()),
     );
     /** @type {PoolModel[][]} */
     const lists = [];
-    for (const observation of observations) {
+    /** @type {{ label: string, failure?: { code: string, status?: number } }[]} */
+    const failed = [];
+    observations.forEach((observation, index) => {
       if (observation !== undefined) lists.push(observation.models);
-    }
+      else {
+        const failure = memberOwners[index].failure();
+        failed.push({
+          label: entries[index].label,
+          ...(failure === undefined ? {} : { failure }),
+        });
+      }
+    });
     if (lists.length < entries.length)
       log('catalog-failed', {
         members: entries.length,
         usable: lists.length,
+        codes: failed.map(({ failure }) => failure?.code ?? 'NOT_READ'),
       });
-    if (lists.length === 0) return undefined;
+    if (lists.length === 0) return { failed };
     const models =
       providerOfKind[spec.kind] === 'codex'
         ? pooledCodexModels(lists)
         : pooledClaudeModels(lists, spec.contextLength);
     const sorted = models.sort(byTitleThenId);
     return {
+      failed,
       sorted,
       indexOf: new Map(sorted.map((model, index) => [model.id, index])),
     };
@@ -495,12 +552,16 @@ export const makePoolCatalog = ({
     });
   };
 
-  /** @type {import('../providers/catalog.js').ModelPage} */
-  const unavailable = harden({
-    rows: harden([]),
-    state: 'unavailable',
-    error: texts.catalogUnavailable,
-  });
+  /**
+   * @param {readonly { label: string, failure?: { code: string, status?: number } }[]} failed
+   * @returns {import('../providers/catalog.js').ModelPage}
+   */
+  const unavailable = failed =>
+    harden({
+      rows: harden([]),
+      state: 'unavailable',
+      error: unavailableText(failed),
+    });
 
   /**
    * The row of a creation's model (R4-21): the chosen id, its model.
@@ -512,7 +573,8 @@ export const makePoolCatalog = ({
     if (chosen === undefined || chosen === '')
       throw Error(subscriptionTexts.subscriptionModelRequired);
     const observation = await combined(options, 'admitting');
-    if (observation === undefined) throw Error(texts.catalogUnavailable);
+    if (observation.sorted === undefined)
+      throw Error(unavailableText(observation.failed));
     const index = observation.indexOf.get(chosen);
     if (index === undefined) throw Error(textOf.unknownProviderModel(chosen));
     return { chosen, model: observation.sorted[index] };
@@ -525,7 +587,8 @@ export const makePoolCatalog = ({
      */
     listModels: async options => {
       const observation = await combined(options, 'snapshot');
-      if (observation === undefined) return unavailable;
+      if (observation.sorted === undefined)
+        return unavailable(observation.failed);
       return pageOf({
         backend: options.backend,
         spec: options.spec,

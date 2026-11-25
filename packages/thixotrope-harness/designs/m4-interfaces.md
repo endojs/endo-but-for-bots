@@ -417,7 +417,14 @@ Cancel aborts the attempt in flight and stops the member loop (R4-7).
   limit (R4-18, Fae `src/subscription-models.js` `pooledSubscriptionModels`); `claude-pool` lists
   the union of the members' admitted models as the synthetic account `auto`, with efforts and no
   context length unless the pool spec sets `contextLength` (R4-19; open decision 13: D-M4-5).
-  A read where no member answers: `{ rows: [], state: 'unavailable', error: texts.catalogUnavailable }`.
+  A read where no member answers: `{ rows: [], state: 'unavailable', error }`, where `error` is
+  `texts.catalogUnavailable`, then each active member's label and why its last read failed
+  (`subscriptionTextOf.catalogMembersFailed`: from the read's fixed code and HTTP status, e.g.
+  `"work": the provider rejected the credential (HTTP 401)`), cut to `reasonUnits`; a
+  refused creation throws the same text. Never a body or a value. Each member read's outcome
+  goes to the accounts view (`catalogFailure` on the member, and the member reads file below),
+  and a member's last good list from the file serves after a restart while it is under the
+  24-hour bound (R4-104).
   Rows: `selectionId` and `default` exactly as M2 8.4 (a pool is never the default backend unless
   the operator makes it so).
 - ChatGPT discovery sends the Codex client version in the models query. The
@@ -449,6 +456,11 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   and `readingFromClaudeUsage`, codex-sandbox `subscription-auth.js` for Codex); `remembered` = a
   reading loaded from `readings.json` (an earlier incarnation's, or this one's after a failed
   refresh); `declared` = the member's `DeclaredProfile`; `unavailable` = none of these.
+- **Failure reasons** (harness): a member's account carries `usageFailure` and `catalogFailure`
+  (`ReadFailure`: a fixed `code` (`REJECTED` for HTTP 401 or 403, `UNREACHABLE`, `READ_FAILED`,
+  or a credential's code), the refusal's HTTP `status`, and `at`) for its last failed usage read
+  and model list read, until a read of the same kind succeeds; so a remembered reading after a
+  failed refresh is visibly failing. Adapter-side only: a manager installed before this works.
 - **Push, never poll** (R4-85): every new reading or member state change publishes one
   `AccountsBatch` (the whole view, `rev` + 1) on an adapter-side channel with M2's channel
   bounds (`channelLimits`); `Accounts.watch(rev?)` subscribes (gateway, in process). Zero vat
@@ -492,6 +504,12 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   'thixotrope-harness-readings-3', members: [{ key, provider, reading, history? }] }`, no token,
   no header value, no body; written temp + rename + fsync at most every 5 s. Formats 2 and 1
   still load, with no history.
+- **Member reads file**: `<state>/agent-host/subscriptions/member-reads.json`, next to the
+  readings, `{ format: 'thixotrope-harness-member-reads-1', members: [{ key, provider, models?:
+  { readAt, list }, catalogFailure?, usageFailure? }] }`: each member's last good model list (at
+  most 128 models, dropped whole at 24 hours or on any bad entry) and its last failures as codes,
+  statuses and times; same writer and bounds as the readings file (one entry per member, at
+  most `maxMembers`).
   A full Codex usage refresh establishes the account's window list.
   Inference headers update individual confirmed windows. Positive usage, a positive
   duration or a reset timestamp can establish a window from headers alone.
@@ -815,7 +833,7 @@ a manager -> adapter call once after a retired break (M2), which for `poolState`
   keys; `PoolState` carries keys, never values; the sign-in helper sends sealed boxes; the browser
   writer is called in process (the `largeCalls` exemption of `m4-secrets.js` keeps it so for
   values up to `browserSecretBytes`); failure texts and the event log carry fixed texts and codes only;
-  `readings.json` holds no token. Acceptance 15 greps for every test credential value.
+  `readings.json` and `member-reads.json` hold no token. Acceptance 15 greps for every test credential value.
 - **Renewal holds one key's accessor** (W-5 fixed): `credentialFor(key)`, not the store or the
   Secrets manager.
 - **Redirects refused** on every provider and token request (R7-29); the authorization header is

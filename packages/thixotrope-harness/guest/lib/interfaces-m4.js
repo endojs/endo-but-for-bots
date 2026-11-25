@@ -332,6 +332,20 @@ const m4ShapeBuilders = {
       {},
       { expiresAt: text(subscriptionLimits.timeUnits), label: S.Label },
     ),
+  /**
+   * Why a member's last catalogue or usage read failed (harness): a fixed
+   * code (`REJECTED`, `UNREACHABLE`, `READ_FAILED`, or a credential's
+   * `subscriptionCodes` entry), the HTTP status of a refusal, and when.
+   * Never a body, a message or a value.
+   */
+  ReadFailure: () =>
+    record(
+      {
+        code: text(limits.secretCodeUnits),
+        at: text(subscriptionLimits.timeUnits),
+      },
+      { status: atMost(599) },
+    ),
   /** One member's account as a person or the model sees it. */
   MemberAccount: () =>
     record(
@@ -350,6 +364,8 @@ const m4ShapeBuilders = {
         at: text(subscriptionLimits.timeUnits),
         markedUntil: text(subscriptionLimits.timeUnits),
         code: text(limits.secretCodeUnits),
+        usageFailure: T.ReadFailure,
+        catalogFailure: T.ReadFailure,
       },
     ),
   /** The accounts behind one pool backend (R4-84: selection is always `auto`). */
