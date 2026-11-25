@@ -34,10 +34,19 @@
  * `E(session).enqueueMessageOnce(submission, requestId, at, attachments)`;
  * otherwise `enqueueOnce` as before.
  *
- * M11 (m11-interfaces.md 9.1): `{ spoken: true }` in the same options marks
- * a message sent from spoken mode; it is passed on as the enqueue methods'
- * last argument `{ spoken: true }`, and only then (a typed send's calls are
- * unchanged). `edit` takes no marker: the entry keeps its own.
+ * M11 (m11-interfaces.md 9.1): `spoken: true` and `dictated: true` in the
+ * same options mark a message sent from spoken mode (its reply is read
+ * aloud) and one whose text came from dictation; their true facts are
+ * passed on as the enqueue methods' last argument, and only then (a typed
+ * send's calls are unchanged). A session created under an earlier program
+ * keeps that program's guard (a deploy replaces the program for later
+ * creations only, `guest/factory/root.js`), which refuses the extra
+ * argument; so before the first marked send to a session the Composer reads
+ * its interface guard (`__getInterfaceGuard__`, the method every exo
+ * answers; never a call made to fail) and sends the marker only when the
+ * method's guard has an optional argument. Otherwise the message goes
+ * unmarked and the receipt says so (`unmarked: true`) for the page to show.
+ * `edit` takes no marker: the entry keeps its own.
  *
  * A staged file's fate after a failed call (HR-SYN-10). Whatever the
  * Composer can check is checked before staging: blank text, the package
@@ -62,6 +71,7 @@ import { limits } from '../../../guest/lib/limits.js';
 import { utf8Bytes } from '../../../guest/lib/bounded.js';
 import { isRetiredBreak } from '../../../guest/lib/retired.js';
 import { checkAttachments } from '../../../guest/session/packages.js';
+import { markerOf } from '../../../guest/lib/pending-queue.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -122,6 +132,25 @@ export const isEditRefusal = error => keptNothing(error, EDIT_REFUSALS);
 harden(isEditRefusal);
 
 /**
+ * Whether the method guard `name` of `guard` (an exo's interface guard, as
+ * `__getInterfaceGuard__` answers it) takes an optional argument: the
+ * spoken marker's slot (M11), absent from every earlier program's
+ * `enqueueOnce` and `enqueueMessageOnce`.
+ * @param {any} guard
+ * @param {string} name
+ */
+export const takesMarker = (guard, name) => {
+  try {
+    const optional =
+      guard?.payload?.methodGuards?.[name]?.payload?.optionalArgGuards;
+    return Array.isArray(optional) && optional.length > 0;
+  } catch {
+    return false;
+  }
+};
+harden(takesMarker);
+
+/**
  * @param {object} [options]
  * @param {() => number} [options.now] ms since the epoch (tests inject a clock)
  * @param {import('./blobs.js').BlobStore} [options.blobs] stages text over
@@ -134,6 +163,33 @@ export const makeComposer = ({ now = () => Date.now(), blobs } = {}) => {
    * @type {WeakMap<object, any>}
    */
   const sessionOfEntry = new WeakMap();
+  /**
+   * Session -> its interface guard (M11), read once: a session's program,
+   * and so its guard, is fixed for its life. A failed read is not kept.
+   * @type {WeakMap<object, Promise<any>>}
+   */
+  const guardOf = new WeakMap();
+  /**
+   * Whether `session`'s method `name` accepts the spoken marker.
+   * @param {any} session
+   * @param {string} name
+   */
+  const acceptsMarker = async (session, name) => {
+    let guard = guardOf.get(session);
+    if (guard === undefined) {
+      // The introspection method every exo answers (`@endo/exo`); it is
+      // not on the typed `E` surface.
+      // eslint-disable-next-line no-underscore-dangle
+      guard = /** @type {Promise<any>} */ (E(session).__getInterfaceGuard__());
+      guardOf.set(session, guard);
+    }
+    try {
+      return takesMarker(await guard, name);
+    } catch {
+      guardOf.delete(session);
+      return false;
+    }
+  };
 
   /**
    * Stage `text` for `owner`, or reject with `textOf.stagingFailed`.
@@ -173,12 +229,17 @@ export const makeComposer = ({ now = () => Date.now(), blobs } = {}) => {
      * @param {any} session
      * @param {string} text
      * @param {string} requestId
-     * @param {{ attachments?: any[], spoken?: boolean }} [options] M5, M11
+     * @param {{ attachments?: any[], spoken?: boolean, dictated?: boolean }} [options] M5, M11
      */
     async submit(session, text, requestId, options = undefined) {
       if (text.trim() === '') throw Error(texts.blankSubmission);
       const attachments = options?.attachments ?? [];
-      const marker = options?.spoken === true ? [harden({ spoken: true })] : [];
+      const facts = markerOf(options);
+      const method =
+        attachments.length > 0 ? 'enqueueMessageOnce' : 'enqueueOnce';
+      const marked = Object.keys(facts).length > 0;
+      const unmarked = marked && !(await acceptsMarker(session, method));
+      const marker = marked && !unmarked ? [facts] : [];
       if (attachments.length > 0) {
         if (text.length > limits.packageTextUnits) {
           throw Error(textOf.packageTooLong(text.length));
@@ -198,8 +259,14 @@ export const makeComposer = ({ now = () => Date.now(), blobs } = {}) => {
               ...marker,
             )
           : E(session).enqueueOnce(submission, requestId, now(), ...marker);
+      /** @param {any} receipt */
+      const answer = receipt =>
+        remember(
+          session,
+          unmarked ? harden({ ...receipt, unmarked: true }) : receipt,
+        );
       if (utf8Bytes(text) <= limits.inlineBytes) {
-        return remember(session, await enqueue(harden({ text })));
+        return answer(await enqueue(harden({ text })));
       }
       const staged = await stage(text, session);
       /** @type {any} */
@@ -218,7 +285,7 @@ export const makeComposer = ({ now = () => Date.now(), blobs } = {}) => {
       // receipt) keeps the first one's blob: this one's file has no holder
       // (M1b QC, J-0393).
       if (receipt?.duplicate === true) void blobs?.discard(staged.blob);
-      return remember(session, receipt);
+      return answer(receipt);
     },
     /**
      * @param {any} entry

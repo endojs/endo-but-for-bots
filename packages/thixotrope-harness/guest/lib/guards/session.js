@@ -1140,6 +1140,10 @@ const m1aShapeBuilders = {
         entry: M.remotable('QueueEntry'),
         turn: M.remotable('Turn'),
         turnId: S.Id,
+        // M11 (m11-interfaces.md 9.1): set by `Composer.submit` only, when
+        // the session's program predates the spoken marker and the message
+        // went unmarked; a session never sets it.
+        unmarked: true,
       },
     ),
   // M5 widening (W5.3 for W5.1; H-6): optional data fields, no objects.
