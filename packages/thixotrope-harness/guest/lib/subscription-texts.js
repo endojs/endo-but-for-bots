@@ -56,9 +56,31 @@ export const subscriptionTexts = harden({
   /** Harness (a member added to a pool): a credential of the other provider. */
   credentialWrongProvider:
     'This secret holds a credential for another provider than the pool',
-  /** Harness (a member added to a pool): the check found nothing wrong. */
+  /**
+   * Harness (a member added to a pool): the check found nothing wrong. It
+   * reads the format and the local expiry only: a token revoked or rotated
+   * at the provider, or a suspended account, passes; the first usage read
+   * after the add is what asks the provider.
+   */
   credentialReady:
-    'This secret holds a credential in the format this provider expects',
+    'Format verified, not yet verified with the provider: the first usage read after adding asks the provider',
+  /** Harness: the first usage read of a member just added succeeded. */
+  firstReadOk: 'The provider accepted the credential (first usage read)',
+  /** Harness: a member just added has had no usage read yet. */
+  firstReadPending: 'Not yet verified with the provider: no usage read yet',
+  /**
+   * Harness: the first usage read of a member just added failed with
+   * REJECTED (HTTP 401 or 403).
+   */
+  firstReadRejected:
+    'The provider rejected the credential. Retire this subscription, or replace the secret and try again.',
+  /**
+   * Harness: the installed subscriptions manager has no `addMember` (a
+   * state provisioned before it keeps its manager until provisioned
+   * fresh).
+   */
+  managerPredatesAdd:
+    "This installation's subscriptions manager predates adding members, so subscriptions cannot be added here. Provision the subscriptions manager fresh to add them.",
   /** Harness: `addPoolMember` to a pool at `maxPoolMembers`. */
   poolFull: 'This pool already has as many members as a pool can hold',
   /** Harness: a credential check of a staged import not yet activated. */

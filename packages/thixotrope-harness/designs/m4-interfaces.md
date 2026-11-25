@@ -220,6 +220,19 @@ field is `NO_PROVIDER` (the read path still accepts it, but a check cannot tell 
 is for); anything else (not JSON, too long, no credential form) is `INVALID`. Store
 failures keep their code (`REVOKED`, `UNKNOWN_SECRET`, also for a presence the sink does not
 know); any other read failure is `READ_FAILED`. No message, token or parse detail passes through.
+A passing check is format and local expiry only: it cannot see a refresh token revoked at the
+provider (a `codex logout`), a token rotated away by another client or a suspended account, so
+the UI words it "format verified, not yet verified with the provider"
+(`subscriptionTexts.credentialReady`). No pre-add probe asks the provider: renewal would rotate
+and write the Secret before it is a member. The add's pool refresh is the member's first usage
+read, and the Subscriptions panel shows its result on the new member (`firstReadOk`, or
+`firstReadRejected` with Retire, inline-confirmed, and "replace the secret and try again").
+
+The Add subscription form asks `E(admin).__getMethodNames__()` once per connection: a manager
+without `addMember` and `checkCredential` (a state provisioned before them keeps its installed
+manager while the adapter and UI load from the checkout) gets
+`subscriptionTexts.managerPredatesAdd` in place of the form. The failure reasons (6) are
+adapter-side only and need no manager change.
 `poolsChanged()` also marks every pool the `Accounts` view keeps stale, so its next read
 (`forBackend`, `history`, `refresh`) describes the pool again and an added member shows at once.
 
@@ -516,7 +529,9 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   An explicit window in a full usage response can also be confirmed at zero usage.
   When loading version 1, the adapter drops ambiguous Codex entries that recorded only zero.
   The chip displays current or remembered provider windows. The Subscriptions panel
-  also lists operator-declared windows and identifies their source.
+  also lists operator-declared windows and identifies their source, and names, on each member
+  with one, its last failed usage and model list reads (`MemberStatus`: what, why, when and, for
+  a rejected credential, "sign in again and replace the secret").
 - **Quota history** (`AH/subscriptions/quota-history.js`): each kept provider reading (headers or
   usage read) appends the windows that reading itself reported as samples `{ at, usedPercent,
   resetsAtMs?, lastAt?, count? }` to the `history` of its readings-file entry, one series per
