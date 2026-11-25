@@ -54,15 +54,15 @@ sections 2, 3, 6 and 8, item by item.
 
 ## 0. Files of the contract (committed with this document)
 
-| file | what it fixes | read by |
-|---|---|---|
-| `AH/speech/audio-protocol.js` | the `/audio` frame format, frame kinds, close codes, stream numbering, `audioLimits`, `audioTimeouts`, event types, phases, `speechTexts`, `speechTextOf`; no imports (browser and adapter) | W11.5, W11.6, W11.8, W11.9 |
-| `AH/speech/engine-protocol.js` | engine kinds, the speech-in process protocol (Endo's Moonshine JSON lines), Piper flags, the voice files, the `openai-audio` paths and constants, the engine environment allowlist, restart pacing, log events | W11.1, W11.2, W11.4, W11.5 |
-| `AH/speech/engine-types.js` | JSDoc types of the adapter-internal objects: `SttEngine`, `Utterance`, `UtteranceSink`, `TtsEngine`, `Synthesis`, `PlaybackSink`, `TtsCatalogue`, `CheckedTtsOptions`, `SpeechText`, `TurnTextSink`, `TurnSpeechView` | W11.1-W11.5 |
-| `guest/lib/voice-preferences.js` | preference fields, `ttsRanges`, `ttsDefaults`, `voiceLimits`, the shortcut's default preset label, `voiceTexts`, `voiceTextOf` (plain data: vats, adapter and browser import it) | W11.2, W11.5, W11.7, W11.8 |
-| `guest/lib/speech-guards.js` | Node-only guards of the gateway-local `Speech` and `AudioPort` and their shapes (`speechShapes`, `speechInterfaces`, `speechMethodNames`, `vocabularyShapes()`) | W11.5, W11.8 |
-| `UI/src/voice/endpointing-defaults.js` | R5-19..R5-33 constants, the junk list, capture block and constraints | W11.6, W11.8 |
-| `UI/src/voice/texts.js` | browser texts of the voice feature | W11.8 |
+| file                                   | what it fixes                                                                                                                                                                                                         | read by                    |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| `AH/speech/audio-protocol.js`          | the `/audio` frame format, frame kinds, close codes, stream numbering, `audioLimits`, `audioTimeouts`, event types, phases, `speechTexts`, `speechTextOf`; no imports (browser and adapter)                           | W11.5, W11.6, W11.8, W11.9 |
+| `AH/speech/engine-protocol.js`         | engine kinds, the speech-in process protocol (Endo's Moonshine JSON lines), Piper flags, the voice files, the `openai-audio` paths and constants, the engine environment allowlist, restart pacing, log events        | W11.1, W11.2, W11.4, W11.5 |
+| `AH/speech/engine-types.js`            | JSDoc types of the adapter-internal objects: `SttEngine`, `Utterance`, `UtteranceSink`, `TtsEngine`, `Synthesis`, `PlaybackSink`, `TtsCatalogue`, `CheckedTtsOptions`, `SpeechText`, `TurnTextSink`, `TurnSpeechView` | W11.1-W11.5                |
+| `guest/lib/voice-preferences.js`       | preference fields, `ttsRanges`, `ttsDefaults`, `voiceLimits`, the shortcut's default preset label, `voiceTexts`, `voiceTextOf` (plain data: vats, adapter and browser import it)                                      | W11.2, W11.5, W11.7, W11.8 |
+| `guest/lib/speech-guards.js`           | Node-only guards of the gateway-local `Speech` and `AudioPort` and their shapes (`speechShapes`, `speechInterfaces`, `speechMethodNames`, `vocabularyShapes()`)                                                       | W11.5, W11.8               |
+| `UI/src/voice/endpointing-defaults.js` | R5-19..R5-33 constants, the junk list, capture block and constraints                                                                                                                                                  | W11.6, W11.8               |
+| `UI/src/voice/texts.js`                | browser texts of the voice feature                                                                                                                                                                                    | W11.8                      |
 
 The factory-vat guards (`Voice`, `VoicePreferences`, `SpeechSettings`, `HarnessRoot.configureSpeech`,
 ...) cannot be a new file: they belong in the factory's table, so they are seam H1, with their
@@ -75,19 +75,19 @@ X-02); no M11 unit edits `guards/factory.js`.
 
 ### 1.1 What M11 delivers
 
-| P | M11 builds | left to |
-|---|---|---|
-| P-30 speech in | streamed 16 kHz mono s16le in over the page's `/audio` socket; cumulative partials (replace, not append) and a final after `end`; one resident engine (`process` kind: Endo's Moonshine daemon, respawned on next use) or an HTTP provider (`openai-audio` kind, key through a grant); every stream timed out | - |
-| P-31 speech out | one synthesis per reply, sentence-pipelined, PCM streamed as produced with its sample rate; catalogue with range checks; Piper (`process`) or the HTTP provider; a warm spare process for the shared preferences (R5-66 improved) | - |
-| P-32 speech view | `AudioPort.speak(session, turnId)`: the turn's assistant text from the session's live channel in the adapter (snapshot, then deltas), code fences and markdown removed, sentence split; a finished last turn replays to the end | - |
-| P-33 endpointing | client calibration, threshold, drift, trailing silence, grace, minimum speech, pre-roll, junk filter, editable compose box, auto-send | - |
-| P-34 playback | gapless scheduling, soft barge-in that stops playback and synthesis but not the turn; mute stops the current reply; Stop cancels the turn | - |
-| P-35 preferences | shared voice preferences in the factory vat (device A writes, device B uses), device cache, voice catalogue, mic and speaker toggles, level meter, per-message Play button, spoken prompt only for voice-started sessions | - |
-| P-49 voice shortcut | the shortcut's preset chosen by object with the catalogue revision (R5-53); "Talk" starts a spoken session from it | - |
-| P-61 voice preset | the built-in `voice` preset's backend and model pinned by provisioning (R4-89); G-11 fallback to the factory default with a warning | the preset's workspace and shell objects (M6: until M6 merges, `voice` is listed `available: false`) |
-| P-66 wake lock | screen wake lock while the mic is on, speech plays or the active turn runs | - |
-| R6-60 launch | `Voice.startVoiceSession({ invocationId })`: a durable claim per id (32 kept) so a redelivered launch answers the same session | the Android shell (P-60, open decision 7) |
-| R5-67, R5-68 | timeouts on every stream; bounded buffers and backpressure both ways; AudioWorklet capture instead of `ScriptProcessorNode` | - |
+| P                   | M11 builds                                                                                                                                                                                                                                                                                                    | left to                                                                                              |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| P-30 speech in      | streamed 16 kHz mono s16le in over the page's `/audio` socket; cumulative partials (replace, not append) and a final after `end`; one resident engine (`process` kind: Endo's Moonshine daemon, respawned on next use) or an HTTP provider (`openai-audio` kind, key through a grant); every stream timed out | -                                                                                                    |
+| P-31 speech out     | one synthesis per reply, sentence-pipelined, PCM streamed as produced with its sample rate; catalogue with range checks; Piper (`process`) or the HTTP provider; a warm spare process for the shared preferences (R5-66 improved)                                                                             | -                                                                                                    |
+| P-32 speech view    | `AudioPort.speak(session, turnId)`: the turn's assistant text from the session's live channel in the adapter (snapshot, then deltas), code fences and markdown removed, sentence split; a finished last turn replays to the end                                                                               | -                                                                                                    |
+| P-33 endpointing    | client calibration, threshold, drift, trailing silence, grace, minimum speech, pre-roll, junk filter, editable compose box, auto-send                                                                                                                                                                         | -                                                                                                    |
+| P-34 playback       | gapless scheduling, soft barge-in that stops playback and synthesis but not the turn; mute stops the current reply; Stop cancels the turn                                                                                                                                                                     | -                                                                                                    |
+| P-35 preferences    | shared voice preferences in the factory vat (device A writes, device B uses), device cache, voice catalogue, mic and speaker toggles, level meter, per-message Play button, spoken prompt only for voice-started sessions                                                                                     | -                                                                                                    |
+| P-49 voice shortcut | the shortcut's preset chosen by object with the catalogue revision (R5-53); "Talk" starts a spoken session from it                                                                                                                                                                                            | -                                                                                                    |
+| P-61 voice preset   | the built-in `voice` preset's backend and model pinned by provisioning (R4-89); G-11 fallback to the factory default with a warning                                                                                                                                                                           | the preset's workspace and shell objects (M6: until M6 merges, `voice` is listed `available: false`) |
+| P-66 wake lock      | screen wake lock while the mic is on, speech plays or the active turn runs                                                                                                                                                                                                                                    | -                                                                                                    |
+| R6-60 launch        | `Voice.startVoiceSession({ invocationId })`: a durable claim per id (32 kept) so a redelivered launch answers the same session                                                                                                                                                                                | the Android shell (P-60, open decision 7)                                                            |
+| R5-67, R5-68        | timeouts on every stream; bounded buffers and backpressure both ways; AudioWorklet capture instead of `ScriptProcessorNode`                                                                                                                                                                                   | -                                                                                                    |
 
 ### 1.2 Not in M11
 
@@ -133,14 +133,14 @@ submission (R5-7).
 `frameBytes` 24,576 (string content of one message into or out of a vat), the hub's vat frame
 ceiling 65,536 encoded bytes (CC-027, `config/defaults.js` `vatFrameBytes`), `inlineBytes` 8,192.
 
-| message into or out of a vat | largest | how it is bounded |
-|---|---|---|
-| `Voice.setPreferences(patch)` in | about 0.4 KB (a 128-unit voice and four numbers) | guard: closed record, `voiceLimits.voiceUnits` |
-| `Voice.getPreferences()` out | about 0.4 KB | same |
+| message into or out of a vat                                              | largest                                                                                                                                                                                                                                                                                                                                                                        | how it is bounded                                                    |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `Voice.setPreferences(patch)` in                                          | about 0.4 KB (a 128-unit voice and four numbers)                                                                                                                                                                                                                                                                                                                               | guard: closed record, `voiceLimits.voiceUnits`                       |
+| `Voice.getPreferences()` out                                              | about 0.4 KB                                                                                                                                                                                                                                                                                                                                                                   | same                                                                 |
 | `HarnessRoot.configureSpeech(settings)` in / `Voice.speechSettings()` out | at most 2 x 32 arguments of 4,096 units in the worst case: 786,432 bytes estimated, **too big**; therefore the guard bounds the whole record: a process command is at most 32 arguments **and** the factory refuses settings whose estimated size (units x 3) exceeds `frameBytes - 2,048` (`voiceTexts.speechSettingsInvalid`) before keeping them, so the answer always fits | appendix A `SpeechSettings`; W11.7 tests the refusal at 22,529 bytes |
-| `Voice.startVoiceSession(request)` in / answer out | about 0.3 KB in; out a `Session` presence, a 64-unit key, a 300-unit warning | guard |
-| `Voice.setVoicePreset(preset, revision)` | tiny | guard |
-| anything audio | 0: never into a vat | D-M11-1 |
+| `Voice.startVoiceSession(request)` in / answer out                        | about 0.3 KB in; out a `Session` presence, a 64-unit key, a 300-unit warning                                                                                                                                                                                                                                                                                                   | guard                                                                |
+| `Voice.setVoicePreset(preset, revision)`                                  | tiny                                                                                                                                                                                                                                                                                                                                                                           | guard                                                                |
+| anything audio                                                            | 0: never into a vat                                                                                                                                                                                                                                                                                                                                                            | D-M11-1                                                              |
 
 A page's calls to the gateway-local `Speech` and `AudioPort` never reach a vat; the bridge's
 frame guard still bounds them at `frameBytes`, except `Speech.replay`, a registered `LargeCall`
@@ -154,7 +154,7 @@ Blobs).
 **D-M11-1. Audio is a data path in the agent-host adapter; vats only decide.** Speech in, speech
 out, the speech view and every engine are objects of the agent-host process, made per adapter
 incarnation by the gateway extension `GW/extensions/speech.js`. The factory vat keeps the durable
-decisions: preferences, the shortcut preset, launch claims and the speech settings. *Rejected:* a
+decisions: preferences, the shortcut preset, launch claims and the speech settings. _Rejected:_ a
 speech vat or session part (each 85 ms block would be a crank of about 70 ms and every byte
 hardened at about 10 us, architecture fact 2); the manager vat's `AgentHostAdmin.speech()`
 (architecture 3.3; see D-M11-2).
@@ -166,7 +166,7 @@ the factory's `Voice`. The speech host reads them through the gateway's `Operato
 when older than `settingsMaxAgeMs`, section 6.4) and reads the key through the grant in process
 (`context.readGrant`, given to the speech extension only: seam H6, D-M11-22), as API backends do
 (D-6). The settings are written only by `HarnessRoot.configureSpeech` (D-M11-21).
-*Rejected:* `AgentHostAdmin.speech()`
+_Rejected:_ `AgentHostAdmin.speech()`
 with a kit registration (a manager-part change is a reinstall that breaks live references until
 W13.2, rule 5 of the review; it would be this group's only manager change); a JSON file in the
 state directory (it cannot hold a `ReadGrant`, so a provider key would have to be a name or a
@@ -177,7 +177,7 @@ streams opened by CapTP calls, their data in band.** `Speech.openAudio()` answer
 the page opens `/audio` and sends HELLO with the token (never in the URL: logs and proxies). Each
 stream is opened by a guarded CapTP call that answers its number (`AudioPort.transcribe()`,
 `AudioPort.speak(session, turnId, options)`, `Speech.replay(port, pieces, options)`); audio, PCM
-and stream events then travel as binary frames (section 4), pushed, not pulled. *Rejected:*
+and stream events then travel as binary frames (section 4), pushed, not pulled. _Rejected:_
 R5-2's audio as object messages over the CapTP socket (base64 inside JSON adds 34 % (3,653 bytes
 for a 2,720-byte block, J-1310), each stream a pull per chunk costing one network round trip, and
 streams would share the bridge's 32 calls in flight with the UI; recorded as a departure, O-5);
@@ -188,7 +188,7 @@ frame); one socket per stream (a handshake per utterance through the proxy).
 `AH/speech/turn-view.js` calls `context.live.subscribe(session)` (the gateway context's `Live`, the
 same object pages use, M3 3.2) and reads the snapshot then the deliveries for `turnId`; a staged
 `final` is read through `context.content` in process. Zero vat deliveries, and it uses step 3's
-shared channel subscriber when that lands. *Rejected:* an entry in `AH/channel-taps.js` (a shared
+shared channel subscriber when that lands. _Rejected:_ an entry in `AH/channel-taps.js` (a shared
 hook table HR-SYN-23 marks for deletion; a tap sees every delivery of every session and runs in
 the publish path); replaying finished turns through `Turn.getContent` (a session crank per page;
 the client already holds a finished turn's text, R5-45).
@@ -200,19 +200,19 @@ HTTP API of the OpenAI audio shape, the key read per request in process). Every 
 runs against fakes: fake process engines (`test/fixtures/fake-stt.mjs`, `fake-tts.mjs`) and a fake
 speech server bound to loopback (`test/fixtures/fake-speech-server.mjs`); the real engines and a
 real provider are `[real-moonshine]`, `[real-piper]`, `[real-provider]` repeats for an owner run.
-*Rejected:* loopback servers wrapping the local engines (Piper reads stdin only; it would add a
+_Rejected:_ loopback servers wrapping the local engines (Piper reads stdin only; it would add a
 process); one kind only (either breaks spec parity or the owner's provider rule). Subscription
 pools (M4) carry no speech API, so a provider key is an API key `Secret` behind a `ReadGrant` (O-10).
 
 **D-M11-6. The speech text pipeline lives in the adapter.** `AH/speech/code-filter.js` (Endo's
 `speech-code-filter.js`) and `AH/speech/speech-text.js` (markdown strip, sentence split, merge,
 forced cut), not `guest/lib/` as the old milestone text said: no vat runs them, so they cost no
-bundle byte. *Rejected:* `guest/lib/speech-code-filter.js` (would invite a vat use and confuse the
+bundle byte. _Rejected:_ `guest/lib/speech-code-filter.js` (would invite a vat use and confuse the
 guest lint).
 
 **D-M11-7. `speak` names the turn by `turnId` within the session's channel.** The live channel
 numbers every event by `turnId`, `History.turnContent(session, turnId)` takes it the same way (M2),
-and clients compare turns by `turnId` (architecture 9). *Rejected:* a `Turn` presence (mapping it to
+and clients compare turns by `turnId` (architecture 9). _Rejected:_ a `Turn` presence (mapping it to
 the channel's events costs a session crank and a delivery per `speak` (`getStatus`), and a page may
 hold only the newest 32 `Turn`s, J-9152). `speak` speaks only the channel's current or last turn;
 any other answers `speechTexts.turnNotLive` and the page uses `Speech.replay`.
@@ -226,7 +226,7 @@ lines (seam H2), `main.js` one and `root.js` two (seam H2b, for D-M11-21).
 a session from a preset that pins a backend and model, `startVoiceSession` calls
 `E(backend).resolveModel(modelId)`; any rejection means "not available": the session is created on
 the factory default backend and model with `voiceTextOf.voiceModelUnavailable(modelId)` as the
-answer's `warning`. *Rejected:* trying `createSession` and matching its failure text (T4).
+answer's `warning`. _Rejected:_ trying `createSession` and matching its failure text (T4).
 
 **D-M11-10. Timeouts on every stream (R5-67 fixed).** HELLO 5 s; an unused token 30 s; no audio on
 an open utterance 30 s (`sttIdleMs`); no engine output for an utterance 10 s, or no final 10 s
@@ -251,9 +251,10 @@ its per-connection state in its own module closure keyed by `context.powers` (a 
 M4's accounts and M5's mentions do (HR-SYN-6 (a) moves all of them onto `FeatureContext` in step
 5). The controller gets one seam only: a submission notice (H10).
 
-**D-M11-14. No session part and no session change.** Spoken sessions already get the spoken
-introduction (M5, `prompt-sections.js`), a voice message is an ordinary Composer submission, and
-interruption is not told to the model (R5-47). The session bundle does not change.
+**D-M11-14. No session part; one per-turn field (amended by 9.1).** A voice message is a Composer
+submission carrying the optional spoken marker (9.1), which the session keeps on its queue entry
+and its `turn-started` record and turns into a note on that turn's system prompt. Interruption is
+not told to the model (R5-47). No new session part.
 
 **D-M11-15. Every process engine exits when its standard input ends.** That is how engines die with
 the adapter: the adapter process exits on IPC disconnect (`pkg/src/platform/node/
@@ -262,6 +263,9 @@ left (K11-1).
 
 **D-M11-16. Only voice-started sessions are spoken (R5-70 fixed; spec-digest "every chat-UI session gets the spoken-reply prompt").** `startVoiceSession` creates with `spoken: true`; the new-session dialog and typed
 sends create plain sessions. Departs from R5-52's "the UI creates every session spoken" (O-2).
+Amended by 9.1: `spoken: true` at creation no longer changes the system prompt (every session
+composes the plain introduction); a Talk session is spoken because its view opens in spoken mode,
+and each dictated message brings the voice rules for its own turn.
 
 **D-M11-17. Play an individual assistant message.** The `message.action` slot
 places a Play button just outside the right edge of each assistant bubble that has text to speak.
@@ -277,8 +281,10 @@ gateway's key guard refuses a call with a key outside the vocabulary before deco
 is not a finite number in `ttsRanges` (`voiceTexts.preferenceOutOfRange`); the speech host checks
 again at `speak`/`replay` (R5-41, R5-54), since a provider or catalogue may change.
 
-**D-M11-20. Auto-speak covers every send of the page.** The voice feature learns each send of its
-page (typed or spoken) from the controller's submission notice (H10), maps the receipt to its turn
+**D-M11-20. Auto-speak covers the spoken sends of the page (amended by 9.1).** The voice feature
+learns each send of its page from the controller's submission notice (H10); only a notice with
+`spoken: true` (a send from spoken mode, whose turn's prompt says the reply is read aloud) is
+spoken, so the model always knows when its reply is heard. It maps the receipt to its turn
 (`receipt.turnId`, or one `getSubmissionReceipt(requestId)` after the next `turn-start` for a queued
 entry) and calls `speak` when that turn starts, if auto-speak is on and speech out is configured
 (R5-45). Turns of other pages are not spoken.
@@ -292,7 +298,7 @@ sign-in secret therefore cannot make the adapter spawn a command line of its cho
 keeps `speechSettings()` (a read the speech host needs through the gateway's `Operator`): a page
 can read the configured argv and receive the key's `ReadGrant`, which adds no authority, since the
 same page already holds `SecretsAdmin` through `Operator.getSecrets()` and no gateway method lets a
-page read a key through a grant. *Rejected:* a separate `SpeechAdmin` facet reached by
+page read a key through a grant. _Rejected:_ a separate `SpeechAdmin` facet reached by
 `HarnessRoot.getSpeechAdmin()` (one more interface, guard and vocabulary entry for one method);
 a `speech` field in `HarnessSettings` through `HarnessRoot.configure` (that method answers the
 pool's status and sets the pool: two jobs in one record, and M6's `environments` field shows the
@@ -312,7 +318,7 @@ rule: objects, not names). Assumption A-5 (W11.5 proves it in `gateway-speech-ex
 the loader's `require` of an ES module and `AH/index.js`'s `import` of it answer the same module
 instance (Node's `require(esm)` shares the ES module cache). If A-5 fails, W11.5 stops and reports;
 the fallback, to be ruled by the PM, is the loader matching the file `speech.js` (a name at the
-code-loading boundary). *Rejected:* `readGrant` on every extension's context (the original H6:
+code-loading boundary). _Rejected:_ `readGrant` on every extension's context (the original H6:
 `secrets.js` and later extensions would hold a key reader they never use); a `needs:
 ['readGrant']` declaration in the extension's export (any file in the directory could declare it:
 an audit aid, not a bound).
@@ -327,7 +333,7 @@ the current settings (the settings cache starts empty). They are started at firs
 speech-in process (R2-6) and no start waits on a model load (R8-29's unbounded wait, R5-58; here
 `engineLoadMs` bounds it, D-M11-10). The cost: the first page of an incarnation pays one engine
 start (`speech.engineRespawn` measures it with the fake, 20.5 ms spawn; Moonshine's real warm-up is
-an owner-run row). Owner question O-12. *Rejected:* warming at the gateway bind (it would need a
+an owner-run row). Owner question O-12. _Rejected:_ warming at the gateway bind (it would need a
 bind notice on the `GatewayContext`, one more M3 change, for a gain only the first utterance sees).
 
 **D-M11-24. The session program does not change (cross-check X-01: M11's cap is 0 bytes).**
@@ -364,33 +370,33 @@ means to the caller); **heaviest crank** (in the vat that receives it).
 HR-SYN-36 as built: `current()`; voice never calls `next()`, which only the start listener's
 recovery does).
 
-| method | caller | crank | mode | max | retired break | heaviest crank |
-|---|---|---|---|---|---|---|
-| `Operator.getVoice() -> Voice` | page (once per connection), speech host (once per incarnation), provisioning step (preset pin) | 1 factory | answered | tiny | the factory is lost (D-17): fatal to the harness | trivial |
-| `getPreferences() -> VoicePreferences` | page at load and when the voice panel opens | 1 factory | answered | 0.4 KB | page shows "unavailable", uses device cache | trivial |
-| `setPreferences(patch) -> VoicePreferences` | page, debounced 300 ms (R5-50) | 1 factory | answered | 0.4 KB | as above | merge of 5 fields; refuses non-finite or out of range (D-M11-19) |
-| `getVoicePreset() -> Preset` | page (voice panel) | 1 factory | answered | tiny | as above | answers the chosen preset, else the built-in `voice` |
-| `setVoicePreset(preset, expectedRevision) -> Preset` | page (voice panel) | 1 factory | answered | tiny | as above | refuses a stale revision with M5's `texts.presetStale`, a preset not of this catalogue or deleted with `voiceTexts.presetNotUsable` |
-| `startVoiceSession(request) -> VoiceSessionAnswer` | page ("Talk", a launch link) | 1 factory crank, then `createSession`'s (a spare take: about 0.85 s, J-9382) plus one adapter round trip for `resolveModel` when the preset pins a model (70-76 ms, J-9043) | answered | 0.3 KB in, 0.5 KB out | as above | the creation crank (as `createSession`); the claim is written in the crank that receives the request and again in the crank where `create` resolves |
-| `speechSettings() -> SpeechSettings` | speech host | 1 factory | answered | under `frameBytes` (checked at write) | speech host: settings unavailable, both directions `failed` with an error in `status()`; never a restart signal | trivial |
-| `HarnessRoot.configureSpeech(settings) -> SpeechSettings` (not on `Voice`, D-M11-21) | provisioning step `70-voice.js`, the administration CLI; never a page | 1 factory | answered | under `frameBytes` (checked) | caller reports the loss | validate per kind, bump `revision` |
+| method                                                                               | caller                                                                                         | crank                                                                                                                                                                       | mode     | max                                   | retired break                                                                                                   | heaviest crank                                                                                                                                      |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Operator.getVoice() -> Voice`                                                       | page (once per connection), speech host (once per incarnation), provisioning step (preset pin) | 1 factory                                                                                                                                                                   | answered | tiny                                  | the factory is lost (D-17): fatal to the harness                                                                | trivial                                                                                                                                             |
+| `getPreferences() -> VoicePreferences`                                               | page at load and when the voice panel opens                                                    | 1 factory                                                                                                                                                                   | answered | 0.4 KB                                | page shows "unavailable", uses device cache                                                                     | trivial                                                                                                                                             |
+| `setPreferences(patch) -> VoicePreferences`                                          | page, debounced 300 ms (R5-50)                                                                 | 1 factory                                                                                                                                                                   | answered | 0.4 KB                                | as above                                                                                                        | merge of 5 fields; refuses non-finite or out of range (D-M11-19)                                                                                    |
+| `getVoicePreset() -> Preset`                                                         | page (voice panel)                                                                             | 1 factory                                                                                                                                                                   | answered | tiny                                  | as above                                                                                                        | answers the chosen preset, else the built-in `voice`                                                                                                |
+| `setVoicePreset(preset, expectedRevision) -> Preset`                                 | page (voice panel)                                                                             | 1 factory                                                                                                                                                                   | answered | tiny                                  | as above                                                                                                        | refuses a stale revision with M5's `texts.presetStale`, a preset not of this catalogue or deleted with `voiceTexts.presetNotUsable`                 |
+| `startVoiceSession(request) -> VoiceSessionAnswer`                                   | page ("Talk", a launch link)                                                                   | 1 factory crank, then `createSession`'s (a spare take: about 0.85 s, J-9382) plus one adapter round trip for `resolveModel` when the preset pins a model (70-76 ms, J-9043) | answered | 0.3 KB in, 0.5 KB out                 | as above                                                                                                        | the creation crank (as `createSession`); the claim is written in the crank that receives the request and again in the crank where `create` resolves |
+| `speechSettings() -> SpeechSettings`                                                 | speech host                                                                                    | 1 factory                                                                                                                                                                   | answered | under `frameBytes` (checked at write) | speech host: settings unavailable, both directions `failed` with an error in `status()`; never a restart signal | trivial                                                                                                                                             |
+| `HarnessRoot.configureSpeech(settings) -> SpeechSettings` (not on `Voice`, D-M11-21) | provisioning step `70-voice.js`, the administration CLI; never a page                          | 1 factory                                                                                                                                                                   | answered | under `frameBytes` (checked)          | caller reports the loss                                                                                         | validate per kind, bump `revision`                                                                                                                  |
 
 `startVoiceSession({ invocationId?, title?, at? })`:
 
 1. With an `invocationId`: a claim `{ state: 'made', session, key }` answers `{ session, key,
-   duplicate: true }` at once (R6-60). A claim `{ state: 'creating', start }` with `start ===
-   starts.current()` throws `voiceTexts.launchInProgress`; with an older `start` (a restart
+duplicate: true }` at once (R6-60). A claim `{ state: 'creating', start }` with `start ===
+starts.current()` throws `voiceTexts.launchInProgress`; with an older `start` (a restart
    interrupted it) it is re-run from step 2. A new id is claimed `{ state: 'creating', start:
-   starts.current() }`;
+starts.current() }`;
    when more than `voiceLimits.invocationClaims` (32) are kept, the oldest is forgotten.
 2. The preset is the chosen shortcut preset, else `catalog.builtIn('voice')`. Its record's
    `backend` and `modelId`, when both are set, are checked with `E(backend).resolveModel(modelId)`;
    a rejection makes the options `{ preset, backend: settings.defaultBackend(), modelId:
-   settings.defaultModelId(), spoken: true }` with `warning: voiceTextOf.voiceModelUnavailable
-   (modelId)` (D-M11-9); otherwise `{ preset, spoken: true }`. `title` and `at` pass through.
+settings.defaultModelId(), spoken: true }` with `warning: voiceTextOf.voiceModelUnavailable
+(modelId)` (D-M11-9); otherwise `{ preset, spoken: true }`. `title` and `at` pass through.
 3. `create(options)`; on success the claim becomes `{ state: 'made', session, key:
-   rows.ofSession(session).key }` and the answer is `{ session, key, duplicate: false,
-   warning? }`. On failure the claim is deleted and the error propagates (a preset that is not
+rows.ofSession(session).key }` and the answer is `{ session, key, duplicate: false,
+warning? }`. On failure the claim is deleted and the error propagates (a preset that is not
    available answers its `unavailableReason`, M5).
 
 **Persists** (factory heap, all bounded): the preferences record (5 fields), the shortcut preset
@@ -404,15 +410,15 @@ incarnation. `AudioPort` is minted per `openAudio`. Both are gateway-local exos 
 `GW/powers.js` `markNeverLeaves` (M3 4.4 rule 2), so the bridge refuses them as arguments toward a
 vat. No vat crank unless stated.
 
-| method | caller | crank | mode | max | retired break | heaviest step (adapter) |
-|---|---|---|---|---|---|---|
-| `Speech.openAudio() -> { port, token }` | page, after sign-in and at each reconnect | none; reads the settings when stale (2 factory cranks, D-M11-2) | answered | 0.2 KB out | - | mint 32 random bytes; refuse over `audioLimits.ports` with `speechTexts.tooManyPorts` |
-| `Speech.configuration() -> SpeechConfiguration` | page at load | none (settings read when stale) | answered | about 12 KB out (128 voices) | - | the catalogue read once per settings revision |
-| `Speech.status() -> SpeechStatus` | page (diagnostics), tests | none | answered | 0.6 KB | - | - |
-| `Speech.replay(port, pieces, options?) -> { stream }` | page: the Replay control | none | answered | 1 MiB in (`LargeCall`) | - | check options (R5-41); read each Blob piece through `Content` in process; open a playback |
-| `AudioPort.transcribe() -> { stream }` | page at utterance onset | none | answered | tiny | - | open an utterance on the speech-in engine (starting it if idle) |
-| `AudioPort.speak(session, turnId, options?) -> { stream }` | page when its fresh turn starts (D-M11-20) or after a settings change (R5-50) | none (`Live.subscribe` is in process) | answered | tiny | - | check options; open the speech view (D-M11-4); replace this port's current playback (R5-44) |
-| `AudioPort.close()` | page on unload, tests | none | answered | tiny | - | close the socket (`audioCloseCodes.portClosed`) and every stream |
+| method                                                     | caller                                                                        | crank                                                           | mode     | max                          | retired break | heaviest step (adapter)                                                                     |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------- | -------- | ---------------------------- | ------------- | ------------------------------------------------------------------------------------------- |
+| `Speech.openAudio() -> { port, token }`                    | page, after sign-in and at each reconnect                                     | none; reads the settings when stale (2 factory cranks, D-M11-2) | answered | 0.2 KB out                   | -             | mint 32 random bytes; refuse over `audioLimits.ports` with `speechTexts.tooManyPorts`       |
+| `Speech.configuration() -> SpeechConfiguration`            | page at load                                                                  | none (settings read when stale)                                 | answered | about 12 KB out (128 voices) | -             | the catalogue read once per settings revision                                               |
+| `Speech.status() -> SpeechStatus`                          | page (diagnostics), tests                                                     | none                                                            | answered | 0.6 KB                       | -             | -                                                                                           |
+| `Speech.replay(port, pieces, options?) -> { stream }`      | page: the Replay control                                                      | none                                                            | answered | 1 MiB in (`LargeCall`)       | -             | check options (R5-41); read each Blob piece through `Content` in process; open a playback   |
+| `AudioPort.transcribe() -> { stream }`                     | page at utterance onset                                                       | none                                                            | answered | tiny                         | -             | open an utterance on the speech-in engine (starting it if idle)                             |
+| `AudioPort.speak(session, turnId, options?) -> { stream }` | page when its fresh turn starts (D-M11-20) or after a settings change (R5-50) | none (`Live.subscribe` is in process)                           | answered | tiny                         | -             | check options; open the speech view (D-M11-4); replace this port's current playback (R5-44) |
+| `AudioPort.close()`                                        | page on unload, tests                                                         | none                                                            | answered | tiny                         | -             | close the socket (`audioCloseCodes.portClosed`) and every stream                            |
 
 A port lives until its socket closes, `close()` is called, or its token is not used within
 `audioTimeouts.tokenMs`; nothing outlives the incarnation. A rejection answers a fixed text from
@@ -420,15 +426,15 @@ A port lives until its socket closes, `close()` is called, or its token is not u
 
 ### 3.3 Adapter-internal objects (types in `AH/speech/engine-types.js`)
 
-| object | made by | what it does |
-|---|---|---|
-| `SpeechHost` (`AH/speech/host.js` `makeSpeechHost({ context, kinds, options })`) | the extension, once per `GatewayContext` | owns the settings cache, the engines (by kind, per settings revision), the ports and their tokens, the `Speech` exo, the route handlers; `stop()` closes all |
-| `SttEngine` (`stt-process.js` W11.1, `openai-audio.js` W11.4) | the host, lazily | utterances; resident engine with respawn on next use (R5-15) |
-| `TtsEngine` (`tts-process.js` W11.2, `openai-audio.js` W11.4) | the host, lazily | catalogue (`voice-catalogue.js` for `process`), one `Synthesis` per playback |
-| `SpeechText` (`speech-text.js`, W11.3) | one per playback | R5-35..R5-37 |
-| `TurnSpeechView` (`turn-view.js` `openTurnView(options)`, W11.3) | one per `speak` | R5-34 over a `Live` subscription |
-| `Playback` (`playback.js`, W11.5) | one per `speak`/`replay` | text source -> `SpeechText` -> `Synthesis` -> PCM frames; backlog bound; one per port at a time |
-| child engine (`child-engine.js` `makeChildEngine`, W11.1, exported for W11.2) | engines of the `process` kind | spawn with `engineEnvironment` only, a ready line, a bounded line reader (`engineLineBytes`), respawn on next use, `engineRestart` pacing, SIGTERM then SIGKILL after `killGraceMs` |
+| object                                                                           | made by                                  | what it does                                                                                                                                                                        |
+| -------------------------------------------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SpeechHost` (`AH/speech/host.js` `makeSpeechHost({ context, kinds, options })`) | the extension, once per `GatewayContext` | owns the settings cache, the engines (by kind, per settings revision), the ports and their tokens, the `Speech` exo, the route handlers; `stop()` closes all                        |
+| `SttEngine` (`stt-process.js` W11.1, `openai-audio.js` W11.4)                    | the host, lazily                         | utterances; resident engine with respawn on next use (R5-15)                                                                                                                        |
+| `TtsEngine` (`tts-process.js` W11.2, `openai-audio.js` W11.4)                    | the host, lazily                         | catalogue (`voice-catalogue.js` for `process`), one `Synthesis` per playback                                                                                                        |
+| `SpeechText` (`speech-text.js`, W11.3)                                           | one per playback                         | R5-35..R5-37                                                                                                                                                                        |
+| `TurnSpeechView` (`turn-view.js` `openTurnView(options)`, W11.3)                 | one per `speak`                          | R5-34 over a `Live` subscription                                                                                                                                                    |
+| `Playback` (`playback.js`, W11.5)                                                | one per `speak`/`replay`                 | text source -> `SpeechText` -> `Synthesis` -> PCM frames; backlog bound; one per port at a time                                                                                     |
+| child engine (`child-engine.js` `makeChildEngine`, W11.1, exported for W11.2)    | engines of the `process` kind            | spawn with `engineEnvironment` only, a ready line, a bounded line reader (`engineLineBytes`), respawn on next use, `engineRestart` pacing, SIGTERM then SIGKILL after `killGraceMs` |
 
 Engine options are the host's `options.timeouts` and `options.limits` (defaults from
 `audioTimeouts`/`audioLimits`); tests pass smaller values. That is the only test lever: no product
@@ -436,19 +442,19 @@ branch only tests take (review rule 4).
 
 ### 3.4 What M11 takes from earlier milestones (exact)
 
-| from | object.method / module | used by |
-|---|---|---|
-| M1b `Live` (`AH/live-service.js`) | `subscribe(session, rev?)` -> `LiveSubscription` `next()`, `close()`; deliveries `snapshot`, `delta`, `tool_call`, `final`, `end`, `abort` (`guest/lib/interfaces.js` `VatEvent`, `DeltaEvent`, `SnapshotEvent`) | `turn-view.js` |
-| M1b `Content` | `read(blob, { offset, maxBytes })` in process (pages of at most `blobPageBytes`) | `turn-view.js` (staged final), `Speech.replay` (Blob pieces) |
-| M3 gateway registry | `GatewayExtension` `services`, `routes` (`upgrade`, `http`), `largeCalls`; `GatewayContext` `live`, `content`, `whenAttached`, `log`, and (seam H6) `operator()` for every extension, `readGrant(grant)` for the speech extension only; `markNeverLeaves` | `GW/extensions/speech.js`, `host.js` |
-| M3 server | `GatewaySocket` (`send`, `close`, `onMessage`, `onClose`, `address`) through the `accept` seam (H5) | `route.js` |
-| M3 UI | `UiFeature` slots `composer.addon`, `app.panel`, `message.renderer`; `FeatureContext` `powers`, `extra(label)`, `controller`, `call`; controller actions `send`, `setInput`, `replaceInput`, `selectSession`, state `view` | `UI/src/voice/` |
-| M2 `Session` | `getSubmissionReceipt(requestId)` (receipt `turnId`/`turn`); `Turn.getStatus()` (`turnId`) | the voice feature (D-M11-20) |
-| M2/M5 factory | the internal `create(options)` with `spoken`, `preset`, `backend`, `modelId`, `title`, `at`; rows `ofSession`; settings `defaultBackend()`, `defaultModelId()`; `Backend.resolveModel(modelId)` | `voice.js` |
-| M5 presets | `PresetCatalogKit.builtIn(label)`, `recordOf(preset)`, `facet.configuration().revision`, `texts.presetStale`; `Preset.save` (provisioning pins the `voice` preset's backend and model) | `voice.js`, `70-voice.js` |
-| M5 prompt | `spoken: true` selects the spoken introduction (R5-52) | nothing to add |
-| M2 secrets | `secrets().readKey(grant)` (in process, one sink call per grant per incarnation) | seam H7, `openai-audio.js` |
-| providers | `AH/providers/http.js` `providerBaseUrl`, `requestSignalOf`, `bodyChunks`, `boundedChunks`, `HttpFailure` (imported, not copied: review rule 3) | `openai-audio.js` |
+| from                              | object.method / module                                                                                                                                                                                                                                    | used by                                                                |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| M1b `Live` (`AH/live-service.js`) | `subscribe(session, rev?)` -> `LiveSubscription` `next()`, `close()`; deliveries `snapshot`, `delta`, `tool_call`, `final`, `end`, `abort` (`guest/lib/interfaces.js` `VatEvent`, `DeltaEvent`, `SnapshotEvent`)                                          | `turn-view.js`                                                         |
+| M1b `Content`                     | `read(blob, { offset, maxBytes })` in process (pages of at most `blobPageBytes`)                                                                                                                                                                          | `turn-view.js` (staged final), `Speech.replay` (Blob pieces)           |
+| M3 gateway registry               | `GatewayExtension` `services`, `routes` (`upgrade`, `http`), `largeCalls`; `GatewayContext` `live`, `content`, `whenAttached`, `log`, and (seam H6) `operator()` for every extension, `readGrant(grant)` for the speech extension only; `markNeverLeaves` | `GW/extensions/speech.js`, `host.js`                                   |
+| M3 server                         | `GatewaySocket` (`send`, `close`, `onMessage`, `onClose`, `address`) through the `accept` seam (H5)                                                                                                                                                       | `route.js`                                                             |
+| M3 UI                             | `UiFeature` slots `composer.addon`, `app.panel`, `message.renderer`; `FeatureContext` `powers`, `extra(label)`, `controller`, `call`; controller actions `send`, `setInput`, `replaceInput`, `selectSession`, state `view`                                | `UI/src/voice/`                                                        |
+| M2 `Session`                      | `getSubmissionReceipt(requestId)` (receipt `turnId`/`turn`); `Turn.getStatus()` (`turnId`)                                                                                                                                                                | the voice feature (D-M11-20)                                           |
+| M2/M5 factory                     | the internal `create(options)` with `spoken`, `preset`, `backend`, `modelId`, `title`, `at`; rows `ofSession`; settings `defaultBackend()`, `defaultModelId()`; `Backend.resolveModel(modelId)`                                                           | `voice.js`                                                             |
+| M5 presets                        | `PresetCatalogKit.builtIn(label)`, `recordOf(preset)`, `facet.configuration().revision`, `texts.presetStale`; `Preset.save` (provisioning pins the `voice` preset's backend and model)                                                                    | `voice.js`, `70-voice.js`                                              |
+| M5 prompt                         | `spoken: true` selects the spoken introduction (R5-52)                                                                                                                                                                                                    | 9.1: no longer used at creation; the per-turn `spokenTurnNote` instead |
+| M2 secrets                        | `secrets().readKey(grant)` (in process, one sink call per grant per incarnation)                                                                                                                                                                          | seam H7, `openai-audio.js`                                             |
+| providers                         | `AH/providers/http.js` `providerBaseUrl`, `requestSignalOf`, `bodyChunks`, `boundedChunks`, `HttpFailure` (imported, not copied: review rule 3)                                                                                                           | `openai-audio.js`                                                      |
 
 **Assumptions W11.9 verifies:**
 
@@ -480,7 +486,7 @@ Frame layout, kinds, close codes, numbering: `audio-protocol.js`. Rules:
   is compared in constant time against the port's (a `Map` from token digest to port; digests,
   never tokens, are kept). Unknown, used or expired: close `tokenRefused`. A port binds one socket
   once; the token is then forgotten. The server answers READY with `{ speechIn, speechOut,
-  sampleRate: 16000, audioFrameBytes }`.
+sampleRate: 16000, audioFrameBytes }`.
 - **Streams.** Numbers are server-chosen: odd for utterances, even for playbacks, from
   `streamNumbers.first`, wrapping before `max` while skipping numbers still open. A frame for a
   number that is not open on this socket, a reserved byte not 0, an unknown kind, or any frame
@@ -491,7 +497,7 @@ Frame layout, kinds, close codes, numbering: `audio-protocol.js`. Rules:
   as the engine reports, `phase: transcribing` after END, then `final` and `end`, or `abort` with a
   reason. ABORT from the page, or the socket closing, aborts the utterance (R5-17).
 - **Playback.** `speak(...)` or `replay(...)` -> `{ stream }`; the server sends EVENT `phase:
-  synthesizing`, PCM frames, `sentence-failed` for a skipped sentence, then `end` or `abort`. ABORT
+synthesizing`, PCM frames, `sentence-failed` for a skipped sentence, then `end` or `abort`. ABORT
   from the page stops it: synthesis is killed, the speech view closed, the turn untouched (R5-47).
   A newer playback on the same port aborts the older with `replaced` (R5-44).
 - **Backpressure.** The server pauses a playback's engine while the socket's queued bytes exceed
@@ -522,15 +528,15 @@ session.
 
 ### 5.3 `SpeechEvent` (EVENT and READY payloads; JSON, adapter to browser only)
 
-| type | fields | when |
-|---|---|---|
-| (READY) | `speechIn: boolean`, `speechOut: boolean`, `sampleRate: 16000`, `audioFrameBytes` | after HELLO |
-| `phase` | `phase`: `listening`, `transcribing`, `synthesizing` | progress |
-| `partial` | `text` (the whole transcript so far) | utterance |
-| `final` | `text` | utterance, after END |
-| `sentence-failed` | `index` | playback: a sentence was skipped (D-M11-10) |
-| `end` | `note?` (`utteranceTooLong`) | either: the stream is over |
-| `abort` | `reason` (a `speechTexts` value) | either: the stream is over |
+| type              | fields                                                                            | when                                        |
+| ----------------- | --------------------------------------------------------------------------------- | ------------------------------------------- |
+| (READY)           | `speechIn: boolean`, `speechOut: boolean`, `sampleRate: 16000`, `audioFrameBytes` | after HELLO                                 |
+| `phase`           | `phase`: `listening`, `transcribing`, `synthesizing`                              | progress                                    |
+| `partial`         | `text` (the whole transcript so far)                                              | utterance                                   |
+| `final`           | `text`                                                                            | utterance, after END                        |
+| `sentence-failed` | `index`                                                                           | playback: a sentence was skipped (D-M11-10) |
+| `end`             | `note?` (`utteranceTooLong`)                                                      | either: the stream is over                  |
+| `abort`           | `reason` (a `speechTexts` value)                                                  | either: the stream is over                  |
 
 ### 5.4 Timeouts
 
@@ -555,7 +561,7 @@ ones when their last stream ends; the next use starts the new one.
 ### 6.2 `process` (W11.1 speech in, W11.2 speech out)
 
 - **Speech in.** `command` (argv; default in the provisioning step: `uv run --quiet
-  <AH>/speech/engines/moonshine_daemon.py --lang <language>`) spawned by `child-engine.js` with the
+<AH>/speech/engines/moonshine_daemon.py --lang <language>`) spawned by `child-engine.js` with the
   `engineEnvironment` allowlist, stdio pipes, cwd the adapter's state directory's `agent-host/`.
   Ready when the engine prints `{"event":"ready"}`. Utterance `n` is engine stream `u<n>`. PCM
   is sent as base64 in `stream_audio` lines as it arrives (no merging needed: frames are pushed).
@@ -588,7 +594,7 @@ ones when their last stream ends; the next use starts the new one.
   `speech-engine-failed` with the status; 429 and 5xx abort the utterance (no retry: the user is
   waiting).
 - **Speech out:** per sentence `POST /audio/speech` `{ model, input, voice, speed,
-  response_format: 'pcm' }`, body streamed as PCM at `pcmSampleRate` (24 kHz); sentences are
+response_format: 'pcm' }`, body streamed as PCM at `pcmSampleRate` (24 kHz); sentences are
   requested one after another (the next is requested when the previous body ends, so audio keeps
   flowing while the client plays); the catalogue is the settings' `voices` (ids as names, sample
   rate 24,000); `noiseScale`, `noiseW`, `sentenceSilence` are accepted and ignored; speed is
@@ -610,7 +616,7 @@ After a failed read, `status().error` holds the reason and either call retries.
 Port of Endo `turn-speech.js` onto the harness channel (R5-34):
 
 1. `subscribe(session)` (no `rev`): the first delivery is the snapshot. If `snapshot.turn.turnId
-   !== turnId`, close and reject `turnNotLive` (the turn is older, or not yet started; the page calls
+!== turnId`, close and reject `turnNotLive` (the turn is older, or not yet started; the page calls
    `speak` only after it saw the turn start). More than `speakViewsPerSession` open views on the
    session: reject `tooManyViews`.
 2. From the snapshot: the text of every message with `role: 'assistant'` in `status.messages`,
@@ -638,48 +644,49 @@ merges with the next; a run of `sentenceUnits` with no boundary is cut at its la
 
 ## 8. What persists where; restart and SIGKILL
 
-| state | lives in | clean restart | SIGKILL |
-|---|---|---|---|
-| voice preferences, shortcut preset, speech settings | factory heap | kept | old or new value: each write is one crank |
-| launch claims (32) | factory heap | kept | as below (K11-4, K11-5) |
-| the spoken flag and prompt of a session | session record (M5) | kept | kept |
-| a voice message once submitted | session queue (M2 receipts) | kept | M3 K3/K4: the page resends its draft by request id; one entry |
-| ports, tokens, sockets, streams, speech views, engines, warm spare, settings cache | agent-host adapter memory | lost by contract; pages reconnect and open a new port | same; engines exit at stdin EOF (D-M11-15) |
-| a partial transcript in the compose box | the page (the controller's draft once typed into the box, `localStorage`) | the page keeps it across a reconnect; not sent unless the grace send happened | same |
-| device settings cache, auto-speak | browser (`localStorage` key `thix-voice:settings`; auto-speak in page memory, R5-55) | kept / reset per page | same |
-| engine caches (uv, weights, voices) | the engines' own directories, outside the state directory | kept | kept |
+| state                                                                              | lives in                                                                             | clean restart                                                                 | SIGKILL                                                                              |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| voice preferences, shortcut preset, speech settings                                | factory heap                                                                         | kept                                                                          | old or new value: each write is one crank                                            |
+| launch claims (32)                                                                 | factory heap                                                                         | kept                                                                          | as below (K11-4, K11-5)                                                              |
+| the spoken flag and prompt of a session                                            | session record (M5)                                                                  | kept                                                                          | kept                                                                                 |
+| a voice message once submitted                                                     | session queue (M2 receipts), with its `spoken` marker (9.1)                          | kept                                                                          | M3 K3/K4: the page resends its draft (which keeps `spoken`) by request id; one entry |
+| the spoken marker of a started turn                                                | its `turn-started` record (9.1)                                                      | kept                                                                          | kept                                                                                 |
+| ports, tokens, sockets, streams, speech views, engines, warm spare, settings cache | agent-host adapter memory                                                            | lost by contract; pages reconnect and open a new port                         | same; engines exit at stdin EOF (D-M11-15)                                           |
+| a partial transcript in the compose box                                            | the page (the controller's draft once typed into the box, `localStorage`)            | the page keeps it across a reconnect; not sent unless the grace send happened | same                                                                                 |
+| device settings cache, auto-speak                                                  | browser (`localStorage` key `thix-voice:settings`; auto-speak in page memory, R5-55) | kept / reset per page                                                         | same                                                                                 |
+| engine caches (uv, weights, voices)                                                | the engines' own directories, outside the state directory                            | kept                                                                          | kept                                                                                 |
 
 **Kill points** (SIGKILL of the supervisor process only, architecture 10; each is a test in
 `test/integration/voice-restart.test.js` unless noted):
 
-| id | where | after restart |
-|---|---|---|
-| K11-1 | during an utterance (audio streaming) | within 5 s no engine process of the old incarnation is alive (`processesUnder` and the fake engines' pid files); the page reconnects, opens a new port; the compose box still holds the last partial; nothing was submitted; 0 vat deliveries came from the utterance |
-| K11-2 | during playback of a live scripted turn | the turn is recovered by M2 (`outcome-unknown` or settled); no Piper or fake TTS process alive; no automatic re-speak (O-7); Replay works |
-| K11-3 | inside `setPreferences` (between the request and its answer) | `getPreferences` answers the old or the new record, never a mix |
-| K11-4 | `startVoiceSession` with an id, killed after the claim crank and before the creation finished | the factory's start listener completes or rolls back the half-made creation (D-5); a redelivered launch with the same id re-runs creation (claim of an older start count): at most one extra listed session, never two claimed (owner question O-8) |
-| K11-5 | after the creation and the claim, before the page received the answer | the redelivered launch answers the same session with `duplicate: true` |
-| K11-6 | after the auto-send's `Composer.submit` staged the text, before the enqueue (M3 K3) | the page's draft resend makes exactly one transcript entry |
+| id    | where                                                                                         | after restart                                                                                                                                                                                                                                                         |
+| ----- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| K11-1 | during an utterance (audio streaming)                                                         | within 5 s no engine process of the old incarnation is alive (`processesUnder` and the fake engines' pid files); the page reconnects, opens a new port; the compose box still holds the last partial; nothing was submitted; 0 vat deliveries came from the utterance |
+| K11-2 | during playback of a live scripted turn                                                       | the turn is recovered by M2 (`outcome-unknown` or settled); no Piper or fake TTS process alive; no automatic re-speak (O-7); Replay works                                                                                                                             |
+| K11-3 | inside `setPreferences` (between the request and its answer)                                  | `getPreferences` answers the old or the new record, never a mix                                                                                                                                                                                                       |
+| K11-4 | `startVoiceSession` with an id, killed after the claim crank and before the creation finished | the factory's start listener completes or rolls back the half-made creation (D-5); a redelivered launch with the same id re-runs creation (claim of an older start count): at most one extra listed session, never two claimed (owner question O-8)                   |
+| K11-5 | after the creation and the claim, before the page received the answer                         | the redelivered launch answers the same session with `duplicate: true`                                                                                                                                                                                                |
+| K11-6 | after the auto-send's `Composer.submit` staged the text, before the enqueue (M3 K3)           | the page's draft resend makes exactly one transcript entry                                                                                                                                                                                                            |
 
 ---
 
 ## 9. The browser client (`UI/src/voice/`, W11.6 modules, W11.8 feature)
 
 - **Capture** (`capture.js`, `AH/speech/capture-worklet.js`): `getUserMedia({ audio:
-  captureConstraints })` (R5-3), an `AudioContext`, the worklet from `CAPTURE_WORKLET_PATH`
+captureConstraints })` (R5-3), an `AudioContext`, the worklet from `CAPTURE_WORKLET_PATH`
   (served by the extension, so CSP `script-src 'self'` admits it), which resamples to 16 kHz,
   converts to s16le and posts blocks of 1,360 samples with their RMS. The mic is off until tapped
   (R5-55); audio is unlocked inside the tap (R5-44).
 - **Endpointing** (`endpointing.js`, pure: `makeEndpointer(defaults) -> { block(rms, atMs) ->
-  Decision }`): calibration window then floor at the 75th percentile; threshold max(minimum, floor x
+Decision }`): calibration window then floor at the 75th percentile; threshold max(minimum, floor x
   multiplier); floor drift while quiet; onset opens an utterance (cancels a pending grace send,
   stops playback, sends the pre-roll first); trailing silence sends END; shorter than minimum speech
   aborts; while a turn is busy the barge-in threshold applies, times the echo factor while the
   page's own speech is audible (R5-31, R5-32, R5-46); invocation mode skips calibration (R5-23).
   The detector pauses while the page is hidden (R5-19). Junk finals are dropped (R5-21). Kept text
   appends to the pending utterance in the compose box (`controller.replaceInput`), stays editable;
-  after the grace with no new speech the box's text is sent with `controller.send` if the mic is
-  still on, the request current and no utterance open; clearing the box cancels (R5-22).
+  after the grace with no new speech the box's text is sent with
+  `controller.send(text, { spoken: true })` (9.1) if the mic is still on, the request current and no utterance open; clearing the box cancels (R5-22).
 - **Playback** (`playback.js`): each PCM frame decoded at its rate (0 means 22,050 Hz) and
   scheduled at max(now, end of the previous); a new playback stops the previous; `audible()` for the
   echo factor; mute stops the current reply (R5-48); Stop cancels the turn and stops playback.
@@ -687,18 +694,19 @@ merges with the next; a run of `sentenceUnits` with no boundary is cut at its la
   keeps `{ session, requestId, receipt }` for the active session; a `started` receipt gives
   `turnId` (or `E(receipt.turn).getStatus()`), a queued one is resolved by one
   `getSubmissionReceipt(requestId)` after the session's next `turn-start`; then `speak(session,
-  turnId, options)` if auto-speak is on and speech out is configured. Barge-in aborts the playback
+turnId, options)` if the send was spoken (9.1), auto-speak is on and speech out is configured. Barge-in aborts the playback
   stream (the turn continues, "continuing in background…" is shown, R5-46) and the new utterance's
   send queues behind the running turn (R5-47).
 - **Settings** (R5-55): server preferences, then the device cache, then the service defaults
   (`configuration().defaults`), then `ttsDefaults`; a change is debounced 300 ms, written with
   `setPreferences`, and a running playback restarts from the beginning with the new options (R5-50).
-- **Slots** (M3 6.2): `voice.controls` in `composer.addon` (mic, speaker, level meter with floor
-  and threshold markers, Talk), `voice.panel` in `app.panel` (label "Voice": spoken replies, voice,
-  Speed, Expression, Phoneme variation, Sentence pause, Voice shortcut preset), `voice.replay` in
-  `message.action` (Play the selected assistant message, including staged text).
-  Talk calls `startVoiceSession`, selects
-  the answered `key`, shows `warning`, and opens the mic.
+- **Slots** (M3 6.2): `voice.mode` in `composer.action` (the mode switch, 9.1),
+  `voice.controls` in `composer.addon` (the level meter with floor and threshold markers while
+  listening; the voice notes), `voice.panel` in `app.panel` (label "Voice": spoken replies, voice,
+  Speed, Expression, Phoneme variation, Sentence pause, Voice shortcut preset, Talk),
+  `voice.replay` in `message.action` (Play the selected assistant message, including staged
+  text). Talk calls `startVoiceSession`, selects the answered `key` (which closes the panel),
+  shows `warning`, and opens the new session's view in spoken mode.
 - **Launch link** (R6-60 without Android): a fragment parameter `voice=<invocation id>` (beside
   `gateway` and `agent`, never a query; M3's parser ignores it, the feature reads
   `globalThis.location.hash` itself) makes the page call `startVoiceSession({ invocationId })`
@@ -708,18 +716,64 @@ merges with the next; a run of `sentenceUnits` with no boundary is cut at its la
 - **State** (D-M11-13): one closure per page from `makeVoiceFeature()` holding a `WeakMap` keyed by
   `context.powers`: port, socket, playback, endpointer, receipts waiting for their turn, auto-speak.
 
+### 9.1 Spoken mode and the spoken marker
+
+**The switch.** Each session view is in **text mode** (typed in, text out) or **spoken mode**
+(spoken in, spoken out). One icon button (`voice.mode`, an inline-SVG microphone) sits in the
+compose bar before Send, in the `composer.action` slot added to M3's `uiSlots` (controls inside the
+compose bar; `composer.addon` stays above it). It has `aria-label` "Spoken mode" and
+`aria-pressed` for the state, and is disabled unless speech in and speech out are both
+configured. Spoken mode is the mic on (`VoiceState.toggleMode`, inside the tap, R5-44, R5-55);
+text mode is the mic off, discarding the unsent dictation (R5-48) and stopping the reply being
+read. One view at a time (the page has one microphone): leaving that view ends spoken mode. The
+level meter shows only while listening. Talk and a launch link select the new session and leave its
+view in spoken mode. The panel's "Spoken replies" remains the page's mute for spoken mode's replies.
+
+**The transcript** is unchanged: the dictated text is shown as the user message, the reply as text.
+
+**The marker** is an explicit field, never inferred from text, checked by a guard at each hop:
+
+| hop                              | field                                                                                                                                                                   | guard                                             |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| voice state -> controller        | `controller.send(text, { spoken: true })` after the grace (only the dictated send; Send with the keyboard is a typed send)                                              | - (same page)                                     |
+| controller -> Composer (gateway) | `Composer.submit(session, text, requestId, { spoken: true })`; an addon's `ComposerSendRequest.spoken`                                                                  | `SubmitOptions` `spoken: M.boolean()`             |
+| Composer -> session              | last argument of `enqueueOnce(submission, requestId, at, options?)` and `enqueueMessageOnce(submission, requestId, at, attachments, options?)`, passed only when spoken | `EnqueueOptions` = `{ spoken?: boolean }`, closed |
+| queue entry                      | `spoken: true` on the item; not in the receipt fingerprint (the text and attachments decide a duplicate); `PendingEntry.edit` keeps it                                  | -                                                 |
+| turn                             | `TurnStarted.spoken: true` (absent when typed)                                                                                                                          | `TurnStarted` optional `spoken: true`             |
+| export / import                  | `ExportEntry.spoken: true` for a waiting spoken entry                                                                                                                   | `ExportEntry` optional `spoken: true`             |
+| prompt                           | every round of that turn appends `texts.spokenTurnNote` to the system prompt, after any other turn note (mail, mention line), below a blank line                        | -                                                 |
+
+`texts.spokenTurnNote` says the message was spoken and transcribed (so it may contain transcription
+errors) and that the reply will be read aloud, followed by the spoken introduction's three rules
+word for word. A typed message in the same session has no marker and no note. The note is in the
+system prompt of that turn only; the user's text and the stored records are not changed.
+
+**Compatibility.** The marker is optional everywhere: absent is typed, so existing sessions, their
+records, receipts and exports stay valid, and a typed call's arguments are as before. A queued
+entry keeps it through an edit and a restart hold; the page's draft keeps it for its resend by
+request id (M3 K3/K4); an imported waiting entry keeps it. A turn interrupted by a restart is
+settled by M2 recovery and not re-run, so nothing re-reads its marker; the `turn-started` record
+keeps it for history.
+
+**Talk sessions reconciled.** `startVoiceSession` still creates with `spoken: true` (the creation
+option stays valid), but a session's system prompt is always composed with the plain introduction
+(`guest/session/prompt.js`); the voice rules come only with a spoken turn. A Talk session differs
+from a typed one only in opening in spoken mode, so a message typed in it is told nothing about
+voice. Sessions created spoken before this change keep their stored spoken prompt; their spoken
+turns repeat the same three rules in the note.
+
 ---
 
 ## 10. Security
 
-| principal | can reach | cannot reach |
-|---|---|---|
-| a page with the sign-in secret (the operator, R7-2) | `Speech`, its own `AudioPort`s, `Voice` through the `Operator` (preferences, shortcut preset, launch, a read of the speech settings); any session's speech by passing that `Session` | another page's port (its token is single use and never shared); writing the speech settings or any engine command line (D-M11-21: only `HarnessRoot.configureSpeech`); the provider key value |
-| provisioning and the administration CLI (`HarnessRoot`) | `HarnessRoot.configureSpeech`, and everything a page reaches | - |
-| a gateway extension other than `speech.js` | the plain `GatewayContext` | `readGrant` (D-M11-22) |
-| an `/audio` socket without a valid HELLO | nothing: closed after `helloMs` | - |
-| a model (session vat, exec vat) | nothing of M11 (no session holds `Voice`, `Speech` or a port) | every speech object (`thix reachability` from a session vat in `voice-session.test.js`) |
-| engines | their own stdin/stdout or HTTP | vats, the hub, the gateway |
+| principal                                               | can reach                                                                                                                                                                            | cannot reach                                                                                                                                                                                  |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| a page with the sign-in secret (the operator, R7-2)     | `Speech`, its own `AudioPort`s, `Voice` through the `Operator` (preferences, shortcut preset, launch, a read of the speech settings); any session's speech by passing that `Session` | another page's port (its token is single use and never shared); writing the speech settings or any engine command line (D-M11-21: only `HarnessRoot.configureSpeech`); the provider key value |
+| provisioning and the administration CLI (`HarnessRoot`) | `HarnessRoot.configureSpeech`, and everything a page reaches                                                                                                                         | -                                                                                                                                                                                             |
+| a gateway extension other than `speech.js`              | the plain `GatewayContext`                                                                                                                                                           | `readGrant` (D-M11-22)                                                                                                                                                                        |
+| an `/audio` socket without a valid HELLO                | nothing: closed after `helloMs`                                                                                                                                                      | -                                                                                                                                                                                             |
+| a model (session vat, exec vat)                         | nothing of M11 (no session holds `Voice`, `Speech` or a port)                                                                                                                        | every speech object (`thix reachability` from a session vat in `voice-session.test.js`)                                                                                                       |
+| engines                                                 | their own stdin/stdout or HTTP                                                                                                                                                       | vats, the hub, the gateway                                                                                                                                                                    |
 
 - The provider key never enters a vat, the hub, a log, an event or an error: read through the
   grant in process per request (D-6); `assertNoSecretInState` after a clean stop finds no encoding
@@ -746,21 +800,21 @@ unit); none is provisional any more. "WX.1" is the cross-lane seam unit (cross-c
 runs after step 3 merges and before any lane unit, and applies the entries named here in one
 commit with the other lanes'. No M11 unit edits a file WX.1 edits.
 
-| id | file | the seam (exact) | other editors | unit |
-|---|---|---|---|---|
-| H1 | `guest/lib/guards/factory.js` | appendix A: one import line; shape builders `VoicePreferences`, `VoicePreferencesPatch`, `VoiceSessionRequest`, `VoiceSessionAnswer`, `SpeechInSettings`, `SpeechOutSettings`, `SpeechSettings`; interface builder `Voice`; `getVoice` in `Operator`; `configureSpeech` in `HarnessRoot`; `Voice`, `getVoice` and `configureSpeech` in the method-name lists | M9 F6 (`getMail` in `Operator`, `HarnessSettings` fields), M6 (presets, `HarnessSettings.environments`), step 3 SESSION (`HarnessStatus.error`, built) | **WX.1** (done there; W11.7 starts from it) |
-| H2 | `guest/factory/factory.js` | in `makeFactoryKit`: the import `import { makeVoice } from './voice.js';`; one line right after the local `createSession` (l.361-362): `const voice = makeVoice({ catalog, create: createSession, rows, settings: harnessSettings, starts });`; in the `Operator` exo (l.420): `getVoice: () => voice.facet,`; in the kit's return record (l.539): `configureSpeech: voice.configureSpeech,` | M9 F1 (three lines after `deletions`, `getMail` in `Operator`, two `recover()` lines), M6 | W11.7 |
-| H2b | `guest/factory/main.js`, `guest/factory/root.js` | `main.js`: in the `makeHarnessRoot({...})` call, `configureSpeech: kit.configureSpeech,`; `root.js`: `makeHarnessRoot` takes `configureSpeech` (optional; absent, the method throws `voiceTexts.speechNotWired`, as `NO_POOL_TEXT` does for the pool) and the exo gains `configureSpeech: settings => needSpeech()(settings),` | M6 F-5 (`makeHarnessSettings` in `root.js`, another function of the file) | W11.7 |
-| H3 | `guest/lib/vocabulary-tables.js` | `import * as speech from './speech-guards.js';` and `{ file: 'speech-guards.js', patterns: () => speech.vocabularyShapes() },` | M9 V1 (two entries), M6 (one exclusion line, X-11 (a)) | **WX.1** |
-| H4 | `test/adapter/gateway-vocabulary-tables.test.js` | the pin (258 keys, 141 methods) re-pinned once for all lanes' entries, M11's being appendix A and `speech-guards.js` | M6, M8, M9 | **WX.1**; WX.F re-measures once |
-| H5 | `GW/server.js` | in `server.on('upgrade', ...)`, after the Origin check: the block from `const key = request.headers['sec-websocket-key']` to `if (head && head.length > 0) made.receive(head);` moves, unchanged, into a local `accept(request, raw, head, { maxMessageBytes, onSocket })` that answers the `GatewaySocket` or `undefined` (refused; the refusal written and logged as today); `/ws` calls `accept(request, raw, head, { maxMessageBytes: bounds.wsMessageBytes, onSocket })`; the route call `route.handle(request, raw, head)` becomes `route.handle(request, raw, head, accept)`; `makeWebSocket`'s socket gains `bufferedBytes: () => raw.writableLength`. The path, Origin and close-code checks (HR-SYN-35, built) stay where they are | none in the group (M8 names `server.js` as untouched) | W11.5 |
-| H6 | `GW/index.js`, `GW/extensions.js`, `GW/protocol.js` | `index.js`: `makeGatewayService` option `extensionPowers` (default `[]`, a list of `{ extension, powers }`); the `operatorOf` holder moves from `bind` to the service closure, `bind` sets `operatorOf.current = config.operator` as today; `context` gains `operator: () => operatorOf.current`; `incarnationParts` passes `contextFor` instead of `context` to `makeExtensionServices` and `makeLargeCalls`, where `contextFor(extension)` answers, once per extension and kept, `harden({ ...context, ...powers })` for the extension whose object is listed and `context` for every other. `extensions.js`: those two functions take `contextFor` and call `make(contextFor(extension))`, `largeCall.target(contextFor(extension))` (the built-in entries keep `context`). `protocol.js`: `GatewayContext.operator`, an optional `readGrant`, `ExtensionPowers` typedefs, `GatewayRoute.handle`'s fourth parameter (H5) | none known | W11.5 |
-| H7 | `AH/index.js` | the import `import { gatewayExtension as speechExtension } from './gateway/extensions/speech.js';` and, in the `makeGatewayService({...})` call (l.439-453), `extensionPowers: [{ extension: speechExtension, powers: { readGrant: grant => secrets().readKey(grant) } }],` (`secrets().readKey` as the API backends use it, l.264) | M8 W8.3 (S-14, S-18: `adapterTools` and the open handler, other blocks of the file) | W11.5 |
-| H8 | `scripts/test-integration.mjs` `regressionLists` | an `M11` list: `voice-session`, `voice-restart`, `voice-speak`, `voice-provider`, browser `voice-ui` (M11's own list, not the core list: X-14) | M6 K-2, M8, M9 | W11.9 |
-| H9 | `perf/_pass.mjs` `perfLists` (PM-merged) | `M11: ['voice', 'voice-session']` | M6, M8, M9 | W11.9 |
-| H10 | `UI/src/controller/index.js` | in `send`, after `sendThroughChain` answered: notify submission listeners `{ sessionKey: key, session, requestId, receipt }`; a controller action `onSubmission(listener) -> unsubscribe` (a `Set` in the closure, cleared on reconnect); 10-15 lines | none in the group; M12 (Home, spaces) and step 5 (a) later | W11.8 |
-| H11 | `H/package.json` (PM-merged) | test drivers use the `ws` devDependency to avoid pooled socket cleanup in Node 24 under SES. Production and browser code use their existing WebSocket implementations | all | - |
-| H12 | `GW/extensions/README.md` | the `GatewayContext` table gains `operator()` (every extension) and `readGrant(grant)` (only the extensions given it through `extensionPowers`); a `speech.js` row in the file list | none known | W11.9 (one owner: W11.5 writes no README line) |
+| id  | file                                                | the seam (exact)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | other editors                                                                                                                                          | unit                                           |
+| --- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
+| H1  | `guest/lib/guards/factory.js`                       | appendix A: one import line; shape builders `VoicePreferences`, `VoicePreferencesPatch`, `VoiceSessionRequest`, `VoiceSessionAnswer`, `SpeechInSettings`, `SpeechOutSettings`, `SpeechSettings`; interface builder `Voice`; `getVoice` in `Operator`; `configureSpeech` in `HarnessRoot`; `Voice`, `getVoice` and `configureSpeech` in the method-name lists                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | M9 F6 (`getMail` in `Operator`, `HarnessSettings` fields), M6 (presets, `HarnessSettings.environments`), step 3 SESSION (`HarnessStatus.error`, built) | **WX.1** (done there; W11.7 starts from it)    |
+| H2  | `guest/factory/factory.js`                          | in `makeFactoryKit`: the import `import { makeVoice } from './voice.js';`; one line right after the local `createSession` (l.361-362): `const voice = makeVoice({ catalog, create: createSession, rows, settings: harnessSettings, starts });`; in the `Operator` exo (l.420): `getVoice: () => voice.facet,`; in the kit's return record (l.539): `configureSpeech: voice.configureSpeech,`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | M9 F1 (three lines after `deletions`, `getMail` in `Operator`, two `recover()` lines), M6                                                              | W11.7                                          |
+| H2b | `guest/factory/main.js`, `guest/factory/root.js`    | `main.js`: in the `makeHarnessRoot({...})` call, `configureSpeech: kit.configureSpeech,`; `root.js`: `makeHarnessRoot` takes `configureSpeech` (optional; absent, the method throws `voiceTexts.speechNotWired`, as `NO_POOL_TEXT` does for the pool) and the exo gains `configureSpeech: settings => needSpeech()(settings),`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | M6 F-5 (`makeHarnessSettings` in `root.js`, another function of the file)                                                                              | W11.7                                          |
+| H3  | `guest/lib/vocabulary-tables.js`                    | `import * as speech from './speech-guards.js';` and `{ file: 'speech-guards.js', patterns: () => speech.vocabularyShapes() },`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | M9 V1 (two entries), M6 (one exclusion line, X-11 (a))                                                                                                 | **WX.1**                                       |
+| H4  | `test/adapter/gateway-vocabulary-tables.test.js`    | the pin (258 keys, 141 methods) re-pinned once for all lanes' entries, M11's being appendix A and `speech-guards.js`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | M6, M8, M9                                                                                                                                             | **WX.1**; WX.F re-measures once                |
+| H5  | `GW/server.js`                                      | in `server.on('upgrade', ...)`, after the Origin check: the block from `const key = request.headers['sec-websocket-key']` to `if (head && head.length > 0) made.receive(head);` moves, unchanged, into a local `accept(request, raw, head, { maxMessageBytes, onSocket })` that answers the `GatewaySocket` or `undefined` (refused; the refusal written and logged as today); `/ws` calls `accept(request, raw, head, { maxMessageBytes: bounds.wsMessageBytes, onSocket })`; the route call `route.handle(request, raw, head)` becomes `route.handle(request, raw, head, accept)`; `makeWebSocket`'s socket gains `bufferedBytes: () => raw.writableLength`. The path, Origin and close-code checks (HR-SYN-35, built) stay where they are                                                                                                                                                                                | none in the group (M8 names `server.js` as untouched)                                                                                                  | W11.5                                          |
+| H6  | `GW/index.js`, `GW/extensions.js`, `GW/protocol.js` | `index.js`: `makeGatewayService` option `extensionPowers` (default `[]`, a list of `{ extension, powers }`); the `operatorOf` holder moves from `bind` to the service closure, `bind` sets `operatorOf.current = config.operator` as today; `context` gains `operator: () => operatorOf.current`; `incarnationParts` passes `contextFor` instead of `context` to `makeExtensionServices` and `makeLargeCalls`, where `contextFor(extension)` answers, once per extension and kept, `harden({ ...context, ...powers })` for the extension whose object is listed and `context` for every other. `extensions.js`: those two functions take `contextFor` and call `make(contextFor(extension))`, `largeCall.target(contextFor(extension))` (the built-in entries keep `context`). `protocol.js`: `GatewayContext.operator`, an optional `readGrant`, `ExtensionPowers` typedefs, `GatewayRoute.handle`'s fourth parameter (H5) | none known                                                                                                                                             | W11.5                                          |
+| H7  | `AH/index.js`                                       | the import `import { gatewayExtension as speechExtension } from './gateway/extensions/speech.js';` and, in the `makeGatewayService({...})` call (l.439-453), `extensionPowers: [{ extension: speechExtension, powers: { readGrant: grant => secrets().readKey(grant) } }],` (`secrets().readKey` as the API backends use it, l.264)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | M8 W8.3 (S-14, S-18: `adapterTools` and the open handler, other blocks of the file)                                                                    | W11.5                                          |
+| H8  | `scripts/test-integration.mjs` `regressionLists`    | an `M11` list: `voice-session`, `voice-restart`, `voice-speak`, `voice-provider`, browser `voice-ui` (M11's own list, not the core list: X-14)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | M6 K-2, M8, M9                                                                                                                                         | W11.9                                          |
+| H9  | `perf/_pass.mjs` `perfLists` (PM-merged)            | `M11: ['voice', 'voice-session']`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | M6, M8, M9                                                                                                                                             | W11.9                                          |
+| H10 | `UI/src/controller/index.js`                        | in `send`, after `sendThroughChain` answered: notify submission listeners `{ sessionKey: key, session, requestId, receipt }`; a controller action `onSubmission(listener) -> unsubscribe` (a `Set` in the closure, cleared on reconnect); 10-15 lines                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | none in the group; M12 (Home, spaces) and step 5 (a) later                                                                                             | W11.8                                          |
+| H11 | `H/package.json` (PM-merged)                        | test drivers use the `ws` devDependency to avoid pooled socket cleanup in Node 24 under SES. Production and browser code use their existing WebSocket implementations                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | all                                                                                                                                                    | -                                              |
+| H12 | `GW/extensions/README.md`                           | the `GatewayContext` table gains `operator()` (every extension) and `readGrant(grant)` (only the extensions given it through `extensionPowers`); a `speech.js` row in the file list                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | none known                                                                                                                                             | W11.9 (one owner: W11.5 writes no README line) |
 
 Not edited by M11: `AH/channel-taps.js`, `AH/projection-hooks.js`, `guest/session/**`, the turn
 runner, `AH/channels.js`, the manager part (`resources/agent-host/*.js` outside `impl/`), M3's
@@ -776,17 +830,17 @@ merged and WX.1 has committed the shared entries (H1, H3, H4). Journal numbers: 
 contract and its settle unit) used J-1310..J-1329; every build unit's range is **PM assigns**
 (a block per unit large enough for a builder, 30 or more; ten inside J-1310..J-1329 is not).
 
-| id | files owned | behaviour | tests | after | journal |
-|---|---|---|---|---|---|
-| W11.1 speech in, `process` | `AH/speech/child-engine.js` (exported for W11.2), `AH/speech/stt-process.js`, `AH/speech/engines/moonshine_daemon.py` (Endo's, unchanged but its header), `test/fixtures/fake-stt.mjs` | section 6.2 speech in; timeouts `sttIdleMs`, `engineTimeoutMs`, `engineLoadMs`; backlog and utterance bounds; respawn and pacing; exit at stdin EOF | `test/adapter/speech-child-engine.test.js`, `test/adapter/speech-stt-process.test.js` (fake modes of appendix B; `[real-moonshine]` cases gated by `THIX_HARNESS_REAL_SPEECH=moonshine`) | WX.1 (commit `child-engine.js` first) | PM assigns |
-| W11.2 speech out, `process` | `AH/speech/tts-process.js`, `AH/speech/voice-catalogue.js` (`readVoiceCatalogue(dir)`, `checkTtsOptions(options, catalogue)`), `test/fixtures/fake-tts.mjs`, `test/fixtures/voices/` | section 6.2 speech out; R5-38..R5-43; `synthTimeoutMs`; warm spare; backpressure through `PlaybackSink.drained` | `test/unit/speech-voice-catalogue.test.js`, `test/adapter/speech-tts-process.test.js` (`[real-piper]` gated by `THIX_HARNESS_REAL_SPEECH=piper`) | W11.1's `child-engine.js` commit | PM assigns |
-| W11.3 speech text and speech view | `AH/speech/code-filter.js`, `AH/speech/speech-text.js`, `AH/speech/turn-view.js` | section 7 | `test/unit/speech-text.test.js` (Endo's cases ported), `test/adapter/speech-turn-view.test.js` (real `channels.js` and `live-service.js`, sessions as `makeExo` with the real `Session` guard, staged final through a real blob store) | WX.1 | PM assigns |
-| W11.4 speech provider, `openai-audio` | `AH/speech/openai-audio.js`, `test/fixtures/fake-speech-server.mjs` | section 6.3; key through `readGrant` per request | `test/adapter/speech-openai-audio.test.js` (fake server on 127.0.0.1: partial and final, PCM per sentence, 401, 429, 500, hang, slow body; `[real-provider]` gated by `THIX_HARNESS_REAL_SPEECH=provider` with a key file) | WX.1 | PM assigns |
-| W11.5 host, route, extension | `AH/speech/host.js`, `AH/speech/kinds.js`, `AH/speech/route.js`, `AH/speech/playback.js`, `GW/extensions/speech.js`; seams H5 (`GW/server.js`), H6 (`GW/index.js`, `GW/extensions.js`, `GW/protocol.js`), H7 (`AH/index.js`) | sections 3.2, 4, 5, 6.1, 6.4; D-M11-22 (A-5 proved first); marks `Speech` and ports never-leaving; `largeCalls: [{ target: c => hostOf(c).speech, methods: ['replay'] }]` (`hostOf` a `WeakMap` by context in the extension module; the `/audio` route, which receives no context, reaches the one host of the process through the same module closure); serves the worklet file | `test/adapter/speech-audio-route.test.js` (Node `WebSocket` client against `makeGatewayServer` with the extension route), `test/adapter/speech-host.test.js` (settings from a `Voice` exo built with the real guard), `test/adapter/speech-timeouts.test.js`, `test/adapter/gateway-speech-extension.test.js` (loads with zero skips; vocabulary keys present; A-5; another extension's context has no `readGrant`) | WX.1 (uses in-test engines of `engine-types.js` until W11.1-W11.4 land, then the real ones) | PM assigns |
-| W11.6 client audio modules | `AH/speech/capture-worklet.js`, `UI/src/voice/{capture,endpointing,audio-socket,playback,wake-lock}.js` | section 9 capture, endpointing, socket client, playback, wake lock | `test/unit/voice-endpointing.test.js` (synthetic level sequences: calibration, 400 ms burst, junk, silence 1,200 ms then grace 800 ms, speech during grace, barge-in and echo factor, invocation mode), `test/unit/voice-audio-socket.test.js` (frame encode and decode against `audio-protocol.js`), `test/unit/voice-playback.test.js` (scheduler with a fake clock) | WX.1 | PM assigns |
-| W11.7 factory `Voice` | `guest/factory/voice.js`, `scripts/provision-steps/70-voice.js`; seams H2 (`factory.js`), H2b (`main.js`, `root.js`) | section 3.1, D-M11-21, D-M11-25; the step: `options.voice = { speech?: SpeechSettings-like data with a key label, voiceBackend?: label, voiceModelId? }`: `HarnessRoot.configureSpeech` (the key's `Secret` found by label in `SecretsAdmin.list`, its `makeReadGrant()`) and pins the `voice` preset's backend and model with `Preset.save` (labels at the config boundary, F.2) | `test/unit/factory-voice.test.js` (with the real catalogue and guards; `configureSpeech` absent from `Voice`), `test/integration/voice-session.test.js`, `test/integration/voice-restart.test.js` | WX.1 | PM assigns |
-| W11.8 voice UI feature | `UI/src/voice/{feature,state,VoiceControls,VoicePanel,ReplayButton}.js`, `UI/src/voice/voice.css`; seam H10 (`UI/src/controller/index.js`) | section 9 feature, settings, slots, fresh turn, launch link | `test/unit/voice-state.test.js` (fakes from `speech-guards.js` and appendix A guards), browser cases in W11.9's file | WX.1; W11.6's module signatures (section 9) | PM assigns |
-| W11.9 integration (last) | `test/integration/voice-speak.test.js`, `test/integration/voice-provider.test.js`, `test/browser/voice-ui.test.mjs`, `test/fixtures/voice-clip.mjs`, `perf/voice.perf.mjs`, `perf/voice-session.perf.mjs`; seams H8, H9, H12 | wiring of all units; acceptance and perf below; the fold list (section 17) checked; session and exec bundles byte-identical (D-M11-24) | the files named; the M11 regression list under 20 minutes | all of W11.1-W11.8 | PM assigns |
+| id                                    | files owned                                                                                                                                                                                                                  | behaviour                                                                                                                                                                                                                                                                                                                                                                         | tests                                                                                                                                                                                                                                                                                                                                                                                                               | after                                                                                       | journal    |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ---------- |
+| W11.1 speech in, `process`            | `AH/speech/child-engine.js` (exported for W11.2), `AH/speech/stt-process.js`, `AH/speech/engines/moonshine_daemon.py` (Endo's, unchanged but its header), `test/fixtures/fake-stt.mjs`                                       | section 6.2 speech in; timeouts `sttIdleMs`, `engineTimeoutMs`, `engineLoadMs`; backlog and utterance bounds; respawn and pacing; exit at stdin EOF                                                                                                                                                                                                                               | `test/adapter/speech-child-engine.test.js`, `test/adapter/speech-stt-process.test.js` (fake modes of appendix B; `[real-moonshine]` cases gated by `THIX_HARNESS_REAL_SPEECH=moonshine`)                                                                                                                                                                                                                            | WX.1 (commit `child-engine.js` first)                                                       | PM assigns |
+| W11.2 speech out, `process`           | `AH/speech/tts-process.js`, `AH/speech/voice-catalogue.js` (`readVoiceCatalogue(dir)`, `checkTtsOptions(options, catalogue)`), `test/fixtures/fake-tts.mjs`, `test/fixtures/voices/`                                         | section 6.2 speech out; R5-38..R5-43; `synthTimeoutMs`; warm spare; backpressure through `PlaybackSink.drained`                                                                                                                                                                                                                                                                   | `test/unit/speech-voice-catalogue.test.js`, `test/adapter/speech-tts-process.test.js` (`[real-piper]` gated by `THIX_HARNESS_REAL_SPEECH=piper`)                                                                                                                                                                                                                                                                    | W11.1's `child-engine.js` commit                                                            | PM assigns |
+| W11.3 speech text and speech view     | `AH/speech/code-filter.js`, `AH/speech/speech-text.js`, `AH/speech/turn-view.js`                                                                                                                                             | section 7                                                                                                                                                                                                                                                                                                                                                                         | `test/unit/speech-text.test.js` (Endo's cases ported), `test/adapter/speech-turn-view.test.js` (real `channels.js` and `live-service.js`, sessions as `makeExo` with the real `Session` guard, staged final through a real blob store)                                                                                                                                                                              | WX.1                                                                                        | PM assigns |
+| W11.4 speech provider, `openai-audio` | `AH/speech/openai-audio.js`, `test/fixtures/fake-speech-server.mjs`                                                                                                                                                          | section 6.3; key through `readGrant` per request                                                                                                                                                                                                                                                                                                                                  | `test/adapter/speech-openai-audio.test.js` (fake server on 127.0.0.1: partial and final, PCM per sentence, 401, 429, 500, hang, slow body; `[real-provider]` gated by `THIX_HARNESS_REAL_SPEECH=provider` with a key file)                                                                                                                                                                                          | WX.1                                                                                        | PM assigns |
+| W11.5 host, route, extension          | `AH/speech/host.js`, `AH/speech/kinds.js`, `AH/speech/route.js`, `AH/speech/playback.js`, `GW/extensions/speech.js`; seams H5 (`GW/server.js`), H6 (`GW/index.js`, `GW/extensions.js`, `GW/protocol.js`), H7 (`AH/index.js`) | sections 3.2, 4, 5, 6.1, 6.4; D-M11-22 (A-5 proved first); marks `Speech` and ports never-leaving; `largeCalls: [{ target: c => hostOf(c).speech, methods: ['replay'] }]` (`hostOf` a `WeakMap` by context in the extension module; the `/audio` route, which receives no context, reaches the one host of the process through the same module closure); serves the worklet file  | `test/adapter/speech-audio-route.test.js` (Node `WebSocket` client against `makeGatewayServer` with the extension route), `test/adapter/speech-host.test.js` (settings from a `Voice` exo built with the real guard), `test/adapter/speech-timeouts.test.js`, `test/adapter/gateway-speech-extension.test.js` (loads with zero skips; vocabulary keys present; A-5; another extension's context has no `readGrant`) | WX.1 (uses in-test engines of `engine-types.js` until W11.1-W11.4 land, then the real ones) | PM assigns |
+| W11.6 client audio modules            | `AH/speech/capture-worklet.js`, `UI/src/voice/{capture,endpointing,audio-socket,playback,wake-lock}.js`                                                                                                                      | section 9 capture, endpointing, socket client, playback, wake lock                                                                                                                                                                                                                                                                                                                | `test/unit/voice-endpointing.test.js` (synthetic level sequences: calibration, 400 ms burst, junk, silence 1,200 ms then grace 800 ms, speech during grace, barge-in and echo factor, invocation mode), `test/unit/voice-audio-socket.test.js` (frame encode and decode against `audio-protocol.js`), `test/unit/voice-playback.test.js` (scheduler with a fake clock)                                              | WX.1                                                                                        | PM assigns |
+| W11.7 factory `Voice`                 | `guest/factory/voice.js`, `scripts/provision-steps/70-voice.js`; seams H2 (`factory.js`), H2b (`main.js`, `root.js`)                                                                                                         | section 3.1, D-M11-21, D-M11-25; the step: `options.voice = { speech?: SpeechSettings-like data with a key label, voiceBackend?: label, voiceModelId? }`: `HarnessRoot.configureSpeech` (the key's `Secret` found by label in `SecretsAdmin.list`, its `makeReadGrant()`) and pins the `voice` preset's backend and model with `Preset.save` (labels at the config boundary, F.2) | `test/unit/factory-voice.test.js` (with the real catalogue and guards; `configureSpeech` absent from `Voice`), `test/integration/voice-session.test.js`, `test/integration/voice-restart.test.js`                                                                                                                                                                                                                   | WX.1                                                                                        | PM assigns |
+| W11.8 voice UI feature                | `UI/src/voice/{feature,state,VoiceControls,VoicePanel,ReplayButton}.js`, `UI/src/voice/voice.css`; seam H10 (`UI/src/controller/index.js`)                                                                                   | section 9 feature, settings, slots, fresh turn, launch link                                                                                                                                                                                                                                                                                                                       | `test/unit/voice-state.test.js` (fakes from `speech-guards.js` and appendix A guards), browser cases in W11.9's file                                                                                                                                                                                                                                                                                                | WX.1; W11.6's module signatures (section 9)                                                 | PM assigns |
+| W11.9 integration (last)              | `test/integration/voice-speak.test.js`, `test/integration/voice-provider.test.js`, `test/browser/voice-ui.test.mjs`, `test/fixtures/voice-clip.mjs`, `perf/voice.perf.mjs`, `perf/voice-session.perf.mjs`; seams H8, H9, H12 | wiring of all units; acceptance and perf below; the fold list (section 17) checked; session and exec bundles byte-identical (D-M11-24)                                                                                                                                                                                                                                            | the files named; the M11 regression list under 20 minutes                                                                                                                                                                                                                                                                                                                                                           | all of W11.1-W11.8                                                                          | PM assigns |
 
 Ownership check (each file has exactly one unit): `child-engine.js` W11.1 only (W11.2 imports
 it); `openai-audio.js` both directions in W11.4; `GW/protocol.js` and `GW/extensions.js` only
@@ -840,8 +894,12 @@ WX.1's); W11.9 last. Six to eight agents.
 8. Preferences written from connection A are what connection B reads and what B's playback uses;
    a stale `setVoicePreset` revision is refused; Talk creates the session from the chosen preset.
    `voice-session.test.js`, `voice-ui.test.mjs`.
-9. A session from `startVoiceSession` has the spoken introduction; a session from the new-session
-   dialog has the plain one (the fake provider's request log). `voice-session.test.js`.
+9. A session from `startVoiceSession` and one from the new-session dialog both have the plain
+   introduction (9.1; the fake provider's request log). `voice-session.test.js`, `m5-prompt.test.js`.
+   A message sent from spoken mode carries the marker to `TurnStarted.spoken` and adds the spoken
+   turn note to every round of its turn only; a typed one does not; the marker survives an edit, a
+   restart hold and export/import. `m5-w57-packages.test.js`, `m5-w57-composer.test.js`,
+   `m2-w27-session-export.test.js`, `voice-state.test.js`, `voice-ui.test.mjs`.
 10. Timeouts: a hanging fake speech-in engine fails the utterance after `engineTimeoutMs` with
     `engineTimeout` and is restarted; an utterance with no AUDIO for `sttIdleMs` is aborted with
     `sttIdle`; a fake TTS that hangs on one sentence produces `sentence-failed` and the next
@@ -849,9 +907,9 @@ WX.1's); W11.9 last. Six to eight agents.
     `speech-timeouts.test.js`.
 11. Replay plays a finished turn's text again, inline pieces and a staged Blob piece alike; the level
     meter moves with input. `speech-audio-route.test.js`, `voice-ui.test.mjs`.
-12. Auto-speak: a send from page A (typed or spoken) is spoken on page A when its turn starts, also
+12. Auto-speak: a send from page A in spoken mode is spoken on page A when its turn starts, also
     when the message was queued behind a running turn; page B, watching the same session, speaks
-    nothing. `voice-ui.test.mjs`.
+    nothing; a typed send is not spoken (9.1). `voice-ui.test.mjs`, `voice-state.test.js`.
 13. Launch claims: `startVoiceSession({ invocationId })` twice answers one session, the second
     `duplicate: true`; after 33 distinct ids the first is forgotten; the claim survives a restart
     (K11-5). `voice-session.test.js`, `voice-restart.test.js`.
@@ -908,23 +966,23 @@ coalesce); spawn to ready of a Node child 20.5 ms (p95 24.5, n 20). Earlier: a g
 vat 23 ms (`ui.call`, J-10192), a vat -> adapter -> vat call 70-76 ms (J-9043), a session from the
 pool 849-864 ms (J-9382), a live delta to an in-process subscriber 0.17-0.20 ms (J-9173, J-10192).
 
-| row | file | window | budget | derived from |
-|---|---|---|---|---|
-| `speech.audioForward`: AUDIO frame received to the engine line written | `perf/voice.perf.mjs` | 60 s at real-time pacing (about 700 frames) | median <= 1 ms, p99 <= 3 ms | 0.055 + 0.009 + 0.022 ms measured; x10 margin for parsing and timers |
-| `speech.audioForward.load`: same, 16 utterances at once | `perf/voice.perf.mjs` | 60 s | p99 <= 5 ms | as above, 16 x |
-| `speech.partialRelay`: engine partial line read to the client's EVENT frame | `perf/voice.perf.mjs` | 60 s | median <= 2 ms | 0.055 ms socket, 0.009 ms JSON |
-| `speech.firstAudio`: delta completing the first sentence published in the channel to the first PCM frame at the client (fake TTS answers at once) | `perf/voice.perf.mjs` | 60 s (one playback per sample) | median <= 20 ms, p99 <= 50 | delta to subscriber 0.2 ms, pipe 0.05, socket 0.06; margin for the channel's microtask batching |
-| `speech.engineRespawn`: fake engine killed to the next utterance's `listening` with the engine ready | `perf/voice.perf.mjs` | 60 s | <= 100 ms | spawn to ready 20.5 ms |
-| `voice.deliveries` **gate row** (a count, not a rate: cross-check X-14): vat deliveries of one spoken turn (utterance, auto-send, speak, playback) minus a typed turn's, counted on every spoken turn the `voice.speakOpen` window runs | `perf/voice-session.perf.mjs` | inside the `voice.speakOpen` window (no time of its own) | 0 on every turn (any non-zero fails) | D-M11-1 |
-| `voice.speakOpen`: `AudioPort.speak` from a CapTP client to its answer | `perf/voice-session.perf.mjs` | 60 s | median <= 10 ms; 0 deliveries | a gateway-local call (`gateway.fetch` 0.51 ms) plus `Live.subscribe` in process |
-| `voice.preferences`: `setPreferences` round trip from a CapTP client | `perf/voice-session.perf.mjs` | 60 s | median <= 50 ms; 1 delivery | `ui.call` 23 ms |
-| `voice.startSession`: `startVoiceSession` with a spare pool and a pinned model | `perf/voice-session.perf.mjs` | 60 s (few samples: reported as such) | median <= 950 ms | 864 ms pool take + 76 ms `resolveModel` |
-| `voice.launchDuplicate`: second call with the same invocation id | `perf/voice-session.perf.mjs` | 60 s | median <= 50 ms | one factory crank through the gateway, 23 ms |
-| `voice.settingsRead`: the host's first settings read | `perf/voice-session.perf.mjs` | 60 s (fresh host per sample) | median <= 100 ms; 2 deliveries | two factory calls of about 23-37 ms |
-| `stt.partialLatency` `[real-moonshine]`: 0.5 s of new audio to the partial | gated in `perf/voice.perf.mjs` | 60 s | <= 300 ms (architecture 11; no measured basis, R5-51) | recorded |
-| `stt.finalLatency` `[real-moonshine]`: END to final | gated | 60 s | <= 500 ms | recorded |
-| `tts.firstAudio` `[real-piper]`: first sentence to first PCM, warm spare / cold | gated | 60 s | warm <= 1 s; cold recorded | architecture 11 |
-| `provider.*` `[real-provider]`: final after END, first PCM after a sentence | gated | 60 s | recorded | - |
+| row                                                                                                                                                                                                                                     | file                           | window                                                   | budget                                                | derived from                                                                                    |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | -------------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `speech.audioForward`: AUDIO frame received to the engine line written                                                                                                                                                                  | `perf/voice.perf.mjs`          | 60 s at real-time pacing (about 700 frames)              | median <= 1 ms, p99 <= 3 ms                           | 0.055 + 0.009 + 0.022 ms measured; x10 margin for parsing and timers                            |
+| `speech.audioForward.load`: same, 16 utterances at once                                                                                                                                                                                 | `perf/voice.perf.mjs`          | 60 s                                                     | p99 <= 5 ms                                           | as above, 16 x                                                                                  |
+| `speech.partialRelay`: engine partial line read to the client's EVENT frame                                                                                                                                                             | `perf/voice.perf.mjs`          | 60 s                                                     | median <= 2 ms                                        | 0.055 ms socket, 0.009 ms JSON                                                                  |
+| `speech.firstAudio`: delta completing the first sentence published in the channel to the first PCM frame at the client (fake TTS answers at once)                                                                                       | `perf/voice.perf.mjs`          | 60 s (one playback per sample)                           | median <= 20 ms, p99 <= 50                            | delta to subscriber 0.2 ms, pipe 0.05, socket 0.06; margin for the channel's microtask batching |
+| `speech.engineRespawn`: fake engine killed to the next utterance's `listening` with the engine ready                                                                                                                                    | `perf/voice.perf.mjs`          | 60 s                                                     | <= 100 ms                                             | spawn to ready 20.5 ms                                                                          |
+| `voice.deliveries` **gate row** (a count, not a rate: cross-check X-14): vat deliveries of one spoken turn (utterance, auto-send, speak, playback) minus a typed turn's, counted on every spoken turn the `voice.speakOpen` window runs | `perf/voice-session.perf.mjs`  | inside the `voice.speakOpen` window (no time of its own) | 0 on every turn (any non-zero fails)                  | D-M11-1                                                                                         |
+| `voice.speakOpen`: `AudioPort.speak` from a CapTP client to its answer                                                                                                                                                                  | `perf/voice-session.perf.mjs`  | 60 s                                                     | median <= 10 ms; 0 deliveries                         | a gateway-local call (`gateway.fetch` 0.51 ms) plus `Live.subscribe` in process                 |
+| `voice.preferences`: `setPreferences` round trip from a CapTP client                                                                                                                                                                    | `perf/voice-session.perf.mjs`  | 60 s                                                     | median <= 50 ms; 1 delivery                           | `ui.call` 23 ms                                                                                 |
+| `voice.startSession`: `startVoiceSession` with a spare pool and a pinned model                                                                                                                                                          | `perf/voice-session.perf.mjs`  | 60 s (few samples: reported as such)                     | median <= 950 ms                                      | 864 ms pool take + 76 ms `resolveModel`                                                         |
+| `voice.launchDuplicate`: second call with the same invocation id                                                                                                                                                                        | `perf/voice-session.perf.mjs`  | 60 s                                                     | median <= 50 ms                                       | one factory crank through the gateway, 23 ms                                                    |
+| `voice.settingsRead`: the host's first settings read                                                                                                                                                                                    | `perf/voice-session.perf.mjs`  | 60 s (fresh host per sample)                             | median <= 100 ms; 2 deliveries                        | two factory calls of about 23-37 ms                                                             |
+| `stt.partialLatency` `[real-moonshine]`: 0.5 s of new audio to the partial                                                                                                                                                              | gated in `perf/voice.perf.mjs` | 60 s                                                     | <= 300 ms (architecture 11; no measured basis, R5-51) | recorded                                                                                        |
+| `stt.finalLatency` `[real-moonshine]`: END to final                                                                                                                                                                                     | gated                          | 60 s                                                     | <= 500 ms                                             | recorded                                                                                        |
+| `tts.firstAudio` `[real-piper]`: first sentence to first PCM, warm spare / cold                                                                                                                                                         | gated                          | 60 s                                                     | warm <= 1 s; cold recorded                            | architecture 11                                                                                 |
+| `provider.*` `[real-provider]`: final after END, first PCM after a sentence                                                                                                                                                             | gated                          | 60 s                                                     | recorded                                              | -                                                                                               |
 
 Time per file: `voice.perf.mjs` 5 rows x 60 s plus 30 s of setup (no supervisor) is about 6
 minutes; `voice-session.perf.mjs` 5 windows x 60 s (the gate row has no window) plus a template
@@ -937,26 +995,26 @@ must not change (checked by `node scripts/bundle-guest.mjs` before and after).
 
 ### 14.2 Too-big and hostile-input probes (each a case in the named test)
 
-| probe | expected | test |
-|---|---|---|
-| an AUDIO frame of 65,537 bytes | that utterance aborts `frameTooLarge`; the socket stays | `speech-audio-route.test.js` |
-| a WebSocket message over 1 MiB | closed 1009 by the server | `speech-audio-route.test.js` |
-| a frame before HELLO, an unknown kind, a reserved byte not 0, a frame for a closed stream | closed `protocol` | `speech-audio-route.test.js` |
-| 1,000 sockets with wrong tokens | each closed `tokenRefused`; connection bounds hold; no port leaks | `speech-audio-route.test.js` |
-| 65 `openAudio` without sockets | the 65th refused `tooManyPorts`; after 30 s all forgotten | `speech-timeouts.test.js` |
-| an utterance of 301 s of audio | ended by the server, final follows, `utteranceTooLong` note | `speech-stt-process.test.js` (fake, sped-up clock) |
-| a speech-in engine that falls 3 MiB behind | utterance aborts `backlog` | `speech-stt-process.test.js` |
-| a fake engine printing a 10 MiB line | the engine is killed; its utterances abort `engineFailed`; respawn on next use | `speech-child-engine.test.js` |
-| a page that never reads PCM | synthesis pauses at 1 MiB queued; never closed by the 8 MiB bound | `speech-audio-route.test.js` |
-| a reply of 1 MiB with no punctuation or newline | cut at whitespace every 1,000 units; backlog under 1 Mi units | `speech-text.test.js`, `speech-turn-view.test.js` |
-| `replay` with 65 pieces, a piece of 8,193 units, or a call body over 1 MiB | refused by the guard / the bridge | `gateway-speech-extension.test.js` |
-| `speak` with a third view on one session | `tooManyViews` | `speech-turn-view.test.js` |
-| `setPreferences` with `speed: NaN`, `Infinity`, `4.05`, a 129-unit voice, an extra key | refused (range text, guard, gateway `unexpectedField`) | `factory-voice.test.js`, `voice-session.test.js` |
-| `HarnessRoot.configureSpeech` with 33 arguments, a 4,097-unit argument, or an estimated 22,529 bytes | refused `speechSettingsInvalid` or by the guard | `factory-voice.test.js` |
-| a gateway page calls `configureSpeech` on its `Voice` presence | refused by the `Voice` guard (no such method); settings unchanged | `voice-session.test.js` |
-| an extension other than `speech.js` reads `context.readGrant` | `undefined` | `gateway-speech-extension.test.js` |
-| `startVoiceSession` with a 129-unit invocation id | refused by the guard | `factory-voice.test.js` |
-| a provider answer of 100 KB JSON, or a body that never ends | bounded read fails `engineFailed`; request timeout | `speech-openai-audio.test.js` |
+| probe                                                                                                | expected                                                                       | test                                               |
+| ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------- |
+| an AUDIO frame of 65,537 bytes                                                                       | that utterance aborts `frameTooLarge`; the socket stays                        | `speech-audio-route.test.js`                       |
+| a WebSocket message over 1 MiB                                                                       | closed 1009 by the server                                                      | `speech-audio-route.test.js`                       |
+| a frame before HELLO, an unknown kind, a reserved byte not 0, a frame for a closed stream            | closed `protocol`                                                              | `speech-audio-route.test.js`                       |
+| 1,000 sockets with wrong tokens                                                                      | each closed `tokenRefused`; connection bounds hold; no port leaks              | `speech-audio-route.test.js`                       |
+| 65 `openAudio` without sockets                                                                       | the 65th refused `tooManyPorts`; after 30 s all forgotten                      | `speech-timeouts.test.js`                          |
+| an utterance of 301 s of audio                                                                       | ended by the server, final follows, `utteranceTooLong` note                    | `speech-stt-process.test.js` (fake, sped-up clock) |
+| a speech-in engine that falls 3 MiB behind                                                           | utterance aborts `backlog`                                                     | `speech-stt-process.test.js`                       |
+| a fake engine printing a 10 MiB line                                                                 | the engine is killed; its utterances abort `engineFailed`; respawn on next use | `speech-child-engine.test.js`                      |
+| a page that never reads PCM                                                                          | synthesis pauses at 1 MiB queued; never closed by the 8 MiB bound              | `speech-audio-route.test.js`                       |
+| a reply of 1 MiB with no punctuation or newline                                                      | cut at whitespace every 1,000 units; backlog under 1 Mi units                  | `speech-text.test.js`, `speech-turn-view.test.js`  |
+| `replay` with 65 pieces, a piece of 8,193 units, or a call body over 1 MiB                           | refused by the guard / the bridge                                              | `gateway-speech-extension.test.js`                 |
+| `speak` with a third view on one session                                                             | `tooManyViews`                                                                 | `speech-turn-view.test.js`                         |
+| `setPreferences` with `speed: NaN`, `Infinity`, `4.05`, a 129-unit voice, an extra key               | refused (range text, guard, gateway `unexpectedField`)                         | `factory-voice.test.js`, `voice-session.test.js`   |
+| `HarnessRoot.configureSpeech` with 33 arguments, a 4,097-unit argument, or an estimated 22,529 bytes | refused `speechSettingsInvalid` or by the guard                                | `factory-voice.test.js`                            |
+| a gateway page calls `configureSpeech` on its `Voice` presence                                       | refused by the `Voice` guard (no such method); settings unchanged              | `voice-session.test.js`                            |
+| an extension other than `speech.js` reads `context.readGrant`                                        | `undefined`                                                                    | `gateway-speech-extension.test.js`                 |
+| `startVoiceSession` with a 129-unit invocation id                                                    | refused by the guard                                                           | `factory-voice.test.js`                            |
+| a provider answer of 100 KB JSON, or a body that never ends                                          | bounded read fails `engineFailed`; request timeout                             | `speech-openai-audio.test.js`                      |
 
 ---
 
@@ -977,7 +1035,8 @@ channel stays open" (CC-120), with that test as the motivation.
    grants) with partials by re-transcription every 1.5 s? [build; partials on; interval in the
    settings]
 2. **O-2** Only voice-started sessions are spoken (departs from R5-52's "every UI session spoken",
-   fixes the spec-digest gap). [voice-started only]
+   fixes the spec-digest gap). [voice-started only; since 9.1, per message: a send from spoken
+   mode is spoken, in any session]
 3. **O-3** The operator selected per-message playback during UAT.
    The `message.action` slot supplies the selected reply to the voice feature (J-12594).
 4. **O-4** No download of Piper voices or Moonshine weights by the harness at start (R8-43): the
@@ -1196,7 +1255,7 @@ gateway vocabulary keys from this appendix: `voice`, `speed`, `noiseScale`, `noi
 All are Node scripts or data; none needs credentials or the network beyond loopback.
 
 - `test/fixtures/fake-stt.mjs` speaks the `sttProcessMessages` protocol. Arguments: `--mode
-  normal|hang-after=<n lines>|crash-at-start|slow-ready=<ms>|flood-line|error-on-stop`,
+normal|hang-after=<n lines>|crash-at-start|slow-ready=<ms>|flood-line|error-on-stop`,
   `--pid-file <path>`, `--log <path>` (JSON lines of what it received, base64 lengths only). A
   partial is `"<bytes so far> bytes"` every 0.5 s of audio, the final `"final <bytes>"`. Exits at
   stdin EOF.
@@ -1205,7 +1264,7 @@ All are Node scripts or data; none needs credentials or the network beyond loopb
   Modes `normal|hang-on=<sentence index>|crash-at-start|slow-ms=<n>`; `--pid-file`, `--log`. Exits
   at stdin EOF.
 - `test/fixtures/fake-speech-server.mjs` listens on `127.0.0.1:0` and prints its port: `POST
-  /v1/audio/transcriptions` answers `{ "text": "final <bytes>" }`; `POST /v1/audio/speech` streams
+/v1/audio/transcriptions` answers `{ "text": "final <bytes>" }`; `POST /v1/audio/speech` streams
   24 kHz PCM as above; it records the SHA-256 of each `Authorization` header (never the value);
   modes per request header `x-fake-mode: 401|429|500|hang|slow-body|huge-json`.
 - `test/fixtures/voices/`: `en_US-test-medium.onnx` (empty) + `.onnx.json` (`sample_rate` 22050),
@@ -1220,45 +1279,45 @@ All are Node scripts or data; none needs credentials or the network beyond loopb
 "M11" names the acceptance item (section 13) that proves it; "departure" names the decision that
 records a difference; "not M11" names the owner. Spec items not listed are not voice items.
 
-| item | what | here |
-|---|---|---|
-| R2-6 | speech in resident, recreated every start; speech out spawned per synthesis | M11 2 (resident, respawn), 5 (one process per reply), 21 (fresh per start); departure D-M11-23 (started at first use) |
-| R2-20 | voices and weights downloaded from remote hosts | not M11: O-4 (the operator installs voices; `uv` fetches weights on first use) |
-| R3-13, R4-89 | the built-in `voice` preset, its pinned backend and model | M11 14 (the pin and G-11) and `70-voice.js`; the workspace and shell are M6's; whole preset: WX.F `voice-preset.test.js` |
+| item           | what                                                                                                 | here                                                                                                                                                                            |
+| -------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R2-6           | speech in resident, recreated every start; speech out spawned per synthesis                          | M11 2 (resident, respawn), 5 (one process per reply), 21 (fresh per start); departure D-M11-23 (started at first use)                                                           |
+| R2-20          | voices and weights downloaded from remote hosts                                                      | not M11: O-4 (the operator installs voices; `uv` fetches weights on first use)                                                                                                  |
+| R3-13, R4-89   | the built-in `voice` preset, its pinned backend and model                                            | M11 14 (the pin and G-11) and `70-voice.js`; the workspace and shell are M6's; whole preset: WX.F `voice-preset.test.js`                                                        |
 | R3-244, R3-245 | synthesis and recognition as unconfined local services, a recognition failure not stopping the start | M11 2 (a speech-in start failure leaves speech out working); engines are adapter children with the allowlisted environment (section 10); no start step waits on them (D-M11-23) |
-| R5-1 | four parts: client front end, speech in, speech out, the speech view | sections 1.3, 6, 7, 9 |
-| R5-2 | audio as object messages over the UI's socket; no endpoint added | departure D-M11-3, O-5 (binary `/audio`); "every session, whatever its backend": M11 4 (speak takes any `Session`) |
-| R5-3 .. R5-11 | the spoken turn, steps 1-9 | M11 1 (capture to final), 6 (endpointing, grace send), 4 (speech view), 5 and 10 (synthesis), 11 and 7 (playback) |
-| R5-12 | base64 PCM in pulled, merged events; odd byte dropped | M11 1 (odd byte); departure D-M11-3 (pushed binary frames, nothing to merge) |
-| R5-13, R5-14 | partials recomputed; cumulative, replace not append | M11 1 |
-| R5-15 | resident model, warmed, respawned on next use | M11 2; warming at first settings read (D-M11-23) |
-| R5-16 | language fixed per service | `SpeechInSettings.language` (appendix A) |
-| R5-17 | a failure mid-stream reported as `abort` | M11 1, 10 |
-| R5-18 | the deployment's model choice | not M11 (operator configuration; `[real-moonshine]` repeats) |
-| R5-19 .. R5-33 | client endpointing and its defaults | M11 6 (`endpointing-defaults.js` holds R5-24..R5-33) |
-| R5-34 | the speech view of a turn | M11 4 |
-| R5-35 .. R5-37 | code filter, sentence split, release on whitespace | M11 3 |
-| R5-38 | one synthesis process per reply, lazy | M11 5, 7; improved by the warm spare (D-M11-12) |
-| R5-39 | the deployment's voices | not M11 (operator configuration; `[real-piper]`) |
-| R5-40 .. R5-43 | catalogue, option checks, ranges, PCM output with its rate | M11 5 |
-| R5-44 | look-ahead and gapless scheduling; a new playback replaces the old | M11 7, 11; `voice-playback.test.js` |
-| R5-45 | auto-speak only on the submitting page | M11 12 |
-| R5-46, R5-47 | soft barge-in; stopping playback ends synthesis, not the turn | M11 7 |
-| R5-48 | Stop cancels the turn; mute stops the reply | M11 7; `voice-ui.test.mjs` |
-| R5-49 | latency mechanisms | perf rows `speech.*` (section 14.1) |
-| R5-50 | debounced settings change restarts speech | M11 8; section 9 Settings |
-| R5-51 | fixed delays, no measured figures | perf rows; `stt.*`, `tts.*` owner rows |
-| R5-52 | spoken introduction for `spoken: true` | M11 9; departure D-M11-16, O-2 (voice-started sessions only) |
-| R5-53 | the shortcut's preset, changeable, per controller | M11 8, 22 |
-| R5-54 | shared preferences record, serialised merges, re-check at synthesis | M11 8, 5; departure D-M11-18 (unknown keys refused) |
-| R5-55, R5-56 | device cache and load order; UI controls | M11 8, 11; section 9; D-M11-17, O-3 (per-message playback) |
-| R5-57 | configurable switches, voice, speed, language, model location | `SpeechSettings` (appendix A), `70-voice.js`; M11 19 |
-| R5-58 | both services after every start; speech-in failure not fatal; unbounded wait | M11 2, 21; departures D-M11-10 (`engineLoadMs`), D-M11-23 |
-| R5-59 | services hold no capabilities, ambient OS authority | section 10 (engines reach only their pipes or HTTP; settings written on the provisioning path, D-M11-21) |
-| R5-60 .. R5-62 | Android shell, invocation, pause | not M11 (P-60, open decision 7); the launch claim (R5-61's 32 ids) is M11 13; the wake lock (R5-62) M11 18 |
-| R5-63 .. R5-71 | context items | R5-66: D-M11-12; R5-67: D-M11-10, M11 10; R5-68: D-M11-11; R5-70: D-M11-16; R5-71: not built (section 1.2) |
-| R6-53 | the voice controls of the UI | M11 6, 7, 8, 11, 18 (`voice-ui.test.mjs`) |
-| R6-60 | launch claims | M11 13 |
-| R8-17 | voice configuration and its defaults (speed 1.0, speech in on, language `en`) | `70-voice.js` defaults; M11 19 |
-| R8-29 | engines fresh at every start with the current configuration | M11 21; departure D-M11-23, O-12 |
-| R8-43 | Piper and Moonshine; downloads | the `process` kind (section 6.2); downloads not M11 (O-4) |
+| R5-1           | four parts: client front end, speech in, speech out, the speech view                                 | sections 1.3, 6, 7, 9                                                                                                                                                           |
+| R5-2           | audio as object messages over the UI's socket; no endpoint added                                     | departure D-M11-3, O-5 (binary `/audio`); "every session, whatever its backend": M11 4 (speak takes any `Session`)                                                              |
+| R5-3 .. R5-11  | the spoken turn, steps 1-9                                                                           | M11 1 (capture to final), 6 (endpointing, grace send), 4 (speech view), 5 and 10 (synthesis), 11 and 7 (playback)                                                               |
+| R5-12          | base64 PCM in pulled, merged events; odd byte dropped                                                | M11 1 (odd byte); departure D-M11-3 (pushed binary frames, nothing to merge)                                                                                                    |
+| R5-13, R5-14   | partials recomputed; cumulative, replace not append                                                  | M11 1                                                                                                                                                                           |
+| R5-15          | resident model, warmed, respawned on next use                                                        | M11 2; warming at first settings read (D-M11-23)                                                                                                                                |
+| R5-16          | language fixed per service                                                                           | `SpeechInSettings.language` (appendix A)                                                                                                                                        |
+| R5-17          | a failure mid-stream reported as `abort`                                                             | M11 1, 10                                                                                                                                                                       |
+| R5-18          | the deployment's model choice                                                                        | not M11 (operator configuration; `[real-moonshine]` repeats)                                                                                                                    |
+| R5-19 .. R5-33 | client endpointing and its defaults                                                                  | M11 6 (`endpointing-defaults.js` holds R5-24..R5-33)                                                                                                                            |
+| R5-34          | the speech view of a turn                                                                            | M11 4                                                                                                                                                                           |
+| R5-35 .. R5-37 | code filter, sentence split, release on whitespace                                                   | M11 3                                                                                                                                                                           |
+| R5-38          | one synthesis process per reply, lazy                                                                | M11 5, 7; improved by the warm spare (D-M11-12)                                                                                                                                 |
+| R5-39          | the deployment's voices                                                                              | not M11 (operator configuration; `[real-piper]`)                                                                                                                                |
+| R5-40 .. R5-43 | catalogue, option checks, ranges, PCM output with its rate                                           | M11 5                                                                                                                                                                           |
+| R5-44          | look-ahead and gapless scheduling; a new playback replaces the old                                   | M11 7, 11; `voice-playback.test.js`                                                                                                                                             |
+| R5-45          | auto-speak only on the submitting page                                                               | M11 12                                                                                                                                                                          |
+| R5-46, R5-47   | soft barge-in; stopping playback ends synthesis, not the turn                                        | M11 7                                                                                                                                                                           |
+| R5-48          | Stop cancels the turn; mute stops the reply                                                          | M11 7; `voice-ui.test.mjs`                                                                                                                                                      |
+| R5-49          | latency mechanisms                                                                                   | perf rows `speech.*` (section 14.1)                                                                                                                                             |
+| R5-50          | debounced settings change restarts speech                                                            | M11 8; section 9 Settings                                                                                                                                                       |
+| R5-51          | fixed delays, no measured figures                                                                    | perf rows; `stt.*`, `tts.*` owner rows                                                                                                                                          |
+| R5-52          | spoken introduction for `spoken: true`                                                               | M11 9; departure D-M11-16, O-2 (voice-started sessions only); since 9.1 the voice rules come per spoken turn (`spokenTurnNote`)                                                 |
+| R5-53          | the shortcut's preset, changeable, per controller                                                    | M11 8, 22                                                                                                                                                                       |
+| R5-54          | shared preferences record, serialised merges, re-check at synthesis                                  | M11 8, 5; departure D-M11-18 (unknown keys refused)                                                                                                                             |
+| R5-55, R5-56   | device cache and load order; UI controls                                                             | M11 8, 11; section 9; D-M11-17, O-3 (per-message playback)                                                                                                                      |
+| R5-57          | configurable switches, voice, speed, language, model location                                        | `SpeechSettings` (appendix A), `70-voice.js`; M11 19                                                                                                                            |
+| R5-58          | both services after every start; speech-in failure not fatal; unbounded wait                         | M11 2, 21; departures D-M11-10 (`engineLoadMs`), D-M11-23                                                                                                                       |
+| R5-59          | services hold no capabilities, ambient OS authority                                                  | section 10 (engines reach only their pipes or HTTP; settings written on the provisioning path, D-M11-21)                                                                        |
+| R5-60 .. R5-62 | Android shell, invocation, pause                                                                     | not M11 (P-60, open decision 7); the launch claim (R5-61's 32 ids) is M11 13; the wake lock (R5-62) M11 18                                                                      |
+| R5-63 .. R5-71 | context items                                                                                        | R5-66: D-M11-12; R5-67: D-M11-10, M11 10; R5-68: D-M11-11; R5-70: D-M11-16; R5-71: not built (section 1.2)                                                                      |
+| R6-53          | the voice controls of the UI                                                                         | M11 6, 7, 8, 11, 18 (`voice-ui.test.mjs`)                                                                                                                                       |
+| R6-60          | launch claims                                                                                        | M11 13                                                                                                                                                                          |
+| R8-17          | voice configuration and its defaults (speed 1.0, speech in on, language `en`)                        | `70-voice.js` defaults; M11 19                                                                                                                                                  |
+| R8-29          | engines fresh at every start with the current configuration                                          | M11 21; departure D-M11-23, O-12                                                                                                                                                |
+| R8-43          | Piper and Moonshine; downloads                                                                       | the `process` kind (section 6.2); downloads not M11 (O-4)                                                                                                                       |
