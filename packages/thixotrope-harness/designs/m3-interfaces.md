@@ -492,12 +492,12 @@ the build. Slots (`uiSlots`) and the props each slot's `component` receives:
 
 | slot | used by | props |
 |---|---|---|
-| `app.panel` | M4 Secrets, Subscriptions; M5 preset editor; M12 Home | `{ context }`; opened from the header menu by `label` |
+| `app.panel` | M4 Secrets, Subscriptions; M5 preset editor; M11 Voice; M12 Home | `{ context }`; a global section of the Settings view, listed by `label` |
 | `header.chip` | M7 Network | `{ context }` |
 | `statusbar.chip` | M4 account chips | `{ context }` |
 | `composer.addon` | M5 mentions, M11 voice | `{ context, input: { text, caret }, replaceRange(start, end, text) }` (`ComposerAddonProps`); optional `send(ComposerSendRequest)`, 9.2 |
 | `newSession.field` | M7 internet toggle | `{ context }` |
-| `session.settings` | M6 emergency stop | `{ context }` |
+| `session.settings` | M6 emergency stop | `{ context }`; part of the Settings view's "This session" section, listed only for an open session once one of them renders something (a component may answer `null`) |
 | `message.renderer` | M5 attachment chips, M9 captions, M12 widgets | `{ context, turn, record }` (`MessageRendererProps`): once per turn, under the turn's user message; `record` is the turn's `TurnStarted` (or live `turn-start`) record with unknown optional fields kept |
 | `message.action` | M11 Play message | `{ context, message }` beside each committed assistant message bubble, aligned with its bottom edge. The component receives the same message the transcript renders, including its staged text reference when present. |
 
@@ -623,7 +623,9 @@ re-read after each `subscribe` notification):
   view: { info, messages, streamingText, phase, busy, current?, pending, hold?,
           usage, earlier: 'none'|'more'|'loading', status,
           input: { text, caret }, sendError? } | null,
-  recovery: { turns, next?, loading } | null, settingsOpen, drawerOpen }
+  recovery: { turns, next?, loading } | null,
+  settings: { section? } | undefined,     // the open Settings view (9.4)
+  drawerOpen }
 ```
 
 Actions: `selectSession(key)`, `newSession({ presetIndex?, backendIndex?, modelSelection?,
@@ -631,7 +633,8 @@ title? })`, `renameSession(key, title)`, `deleteSession(key)`, `send(text)`, `st
 `sendPendingNow(entryKey)`, `editPending(entryKey, text)`, `cancelPending(entryKey)`,
 `loadEarlier()`, `openRecovery()`, `resolveTurn(turnId, note)`, `readContent(staged) -> text`,
 `setInput(text, caret?)`, `replaceInput(start, end, text)` (what `replaceRange` calls),
-`toggleDrawer()`, `toggleSettings()`, `refreshModels(backendIndex)`. String keys
+`toggleDrawer()`, `openSettings(section?)`, `selectSettingsSection(section)`, `closeSettings()`,
+`toggleSettings()`, `refreshModels(backendIndex)`. String keys
 appear only where the page re-finds an object it holds (F.2 d): the controller keeps
 `Map<key, Session>` from the rows it received, `Map<entryKey, QueueEntry>` from `PendingRow`s,
 turns by `turnId` from history pages.
@@ -714,6 +717,30 @@ it knows and never copies records onto M2's keys, so an optional field a later m
 | R6-51 status rows, Details, recovery panel, Record acknowledgement | `UI/src/conversation/{StatusRow,Recovery}.js` | `TurnStatus`, history pages, `Turn.resolve` / `Session.findTurn` |
 | R6-52 status bar | `UI/src/shell/StatusBar.js` | `UsageTotals`; slot `statusbar.chip` |
 | R6-13 overlay, R6-61 drawer | `UI/src/shell/{Overlay,Layout}.js` | connection state; `drawerMaxWidthPx` |
+| Settings view | `UI/src/shell/{Header,Settings}.js`, `settings.css` | slots `app.panel`, `session.settings`; `settings` (9.4) |
+
+### 9.4 Settings view
+
+One Settings view holds what configures the harness and the open session. The header's Settings
+control (an icon with the accessible name and tooltip "Settings") opens and closes it with or
+without a session open; it is absent only while a subagent is inspected, which shows no features.
+The view replaces the main region and hides the composer and the status bar. A vertical list on
+the left selects a section, which renders on the right; at `drawerMaxWidthPx` or less the list is
+a scrolling row on top.
+
+- **Sections**: "This session" (id `session`, the `session.settings` features of the active
+  session) and one per `app.panel` feature that `when(context)` shows, in slot order, by
+  `label`. The `session.settings` features stay mounted (hidden) while the view is open, and
+  "This session" is listed only once one of them has rendered something, so the view never shows
+  an empty pane.
+- **State**: `settings: { section? } | undefined`. `openSettings(section?)` opens at
+  `section` or the last section selected; `selectSettingsSection(section)` selects and
+  remembers; a section absent or no longer listed shows "This session" when listed, else the first
+  global section. `selectSession`, `newSession` and subagent navigation close the view.
+- **Closing**: Escape (outside a text field) or the Settings control; the session shows again.
+- **Layout**: every section gets one content width and heading size from one rule in
+  `UI/src/shell/settings.css`; a panel's own rules inside stay its own. The header keeps one line
+  (`flex-wrap: nowrap`) and the title truncates.
 
 ---
 

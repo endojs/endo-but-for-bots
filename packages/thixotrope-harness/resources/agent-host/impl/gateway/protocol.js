@@ -155,7 +155,11 @@ export const drawerMaxWidthPx = 640;
  * change.
  */
 export const uiSlots = Object.freeze([
-  /** A full panel opened from the header menu (Secrets, Presets, Home). */
+  /**
+   * A global section of the Settings view (Subscriptions, Secrets, Presets,
+   * Voice), listed by `label` in its section list and opened from the
+   * header's Settings control.
+   */
   'app.panel',
   /** A chip in the header of the active session (Network, Details). */
   'header.chip',
@@ -168,7 +172,11 @@ export const uiSlots = Object.freeze([
   'composer.addon',
   /** Extra fields of the "Start a new session" dialog (internet toggle). */
   'newSession.field',
-  /** Sections of the session Settings panel (emergency stop). */
+  /**
+   * Parts of the Settings view's "This session" section (emergency stop),
+   * listed only for an open session and once one of them renders
+   * something (a component may answer `null`).
+   */
   'session.settings',
   /**
    * Per-turn renderers under the turn's user message (attachment chips,
