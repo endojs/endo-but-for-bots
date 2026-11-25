@@ -111,23 +111,49 @@ node scripts/project-preset.mjs "$state" --repo ../.. --ref "$project_ref" --ima
 ```
 
 A new preset defaults to the single `claude-pool` backend with
-`claude-fable-5-2`. Republishing without `--backend` or `--model` keeps the
-saved backend and model. `--backend` takes a backend label, or a kind such as
+`claude-fable-5-2`; a state without a `claude-pool` backend gets a preset
+with no backend or model (the factory defaults) and a note. Republishing
+without `--backend` or `--model` keeps the saved backend and model. `--backend` takes a backend label, or a kind such as
 `claude-pool`. The script resolves it to the factory's Backend object and
 fails when none or several match. It checks `--model` against that backend's
 catalogue. Presets store no effort, so `--effort` only checks that the model
-starts its sessions at that effort. The script fails if not.
+starts its sessions at that effort. The script fails if not. It resolves
+and checks the preset name, backend, model and effort before it changes
+anything (the published bundle, the environments, the session program).
+A model row with no efforts at all means the running agent-host has an
+older efforts table: restart the supervisor on a tree with the fix.
 
-The `modelId` and `reasoningEffort` arguments of `spawnSubagent` need both
-the current session program and the current factory. The factory is installed
-once per state and has no live upgrade before M13. An older factory refuses a
-spawn that names a model or an effort, but a spawn without them still works.
-To get the new factory, export the state with `scripts/export.mjs`, provision
-a fresh state and import the export there.
-The table of efforts that the catalogue offers for Claude Fable 5.2 is in the
-agent-host native resource (`claudeEfforts` in
-`resources/agent-host/impl/subscriptions/messages.js`). A state runs the
-agent-host code it was installed with.
+Republishing upgrades instructions that are one of the script's earlier
+defaults. It keeps instructions an operator edited and prints a note;
+`--replace-instructions` replaces them with the current default. The
+default makes a session the project manager that delegates implementation
+and makes each subagent (whose session program adds a "Subagent role"
+section) the implementer. A child has its own checkout of the seed commit
+that the parent cannot fetch from, and an `askSubagent` answer is cut at
+about 31,000 characters, so the child hands its commits back as a base64
+git bundle, put in pieces into a drop box the parent publishes and attaches
+at the spawn; the parent fetches the bundle into its own checkout.
+
+What takes effect when:
+- The preset's text, backend and model: at once, through
+  `project-preset.mjs`, for sessions created afterwards. A session keeps the
+  snapshot it was created with.
+- The efforts table (`claudeEfforts` in
+  `resources/agent-host/impl/subscriptions/messages.js`): at the next
+  supervisor restart. `resources/agent-host/impl/**` is loaded from the
+  source tree when the adapter process starts
+  (`resources/agent-host/ephemeral.js`); only the installed durable halves
+  and the factory are pinned to the state.
+- The session program (the subagent role section, the `spawnSubagent`
+  description and its check of the factory): through `project-preset.mjs
+  --legacy-factory`, which loads it.
+- The factory's `SpawnRequest` guard (`modelId`, `reasoningEffort`): only on
+  a freshly provisioned state. The factory is installed once per state and
+  has no live upgrade before M13. Export the state with `scripts/export.mjs`,
+  provision a fresh state and import the export there. On an older factory
+  the session program reads the factory's guard, describes `spawnSubagent`
+  without the two options and refuses them with what to do; a spawn without
+  them works, and the child runs on the parent's model.
 
 Set `state` to the supervisor's state directory. Rebuild the image when the Yarn lockfile or native Rust worker changes.
 The image build needs access to the locked upstream dependencies. Once built, the session runs offline
