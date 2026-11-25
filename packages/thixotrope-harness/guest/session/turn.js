@@ -62,7 +62,7 @@ import {
   utf8Bytes,
   messageOf,
 } from '../lib/bounded.js';
-import { subagentRoleSection } from '../lib/mail-prompt.js';
+import { subagentRoleSection, takesSubagentRole } from '../lib/mail-prompt.js';
 import { makeHistory } from './history.js';
 import { inCallOrder } from './records.js';
 import { isStaged, submissionField } from './staging.js';
@@ -665,8 +665,8 @@ export const makeTurnRunner = ({
 
   /**
    * M5 S2: the round's system prompt: the stored prompt alone, or with the
-   * turn's note (a subagent's always begins with its role section, D-M9-26:
-   * `mail-prompt.js` `subagentRoleSection`). Inline: one text joined with a blank line when it stays
+   * turn's note (a subagent's of a preset that names the role begins with
+   * its role section, D-M9-26: `mail-prompt.js` `subagentRoleSection`). Inline: one text joined with a blank line when it stays
    * within `inlineBytes`; otherwise (a staged prompt, or a joined text over
    * `inlineBytes`) the two-part list `[prompt, note]`, which the adapter's
    * `systemTextOf` joins the same way.
@@ -674,12 +674,11 @@ export const makeTurnRunner = ({
    */
   const systemFor = active => {
     const prompt = config.systemPrompt;
-    const note =
-      config.userInitiated === false
-        ? [subagentRoleSection, active.systemNote]
-            .filter(part => part !== undefined)
-            .join('\n\n')
-        : active.systemNote;
+    const note = takesSubagentRole(config)
+      ? [subagentRoleSection, active.systemNote]
+          .filter(part => part !== undefined)
+          .join('\n\n')
+      : active.systemNote;
     if (note === undefined) return prompt;
     if (prompt === undefined) return note;
     if (typeof prompt === 'string') {

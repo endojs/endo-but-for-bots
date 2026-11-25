@@ -77,7 +77,25 @@ helpers when finished.`;
  * task itself. Its heading is what preset texts key on
  * (`scripts/project-preset.mjs` `subagentRoleHeading`).
  */
-export const subagentRoleSection = `Subagent role ${DASH} you are a subagent: a parent session created you with
+/**
+ * The section's heading. A subagent gets the section only when its
+ * preset's instructions name this heading (they set up the roles the
+ * section settles: `scripts/project-preset.mjs`); other presets' subagents
+ * keep the Delegation section's own advice (D-M9-26).
+ */
+export const subagentRoleHeading = 'Subagent role';
+
+/**
+ * Whether a session's rounds carry `subagentRoleSection`: a subagent
+ * (`userInitiated` false) whose preset instructions name the heading.
+ * @param {{ userInitiated?: boolean, preset?: { instructions?: string } }} config
+ */
+export const takesSubagentRole = config =>
+  config.userInitiated === false &&
+  (config.preset?.instructions?.includes(subagentRoleHeading) ?? false);
+harden(takesSubagentRole);
+
+export const subagentRoleSection = `${subagentRoleHeading} ${DASH} you are a subagent: a parent session created you with
 spawnSubagent, and every task you receive comes from it through askSubagent,
 which answers it with your reply. Do the task yourself; your instructions'
 advice to delegate is for the parent, not for you. Spawn subagents of your own
