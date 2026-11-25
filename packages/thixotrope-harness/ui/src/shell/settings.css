@@ -14,7 +14,7 @@
 .thix-settings-label {
   font-size: 0.85rem;
 }
-.thix-app .thix-settings {
+.thix-settings {
   flex: 1;
   display: flex;
   min-height: 0;
@@ -23,13 +23,15 @@
 }
 .thix-settings-nav {
   flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
   width: 12rem;
   padding: 0.75rem 0.5rem;
   overflow-y: auto;
   border-right: 1px solid var(--fl-border);
+}
+.thix-settings-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
 }
 .thix-settings-item {
   border: none;
@@ -81,6 +83,10 @@
   flex-direction: column;
   align-items: stretch;
 }
+.thix-settings-status {
+  margin: 0 0 0.75rem;
+  color: var(--fl-danger, var(--fl-text-muted));
+}
 .thix-settings-empty {
   color: var(--fl-text-muted);
 }
@@ -88,11 +94,13 @@
   .thix-settings-label {
     display: none;
   }
-  .thix-app .thix-settings {
+  .thix-settings {
     flex-direction: column;
   }
-  .thix-settings-nav {
+  .thix-settings-tabs {
     flex-direction: row;
+  }
+  .thix-settings-nav {
     width: auto;
     padding: 0.5rem;
     overflow-x: auto;

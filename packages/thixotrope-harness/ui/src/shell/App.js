@@ -103,6 +103,7 @@ export const App = ({ controller, features, views = {}, narrow = false }) => {
         features,
         context,
         sessionFeatures: Boolean(state.view) && !inspecting,
+        narrow,
       });
     }
     if (!state.view) {

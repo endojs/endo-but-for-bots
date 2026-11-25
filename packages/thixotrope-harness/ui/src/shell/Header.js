@@ -16,7 +16,7 @@ import {
   uiTexts,
   uiTextOf,
 } from '../../../resources/agent-host/impl/gateway/protocol.js';
-import { settingsTexts } from './Settings.js';
+import { settingsTexts, settingsToggleId } from './Settings.js';
 import { Slot } from './Slot.js';
 
 /** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
@@ -172,11 +172,13 @@ export const Header = ({
           'button',
           {
             type: 'button',
+            id: settingsToggleId,
             class: `floot-header-btn thix-settings-toggle${state.settings ? ' on' : ''}`,
             'aria-label': settingsTexts.title,
             title: state.settings ? settingsTexts.close : settingsTexts.open,
             'aria-expanded': Boolean(state.settings),
-            'aria-controls': 'thix-settings',
+            // The view exists only while open.
+            'aria-controls': state.settings ? 'thix-settings' : undefined,
             onClick: () => controller.toggleSettings(),
           },
           h('span', { 'aria-hidden': 'true' }, '⚙'),

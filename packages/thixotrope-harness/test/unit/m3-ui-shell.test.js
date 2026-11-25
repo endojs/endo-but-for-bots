@@ -15,6 +15,11 @@ import {
   uiTexts,
   uiTextOf,
 } from '../../resources/agent-host/impl/gateway/protocol.js';
+import { NewSession } from '../../ui/src/sessions/index.js';
+import {
+  settingsSettleMs,
+  settingsTexts,
+} from '../../ui/src/shell/Settings.js';
 import { makeFakePowers, makeTestDom } from './_m3-fake-powers.js';
 
 const flush = async (rounds = 20) => {
@@ -373,7 +378,7 @@ test.serial(
     t.deepEqual(sectionIds(), ['zeta', 'alpha'], 'slot order, when() kept');
     t.is($('.thix-settings-section[data-panel="zeta"]')?.textContent, 'Z');
     t.is(
-      $('.thix-settings-nav [aria-current="page"]')?.getAttribute(
+      $('.thix-settings-nav [aria-selected="true"]')?.getAttribute(
         'data-section',
       ),
       'zeta',
@@ -433,7 +438,12 @@ test.serial(
     controller.openSettings();
     await flush();
     t.is($('button[data-section="session"]'), null, 'nothing to show yet');
-    t.is($('.thix-settings')?.getAttribute('data-selected'), 'alpha');
+    t.is(
+      $('.thix-settings')?.getAttribute('data-selected'),
+      null,
+      'no global section mounted while the session sections settle',
+    );
+    t.is($('.thix-settings-empty')?.textContent, settingsTexts.loading);
     reveal(true);
     await flush();
     t.is($('button[data-section="session"]')?.textContent, 'This session');
@@ -463,3 +473,184 @@ test.serial(
     await dom.close();
   },
 );
+
+test.serial(
+  'Settings: Escape in a field, or handled by the New session dialog, leaves it open',
+  async t => {
+    const Field = () => h('input', { class: 'field' });
+    const features = [
+      { id: 'alpha', slot: 'app.panel', label: 'Alpha', component: Field },
+    ];
+    const views = { sessions: { NewSession } };
+    const { dom, controller, powers } = await setup({ features, views });
+    const $ = (/** @type {string} */ selector) =>
+      dom.document.querySelector(selector);
+    await controller.attach(powers);
+    await flush();
+    controller.openSettings();
+    await flush();
+    fire(dom.window, $('.field'), 'keydown', { key: 'Escape' });
+    await flush();
+    t.truthy($('.thix-settings'), 'Escape in an input stays with the input');
+
+    controller.openNewSession();
+    await flush();
+    const dialog = $('[role="dialog"]');
+    t.truthy(dialog);
+    fire(dom.window, dialog, 'keydown', { key: 'Escape' });
+    await flush();
+    t.false(controller.getState().newSessionOpen, 'the dialog closed');
+    t.truthy($('.thix-settings'), 'Settings stayed open under it');
+    // Also while the dialog is open but the key lands outside it.
+    controller.openNewSession();
+    await flush();
+    fire(dom.window, dom.document.body, 'keydown', { key: 'Escape' });
+    await flush();
+    t.truthy($('.thix-settings'));
+    controller.closeNewSession();
+    await flush();
+    fire(dom.window, dom.document.body, 'keydown', { key: 'Escape' });
+    await flush();
+    t.is($('.thix-settings'), null, 'one Escape per layer');
+    await dom.close();
+  },
+);
+
+test.serial(
+  'Settings: a tablist; focus moves in on open and back on close; arrows move',
+  async t => {
+    const features = [
+      { id: 'alpha', slot: 'app.panel', label: 'Alpha', component: () => 'A' },
+      { id: 'beta', slot: 'app.panel', label: 'Beta', component: () => 'B' },
+    ];
+    const { dom, controller, powers } = await setup({ features });
+    const $ = (/** @type {string} */ selector) =>
+      dom.document.querySelector(selector);
+    await controller.attach(powers);
+    await flush();
+    const toggle = () => $('button[aria-label="Settings"]');
+    t.is(toggle().getAttribute('aria-controls'), null, 'no dangling id');
+    toggle().focus();
+    toggle().click();
+    await flush();
+    t.is(toggle().getAttribute('aria-controls'), 'thix-settings');
+    t.truthy(dom.document.getElementById('thix-settings'));
+    const tab = (/** @type {string} */ id) =>
+      $(`[role="tab"][data-section="${id}"]`);
+    t.is($('[role="tablist"]')?.getAttribute('aria-orientation'), 'vertical');
+    t.is(dom.document.activeElement, tab('alpha'), 'focus on the selected tab');
+    t.is(tab('alpha').getAttribute('aria-selected'), 'true');
+    t.is(tab('beta').getAttribute('aria-selected'), 'false');
+    t.is(tab('alpha').tabIndex, 0);
+    t.is(tab('beta').tabIndex, -1);
+    const panel = $('[role="tabpanel"]');
+    t.is(panel.id, tab('alpha').getAttribute('aria-controls'));
+    t.is(panel.getAttribute('aria-labelledby'), tab('alpha').id);
+    t.is($('[aria-current]'), null);
+    fire(dom.window, tab('alpha'), 'keydown', { key: 'ArrowDown' });
+    t.is(dom.document.activeElement, tab('beta'));
+    fire(dom.window, tab('beta'), 'keydown', { key: 'ArrowDown' });
+    t.is(dom.document.activeElement, tab('alpha'), 'wraps');
+    fire(dom.window, tab('alpha'), 'keydown', { key: 'End' });
+    t.is(dom.document.activeElement, tab('beta'));
+    t.is(
+      controller.getState().settings?.section,
+      undefined,
+      'moving focus does not select',
+    );
+    dom.document.activeElement.click();
+    await flush();
+    t.is(tab('beta').getAttribute('aria-selected'), 'true');
+    fire(dom.window, dom.document.activeElement, 'keydown', { key: 'Escape' });
+    await flush();
+    t.is($('.thix-settings'), null);
+    t.is(dom.document.activeElement, toggle(), 'focus back on the control');
+    await dom.close();
+  },
+);
+
+test.serial(
+  'Settings: with no section chosen, no global panel mounts just to be replaced',
+  async t => {
+    let mounts = 0;
+    const Subscriptions = () => {
+      useState(() => {
+        mounts += 1;
+      });
+      return h('div', { class: 'subs' }, 'S');
+    };
+    /** @type {(value: boolean) => void} */
+    let reveal = () => {};
+    const Late = () => {
+      const [shown, setShown] = useState(false);
+      reveal = setShown;
+      return shown ? h('p', { class: 'late' }, 'late') : null;
+    };
+    const features = [
+      {
+        id: 'accounts',
+        slot: 'app.panel',
+        label: 'Subscriptions',
+        component: Subscriptions,
+      },
+      { id: 'late', slot: 'session.settings', component: Late },
+    ];
+    const { dom, controller, powers } = await setup({ features });
+    const $ = (/** @type {string} */ selector) =>
+      dom.document.querySelector(selector);
+    await controller.attach(powers);
+    await controller.selectSession('s1');
+    await flush();
+    controller.openSettings();
+    await flush();
+    t.is(mounts, 0, 'waiting for This session');
+    reveal(true);
+    await flush();
+    t.is($('.thix-settings')?.getAttribute('data-selected'), 'session');
+    t.is(mounts, 0, 'Subscriptions never flashed');
+    controller.closeSettings();
+    await flush();
+
+    // The session section never shows: after the bound, the first global
+    // section, kept when This session turns up later.
+    await controller.selectSession('s1');
+    await flush();
+    controller.openSettings();
+    await flush();
+    t.is(mounts, 0);
+    await new Promise(resolve => setTimeout(resolve, settingsSettleMs + 100));
+    await flush();
+    t.is($('.thix-settings')?.getAttribute('data-selected'), 'accounts');
+    t.is(mounts, 1);
+    reveal(true);
+    await flush();
+    t.truthy($('button[data-section="session"]'), 'listed once it shows');
+    t.is(
+      $('.thix-settings')?.getAttribute('data-selected'),
+      'accounts',
+      'no jump',
+    );
+    t.is(mounts, 1);
+    await dom.close();
+  },
+);
+
+test.serial('Settings: a page-wide error shows above the section', async t => {
+  const features = [
+    { id: 'alpha', slot: 'app.panel', label: 'Alpha', component: () => 'A' },
+  ];
+  const { dom, controller, powers } = await setup({ features });
+  await controller.attach(powers);
+  await flush();
+  controller.openSettings();
+  await flush();
+  await t.throwsAsync(
+    controller.featureContext().call(() => Promise.reject(Error('boom'))),
+  );
+  await flush();
+  t.regex(
+    String(dom.document.querySelector('.thix-settings-status')?.textContent),
+    /boom/,
+  );
+  await dom.close();
+});
