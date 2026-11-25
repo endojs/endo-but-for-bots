@@ -119,6 +119,8 @@ harden(isoOf);
  * @property {'claude-pool' | 'codex-pool'} kind
  * @property {string} label
  * @property {readonly MemberEntry[]} members
+ * @property {{ code: string, unrestored?: number }} [additionsNote] the
+ *   adapter-kept additions' problem on this pool (`pool-additions.js`)
  */
 
 /**
@@ -449,6 +451,21 @@ export const makeAccounts = ({
           .slice(0, subscriptionLimits.maxPoolMembers)
           .map(memberAccount),
       ),
+      ...(info.additionsNote === undefined
+        ? {}
+        : {
+            additionsNote: harden({
+              code: info.additionsNote.code.slice(0, limits.secretCodeUnits),
+              ...(info.additionsNote.unrestored === undefined
+                ? {}
+                : {
+                    unrestored: Math.min(
+                      info.additionsNote.unrestored,
+                      subscriptionLimits.maxMembers,
+                    ),
+                  }),
+            }),
+          }),
     });
 
   /**
@@ -755,6 +772,9 @@ export const makeAccounts = ({
         members: harden(
           [...info.members].slice(0, subscriptionLimits.maxPoolMembers),
         ),
+        ...(info.additionsNote === undefined
+          ? {}
+          : { additionsNote: info.additionsNote }),
       }),
     );
   };

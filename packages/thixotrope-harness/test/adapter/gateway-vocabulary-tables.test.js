@@ -160,8 +160,10 @@ test('the key and method sets are the ones before HR-SYN-7 plus WX.1s', t => {
   // + 2: M11's spoken marker (`spoken`, `dictated`; m11-interfaces.md 9.1).
   // M4 add-member (m4-interfaces 3.4, 3.5, 10): + 2 keys, MemberAccount's
   // usageFailure and catalogFailure; + 4 methods, addPoolMember,
-  // checkCredential, addMember and Accounts.poolMembers.
-  t.is(keys.size, 258 + 70 + 3 + 3 + 2 + 2);
+  // checkCredential, addMember and Accounts.poolMembers. Pool additions
+  // over a pinned manager (3.5): + 2 keys, PoolAccounts' additionsNote
+  // and its unrestored count.
+  t.is(keys.size, 258 + 70 + 3 + 3 + 2 + 2 + 2);
   t.is(methods.size, 141 + 33 + 3 + 4);
   t.deepEqual([...keys].sort(), [...before.keys, ...added.keys].sort());
   t.deepEqual(

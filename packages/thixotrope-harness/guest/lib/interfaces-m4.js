@@ -370,13 +370,22 @@ const m4ShapeBuilders = {
     ),
   /** The accounts behind one pool backend (R4-84: selection is always `auto`). */
   PoolAccounts: () =>
-    record({
-      backend: R('Backend'),
-      kind: T.PoolKind,
-      label: S.Label,
-      selection: 'auto',
-      members: list(T.MemberAccount, subscriptionLimits.maxPoolMembers),
-    }),
+    record(
+      {
+        backend: R('Backend'),
+        kind: T.PoolKind,
+        label: S.Label,
+        selection: 'auto',
+        members: list(T.MemberAccount, subscriptionLimits.maxPoolMembers),
+      },
+      {
+        // Harness (m4-interfaces 3.5): the adapter-kept additions' problem.
+        additionsNote: record(
+          { code: text(limits.secretCodeUnits) },
+          { unrestored: atMost(subscriptionLimits.maxMembers) },
+        ),
+      },
+    ),
   /**
    * Every pool's accounts. Adapter-local: never enters a vat (8 pools x 16
    * members can exceed frameBytes; it travels gateway -> browser only).

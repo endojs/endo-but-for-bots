@@ -54,7 +54,7 @@ import { makePoolCatalog } from './catalog.js';
 import { makeCredentialOps, makeSecretResolver } from './credential-ops.js';
 import { parseCredential } from './credentials.js';
 import { makePoolCore } from './pool.js';
-import { makePoolAdditions } from './pool-additions.js';
+import { ADDITIONS_RETRY_MS, makePoolAdditions } from './pool-additions.js';
 import { initialFromPoolState, makePoolStateBridge } from './pool-state.js';
 import { makeMemberCredential } from './renewal.js';
 
@@ -78,10 +78,14 @@ export const providerEndpoints = harden({
 });
 
 /**
- * Adapter-kept additions waiting for an operator (before the gateway's
- * first bind) are looked for again at a pool's next load after this long.
+ * A pool's first selection waits at most this long for its kept
+ * additions (before the gateway's first bind there is no operator to
+ * restore them through); then it serves what it has, and the rest join at
+ * a later load (asked again after `ADDITIONS_RETRY_MS`).
  */
-const ADDITIONS_RETRY_MS = 5000;
+const ADDITIONS_HOLD_MS = 15_000;
+/** The hold looks again this often. */
+const ADDITIONS_HOLD_STEP_MS = 250;
 
 /**
  * One pool as this incarnation knows it.
@@ -94,7 +98,9 @@ const ADDITIONS_RETRY_MS = 5000;
  * @property {readonly MemberEntry[]} members in declaration order, then
  *   the adapter-kept additions (`pool-additions.js`)
  * @property {number} [additionsRev] the additions' `rev` they were read at
- * @property {boolean} [additionsPending] some wait for an operator
+ * @property {boolean} [additionsPending] some wait for an operator or a
+ *   transient failure (`pool-additions.js` codes)
+ * @property {{ code: string, unrestored?: number }} [additionsNote]
  * @property {number} [additionsAskedAt] when they were last looked for
  * @property {ReturnType<typeof makePoolCore> | undefined} core
  */
@@ -123,9 +129,13 @@ const lazy = value =>
  * @param {typeof providerEndpoints} [options.endpoints]
  * @param {(error: unknown) => void} [options.onError] a failed readings
  *   file write
- * @param {() => any} [options.currentOperator] the `Operator` the gateway serves
- *   now (undefined before its first bind): how adapter-kept pool
- *   additions reach the manager's `SecretsAdmin` and `SubscriptionsAdmin`
+ * @param {() => any} [options.getSecrets] the gateway's
+ *   `Operator.getSecrets()` now (its `SecretsAdmin`, or a promise for it;
+ *   undefined before the first bind): how adapter-kept pool additions
+ *   reach the manager's `SecretsAdmin` and `SubscriptionsAdmin` (only
+ *   that, never the whole Operator)
+ * @param {number} [options.additionsHoldMs] a pool's first selection waits
+ *   at most this long for its kept additions to be restored
  */
 export const makeSubscriptions = ({
   sink,
@@ -137,7 +147,8 @@ export const makeSubscriptions = ({
   settings = subscriptionDefaults,
   endpoints = providerEndpoints,
   onError,
-  currentOperator = () => undefined,
+  getSecrets = () => undefined,
+  additionsHoldMs = ADDITIONS_HOLD_MS,
 }) => {
   const sinkNow = () => lazy(sink);
   const fetchOption = fetch === undefined ? {} : { fetch };
@@ -265,9 +276,8 @@ export const makeSubscriptions = ({
    * (undefined while it has none), asked at each use.
    */
   const admins = async () => {
-    const current = currentOperator();
-    if (current === undefined) return undefined;
-    const secretsAdmin = await E(current).getSecrets();
+    const secretsAdmin = await getSecrets();
+    if (secretsAdmin === undefined) return undefined;
     const subscriptionsAdmin = await E(secretsAdmin).subscriptions();
     return harden({ secrets: secretsAdmin, subscriptions: subscriptionsAdmin });
   };
@@ -279,10 +289,13 @@ export const makeSubscriptions = ({
     resolveSecret,
     checkCredential: (secret, provider) =>
       credentialOps.checkCredential(secret, provider),
+    // Every active pool the manager lists (its `listPools` is whole: at
+    // most `maxPools`); no operator or sink is a throw, not an empty list.
     livePools: async () => {
       const reached = await admins();
       const target = sinkNow();
-      if (reached === undefined || target === undefined) return [];
+      if (reached === undefined || target === undefined)
+        throw Error('the manager is not reachable');
       const { pools: listed } = await E(reached.subscriptions).listPools();
       return Promise.all(
         listed.map(async (/** @type {any} */ backend) => {
@@ -298,24 +311,36 @@ export const makeSubscriptions = ({
         }),
       );
     },
+    now,
+    // H: the manager's pools now hold the migrated additions; each pool
+    // and the accounts view read its `poolState` again.
+    onMigrated: () => {
+      for (const pool of pools.values()) pool.bridge.invalidate();
+      accounts.poolsChanged();
+    },
     ...(onError === undefined ? {} : { onError }),
   });
 
   /**
    * A pool's adapter-kept additions over its manager state; a failure
    * serves the spec members alone (and looks again at the next load).
+   * @param {any} backend
    * @param {{ kind: string, label: string }} info
    * @param {any} state a `PoolState`
-   * @returns {Promise<{ members: MemberEntry[], pending: boolean }>}
+   * @returns {Promise<{ members: MemberEntry[], pending: boolean, note?: { code: string, unrestored?: number } }>}
    */
-  const withAdditions = async (info, state) => {
+  const withAdditions = async (backend, info, state) => {
     if (state.state === 'retired') return { members: [], pending: false };
+    /** @type {{ members: MemberEntry[], pending: boolean }} */
+    let extras;
     try {
-      return await additions.extrasOf(info, state.members);
+      extras = await additions.extrasOf(backend, info, state.members);
     } catch (error) {
       onError?.(error);
-      return { members: [], pending: true };
+      extras = { members: [], pending: true };
     }
+    const note = additions.noteOf(info, state.members);
+    return note === undefined ? extras : { ...extras, note };
   };
 
   /** @type {ReturnType<typeof makeAccounts>} */
@@ -341,6 +366,26 @@ export const makeSubscriptions = ({
           );
       }
     }
+  };
+
+  /**
+   * E: an added member's mark changes are kept in the additions file (the
+   * pinned manager's `poolChanged` ignores members outside its spec).
+   * @param {PoolRecord} pool
+   * @param {import('./types.js').PoolChange} change
+   */
+  const keepAddedMarks = (pool, change) => {
+    const specMembers = pool.loaded?.members ?? [];
+    const added = pool.members.slice(specMembers.length);
+    const changes = (change.marks ?? []).flatMap(({ member, mark }) => {
+      const entry = added.find(candidate => candidate.member === member);
+      if (entry === undefined) return [];
+      return [
+        mark === undefined ? { key: entry.key } : { key: entry.key, mark },
+      ];
+    });
+    if (changes.length > 0)
+      additions.recordMarks(pool.spec, specMembers, changes);
   };
 
   /**
@@ -374,19 +419,44 @@ export const makeSubscriptions = ({
       (pool.additionsPending === true &&
         now() - (pool.additionsAskedAt ?? 0) >= ADDITIONS_RETRY_MS)
     ) {
-      const rev = additions.rev();
-      const extras = await withAdditions(spec, loaded);
+      let extras = await withAdditions(backend, spec, loaded);
+      // What the additions serve now, this search's changes included.
+      let rev = additions.rev();
+      // F: a pool's first selection waits (at most `additionsHoldMs`) for
+      // its kept additions, so it does not start without them.
+      if (
+        pool.core === undefined &&
+        extras.pending &&
+        loaded.state === 'active' &&
+        additions.keeps(spec, loaded.members)
+      ) {
+        const step = Math.min(ADDITIONS_HOLD_STEP_MS, additionsHoldMs);
+        for (
+          let waited = 0;
+          extras.pending && waited < additionsHoldMs && pool.core === undefined;
+          waited += step
+        ) {
+          // eslint-disable-next-line no-await-in-loop
+          await timers.delay(step);
+          // eslint-disable-next-line no-await-in-loop
+          extras = await withAdditions(backend, spec, loaded);
+          rev = additions.rev();
+        }
+      }
       const members = harden([...loaded.members, ...extras.members]);
       const unchanged =
         pool.loaded !== undefined &&
         pool.state === loaded.state &&
-        sameMembers(pool.members, members);
+        sameMembers(pool.members, members) &&
+        pool.additionsNote?.code === extras.note?.code &&
+        pool.additionsNote?.unrestored === extras.note?.unrestored;
       pool.loaded = loaded;
       pool.state = loaded.state;
       pool.members = members;
       pool.additionsRev = rev;
       pool.additionsPending = extras.pending;
       pool.additionsAskedAt = now();
+      pool.additionsNote = extras.note;
       if (loaded.state === 'retired')
         additions.poolRetired(pool.spec, loaded.members);
       for (const entry of members)
@@ -399,10 +469,13 @@ export const makeSubscriptions = ({
           cacheLifetimeMs:
             pool.spec.cacheLifetimeMs ?? settings.cacheLifetimeMs,
           now,
-          initial: initialFromPoolState(loaded),
+          // The manager's marks, and those the adapter keeps for the
+          // additions (E: the pinned manager keeps its spec members' only).
+          initial: initialFromPoolState({ ...loaded, members }),
           onChange: change => {
             pool.bridge.record(change);
             mirror(pool, change);
+            keepAddedMarks(pool, change);
           },
           settings,
         });
@@ -412,6 +485,7 @@ export const makeSubscriptions = ({
           kind: pool.spec.kind,
           label: pool.spec.label,
           members,
+          ...(extras.note === undefined ? {} : { additionsNote: extras.note }),
         });
     }
     return pool;
@@ -504,6 +578,9 @@ export const makeSubscriptions = ({
             kind: loaded.spec.kind,
             label: loaded.spec.label,
             members: loaded.members,
+            ...(loaded.additionsNote === undefined
+              ? {}
+              : { additionsNote: loaded.additionsNote }),
           });
         }
         const target = sinkNow();
@@ -516,11 +593,12 @@ export const makeSubscriptions = ({
           return undefined;
         }
         const state = await E(target).poolState(backend);
-        const extras = await withAdditions(info, state);
+        const extras = await withAdditions(backend, info, state);
         return harden({
           kind: info.kind,
           label: info.label,
           members: [...state.members, ...extras.members],
+          ...(extras.note === undefined ? {} : { additionsNote: extras.note }),
         });
       },
     },
@@ -533,6 +611,9 @@ export const makeSubscriptions = ({
        * @param {any} secret
        */
       checkCredential: async (backend, secret) => {
+        const manager = await managerWith('checkCredential');
+        if (manager !== undefined)
+          return E(manager).checkCredential(backend, secret);
         const { provider } = await poolFacts(backend);
         return credentialOps.checkCredential(secret, provider);
       },
@@ -543,7 +624,7 @@ export const makeSubscriptions = ({
        */
       poolMembers: async backend => {
         const { info, state } = await poolFacts(backend);
-        const extras = await withAdditions(info, state);
+        const extras = await withAdditions(backend, info, state);
         return harden(
           [...state.members, ...extras.members]
             .filter(entry => entry.state === 'active')
@@ -571,23 +652,38 @@ export const makeSubscriptions = ({
   };
 
   /**
-   * `Accounts.addMember`: the manager's own `addMember` when it has one
-   * (introspected each time: a state provisioned later has it); else an
-   * adapter-kept addition (`pool-additions.js`). Either way the pool's
-   * loads see the member next, and the accounts view reads the pool again.
+   * The manager's `SubscriptionsAdmin` when it has `name` (asked here, in
+   * the adapter, each time: a state provisioned later has it; the page
+   * never introspects through the gateway, whose guard refuses
+   * `__getMethodNames__`), else undefined.
+   * @param {string} name
+   */
+  const managerWith = async name => {
+    const reached = await admins();
+    if (reached === undefined) return undefined;
+    // eslint-disable-next-line no-underscore-dangle -- the Endo introspection method
+    const names = await E(reached.subscriptions).__getMethodNames__();
+    return names.includes(name) ? reached.subscriptions : undefined;
+  };
+
+  /**
+   * `Accounts.addMember`: the manager's own `addMember` when it has one;
+   * else an adapter-kept addition (`pool-additions.js`). Either way the
+   * pool's loads see the member next, and the accounts view reads the
+   * pool again.
    * @param {any} backend
    * @param {{ label: string, credential: any, weight?: number, declared?: any }} request
    */
   const addMember = async (backend, request) => {
-    const reached = await admins();
-    if (reached !== undefined) {
-      // eslint-disable-next-line no-underscore-dangle -- the Endo introspection method
-      const names = await E(reached.subscriptions).__getMethodNames__();
-      if (names.includes('addMember'))
-        return E(reached.subscriptions).addMember(backend, request);
+    const manager = await managerWith('addMember');
+    if (manager !== undefined) {
+      const member = await E(manager).addMember(backend, request);
+      for (const pool of pools.values()) pool.bridge.invalidate();
+      accounts.poolsChanged();
+      return member;
     }
     const { info, state } = await poolFacts(backend);
-    const member = await additions.add(info, state.members, request);
+    const member = await additions.add(backend, info, state.members, request);
     accounts.poolsChanged();
     return member;
   };
@@ -674,7 +770,10 @@ export const makeSubscriptions = ({
       await Promise.all([...pools.values()].map(pool => pool.bridge.flush()));
       await accounts.flush();
     },
-    close: () => accounts.close(),
+    close: async () => {
+      await additions.close().catch(() => {});
+      await accounts.close();
+    },
   });
 };
 harden(makeSubscriptions);

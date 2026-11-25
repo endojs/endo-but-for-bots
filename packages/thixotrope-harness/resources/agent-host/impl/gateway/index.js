@@ -427,11 +427,15 @@ export const makeGatewayService = ({
     attached,
     close: unbind,
     /**
-     * The `Operator` of the current bind (undefined before the first):
-     * the subscriptions' adapter-kept pool additions reach the manager's
-     * admin objects through it (`subscriptions/pool-additions.js`).
+     * The current bind's `Operator.getSecrets()` (undefined before the
+     * first bind): the subscriptions' adapter-kept pool additions reach
+     * the manager's `SecretsAdmin` through it and nothing else of the
+     * Operator (`subscriptions/pool-additions.js`).
      */
-    operator: () => operatorOf.current,
+    getSecrets: () =>
+      operatorOf.current === undefined
+        ? undefined
+        : E(operatorOf.current).getSecrets(),
     /** Tests: the port served now, if any. */
     port: () => serving?.server.port,
   });

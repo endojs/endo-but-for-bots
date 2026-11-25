@@ -87,6 +87,19 @@ export const subscriptionTexts = harden({
    */
   additionsUnreachable:
     'The subscriptions manager could not be reached through the gateway; try again',
+  /**
+   * Harness: the adapter's file of added subscriptions could not be read
+   * or parsed; adds through the adapter wait until it can (an unparsable
+   * one is moved aside under a dated name, never rewritten).
+   */
+  additionsUnreadable:
+    'The file of subscriptions added here could not be read, so no subscription can be added now; restart the agent host after checking pool-additions.json in its state directory',
+  /**
+   * Harness: another agent-host process (a reload in progress) holds the
+   * additions file's lock.
+   */
+  additionsLocked:
+    'Another agent-host process is still running and keeps the added subscriptions; try again in a moment',
   /** Harness: `addPoolMember` to a pool at `maxPoolMembers`. */
   poolFull: 'This pool already has as many members as a pool can hold',
   /** Harness: a credential check of a staged import not yet activated. */

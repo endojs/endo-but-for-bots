@@ -308,7 +308,7 @@
   "m4Interfaces.CredentialOps": "checkCredential(secret, provider): the adapter reads the Secret and answers ok or a code, never the value (m4-interfaces.md 3.2)",
   "m4MethodNames.CredentialOps": "CredentialOps gains checkCredential",
   "m4Shapes.MemberAccount": "A member account may carry usageFailure and catalogFailure: the last failed read of each kind as a fixed code, an HTTP status and a time, never a body or a value",
-  "m4Shapes.PoolAccounts": "Its member accounts may carry usageFailure and catalogFailure (m4Shapes.ReadFailure)",
+  "m4Shapes.PoolAccounts": "Its member accounts may carry usageFailure and catalogFailure (m4Shapes.ReadFailure); a pool may carry additionsNote: a fixed code and a count of added subscriptions that could not be restored (m4-interfaces 3.5)",
   "m4Shapes.AccountsView": "Its member accounts may carry usageFailure and catalogFailure (m4Shapes.ReadFailure)"
  },
  "exportsRemoved": [
@@ -465,7 +465,9 @@
    "dictated",
    "unmarked",
    "usageFailure",
-   "catalogFailure"
+   "catalogFailure",
+   "additionsNote",
+   "unrestored"
   ],
   "methods": [
    "alarm",
