@@ -154,9 +154,9 @@ What takes effect when:
   only the installed durable halves and the factory are pinned to the state.
 - The session program (the subagent role section, the `spawnSubagent`
   description and its check of the factory): through `project-preset.mjs
-  --legacy-factory`, which loads it. The subagent role section is added only
-  to a subagent whose preset instructions name its heading, as this
-  preset's do; other presets' subagents are unchanged.
+  --legacy-factory`, which loads it. The subagent role section reaches every
+  subagent and limits nothing but delegating its own task; this preset's
+  instructions add that an implementer spawns no subagents unless asked.
 - A subagent's model and effort (`spawnSubagent` `modelId`,
   `reasoningEffort`): with the session program. The factory is installed
   once per state and is not changed; the session program reads its

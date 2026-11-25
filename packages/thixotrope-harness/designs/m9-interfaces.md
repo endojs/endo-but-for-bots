@@ -424,18 +424,20 @@ and a session made so is a user session outside the tree).
 the mail body of each ask (`mail-text.js` `mailTurnInput`), so nothing in its input marks the parent
 as the sender. Its `SessionConfig.userInitiated` is false (the spawn sets it), and the session
 program's `systemFor` adds `mail-prompt.js` `subagentRoleSection` ("Subagent role") to every
-round's system text of such a session whose preset instructions name the heading
-(`takesSubagentRole`), before the turn's note, inside the same two-part `system`. Only presets that
-set up the roles get it: the section's "spawn subagents of your own only when the brief asks for
-it" would change what other presets' subagents do, so they keep the Delegation section's advice.
+round's system text of such a session, before the turn's note, inside the same two-part `system`.
+It limits nothing else (whether a subagent may spawn its own is its preset's to say; the project
+preset's instructions do), so a subagent of another preset is told only what is true of it.
 It tells the child to do its task itself, which also settles the Delegation section's "Do work you
 can simply do yourself" against a preset that tells its sessions to delegate: preset texts address
 the subagent through the section's heading. It is not a composed section (`PromptContext`
 `userInitiated`): the factory composes a subagent's stored prompt, so a section there would reach
 only freshly provisioned states, while the round text arrives with a session program load.
 Rejected: a marker sentence at the start of the brief as the only signal (a parent that forgets it
-makes its child a project manager that delegates again); the section for every subagent (a
-behaviour change for presets that never asked for it).
+makes its child a project manager that delegates again); the section only for presets whose
+instructions set up the roles (the session program cannot see them: the factory drops
+`instructions` from `SessionConfig.preset` and the composed prompt is usually staged, so it would
+need a pinned factory change or a guess); a limit on spawning in the section (it changed other
+presets' subagents).
 
 **D-M9-29. A child hands its commits back through its parent's shell.** The project preset's
 parent attaches its own `shell` to each child as `parent-shell`; the child runs
