@@ -214,7 +214,10 @@ once (an audited store read) and keeps it in the adapter. It answers `{ ok: true
 wrapped or inner, Codex's login cache, an activated `LocalClaudeRefreshV1` grant) and it is
 usable: `CONSUMED` when it carries `pendingRefresh`, `EXPIRED` when it has no refresh token and
 its access token expired (as `renewal.js`). A value refused for this provider and accepted for the
-other is `WRONG_PROVIDER`; anything else (not JSON, too long, a staged import) is `INVALID`. Store
+other is `WRONG_PROVIDER`. A staged import (`StagedClaudeSubscriptionV1`) is `NOT_ACTIVATED` for a
+claude pool (`WRONG_PROVIDER` for a codex pool); a stored form (`version: 1`) with no `provider`
+field is `NO_PROVIDER` (the read path still accepts it, but a check cannot tell which provider it
+is for); anything else (not JSON, too long, no credential form) is `INVALID`. Store
 failures keep their code (`REVOKED`, `UNKNOWN_SECRET`, also for a presence the sink does not
 know); any other read failure is `READ_FAILED`. No message, token or parse detail passes through.
 `poolsChanged()` also marks every pool the `Accounts` view keeps stale, so its next read

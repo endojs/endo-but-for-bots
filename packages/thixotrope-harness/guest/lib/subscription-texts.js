@@ -61,6 +61,12 @@ export const subscriptionTexts = harden({
     'This secret holds a credential in the format this provider expects',
   /** Harness: `addPoolMember` to a pool at `maxPoolMembers`. */
   poolFull: 'This pool already has as many members as a pool can hold',
+  /** Harness: a credential check of a staged import not yet activated. */
+  credentialNotActivated:
+    'This secret holds a staged import that has not been activated yet; activate it, then try again',
+  /** Harness: a credential check of a stored form that names no provider. */
+  credentialNoProvider:
+    'This secret holds a stored credential that does not say which provider it is for; replace it with a provider login export',
   /** Harness: a credential check of a revoked Secret. */
   credentialRevoked: 'This secret is revoked',
   /** Harness: a credential check of a Secret no longer in the store. */
@@ -132,6 +138,10 @@ export const subscriptionTextOf = harden({
         return subscriptionTexts.credentialInvalid;
       case 'WRONG_PROVIDER':
         return subscriptionTexts.credentialWrongProvider;
+      case 'NOT_ACTIVATED':
+        return subscriptionTexts.credentialNotActivated;
+      case 'NO_PROVIDER':
+        return subscriptionTexts.credentialNoProvider;
       case 'EXPIRED':
         return subscriptionTexts.credentialExpired;
       case 'CONSUMED':
@@ -183,13 +193,17 @@ export const subscriptionCodes = harden([
 
 /**
  * The codes a credential check answers (`CredentialCheck`, m4-interfaces
- * 3.1, 3.2): the value's format (`INVALID`, `WRONG_PROVIDER`), what it
+ * 3.1, 3.2): the value's format (`INVALID`: not JSON, too long or no
+ * credential form; `WRONG_PROVIDER`; `NOT_ACTIVATED`: a staged import;
+ * `NO_PROVIDER`: a stored form naming no provider), what it
  * says (`EXPIRED` with no refresh token, `CONSUMED` by an interrupted
  * renewal) and the store's (`REVOKED`, `UNKNOWN_SECRET`, `READ_FAILED`).
  */
 export const credentialCheckCodes = harden([
   'INVALID',
   'WRONG_PROVIDER',
+  'NOT_ACTIVATED',
+  'NO_PROVIDER',
   'EXPIRED',
   'CONSUMED',
   'REVOKED',

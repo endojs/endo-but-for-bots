@@ -357,6 +357,24 @@ const checkFailed = code => harden({ ok: false, code });
  * @returns {CredentialCheck}
  */
 export const checkCredentialValue = (text, provider, nowMs) => {
+  /** @type {Record<string, any>} */
+  let record;
+  try {
+    record = credentialRecord(text);
+  } catch {
+    return checkFailed('INVALID');
+  }
+  // A staged import is a Claude credential the operator has not activated
+  // yet (`activateStagedClaudeCredential`): its own code, not `INVALID`.
+  if (record.version === 'StagedClaudeSubscriptionV1')
+    return checkFailed(
+      provider === 'claude' ? 'NOT_ACTIVATED' : 'WRONG_PROVIDER',
+    );
+  // The read path accepts a stored form that names no provider (the
+  // contract's form, section 7) for either; a check cannot tell which
+  // provider it is for, so it refuses it rather than pass it for both.
+  if (record.version === 1 && record.provider === undefined)
+    return checkFailed('NO_PROVIDER');
   /** @type {StoredCredential | LocalClaudeRefresh} */
   let credential;
   try {

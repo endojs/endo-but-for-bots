@@ -143,7 +143,35 @@ const fixtures = () => {
         refreshToken,
         scopes: ['user:inference'],
       }),
-      code: 'INVALID',
+      code: 'NOT_ACTIVATED',
+    },
+    {
+      name: 'staged Claude import for a codex pool',
+      provider: 'codex',
+      value: JSON.stringify({ version: 'StagedClaudeSubscriptionV1' }),
+      code: 'WRONG_PROVIDER',
+    },
+    {
+      name: 'stored form naming no provider, for a claude pool',
+      provider: 'claude',
+      value: JSON.stringify({
+        version: 1,
+        accessToken,
+        refreshToken,
+        expiresAtMs: NOW + 1000,
+      }),
+      code: 'NO_PROVIDER',
+    },
+    {
+      name: 'stored form naming no provider, for a codex pool',
+      provider: 'codex',
+      value: JSON.stringify({
+        version: 1,
+        accessToken,
+        refreshToken,
+        expiresAtMs: NOW + 1000,
+      }),
+      code: 'NO_PROVIDER',
     },
     {
       name: 'Claude login for a codex pool',
