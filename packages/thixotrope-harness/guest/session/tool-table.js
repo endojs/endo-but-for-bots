@@ -80,7 +80,9 @@ const { E } = /** @type {GuestGlobals} */ (globalThis);
  * @typedef {object} ToolTableEntry
  * @property {string} name
  * @property {'adapter' | 'guest' | 'session'} site
- * @property {() => { name: string, description: string, parameters: string }} describe
+ * @property {(ports?: any, services?: any, runtime?: any) => { name: string, description: string, parameters: string }} describe
+ *   the round's ports, services and runtime (a description may depend on
+ *   what the session has learned, D-M9-25)
  * @property {(ports: any, services?: any) => boolean} available
  * @property {(request: { opId: string, args: any, turnId: string }, ports: any, context?: any) => Promise<{ status: 'ok' | 'failed' | 'frame-limit', text: any }>} execute
  *   M1b (contract 2.3): `context` is the ToolContext; `args` may be staged
@@ -224,7 +226,7 @@ export const toolSetFor = (
       entry.available(ports, services)
     ) {
       byName.set(entry.name, entry);
-      descriptions.push(entry.describe());
+      descriptions.push(entry.describe(ports, services, runtime));
     }
   }
   if (sources.length > 0) {
@@ -264,7 +266,7 @@ export const toolSetFor = (
         entry.available(ports, services)
       ) {
         byName.set(entry.name, entry);
-        descriptions.push(entry.describe());
+        descriptions.push(entry.describe(ports, services, runtime));
       }
     }
   }

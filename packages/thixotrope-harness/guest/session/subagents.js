@@ -31,6 +31,16 @@
  * a session that never delegated sends nothing (no message on a turn that
  * does not use subagents).
  *
+ * D-M9-25: whether the factory's `Delegation.spawn` takes `modelId` and
+ * `reasoningEffort` is read from its interface guard
+ * (`__getInterfaceGuard__`: the `SpawnRequest` pattern is matched against a
+ * request naming both), once per incarnation and only when a spawn names
+ * one, so a session that does not use them sends nothing more. An older
+ * factory's closed record answers false: the spawn is refused with
+ * `spawnOptionsUnsupported` before it is sent, and later rounds describe
+ * `spawnSubagent` without the two options. An answer that cannot be read
+ * (no guard) is unknown, and the spawn is sent as it is.
+ *
  * Nothing here is exported with the session (D-M9-21): an imported row has
  * a `Delegation` of its own and no children. Guest rules.
  */
@@ -45,7 +55,37 @@ import { makeCallTable } from './tools/call-table.js';
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { HookTurn } from './runtime-parts.js' */
 /** @import { CallEntry } from './tools/call-table.js' */
-const { E } = /** @type {GuestGlobals} */ (globalThis);
+const { E, matches } = /** @type {GuestGlobals} */ (globalThis);
+
+/** A spawn request naming both options (D-M9-25), for the guard check. */
+const withOptions = harden({
+  name: 'probe',
+  attachments: [],
+  at: 0,
+  modelId: 'model',
+  reasoningEffort: 'effort',
+});
+
+/**
+ * Whether a `Delegation` interface guard's `spawn` admits `modelId` and
+ * `reasoningEffort`: true or false, or undefined when the guard cannot be
+ * read. Reads `payload` of the guards (an internal shape of
+ * `@endo/patterns`, as `interfaces-m3.js` `withGatewayAdmin` does): the
+ * method guard's first argument guard, unwrapped from `M.await`.
+ * @param {any} guard
+ * @returns {boolean | undefined}
+ */
+export const spawnTakesOptions = guard => {
+  try {
+    const arg = guard?.payload?.methodGuards?.spawn?.payload?.argGuards?.[0];
+    const pattern = arg?.payload?.argGuard ?? arg;
+    if (pattern === undefined) return undefined;
+    return matches(withOptions, pattern);
+  } catch {
+    return undefined;
+  }
+};
+harden(spawnTakesOptions);
 
 /**
  * @typedef {object} OpenAsk
@@ -79,6 +119,10 @@ export const subagentsPart = harden({
     let at = 0;
 
     const delegation = () => runtime.services?.subagents;
+    /** @type {Promise<boolean | undefined> | undefined} */
+    let optionsAsked;
+    /** @type {boolean | undefined} what the guard said (D-M9-25) */
+    let optionsTaken;
 
     /**
      * The open asks of one turn, after telling each child to stop.
@@ -121,6 +165,30 @@ export const subagentsPart = harden({
       available: () => delegation() !== undefined,
       delegation,
       names: () => harden([...handles.keys()]),
+      /**
+       * D-M9-25: what the factory's guard said of the spawn options, once
+       * read: true, false, or undefined (not read, or unreadable).
+       */
+      spawnOptions: () => optionsTaken,
+      /**
+       * Read the factory's `Delegation` guard once (D-M9-25).
+       * @returns {Promise<boolean | undefined>}
+       */
+      whenSpawnOptions: () => {
+        const held = delegation();
+        if (held === undefined) return Promise.resolve(undefined);
+        if (optionsAsked !== undefined) return optionsAsked;
+        // eslint-disable-next-line no-underscore-dangle -- the exo's own guard (D-M9-25)
+        const asked = E(held).__getInterfaceGuard__();
+        const reading = asked
+          .then(spawnTakesOptions, () => undefined)
+          .then(taken => {
+            optionsTaken = taken;
+            return taken;
+          });
+        optionsAsked = reading;
+        return reading;
+      },
       /** The claim time of the current turn (spawn and ask `at`). */
       at: () => at,
       /** @param {string} name */

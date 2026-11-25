@@ -368,6 +368,7 @@
   "texts.dictatedTurnNote": "M11 (m11-interfaces.md 9.1): the note that the text was dictated, rendered with the turn's user message in the provider projection.",
   "texts.readAloudTurnNote": "M11 (m11-interfaces.md 9.1): the note that the reply will be read aloud, rendered with the turn's user message in the provider projection.",
   "textOf.spawnOptionInvalid": "D-M9-25: a refusal of a spawn model or effort that names what is offered",
+  "texts.spawnOptionsUnsupported": "D-M9-25: a spawn naming a model or effort on a factory whose SpawnRequest guard predates them",
   "textOf.subagentModelUnknown": "D-M9-25: a refusal of a spawn model or effort that names what is offered",
   "textOf.subagentCatalogUnavailable": "D-M9-25: a refusal of a spawn model or effort that names what is offered",
   "textOf.subagentEffortUnknown": "D-M9-25: a refusal of a spawn model or effort that names what is offered",

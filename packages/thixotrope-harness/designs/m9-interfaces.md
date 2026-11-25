@@ -375,9 +375,14 @@ parent's backend (and so its subscription pool): naming another backend would ne
 object the parent does not hold and a policy for which backends a child may reach, so it is left
 out. Nothing stored changes: the child's choice is in its own `SessionConfig` as for any session,
 and the fields are optional in `SpawnRequest`, so stored records, a factory's in-memory inheritance
-and spawns in flight across a restart are valid as they are. A session program that sends the
-fields to a factory installed before D-M9-25 gets that factory's guard refusal; without them it
-works as before. Rejected: picking the effort in the session (it holds no catalogue).
+and spawns in flight across a restart are valid as they are. A factory installed before D-M9-25
+has the closed `SpawnRequest` without the fields. The session program reads that from the
+`Delegation`'s own interface guard (`__getInterfaceGuard__`, matching a request naming both against
+the `spawn` argument pattern), once per incarnation and only when a spawn names a field: on such a
+factory the spawn is refused before it is sent with `texts.spawnOptionsUnsupported` (spawn again
+without them; the child inherits), and later rounds describe `spawnSubagent` without the two
+options. A guard that cannot be read leaves the spawn to the factory. No probe spawn is sent.
+Rejected: picking the effort in the session (it holds no catalogue).
 
 ---
 

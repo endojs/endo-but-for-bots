@@ -36,7 +36,7 @@ import {
 /* eslint-enable import/no-relative-packages */
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
-const { Far, makeExo, makePromiseKit } = /** @type {GuestGlobals} */ (
+const { Far, M, makeExo, makePromiseKit } = /** @type {GuestGlobals} */ (
   globalThis
 );
 
@@ -79,8 +79,23 @@ const makeHandle = (name, log) => {
   };
 };
 
-/** @param {{ refuse?: string, hold?: boolean }} [options] */
-const makeDelegation = ({ refuse } = {}) => {
+/**
+ * The `Delegation` guard of a factory from before D-M9-25: `SpawnRequest` a
+ * closed record without `modelId` and `reasoningEffort`.
+ */
+const olderDelegationGuard = M.interface('Delegation', {
+  spawn: M.callWhen(
+    M.splitRecord(
+      { name: M.string(), attachments: M.array(), at: M.number() },
+      { systemPrompt: M.string() },
+      {},
+    ),
+  ).returns(M.any()),
+  children: M.call().returns(M.any()),
+});
+
+/** @param {{ refuse?: string, hold?: boolean, guard?: any }} [options] */
+const makeDelegation = ({ refuse, guard = PO.Delegation } = {}) => {
   /** @type {any[]} */
   const log = [];
   /** @type {Map<string, ReturnType<typeof makeHandle>>} */
@@ -88,7 +103,7 @@ const makeDelegation = ({ refuse } = {}) => {
   /** @type {any[]} */
   const held = [];
   let holding = false;
-  const delegation = makeExo('Delegation', PO.Delegation, {
+  const delegation = makeExo('Delegation', guard, {
     spawn: async request => {
       log.push(['spawn', request]);
       if (holding) {
@@ -753,4 +768,73 @@ test('spawnSubagent: modelId and reasoningEffort reach the spawn; absent, none i
     'a non-string is refused by the closed reader',
   );
   t.is(fake.log.length, 2, 'nothing sent for a refused option');
+});
+
+test('spawnSubagent on an older factory: its guard is read, the options are refused with what to do, and later rounds describe the tool without them', async t => {
+  const fake = makeDelegation({ guard: olderDelegationGuard });
+  const { call, part, runtime } = setup({ delegation: fake.delegation });
+  t.is(part.spawnOptions(), undefined, 'nothing read before a spawn uses them');
+  t.regex(
+    spawnTool.describe(undefined, undefined, runtime).parameters,
+    /modelId/,
+  );
+  t.deepEqual(await outcome(call(spawnTool, { name: 'plain' }).result), [
+    'ok',
+    mailTextOf.spawned('plain'),
+  ]);
+  t.is(part.spawnOptions(), undefined, 'a plain spawn reads nothing');
+  t.deepEqual(
+    await outcome(
+      call(spawnTool, { name: 'opus', modelId: 'claude-opus-5-5' }).result,
+    ),
+    ['failed', texts.spawnOptionsUnsupported],
+  );
+  t.deepEqual(
+    await outcome(
+      call(spawnTool, { name: 'deep', reasoningEffort: 'high' }).result,
+    ),
+    ['failed', texts.spawnOptionsUnsupported],
+  );
+  t.is(fake.log.length, 1, 'no refused spawn was sent');
+  t.false(part.taken('opus'), 'the name is free');
+  t.is(part.spawnOptions(), false);
+  const narrow = spawnTool.describe(undefined, undefined, runtime);
+  const { properties, required } = JSON.parse(narrow.parameters);
+  t.deepEqual(Object.keys(properties).sort(), [
+    'attachments',
+    'name',
+    'systemPrompt',
+  ]);
+  t.deepEqual(required, ['name']);
+  t.notRegex(narrow.description, /modelId/);
+});
+
+test('spawnSubagent on a current factory: its guard admits the options and the description keeps them', async t => {
+  const fake = makeDelegation();
+  const { call, part, runtime } = setup({ delegation: fake.delegation });
+  t.deepEqual(
+    await outcome(
+      call(spawnTool, { name: 'opus', modelId: 'claude-opus-5-5' }).result,
+    ),
+    ['ok', mailTextOf.spawned('opus')],
+  );
+  t.is(part.spawnOptions(), true);
+  t.regex(
+    spawnTool.describe(undefined, undefined, runtime).parameters,
+    /reasoningEffort/,
+  );
+  // A Delegation without a readable guard is unknown: the spawn is sent.
+  const bare = Far('Delegation', {
+    spawn: async () =>
+      harden({ handle: Far('SubagentHandle', {}), title: 'parent / x' }),
+    children: () => harden([]),
+  });
+  const other = setup({ delegation: bare });
+  t.deepEqual(
+    await outcome(
+      other.call(spawnTool, { name: 'x', modelId: 'claude-opus-5-5' }).result,
+    ),
+    ['ok', mailTextOf.spawned('x')],
+  );
+  t.is(other.part.spawnOptions(), undefined);
 });

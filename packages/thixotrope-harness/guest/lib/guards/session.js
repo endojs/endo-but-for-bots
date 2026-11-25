@@ -401,6 +401,12 @@ export const texts = harden({
    */
   imported:
     'This message came with an imported session; it can be read and dismissed, not answered',
+  /**
+   * D-M9-25: the installed factory's `SpawnRequest` guard is the closed
+   * record from before the options (read from its interface guard).
+   */
+  spawnOptionsUnsupported:
+    "This harness's factory predates choosing a subagent's model or reasoning effort (a freshly provisioned state has it). Spawn again without modelId and reasoningEffort: the child then runs on your backend, model and effort",
   /** Harness (R4-49 style): an ask the parent's cancel abandoned. */
   askAbandoned:
     "Subagent ask abandoned: the turn was cancelled; the subagent's turn was cancelled too",

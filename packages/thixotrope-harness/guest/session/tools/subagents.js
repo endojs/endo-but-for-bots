@@ -96,12 +96,16 @@ const argumentsOf = {
  * @param {'spawnSubagent' | 'askSubagent' | 'stopSubagent' | 'attachment'} tool
  * @param {number} required
  * @param {string} [description]
+ * @param {readonly string[]} [hidden] names the reader takes but the
+ *   description does not offer (D-M9-25: an older factory's spawn)
  */
-const toolOf = (tool, required, description = '') => {
+const toolOf = (tool, required, description = '', hidden = []) => {
   const names = mailToolArgumentNames[tool];
   /** @type {Record<string, any>} */
   const properties = {};
-  for (const name of names) [, properties[name]] = argumentsOf[name];
+  for (const name of names) {
+    if (!hidden.includes(name)) [, properties[name]] = argumentsOf[name];
+  }
   return harden({
     /** @type {ArgSpec} */
     spec: {
@@ -144,6 +148,18 @@ const tools = harden({
   ),
   attachment: toolOf('attachment', 2),
 });
+
+/**
+ * D-M9-25: `spawnSubagent` as offered on a factory whose `SpawnRequest`
+ * predates `modelId` and `reasoningEffort` (the session part read it from
+ * the factory's guard): the same tool without the two options.
+ */
+const spawnWithoutOptions = toolOf(
+  'spawnSubagent',
+  1,
+  'Create a subagent: a hidden helper session like yours holding only the attachments ({name, petName}; petName subagents/<name> passes a subagent). It runs on your backend with your model and reasoning effort (this harness cannot choose them per subagent). Then use askSubagent and stopSubagent by its name.',
+  ['modelId', 'reasoningEffort'],
+).description;
 
 /**
  * Read a tool's arguments, inline or staged (`splitArgs` in the exec vat).
@@ -324,7 +340,10 @@ const withName = (tool, work) => async (request, ports, context) => {
 const spawnEntry = harden({
   name: 'spawnSubagent',
   site: 'guest',
-  describe: () => tools.spawnSubagent.description,
+  describe: (_ports, _services, runtime) =>
+    runtime?.subagents?.spawnOptions?.() === false
+      ? spawnWithoutOptions
+      : tools.spawnSubagent.description,
   available,
   execute: withName(
     'spawnSubagent',
@@ -354,6 +373,13 @@ const spawnEntry = harden({
         )
           return failed(mailTextOf.spawnOptionInvalid(field, limit));
       }
+      // D-M9-25: an older factory's closed SpawnRequest would refuse the
+      // options with a raw guard error; its guard says so first.
+      if (
+        (modelId !== undefined || reasoningEffort !== undefined) &&
+        (await part.whenSpawnOptions()) === false
+      )
+        return failed(texts.spawnOptionsUnsupported);
       const attached = attachmentsOf(values.get('attachments'), context);
       if ('outcome' in attached) return attached.outcome;
       const spawnRequest = harden({
