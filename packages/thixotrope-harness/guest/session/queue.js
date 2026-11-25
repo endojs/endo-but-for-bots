@@ -44,7 +44,7 @@ import { makePendingQueue } from '../lib/pending-queue.js';
 import { makeSubmissions } from './submissions.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
-/** @import { QueueItem, Internal, StoredReceipt } from '../lib/pending-queue.js' */
+/** @import { QueueItem, Internal, StoredReceipt, VoiceMarker } from '../lib/pending-queue.js' */
 const { Fail, defineExoClass, harden } = /** @type {GuestGlobals} */ (
   globalThis
 );
@@ -77,7 +77,7 @@ const VIEW_OVERHEAD_BYTES = 64;
  * @property {number} at
  * @typedef {{ entries: PendingRow[], hold?: Hold }} PendingView
  * @typedef {object} Queue
- * @property {(submission: Submission, requestId: string, at: number, attachments?: readonly { label: string, value: any }[], marker?: import('../lib/pending-queue.js').VoiceMarker) => { receipt: Receipt, added: boolean }} enqueueOnce
+ * @property {(submission: Submission, requestId: string, at: number, attachments?: readonly { label: string, value: any }[], marker?: VoiceMarker) => { receipt: Receipt, added: boolean }} enqueueOnce
  *   M5: `attachments` are kept in the entry (`packages.js` checks them);
  *   M11: `marker` is the entry's spoken-mode facts (`markerOf`)
  * @property {(requestId: string) => Receipt | undefined} receiptFor

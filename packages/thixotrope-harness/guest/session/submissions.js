@@ -28,7 +28,7 @@
 import { releaseRule } from './holds.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
-/** @import { makePendingQueue, Internal } from '../lib/pending-queue.js' */
+/** @import { makePendingQueue, Internal, VoiceMarker } from '../lib/pending-queue.js' */
 const { harden } = /** @type {GuestGlobals} */ (globalThis);
 
 /**
@@ -75,7 +75,7 @@ export const makeSubmissions = ({ pending, onChange = () => {} }) => {
      * @param {string} requestId
      * @param {number} at
      * @param {readonly { label: string, value: any }[]} [attachments] M5
-     * @param {import('../lib/pending-queue.js').VoiceMarker} [marker] M11
+     * @param {VoiceMarker} [marker] M11
      */
     enqueue: (submission, requestId, at, attachments, marker) => {
       const result = pending.enqueue(

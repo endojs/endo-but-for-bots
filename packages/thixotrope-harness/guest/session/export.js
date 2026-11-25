@@ -46,6 +46,7 @@ import { blobsOf } from './staging.js';
 import { markerOf } from '../lib/pending-queue.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
+/** @import { VoiceMarker } from '../lib/pending-queue.js' */
 const { E, Fail, harden } = /** @type {GuestGlobals} */ (globalThis);
 
 /** Bytes kept free in an export page for its own keys and envelope. */
@@ -65,7 +66,7 @@ const cursorNumbers = (cursor, pattern) => {
  * @param {object} powers
  * @param {{ count: () => number, at: (index: number) => any, messageCount: () => number, base: () => number }} powers.records
  *   the RecordLog
- * @param {{ items: () => any[], currentHold: () => any, size: () => number, hold: (reason: any, message: string) => void, enqueueOnce: (submission: any, requestId: string, at: number, attachments?: any, marker?: import('../lib/pending-queue.js').VoiceMarker) => any }} powers.queue
+ * @param {{ items: () => any[], currentHold: () => any, size: () => number, hold: (reason: any, message: string) => void, enqueueOnce: (submission: any, requestId: string, at: number, attachments?: any, marker?: VoiceMarker) => any }} powers.queue
  *   the session's queue
  * @param {any} powers.runner the turn runner (seams of 2.4 item 5)
  * @param {{ state: () => any, entries: () => any[] }} powers.archive the
