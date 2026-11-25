@@ -87,7 +87,7 @@ const NO_EFFORTS = harden([]);
  */
 export const claudeEfforts = modelId => {
   if (
-    /^claude-(?:(?:opus|sonnet)-5(?:-5)?|haiku-5-5|(?:fable|mythos)-5(?:-1)?|opus-4-[78])(?:-20[0-9]{6})?$/.test(
+    /^claude-(?:(?:opus|sonnet)-5(?:-5)?|haiku-5-5|fable-5(?:-[12])?|mythos-5(?:-1)?|opus-4-[78])(?:-20[0-9]{6})?$/.test(
       modelId,
     )
   )

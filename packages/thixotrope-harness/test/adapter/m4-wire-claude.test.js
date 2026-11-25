@@ -197,6 +197,13 @@ test('effort: adaptive thinking with the effort (R4-23); refused before any requ
     'high',
     'max',
   ]);
+  for (const id of [
+    'claude-fable-5',
+    'claude-fable-5-1',
+    'claude-fable-5-2',
+    'claude-opus-5-5',
+  ])
+    t.true(claudeEfforts(id).includes('medium'), id);
   t.deepEqual(claudeEfforts('claude-fake-1'), []);
   const server = await serverFor(t);
   server.setPlan([{ sse: 'claude-text.sse' }]);
