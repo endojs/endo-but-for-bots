@@ -35,13 +35,27 @@ const projectWorkflow = [
 ].join(' ');
 const scratchInstructions =
   'For nested integration tests set THIX_HARNESS_TMP=/tmp/thix. For a separate supervisor create a short private state directory on that same Linux scratch mount.';
-const instructions = `${projectWorkflow} For the first thix-selfdev-prepare command, set the shell tool's timeoutMs to 600000 (10 minutes) for the cold build. ${scratchInstructions}`;
+const operational = `${projectWorkflow} For the first thix-selfdev-prepare command, set the shell tool's timeoutMs to 600000 (10 minutes) for the cold build. ${scratchInstructions}`;
+/** The model a project manager session delegates implementation to. */
+export const implementerModel = 'claude-opus-5-5';
+// The two roles share this one text: a subagent spawned without a
+// systemPrompt is composed from its parent's preset snapshot (factory
+// `create`), and a given systemPrompt replaces the whole composition.
+const delegation = [
+  'Roles. If your task came from a parent session through askSubagent, you are its implementer: do the work yourself in your own /workspace checkout as described below, commit it, and answer with the commit hashes, git diff HEAD, the commands you ran with their results, and what you could not do. Do not spawn subagents of your own unless the brief asks for it or the work truly needs it.',
+  `Otherwise you are the project manager and quality-control master for the work you are given. Do not implement it yourself: plan it, then delegate each piece to an Opus 5.5 subagent with spawnSubagent { name, modelId: "${implementerModel}" } and no systemPrompt, so the child keeps these instructions (a systemPrompt would replace them). Give each a self-contained brief in askSubagent: it sees none of your conversation, so state the goal, the files, the constraints, the tests to run and when to stop, and begin with "You are the implementer for this task."`,
+  "Pass a subagent's work on only after checking it: read its diff, run the relevant tests yourself, and send it back with concrete fixes when it falls short. Stop each subagent when its work is accepted. Report faithfully what was done, what you verified and how, and what remains unverified or failed.",
+].join(' ');
+const instructions = `${delegation} ${operational}`;
 // Upgrade our earlier published defaults while preserving operator edits.
 const earlierInstructions = [
-  'Use a separate short /tmp state path for nested supervisors.',
-  'For a nested supervisor use a short private state directory under /home/node, where its staged Linux worker can execute.',
-  scratchInstructions,
-].map(suffix => `${projectWorkflow} ${suffix}`);
+  ...[
+    'Use a separate short /tmp state path for nested supervisors.',
+    'For a nested supervisor use a short private state directory under /home/node, where its staged Linux worker can execute.',
+    scratchInstructions,
+  ].map(suffix => `${projectWorkflow} ${suffix}`),
+  operational,
+];
 
 /** @param {string | undefined} prior */
 export const projectInstructions = prior =>
@@ -49,6 +63,135 @@ export const projectInstructions = prior =>
     ? instructions
     : prior;
 harden(projectInstructions);
+
+/** The defaults of a preset that has no backend of its own. */
+export const presetDefaults = harden({
+  backendKind: 'claude-pool',
+  modelId: 'claude-fable-5-2',
+  reasoningEffort: 'medium',
+});
+
+/** Catalogue pages read at most to find a model. */
+const MODEL_PAGES = 20;
+
+/**
+ * The Backend among `backends` (the factory's `listBackends()`) that `name`
+ * names, by label or else by kind (`claude-pool`), and by the default kind
+ * when no name is given. Objects, not names: the answer is the factory's
+ * own Backend object, and the preset saves that object.
+ * @param {readonly any[]} backends
+ * @param {string} [name]
+ */
+export const resolveBackend = async (backends, name) => {
+  const views = await Promise.all(backends.map(b => E(b).describe()));
+  /** @param {(view: any) => boolean} test */
+  const indexes = test => views.flatMap((v, i) => (test(v) ? [i] : []));
+  const byLabel = name === undefined ? [] : indexes(v => v.label === name);
+  const kind = name ?? presetDefaults.backendKind;
+  const wanted = byLabel.length > 0 ? byLabel : indexes(v => v.kind === kind);
+  const what =
+    byLabel.length > 0
+      ? `labelled ${JSON.stringify(name)}`
+      : name === undefined
+        ? `of kind ${kind}`
+        : `labelled or of kind ${JSON.stringify(name)}`;
+  const known = views.map(v => `${v.label} (${v.kind})`).join(', ') || 'none';
+  if (wanted.length === 0)
+    throw Error(`No backend ${what}; the factory offers: ${known}`);
+  if (wanted.length > 1)
+    throw Error(
+      `${wanted.length} backends are ${what}; name one with --backend LABEL (the factory offers: ${known})`,
+    );
+  return { backend: backends[wanted[0]], view: views[wanted[0]] };
+};
+harden(resolveBackend);
+
+/**
+ * A model's catalogue row on `backend`, or undefined.
+ * @param {any} backend
+ * @param {string} modelId
+ */
+const modelRow = async (backend, modelId) => {
+  /** @type {string | undefined} */
+  let after;
+  for (let page = 0; page < MODEL_PAGES; page += 1) {
+    const answer = await E(backend).listModels(
+      harden(after === undefined ? { limit: 50 } : { after, limit: 50 }),
+    );
+    if (answer.state !== 'ok')
+      throw Error(
+        `The backend's model catalogue is ${answer.state}${answer.error ? `: ${answer.error}` : ''}`,
+      );
+    const row = answer.rows.find(
+      (/** @type {any} */ r) => r.modelId === modelId,
+    );
+    if (row || answer.next === undefined) return row;
+    after = answer.next;
+  }
+  return undefined;
+};
+
+/**
+ * The backend and model the preset saves, and notes for the operator.
+ * With no option the prior preset's backend and model are kept (operator
+ * edits survive a republish); a preset without a backend gets the defaults;
+ * an option replaces the saved value. A model chosen here is checked in the
+ * backend's catalogue.
+ *
+ * Presets carry no reasoning effort (J-13015: the catalogue ignores one), so
+ * an effort is checked, not saved: a session on the model starts at the
+ * pool's default effort, which must be the requested one. An explicit
+ * `effort` that is not the default fails; the implied default only warns.
+ * @param {{ backend?: any, modelId?: string } | undefined} prior
+ * @param {{ backends: readonly any[], backend?: string, modelId?: string, reasoningEffort?: string }} choice
+ * @returns {Promise<{ backend: any, modelId: string | undefined, notes: readonly string[] }>}
+ */
+export const choosePresetModel = async (prior, choice) => {
+  /** @type {string[]} */
+  const notes = [];
+  const keep = choice.backend === undefined && prior?.backend !== undefined;
+  const { backend, view } = keep
+    ? {
+        backend: prior?.backend,
+        view: await E(prior?.backend)
+          .describe()
+          .catch(() => undefined),
+      }
+    : await resolveBackend(choice.backends, choice.backend);
+  const sameBackend = backend === prior?.backend;
+  const defaultKind = view?.kind === presetDefaults.backendKind;
+  const modelId =
+    choice.modelId ??
+    (sameBackend
+      ? prior?.modelId
+      : defaultKind
+        ? presetDefaults.modelId
+        : undefined);
+  const chosen = modelId !== undefined && modelId !== prior?.modelId;
+  const effort =
+    choice.reasoningEffort ??
+    (chosen && defaultKind ? presetDefaults.reasoningEffort : undefined);
+  if (modelId === undefined) {
+    if (choice.reasoningEffort !== undefined)
+      throw Error('--effort needs a model: give --model too');
+    return harden({ backend, modelId: undefined, notes });
+  }
+  if (chosen || effort !== undefined) {
+    const row = await modelRow(backend, modelId);
+    if (row === undefined)
+      throw Error(
+        `Model ${JSON.stringify(modelId)} is not in the backend's catalogue`,
+      );
+    if (effort !== undefined && row.defaultReasoningEffort !== effort) {
+      const offered = row.reasoningEfforts.join(', ') || 'none';
+      const text = `${modelId} starts sessions at reasoning effort ${row.defaultReasoningEffort ?? 'none'}, not ${effort} (offered: ${offered}); presets carry no effort, so pick it per session`;
+      if (choice.reasoningEffort !== undefined) throw Error(text);
+      notes.push(text);
+    }
+  }
+  return harden({ backend, modelId, notes });
+};
+harden(choosePresetModel);
 
 /**
  * @param {string} state
@@ -146,8 +289,11 @@ harden(publishSource);
  * @param {any} admin
  * @param {Awaited<ReturnType<typeof publishSource>>} seed
  * @param {boolean} legacy
+ * @param {Parameters<typeof choosePresetModel>[1]} [choice] absent: the
+ *   prior backend and model are kept as they are
+ * @returns {Promise<{ notes: readonly string[] }>}
  */
-export const savePreset = async (catalog, admin, seed, legacy) => {
+export const savePreset = async (catalog, admin, seed, legacy, choice) => {
   const { revision, presets } = await E(catalog).configuration();
   const views = await Promise.all(
     presets.map(/** @param {any} p */ p => E(p).describe()),
@@ -169,14 +315,20 @@ export const savePreset = async (catalog, admin, seed, legacy) => {
   )
     throw Error('The project preset name is already in use');
   const prompt = projectInstructions(prior?.instructions);
+  const { backend, modelId, notes } =
+    choice === undefined
+      ? { backend: prior?.backend, modelId: prior?.modelId, notes: [] }
+      : await choosePresetModel(prior, choice);
   if (
     previousSeed?.commit === seed.commit &&
     Boolean(marker) === legacy &&
     prior.reasoningEffort === undefined &&
-    prior.instructions === prompt
+    prior.instructions === prompt &&
+    prior.backend === backend &&
+    prior.modelId === modelId
   ) {
     if (!prior.available) throw Error(prior.unavailableReason);
-    return;
+    return harden({ notes });
   }
   const managedEndowments = endowments.filter(
     /** @param {any} x */ x => x.label !== markerLabel,
@@ -200,8 +352,8 @@ export const savePreset = async (catalog, admin, seed, legacy) => {
     ],
     endowments: managedEndowments,
     ...(legacy ? {} : { workspaceSeed: seed }),
-    ...(prior?.backend && { backend: prior.backend }),
-    ...(prior?.modelId && { modelId: prior.modelId }),
+    ...(backend && { backend }),
+    ...(modelId && { modelId }),
   });
   let saved = preset;
   if (saved) await E(saved).save(record, revision);
@@ -216,6 +368,9 @@ export const savePreset = async (catalog, admin, seed, legacy) => {
     : view.workspaceSeed;
   if (actual?.commit !== seed.commit)
     throw Error('Factory did not retain the project revision');
+  if (view.backend !== backend || view.modelId !== modelId)
+    throw Error('Factory did not retain the preset backend and model');
+  return harden({ notes });
 };
 
 /** @param {string[]} argv */
@@ -231,6 +386,9 @@ const main = async argv => {
       workspace: { type: 'string', default: 'w' },
       'legacy-factory': { type: 'boolean' },
       'replace-runner': { type: 'boolean' },
+      backend: { type: 'string' },
+      model: { type: 'string' },
+      effort: { type: 'string' },
     },
   });
   const { image, repo, runtime } = values;
@@ -242,7 +400,7 @@ const main = async argv => {
     !['docker', 'podman'].includes(runtime)
   )
     throw Error(
-      'Usage: project-preset.mjs STATE --repo REPO --image NAME@sha256:DIGEST [--ref REF] [--runtime docker|podman] [--workspace w] [--legacy-factory] [--replace-runner]',
+      'Usage: project-preset.mjs STATE --repo REPO --image NAME@sha256:DIGEST [--ref REF] [--runtime docker|podman] [--workspace w] [--legacy-factory] [--replace-runner] [--backend LABEL] [--model ID] [--effort LEVEL]',
     );
   await run(runtime, ['image', 'inspect', '--format', '{{.Id}}', image]);
   const state = path.resolve(positionals[0]);
@@ -301,12 +459,22 @@ const main = async argv => {
     }
     await attach.run(context);
     const operator = await E(root).getOperator();
-    await savePreset(
+    const factory = await E(operator).getFactory();
+    const { notes } = await savePreset(
       await E(operator).getPresets(),
       admin,
       seed,
       !!values['legacy-factory'],
+      harden({
+        backends: await E(factory).listBackends(),
+        ...(values.backend === undefined ? {} : { backend: values.backend }),
+        ...(values.model === undefined ? {} : { modelId: values.model }),
+        ...(values.effort === undefined
+          ? {}
+          : { reasoningEffort: values.effort }),
+      }),
     );
+    for (const note of notes) process.stderr.write(`project-preset: ${note}\n`);
     process.stdout.write(`${presetName} ready at ${seed.commit}\n`);
   } finally {
     client.close();
