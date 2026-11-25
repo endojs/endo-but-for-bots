@@ -44,7 +44,6 @@ import { submissionField } from './staging.js';
 import { toolTable } from './tool-table.js';
 import { makeTurnRunner } from './turn.js';
 import { makeContextWindow } from './compaction.js';
-import { subagentConfig, withoutSubagentModel } from '../lib/subagent-model.js';
 
 // The exo methods are typed loosely; the interface guards check the values.
 const { makeExo } = /** @type {any} */ (globalThis);
@@ -66,7 +65,7 @@ const { makeExo } = /** @type {any} */ (globalThis);
  * @param {SessionOptions} [options]
  */
 export const makeSession = (
-  { config: given, services: givenServices, rowReporter },
+  { config, services, rowReporter },
   {
     makeQueue = defaultMakeQueue,
     isRestartSignal = defaultIsRestartSignal,
@@ -76,11 +75,6 @@ export const makeSession = (
     labelSeeds = defaultLabelSeeds,
   } = {},
 ) => {
-  // D-M9-27: a subagent spawned through an older factory carries its
-  // model choice as an endowment; the session runs on it from here on.
-  // The choice is the session's config, not an object of its inventory.
-  const config = subagentConfig(given, givenServices.endowments);
-  const services = withoutSubagentModel(givenServices);
   let { title } = config;
   let inventoryRevision = 0;
   // Creation seeds precede the first possible reader and live publisher.

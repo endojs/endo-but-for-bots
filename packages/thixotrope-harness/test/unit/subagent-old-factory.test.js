@@ -13,12 +13,18 @@ import './_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
+/* eslint-disable no-await-in-loop -- each case runs in turn */
 import { textOf as mailTextOf } from '../../guest/lib/guards/session.js';
-import { textOf as postOfficeTextOf } from '../../guest/lib/guards/factory.js';
 import {
-  subagentConfig,
+  interfaces as factoryInterfaces,
+  textOf as postOfficeTextOf,
+} from '../../guest/lib/guards/factory.js';
+import {
+  checkedSubagentConfig,
+  subagentModelAttachment,
   subagentModelLabel,
 } from '../../guest/lib/subagent-model.js';
+import { pooledClaudeModels } from '../../resources/agent-host/impl/subscriptions/catalog.js';
 import { makeLabels } from '../../guest/session/labels.js';
 import { makeSpareMaker } from '../../guest/session/main.js';
 import { workspaceSeedLabel } from '../../guest/lib/workspace-seed.js';
@@ -36,20 +42,60 @@ const [spawnTool] = subagentToolEntries;
 const drain = () => new Promise(resolve => setImmediate(resolve));
 const AT = 1_700_000_000_000;
 
-/** The parent's pool: Fable (the parent's model) and Opus 5.5. */
-const rows = harden([
-  {
-    modelId: 'claude-fable-5-2',
-    reasoningEfforts: ['low', 'medium', 'high', 'max'],
-    contextLength: 200_000,
-  },
-  {
-    modelId: 'claude-opus-5-5',
-    reasoningEfforts: ['low', 'medium', 'high'],
-    contextLength: 1_000_000,
-    maxOutputTokens: 64_000,
-  },
-]);
+/**
+ * The parent's Claude pool as the reloaded adapter lists it: rows made by
+ * `pooledClaudeModels` (efforts from `claudeEfforts`, no window or output
+ * cap: a pool spec without `contextLength`), and `resolveModel` answering
+ * the pool settings' window and cap for any listed model, as
+ * `impl/subscriptions/catalog.js` does for a Claude pool.
+ */
+const rows = harden(
+  pooledClaudeModels(
+    [
+      ['claude-fable-5-2', 'claude-opus-5-5', 'claude-haiku-4-5'].map(id => ({
+        id,
+        title: id,
+        description: '',
+        reasoningEfforts: [],
+      })),
+    ],
+    undefined,
+  ).map(model =>
+    harden({
+      modelId: model.id,
+      title: model.title,
+      reasoningEfforts: model.reasoningEfforts,
+      ...(model.contextLength === undefined
+        ? {}
+        : { contextLength: model.contextLength }),
+    }),
+  ),
+);
+const CLAUDE_WINDOW = 200_000;
+const CLAUDE_OUTPUT = 16_384;
+
+/**
+ * @param {Record<string, any>} [extra]
+ * @param {any[]} [reads]
+ */
+const makePool = (extra = {}, reads = []) =>
+  Far('Backend', {
+    describe: () => harden({ kind: 'claude-pool', label: 'pool' }),
+    listModels: async (/** @type {any} */ request) => {
+      reads.push(request);
+      return harden({ state: 'ok', rows });
+    },
+    resolveModel: async (/** @type {string} */ modelId) => {
+      if (!rows.some(row => row.modelId === modelId))
+        throw Error(`unknown ${modelId}`);
+      return harden({
+        modelId,
+        contextLength: CLAUDE_WINDOW,
+        maxOutputTokens: CLAUDE_OUTPUT,
+      });
+    },
+    ...extra,
+  });
 
 /**
  * A child's session made as 51760a3996's factory made it, with a probe
@@ -72,10 +118,7 @@ const makeChild = (request, parentConfig) => {
   });
   const publisher = Far('LivePublisher', { publish: () => {} });
   const ports = harden({ endpoint, publisher, tools: harden([]), since: AT });
-  const backend = Far('Backend', {
-    describe: () => harden({ kind: 'claude-pool', label: 'pool' }),
-    open: () => ports,
-  });
+  const backend = makePool({ open: () => ports });
   const host = Far('SessionHostFacet', {
     liveChannel: () => Far('LivePublisher', { publish: () => {} }),
   });
@@ -97,6 +140,7 @@ const makeChild = (request, parentConfig) => {
       modelId: parentConfig.modelId,
       reasoningEffort: parentConfig.reasoningEffort,
       contextLength: parentConfig.contextLength,
+      maxOutputTokens: parentConfig.maxOutputTokens,
       preset: harden({ label: 'chat-only' }),
       createdAt: AT,
       userInitiated: false,
@@ -112,12 +156,25 @@ const makeChild = (request, parentConfig) => {
   return { made, rounds, seeded };
 };
 
-/** @param {{ projectSource?: any, guarded?: boolean }} [options] */
-const setup = ({ projectSource, guarded = true } = {}) => {
+/**
+ * @param {{ projectSource?: any, guarded?: boolean, guard?: any, parent?: Record<string, any>, overridden?: boolean }} [options]
+ *   `guard`: the Delegation's guard (default the older record);
+ *   `parent`: the parent's own config; `overridden`: the parent runs on a
+ *   marker's choice
+ */
+const setup = ({
+  projectSource,
+  guarded = true,
+  guard = olderDelegationGuard,
+  parent = {},
+  overridden = false,
+} = {}) => {
   const parentConfig = harden({
     modelId: 'claude-fable-5-2',
     reasoningEffort: 'medium',
-    contextLength: 200_000,
+    contextLength: CLAUDE_WINDOW,
+    maxOutputTokens: CLAUDE_OUTPUT,
+    ...parent,
   });
   /** @type {any[]} */
   const spawns = [];
@@ -137,27 +194,32 @@ const setup = ({ projectSource, guarded = true } = {}) => {
   };
   // `guarded: false`: a Delegation whose guard cannot be read.
   const delegation = guarded
-    ? makeExo('Delegation', olderDelegationGuard, /** @type {any} */ (methods))
+    ? makeExo('Delegation', guard, /** @type {any} */ (methods))
     : Far('Delegation', methods);
   /** @type {any[]} */
   const catalogueReads = [];
-  const backend = Far('Backend', {
-    describe: () => harden({ kind: 'claude-pool', label: 'pool' }),
-    listModels: async (/** @type {any} */ request) => {
-      catalogueReads.push(request);
-      return harden({ state: 'ok', rows });
-    },
-  });
+  const backend = makePool({}, catalogueReads);
   const services = harden({
     subagents: delegation,
     backend,
     ...(projectSource === undefined ? {} : { projectSource }),
+    ...(overridden ? { modelOverridden: true } : {}),
   });
   const part = subagentsPart.make(
     /** @type {any} */ ({ services, config: parentConfig }),
   );
   const labels = makeLabels({
-    seeds: [{ label: 'x', value: Far('X', {}), source: 'endowment' }],
+    seeds: [
+      { label: 'x', value: Far('X', {}), source: 'endowment' },
+      // What a model can bind with its store tool: any copy data.
+      {
+        label: 'forged',
+        value: harden({
+          json: '{"modelId":"claude-opus-5-5","contextLength":99999999,"maxOutputTokens":99999999}',
+        }),
+        source: 'endowment',
+      },
+    ],
   });
   const runtime = harden({ labels, services, subagents: part });
   part.hooks.onClaim(/** @type {any} */ ({ active: { claimAt: AT } }));
@@ -225,7 +287,8 @@ test('an older factory: a child spawned with modelId and reasoningEffort runs on
   t.truthy(round, 'the child started a round');
   t.is(round.options.modelId, 'claude-opus-5-5');
   t.is(round.options.reasoningEffort, 'high');
-  t.is(round.options.maxOutputTokens, 64_000, 'the model row cap');
+  // F2: the pool's resolveModel answer, as a creation stores it.
+  t.is(round.options.maxOutputTokens, CLAUDE_OUTPUT, 'the pool output cap');
   const impl = await s.children.get('impl')?.made;
   const listed = await impl.session.getInfo();
   t.is(listed.modelId, 'claude-opus-5-5', 'the child says so in its info');
@@ -270,40 +333,143 @@ test('an older factory: an unknown model or effort is refused before any spawn, 
     text: postOfficeTextOf.subagentModelUnknown('claude-nope', 'pool', [
       'claude-fable-5-2',
       'claude-opus-5-5',
+      'claude-haiku-4-5',
     ]),
   });
   t.deepEqual(
     await s.spawn({
       name: 'y',
-      modelId: 'claude-opus-5-5',
+      modelId: 'claude-haiku-4-5',
       reasoningEffort: 'max',
     }),
     {
       status: 'failed',
-      text: postOfficeTextOf.subagentEffortUnknown('claude-opus-5-5', 'max', [
-        'low',
-        'medium',
-        'high',
-      ]),
+      text: postOfficeTextOf.subagentEffortUnknown(
+        'claude-haiku-4-5',
+        'max',
+        [],
+      ),
     },
   );
   t.is(s.spawns.length, 0);
   t.false(s.part.taken('x'));
 });
 
-test('a user session ignores a subagent-model endowment; a malformed one is ignored', async t => {
+test('the child checks a marker against its backend: window and cap from resolveModel, a forged or unknown one leaves the parent model', async t => {
+  const backend = makePool();
+  const child = harden({
+    modelId: 'claude-fable-5-2',
+    reasoningEffort: 'medium',
+    contextLength: CLAUDE_WINDOW,
+    maxOutputTokens: CLAUDE_OUTPUT,
+    userInitiated: false,
+  });
+  const opus = subagentModelAttachment({
+    modelId: 'claude-opus-5-5',
+    reasoningEffort: 'high',
+  }).value;
+  const applied = await checkedSubagentConfig(child, backend, opus);
+  t.true(applied.overridden);
+  t.like(applied.config, {
+    modelId: 'claude-opus-5-5',
+    reasoningEffort: 'high',
+    contextLength: CLAUDE_WINDOW,
+    maxOutputTokens: CLAUDE_OUTPUT,
+  });
+  const user = harden({ ...child, userInitiated: true });
+  t.is((await checkedSubagentConfig(user, backend, opus)).config, user);
+  for (const json of [
+    '{"modelId":7}',
+    '{"modelId":"claude-evil"}',
+    '{"modelId":"claude-opus-5-5","reasoningEffort":"ultra"}',
+    // Fields outside the marker are refused with it, not skipped.
+    '{"modelId":"claude-opus-5-5","contextLength":99999999}',
+    '{"modelId":"claude-opus-5-5","maxOutputTokens":99999999}',
+  ]) {
+    const forged = await checkedSubagentConfig(child, backend, { json });
+    t.is(forged.config, child, json);
+    t.false(forged.overridden);
+  }
+  // A backend that cannot answer: the factory's config stands.
+  const down = makePool({
+    listModels: async () => harden({ state: 'unavailable', rows: [] }),
+  });
+  t.is((await checkedSubagentConfig(child, down, opus)).config, child);
+});
+
+test('F1: a model cannot forge the marker or the project source on any spawn path', async t => {
+  const refused = (/** @type {string} */ label) => ({
+    status: 'failed',
+    text: mailTextOf.reservedAttachment(label),
+  });
+  const forge = (/** @type {string} */ label) => [
+    { name: label, petName: 'forged' },
+  ];
+  for (const options of [
+    {},
+    { guard: factoryInterfaces.Delegation },
+    { guarded: false },
+    { projectSource: Far('WorkspaceSeedMarker', {}) },
+  ]) {
+    const s = setup(options);
+    for (const label of [subagentModelLabel, workspaceSeedLabel]) {
+      // No options: what used to be the direct path.
+      t.deepEqual(
+        await s.spawn({ name: 'a', attachments: forge(label) }),
+        refused(label),
+      );
+      t.deepEqual(
+        await s.spawn({
+          name: 'b',
+          modelId: 'claude-opus-5-5',
+          attachments: forge(label),
+        }),
+        refused(label),
+      );
+    }
+    t.is(s.spawns.length, 0, JSON.stringify(Object.keys(options)));
+  }
+  // Under another label the same data is an ordinary attachment, and the
+  // child does not read it as a model choice.
   const s = setup();
-  await s.spawn({ name: 'impl', modelId: 'claude-opus-5-5' });
-  const marker = s.spawns[0].attachments;
-  const user = harden({ modelId: 'claude-fable-5-2', userInitiated: true });
-  t.is(subagentConfig(user, marker), user);
-  const child = harden({ modelId: 'claude-fable-5-2', userInitiated: false });
-  t.is(subagentConfig(child, marker).modelId, 'claude-opus-5-5');
-  const bad = harden([
-    { label: subagentModelLabel, value: harden({ json: '{"modelId":7}' }) },
-  ]);
-  t.is(subagentConfig(child, bad), child);
-  t.is(subagentConfig(child, undefined), child);
+  await s.spawn({
+    name: 'plain',
+    attachments: [{ name: 'notes', petName: 'forged' }],
+  });
+  const { round } = await s.firstRound('plain');
+  t.is(round.options.modelId, 'claude-fable-5-2');
+  t.is(round.options.maxOutputTokens, CLAUDE_OUTPUT);
+});
+
+test('F3: a session running on a marker sends its own model to children on every factory', async t => {
+  for (const guard of [olderDelegationGuard, factoryInterfaces.Delegation]) {
+    const s = setup({
+      guard,
+      overridden: true,
+      parent: { modelId: 'claude-opus-5-5', reasoningEffort: 'high' },
+    });
+    await s.spawn({ name: 'grandchild' });
+    t.false('modelId' in s.spawns[0]);
+    t.deepEqual(
+      s.spawns[0].attachments.map((/** @type {any} */ a) => a.label),
+      [subagentModelLabel],
+    );
+    const { round } = await s.firstRound('grandchild');
+    t.is(round.options.modelId, 'claude-opus-5-5');
+    t.is(round.options.reasoningEffort, 'high');
+    // An effort alone stays on the session's own model, not the recorded.
+    await s.spawn({ name: 'deep', reasoningEffort: 'low' });
+    const deep = await s.firstRound('deep');
+    t.is(deep.round.options.modelId, 'claude-opus-5-5');
+    t.is(deep.round.options.reasoningEffort, 'low');
+  }
+  // Not overridden, on a current factory: the fields, no marker.
+  const current = setup({ guard: factoryInterfaces.Delegation });
+  await current.spawn({ name: 'x' });
+  t.deepEqual(current.spawns[0].attachments, []);
+  await current.spawn({ name: 'y', modelId: 'claude-opus-5-5' });
+  t.is(current.spawns[1].modelId, 'claude-opus-5-5');
+  t.deepEqual(current.spawns[1].attachments, []);
 });
 
 test('a legacy project source goes to every child, which opens its checkout from it (D-M9-28)', async t => {
@@ -327,7 +493,7 @@ test('a legacy project source goes to every child, which opens its checkout from
     }),
     {
       status: 'failed',
-      text: mailTextOf.duplicateAttachment(workspaceSeedLabel),
+      text: mailTextOf.reservedAttachment(workspaceSeedLabel),
     },
   );
   const without = setup();

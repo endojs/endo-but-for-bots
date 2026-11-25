@@ -726,6 +726,13 @@ export const textOf = harden({
    */
   spawnOptionInvalid: (field, limit) =>
     `The subagent's ${field} must be a nonblank string of at most ${limit} characters; omit it to use your own`,
+  /**
+   * D-M9-27, D-M9-28: a spawn attachment under a label only the session
+   * program attaches.
+   * @param {string} label
+   */
+  reservedAttachment: label =>
+    `The attachment label ${q(label)} is reserved for the harness; choose another label`,
   /** @param {string} name */
   subagentExists: name => `A subagent named ${q(name)} already exists`,
   /**

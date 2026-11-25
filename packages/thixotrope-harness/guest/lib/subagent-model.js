@@ -6,12 +6,14 @@
  * - the factory's `Delegation.spawn`, when its `SpawnRequest` takes
  *   `modelId` and `reasoningEffort` (`guest/factory/subagents.js`);
  * - the parent's session program, when the installed factory's guard is
- *   the older closed record that does not (D-M9-27). The parent then checks
- *   the choice against its own `SessionServices.backend` (the child's
- *   backend too: a child stays on its parent's) and sends it to the child
- *   as one more attachment, `subagentModelLabel`, which the older factory
- *   passes through as the child's endowment. The child's session program
- *   reads it in `subagentConfig` and runs on it.
+ *   the older closed record that does not (or cannot be read), or when the
+ *   session itself runs on a model the factory did not record (D-M9-27).
+ *   The parent checks the choice against its own `SessionServices.backend`
+ *   (the child's backend too: a child stays on its parent's) and sends it
+ *   to the child as one more attachment, `subagentModelLabel`, which every
+ *   factory passes through as the child's endowment;
+ * - the child's session program, which checks the marker again
+ *   (`checkedSubagentConfig`) before it runs on it.
  *
  * `chooseSubagentModel` is the D-M9-25 rule: neither given, the parent's
  * model and effort, unchanged, with no catalogue read. A `modelId` must be
@@ -27,6 +29,7 @@
 import { limits } from './limits.js';
 import { textOf } from './guards/factory.js';
 import { parseClosedArgs } from './tool-args.js';
+import { workspaceSeedLabel } from './workspace-seed.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { ArgSpec } from './tool-args.js' */
@@ -154,20 +157,27 @@ export const chooseSubagentModel = async (from, modelId, reasoningEffort) => {
 harden(chooseSubagentModel);
 
 /**
- * The `subagentModelLabel` endowment of a choice: copy data (`JsonValue`,
- * which an older factory's `Attachments` guard admits) naming the model, the
- * effort and, from the row, the window and output cap the child's creation
- * would have stored for that model.
- * @param {{ modelId: string, reasoningEffort?: string, row?: any }} choice
+ * Labels only the session program attaches to a spawn (D-M9-27, D-M9-28):
+ * a model's own attachment under one of them is always refused, so what a
+ * child finds there was minted by its parent's session program.
  */
-export const subagentModelAttachment = ({ modelId, reasoningEffort, row }) => {
+export const reservedSpawnLabels = harden([
+  subagentModelLabel,
+  workspaceSeedLabel,
+]);
+
+/**
+ * The `subagentModelLabel` endowment of a choice: copy data (`JsonValue`,
+ * which an older factory's `Attachments` guard admits) naming the model and
+ * the effort only. The child checks both against its backend and takes the
+ * window and output cap from the backend's `resolveModel`, as a creation
+ * does.
+ * @param {{ modelId: string, reasoningEffort?: string }} choice
+ */
+export const subagentModelAttachment = ({ modelId, reasoningEffort }) => {
   /** @type {Record<string, any>} */
   const data = { modelId };
   if (reasoningEffort !== undefined) data.reasoningEffort = reasoningEffort;
-  if (typeof row?.contextLength === 'number')
-    data.contextLength = row.contextLength;
-  if (typeof row?.maxOutputTokens === 'number')
-    data.maxOutputTokens = row.maxOutputTokens;
   return harden({
     label: subagentModelLabel,
     value: harden({ json: JSON.stringify(data) }),
@@ -184,34 +194,25 @@ const markerSpec = harden({
   fields: harden([
     { name: 'modelId', kind: 'string', required: true },
     { name: 'reasoningEffort', kind: 'string' },
-    { name: 'contextLength', kind: 'integer' },
-    { name: 'maxOutputTokens', kind: 'integer' },
   ]),
 });
 
-/** @param {unknown} n */
-const isCount = n => typeof n === 'number' && Number.isSafeInteger(n) && n > 0;
+/** Units a marker's text may have (two short fields). */
+const MARKER_UNITS = 1024;
 
 /**
- * A subagent's `SessionConfig` with the model choice its parent sent as an
- * endowment applied (D-M9-27): `config` itself when the session is not a
- * subagent or carries no valid choice. Read once per `make`, from data the
- * session keeps (its config and endowments), so a restart decides the same.
- * @param {any} config SessionConfig
- * @param {readonly any[] | undefined} endowments SessionServices.endowments
+ * The request a marker names, or undefined when it is not one.
+ * @param {any} value the endowment's value
+ * @returns {{ modelId: string, reasoningEffort?: string } | undefined}
  */
-export const subagentConfig = (config, endowments) => {
-  if (config.userInitiated !== false || endowments === undefined) return config;
-  const marker = endowments.find(e => e?.label === subagentModelLabel);
-  const json = marker?.value?.json;
-  if (typeof json !== 'string') return config;
+export const markerRequest = value => {
+  const json = value?.json;
+  if (typeof json !== 'string' || json.length > MARKER_UNITS) return undefined;
   // Read by the closed reader (no `JSON.parse` in a vat, J-9366).
   const read = parseClosedArgs(json, markerSpec);
-  if (!read.ok) return config;
+  if (!read.ok) return undefined;
   const modelId = read.values.get('modelId');
   const reasoningEffort = read.values.get('reasoningEffort');
-  const contextLength = read.values.get('contextLength');
-  const maxOutputTokens = read.values.get('maxOutputTokens');
   if (
     typeof modelId !== 'string' ||
     modelId === '' ||
@@ -219,37 +220,75 @@ export const subagentConfig = (config, endowments) => {
     (reasoningEffort !== undefined &&
       (typeof reasoningEffort !== 'string' ||
         reasoningEffort === '' ||
-        reasoningEffort.length > limits.effortUnits)) ||
-    (contextLength !== undefined && !isCount(contextLength)) ||
-    (maxOutputTokens !== undefined && !isCount(maxOutputTokens))
+        reasoningEffort.length > limits.effortUnits))
   )
-    return config;
-  /** @type {Record<string, any>} */
-  const next = { ...config, modelId };
-  // The parent's window, cap and effort belong to the parent's model.
-  delete next.reasoningEffort;
-  delete next.contextLength;
-  delete next.maxOutputTokens;
-  if (reasoningEffort !== undefined) next.reasoningEffort = reasoningEffort;
-  if (contextLength !== undefined) next.contextLength = contextLength;
-  if (maxOutputTokens !== undefined) next.maxOutputTokens = maxOutputTokens;
-  return harden(next);
+    return undefined;
+  return harden(
+    reasoningEffort === undefined ? { modelId } : { modelId, reasoningEffort },
+  );
 };
-harden(subagentConfig);
+harden(markerRequest);
+
+/** @param {unknown} n */
+const isCount = n => typeof n === 'number' && Number.isSafeInteger(n) && n > 0;
 
 /**
- * `services` without its `subagentModelLabel` endowment (`services` itself
- * when it has none).
- * @template {{ endowments?: readonly any[] }} T
- * @param {T} services
- * @returns {T}
+ * A subagent's `SessionConfig` with the model choice its parent sent as an
+ * endowment applied (D-M9-27), checked here as a creation checks it: the
+ * model must be in the backend's catalogue and the effort one the model's
+ * row offers (`chooseSubagentModel`), and the window and output cap are
+ * what the backend's `resolveModel` answers for the model (a Claude pool:
+ * the pool's settings; nothing in the marker sets them). A marker that is
+ * not one, a refused choice or a backend that cannot answer leaves the
+ * config the factory made: the child runs on its parent's recorded model.
+ * `overridden` says whether the model or effort now differs from what the
+ * factory recorded (the session then sends its own to its children).
+ * Run once, by the session program's `make`.
+ * @param {any} config the SessionConfig the factory made
+ * @param {any} backend the session's Backend
+ * @param {any} value the marker's value
+ * @returns {Promise<{ config: any, overridden: boolean }>}
  */
-export const withoutSubagentModel = services => {
-  const { endowments } = services;
-  if (!endowments?.some(e => e?.label === subagentModelLabel)) return services;
-  return harden({
-    ...services,
-    endowments: harden(endowments.filter(e => e?.label !== subagentModelLabel)),
-  });
+export const checkedSubagentConfig = async (config, backend, value) => {
+  const unchanged = harden({ config, overridden: false });
+  if (config.userInitiated !== false) return unchanged;
+  const request = markerRequest(value);
+  if (request === undefined) return unchanged;
+  try {
+    const choice = await chooseSubagentModel(
+      harden({ backend, modelId: request.modelId }),
+      request.modelId,
+      request.reasoningEffort,
+    );
+    const { kind } = await E(backend).describe();
+    /** @type {Record<string, any>} */
+    const next = { ...config, modelId: choice.modelId };
+    delete next.reasoningEffort;
+    if (choice.reasoningEffort !== undefined)
+      next.reasoningEffort = choice.reasoningEffort;
+    // A scripted backend has no catalogue: the window stays the creation's.
+    if (kind !== 'scripted' && choice.modelId !== config.modelId) {
+      const answer = await E(backend).resolveModel(choice.modelId);
+      const { contextLength, maxOutputTokens } = answer ?? {};
+      if (
+        answer?.modelId !== choice.modelId ||
+        (contextLength !== undefined && !isCount(contextLength)) ||
+        (maxOutputTokens !== undefined && !isCount(maxOutputTokens))
+      )
+        return unchanged;
+      delete next.contextLength;
+      delete next.maxOutputTokens;
+      if (contextLength !== undefined) next.contextLength = contextLength;
+      if (maxOutputTokens !== undefined) next.maxOutputTokens = maxOutputTokens;
+    }
+    return harden({
+      config: harden(next),
+      overridden:
+        next.modelId !== config.modelId ||
+        next.reasoningEffort !== config.reasoningEffort,
+    });
+  } catch {
+    return unchanged;
+  }
 };
-harden(withoutSubagentModel);
+harden(checkedSubagentConfig);

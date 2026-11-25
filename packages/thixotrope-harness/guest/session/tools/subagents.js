@@ -54,8 +54,8 @@ import { limits } from '../../lib/limits.js';
 import { parseClosedArgs } from '../../lib/tool-args.js';
 import { fitsFrame, messageOf } from '../../lib/bounded.js';
 import {
+  reservedSpawnLabels,
   subagentModelAttachment,
-  subagentModelLabel,
 } from '../../lib/subagent-model.js';
 import { workspaceSeedLabel } from '../../lib/workspace-seed.js';
 import { isValidLabel } from '../labels.js';
@@ -367,20 +367,31 @@ const spawnEntry = harden({
       }
       const attached = attachmentsOf(values.get('attachments'), context);
       if ('outcome' in attached) return attached.outcome;
+      // The labels the session program mints are never the model's own
+      // (D-M9-27, D-M9-28), whatever the factory and the session hold.
+      const reserved = attached.attachments.find(a =>
+        reservedSpawnLabels.includes(a.label),
+      );
+      if (reserved !== undefined)
+        return failed(mailTextOf.reservedAttachment(reserved.label));
       const chosen = modelId !== undefined || reasoningEffort !== undefined;
       // D-M9-27: the fields go to the factory only when its guard, read
-      // once, says spawn takes them. Otherwise (an older factory's closed
-      // SpawnRequest, or a guard that cannot be read) the choice is
-      // checked here and travels as the child's `subagentModelLabel`
-      // endowment, which every factory passes through.
-      const direct = !chosen || (await part.whenSpawnOptions()) === true;
+      // once, says spawn takes them and the factory's record of this
+      // session's model is the one it runs on. Otherwise (an older
+      // factory's closed SpawnRequest, a guard that cannot be read, or a
+      // session that itself runs on a marker's choice, whose children
+      // would otherwise get the factory's recorded model) the choice is
+      // made here, defaulting to this session's own model and effort, and
+      // travels as the child's `subagentModelLabel` endowment, which every
+      // factory passes through.
+      const overridden = context.services?.modelOverridden === true;
+      const direct =
+        !overridden && (!chosen || (await part.whenSpawnOptions()) === true);
       let { attachments } = attached;
       // D-M9-28: the legacy project source goes to every child, which
       // opens its own checkout of the same revision from it.
       const source = context.services?.projectSource;
       if (source !== undefined) {
-        if (attachments.some(a => a.label === workspaceSeedLabel))
-          return failed(mailTextOf.duplicateAttachment(workspaceSeedLabel));
         if (attachments.length >= ML.maxAttachments)
           return failed(mailTextOf.tooManyAttachments(attachments.length + 1));
         attachments = harden([
@@ -389,8 +400,6 @@ const spawnEntry = harden({
         ]);
       }
       if (!direct) {
-        if (attachments.some(a => a.label === subagentModelLabel))
-          return failed(mailTextOf.duplicateAttachment(subagentModelLabel));
         if (attachments.length >= ML.maxAttachments)
           return failed(mailTextOf.tooManyAttachments(attachments.length + 1));
         /** @type {any} */

@@ -371,7 +371,8 @@
   "textOf.subagentModelUnknown": "D-M9-25: a refusal of a spawn model or effort that names what is offered",
   "textOf.subagentCatalogUnavailable": "D-M9-25: a refusal of a spawn model or effort that names what is offered",
   "textOf.subagentEffortUnknown": "D-M9-25: a refusal of a spawn model or effort that names what is offered",
-  "textOf.subagentEffortNone": "D-M9-25: a refusal of a spawn model or effort that names what is offered"
+  "textOf.subagentEffortNone": "D-M9-25: a refusal of a spawn model or effort that names what is offered",
+  "textOf.reservedAttachment": "D-M9-27, D-M9-28: a refusal of a spawn attachment under a label only the session program attaches"
  },
  "vocabularyAdded": {
   "keys": [
