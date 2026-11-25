@@ -43,6 +43,7 @@ import { limits } from '../lib/limits.js';
 import { messageBytes } from '../lib/bounded.js';
 import { holdText } from './holds.js';
 import { blobsOf } from './staging.js';
+import { markerOf } from '../lib/pending-queue.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E, Fail, harden } = /** @type {GuestGlobals} */ (globalThis);
@@ -64,7 +65,7 @@ const cursorNumbers = (cursor, pattern) => {
  * @param {object} powers
  * @param {{ count: () => number, at: (index: number) => any, messageCount: () => number, base: () => number }} powers.records
  *   the RecordLog
- * @param {{ items: () => any[], currentHold: () => any, size: () => number, hold: (reason: any, message: string) => void, enqueueOnce: (submission: any, requestId: string, at: number, attachments?: any, spoken?: boolean) => any }} powers.queue
+ * @param {{ items: () => any[], currentHold: () => any, size: () => number, hold: (reason: any, message: string) => void, enqueueOnce: (submission: any, requestId: string, at: number, attachments?: any, marker?: import('../lib/pending-queue.js').VoiceMarker) => any }} powers.queue
  *   the session's queue
  * @param {any} powers.runner the turn runner (seams of 2.4 item 5)
  * @param {{ state: () => any, entries: () => any[] }} powers.archive the
@@ -214,13 +215,14 @@ export const makeSessionExport = ({
     let bytes = PAGE_SLACK;
     let i = from;
     while (i < items.length) {
-      const { submission, requestId, at, spoken } = items[i];
+      const { submission, requestId, at } = items[i];
       // M11 (m11-interfaces.md 9.1): a spoken entry keeps its marker.
-      const entry = harden(
-        spoken === true
-          ? { submission, requestId, at, spoken }
-          : { submission, requestId, at },
-      );
+      const entry = harden({
+        submission,
+        requestId,
+        at,
+        ...markerOf(items[i]),
+      });
       const size = messageBytes(entry);
       if (entries.length > 0 && bytes + size > limits.frameBytes) break;
       bytes += size;
@@ -289,9 +291,16 @@ export const makeSessionExport = ({
       from === count || Fail`records continue at ${count}, not ${from}`;
       runner.importTurns(added);
     } else if (part === 'queue') {
-      for (const { submission, requestId, at, spoken } of chunk.entries ?? []) {
+      for (const entry of chunk.entries ?? []) {
+        const { submission, requestId, at } = entry;
         runner.see(at);
-        queue.enqueueOnce(submission, requestId, at, undefined, spoken);
+        queue.enqueueOnce(
+          submission,
+          requestId,
+          at,
+          undefined,
+          markerOf(entry),
+        );
       }
       const hold = chunk.hold ?? { reason: 'restart', message: '' };
       if (queue.size() > 0)

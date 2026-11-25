@@ -32,6 +32,8 @@ const UNKNOWN_TEXT = 'Tool outcome unknown; do not automatically retry.';
  * @property {string | null} [status] the settled status; `null` leaves the
  *   turn running (the current turn)
  * @property {boolean} [dispatched] default true
+ * @property {{ spoken?: true, dictated?: true }} [marker] M11: the
+ *   `turn-started` record's spoken-mode facts
  */
 
 export const makeTurnLog = () => {
@@ -63,6 +65,7 @@ export const makeTurnLog = () => {
     rounds = [{ text: 'done' }],
     status = 'completed',
     dispatched = true,
+    marker = {},
   } = {}) => {
     turns += 1;
     const turnId = `t${turns}`;
@@ -71,6 +74,7 @@ export const makeTurnLog = () => {
       turnId,
       input: input ?? `input of ${turnId}`,
       at,
+      ...marker,
     });
     /** @type {number[]} */
     const settled = [];

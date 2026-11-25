@@ -32,6 +32,7 @@ import { makeLabels } from './labels.js';
 import { inventoryPage } from './inventory.js';
 import { runtimeParts, makeRuntime } from './runtime-parts.js';
 import { makeQueue as defaultMakeQueue } from './queue.js';
+import { markerOf } from '../lib/pending-queue.js';
 import { isRestartSignal as defaultIsRestartSignal } from './recovery.js';
 import { checkAttachments } from './packages.js';
 import { makeSessionArchive } from './archive.js';
@@ -229,7 +230,8 @@ export const makeSession = (
    * @param {string} requestId
    * @param {number} at
    * @param {readonly { label: string, value: any }[]} [attachments]
-   * @param {{ spoken?: boolean }} [options] M11: the spoken marker
+   * @param {{ spoken?: boolean, dictated?: boolean }} [options] M11: the
+   *   spoken-mode marker (m11-interfaces.md 9.1)
    */
   const enqueue = (submission, requestId, at, attachments, options) => {
     runner.see(at);
@@ -238,7 +240,7 @@ export const makeSession = (
       requestId,
       at,
       attachments,
-      options?.spoken === true,
+      markerOf(options),
     );
     if (!added) return receipt;
     if (runner.claimNext() === undefined) return receipt;
@@ -276,7 +278,8 @@ export const makeSession = (
      * @param {any} submission inline `{ text }` or a StagedText
      * @param {string} requestId
      * @param {number} at
-     * @param {{ spoken?: boolean }} [options] M11 (m11-interfaces.md 9.1)
+     * @param {{ spoken?: boolean, dictated?: boolean }} [options] M11
+     *   (m11-interfaces.md 9.1)
      */
     enqueueOnce(submission, requestId, at, options) {
       refuseIfDeleting();
@@ -332,7 +335,8 @@ export const makeSession = (
      * @param {string} requestId
      * @param {number} at
      * @param {any[]} attachments
-     * @param {{ spoken?: boolean }} [options] M11 (m11-interfaces.md 9.1)
+     * @param {{ spoken?: boolean, dictated?: boolean }} [options] M11
+     *   (m11-interfaces.md 9.1)
      */
     enqueueMessageOnce(submission, requestId, at, attachments, options) {
       refuseIfDeleting();

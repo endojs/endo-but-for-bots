@@ -75,15 +75,15 @@ export const makeSubmissions = ({ pending, onChange = () => {} }) => {
      * @param {string} requestId
      * @param {number} at
      * @param {readonly { label: string, value: any }[]} [attachments] M5
-     * @param {boolean} [spoken] M11: sent from spoken mode
+     * @param {import('../lib/pending-queue.js').VoiceMarker} [marker] M11
      */
-    enqueue: (submission, requestId, at, attachments, spoken) => {
+    enqueue: (submission, requestId, at, attachments, marker) => {
       const result = pending.enqueue(
         submission,
         requestId,
         at,
         attachments,
-        spoken,
+        marker,
       );
       if (result.added) userSent();
       return result;

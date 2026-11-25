@@ -75,9 +75,6 @@
  * @property {string | undefined} systemNote a line every round request of
  *   this turn adds to the stored prompt (R4-29; a part writes it, in
  *   `onClaim`)
- * @property {boolean} [spoken] M11 (m11-interfaces.md 9.1): the turn's
- *   message was sent from spoken mode; every round request adds
- *   `texts.spokenTurnNote` after `systemNote`
  * @property {number} [startIndex] the index of this turn's `TurnStarted`
  *   record (m8-interfaces.md T-1, set in the claim crank by the runner
  *   once the context window is built, seam S-5a)

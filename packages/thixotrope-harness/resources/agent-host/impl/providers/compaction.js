@@ -283,8 +283,15 @@ harden(compactionHook);
  * @param {number} to absolute index (exclusive)
  * @param {number} [omit] an absolute index to leave out (the directive's
  *   `turn-started`, which the tail does not count)
+ * @param {boolean} [notes] M11: the turn notes (`projectRecords`)
  */
-const projectSlice = ({ start, records, texts }, from, to, omit) => {
+const projectSlice = (
+  { start, records, texts },
+  from,
+  to,
+  omit,
+  notes = true,
+) => {
   const slice = records.slice(from - start, to - start);
   /** @type {Set<string>} */
   const started = new Set();
@@ -299,7 +306,8 @@ const projectSlice = ({ start, records, texts }, from, to, omit) => {
       ? slice
       : slice.filter((_, i) => from + i !== omit);
   const marked = [...cut].map(turnId => ({ kind: 'dispatched', turnId }));
-  return projectRecords([...marked, ...body], { texts, hooks: [] }).transcript;
+  return projectRecords([...marked, ...body], { texts, hooks: [], notes })
+    .transcript;
 };
 
 /**
@@ -406,6 +414,9 @@ export const planCompaction = ({ input, ask, system, tools }) => {
       ? harden({
           kind: 'message',
           role: 'user',
+          // M11 (9.1): the input alone, as the session stores the directive
+          // (`guest/session/compaction.js`): a turn note does not survive a
+          // boundary inside its own turn.
           content: textOf(started.input, input.texts),
         })
       : undefined;
@@ -431,9 +442,12 @@ export const planCompaction = ({ input, ask, system, tools }) => {
     boundary = candidates[j];
   }
   // 8. The prefix: the previous summary, then the context up to the boundary.
+  // M11 (m11-interfaces.md 9.1): the summariser reads the history without
+  // the turn notes (a spoken turn's note would tell it to answer briefly);
+  // the sizes above count them, as the provider is sent them.
   const body = withoutMarkers([
     ...sealed,
-    ...projectSlice(input, start, boundary),
+    ...projectSlice(input, start, boundary, undefined, false),
   ]);
   if (!holdsCompletedWork(body)) {
     return harden({ refuse: compactionSkipTexts.nothingToSummarize });

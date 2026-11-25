@@ -32,8 +32,11 @@
  * fingerprint covers the labels too (`StoredReceipt.labels`, not the
  * objects): a retry under the same request id must carry the same labels
  * in the same order. M11 (m11-interfaces.md 9.1): an entry sent from
- * spoken mode carries `spoken: true` (absent on a typed one); it is not
- * part of the fingerprint, and an edit keeps it with the rest of the item.
+ * spoken mode carries `spoken: true` (its reply is read aloud) and, when
+ * its text came from dictation, `dictated: true`; both are absent on a
+ * typed entry. The marker is not part of the fingerprint (a retry under the
+ * same request id answers the original, marker and all), and an edit keeps
+ * it with the rest of the item.
  * An edit keeps the attachments; a cancel and the claim
  * drop them from the entry (after the claim the turn's package holds them,
  * until the turn settles). Worst case of the labels kept by receipts:
@@ -80,6 +83,28 @@ const refuse = message => {
 export const REQUEST_ID = /^\d{13}-[0-9a-f-]{36}$/;
 
 /**
+ * M11 (m11-interfaces.md 9.1): the two facts of a message sent from spoken
+ * mode, as an entry, an export entry and a `TurnStarted` record carry them:
+ * `spoken: true` (its reply is read aloud) and `dictated: true` (its text
+ * came from dictation and may hold transcription errors). Only `true` is
+ * ever stored; a typed message carries neither.
+ * @typedef {{ spoken?: true, dictated?: true }} VoiceMarker
+ */
+
+/**
+ * The stored form of a marker (`EnqueueOptions`, `ExportEntry`, a record or
+ * a queue item): only its true facts, so a typed message adds no field.
+ * @param {{ spoken?: unknown, dictated?: unknown } | undefined} options
+ * @returns {VoiceMarker}
+ */
+export const markerOf = options =>
+  harden({
+    ...(options?.spoken === true ? { spoken: true } : {}),
+    ...(options?.dictated === true ? { dictated: true } : {}),
+  });
+harden(markerOf);
+
+/**
  * @typedef {any} Submission `{ text }`, or a StagedText
  * @typedef {string | { bytes: number, digest?: string, preview?: string }} Fingerprint
  * @typedef {object} QueueItem
@@ -89,7 +114,8 @@ export const REQUEST_ID = /^\d{13}-[0-9a-f-]{36}$/;
  * @property {number} at when it was submitted (the Composer's stamp)
  * @property {string} requestId
  * @property {readonly { label: string, value: any }[]} [attachments] M5
- * @property {true} [spoken] M11: sent from spoken mode
+ * @property {true} [spoken] M11: sent from spoken mode (read aloud)
+ * @property {true} [dictated] M11: its text came from dictation
  * @typedef {object} Internal
  * @property {QueueItem} item
  * @property {string} preview the text cut to messagePreviewUnits
@@ -274,7 +300,7 @@ export const makePendingQueue = ({ makeEntry, onChange = () => {} }) => {
    * @param {string} requestId
    * @param {number} at
    * @param {readonly { label: string, value: any }[]} [attachments] M5
-   * @param {boolean} [spoken] M11: sent from spoken mode
+   * @param {VoiceMarker} [marker] M11 (`markerOf`)
    * @returns {{ stored: StoredReceipt, added: boolean, internal?: Internal }}
    */
   const enqueue = (
@@ -282,7 +308,7 @@ export const makePendingQueue = ({ makeEntry, onChange = () => {} }) => {
     requestId,
     at,
     attachments = undefined,
-    spoken = false,
+    marker = undefined,
   ) => {
     checkSubmission(submission);
     REQUEST_ID.test(requestId) || refuse(texts.invalidRequestId);
@@ -326,7 +352,7 @@ export const makePendingQueue = ({ makeEntry, onChange = () => {} }) => {
       at,
       requestId,
       ...(attached ? { attachments } : {}),
-      ...(spoken ? { spoken: true } : {}),
+      ...markerOf(marker),
     });
     waiting.add(internal);
     /** @type {StoredReceipt} */

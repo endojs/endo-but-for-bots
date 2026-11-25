@@ -529,12 +529,19 @@ export const texts = harden({
    */
   notBuiltYet: 'This harness does not provide this yet',
   /**
-   * M11 (m11-interfaces.md 9.1): the note a turn whose message was sent
-   * from spoken mode adds to its system prompt, after any other note. The
-   * three rules are the spoken introduction's (`prompt-sections.js`
+   * M11 (m11-interfaces.md 9.1): the note the provider projection adds to
+   * the user message of a turn whose text came from dictation
+   * (`TurnStarted.dictated`), before `readAloudTurnNote`.
+   */
+  dictatedTurnNote:
+    'The user spoke this message and it was transcribed, so it may contain transcription errors (misheard, missing or extra words, odd punctuation); answer what they meant.',
+  /**
+   * M11 (m11-interfaces.md 9.1): the note the provider projection adds to
+   * the user message of a turn sent from spoken mode (`TurnStarted.spoken`).
+   * The three rules are the spoken introduction's (`prompt-sections.js`
    * `flootIntroduction(true)`), word for word.
    */
-  spokenTurnNote: `The user spoke this message and it was transcribed, so it may contain transcription errors (misheard, missing or extra words, odd punctuation); answer what they meant. Your reply will be read aloud, so:
+  readAloudTurnNote: `Your reply will be read aloud, so:
 - Keep responses short and conversational ${DASH} usually one to three sentences.
 - Avoid markdown, code blocks, bullet lists, and emoji; write as you would speak.
 - Answer directly. Speak plain summaries; never read code, secrets, or raw tool output aloud.`,
@@ -959,11 +966,14 @@ const m1aShapeBuilders = {
   Submission: () => M.or(record({ text: S.SubmissionText }), B.StagedText),
   /**
    * How a submission was made (m11-interfaces.md 9.1, the spoken marker):
-   * `spoken: true` for a message sent from a view in spoken mode. The
-   * optional last argument of `enqueueOnce` and `enqueueMessageOnce`;
-   * absent, or `spoken: false`, is a typed message.
+   * `spoken: true` for a message sent from a view in spoken mode (its reply
+   * is read aloud), `dictated: true` when its text came from dictation (it
+   * may hold transcription errors). The optional last argument of
+   * `enqueueOnce` and `enqueueMessageOnce`; absent, or both false, is a
+   * typed message.
    */
-  EnqueueOptions: () => record({}, { spoken: M.boolean() }),
+  EnqueueOptions: () =>
+    record({}, { spoken: M.boolean(), dictated: M.boolean() }),
   /** A tool call as the model returned it; `args` is the model's JSON text (or staged). */
   ToolCall: () =>
     record({
@@ -994,13 +1004,15 @@ const m1aShapeBuilders = {
       // M5 widening (W5.3; m5-interfaces.md 9.1 H-6): the labels of the
       // message's attachments (R3-8, R4-29), never the objects. M11
       // (m11-interfaces.md 9.1): `spoken: true` for a message sent from
-      // spoken mode; absent on a typed one and on every older record.
+      // spoken mode, `dictated: true` for dictated text; absent on a typed
+      // one and on every older record.
       {
         attachments: list(
           text(limits.endowmentLabelUnits),
           limits.maxAttachments,
         ),
         spoken: true,
+        dictated: true,
       },
     ),
   Dispatched: () => record({ kind: 'dispatched', turnId: S.Id, round: count }),
@@ -1646,8 +1658,8 @@ const m2ShapeBuilders = {
         requestId: text(limits.requestIdUnits),
         at: count,
       },
-      // M11 (m11-interfaces.md 9.1): the entry's spoken marker.
-      { spoken: true },
+      // M11 (m11-interfaces.md 9.1): the entry's spoken-mode marker.
+      { spoken: true, dictated: true },
     ),
   /**
    * `SessionInternal.exportState` page and `importState` chunk: one `part`
@@ -1719,10 +1731,17 @@ const objectShapeBuilders = {
   // (`./mail.js` reads them and `./session.js` imports `./mail.js`).
   /**
    * `Composer.submit`'s optional fourth argument: the attachments (M5) and
-   * the spoken marker (M11, m11-interfaces.md 9.1).
+   * the spoken-mode marker (M11, m11-interfaces.md 9.1).
    */
   SubmitOptions: () =>
-    record({}, { attachments: S.Attachments, spoken: M.boolean() }),
+    record(
+      {},
+      {
+        attachments: S.Attachments,
+        spoken: M.boolean(),
+        dictated: M.boolean(),
+      },
+    ),
   /** A stored JSON value as `ExecPowersSource` carries it: the model's text. */
   // JsonValue is shared with mail attachments in base.js.
   /** `ExecPowersSource.lookup` answer. */

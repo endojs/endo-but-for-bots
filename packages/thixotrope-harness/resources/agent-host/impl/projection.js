@@ -29,6 +29,14 @@
  * read by `providers/images.js`); a turn whose `TurnStarted` lies before
  * the records (cut by the boundary) counts as dispatched.
  *
+ * M11 (`designs/m11-interfaces.md` 9.1): a turn whose `TurnStarted` carries
+ * `dictated: true` or `spoken: true` gets that turn's note in its user
+ * message, below the input and a blank line (`turnNoteOf`): the system text
+ * stays the same for every turn, so the provider's cached prefix survives a
+ * change of mode, and the record and the history the person sees keep the
+ * input as typed or dictated. `notes: false` (the compaction plan's history,
+ * the summariser's input) leaves the notes out.
+ *
  * Pure: the result depends only on the records (grouped by turn and round)
  * and the texts of their staged fields, so a cache rebuilt from pages
  * projects exactly what the incremental cache does (adapter property test).
@@ -40,7 +48,36 @@
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { isStaged } from '../../../guest/session/staging.js';
+import { texts as sessionTexts } from '../../../guest/lib/guards/session.js';
 /* eslint-enable import/no-relative-packages */
+
+/**
+ * M11 (m11-interfaces.md 9.1): the note of a turn's spoken-mode facts, or
+ * undefined for a typed turn: the dictation note, then the read-aloud note,
+ * a blank line between them.
+ * @param {{ spoken?: unknown, dictated?: unknown }} started a TurnStarted
+ * @returns {string | undefined}
+ */
+export const turnNoteOf = started => {
+  const notes = [
+    started.dictated === true ? sessionTexts.dictatedTurnNote : undefined,
+    started.spoken === true ? sessionTexts.readAloudTurnNote : undefined,
+  ].filter(note => note !== undefined);
+  return notes.length === 0 ? undefined : notes.join('\n\n');
+};
+harden(turnNoteOf);
+
+/**
+ * The user message's content of a turn as the provider sees it: its input,
+ * then its note (`turnNoteOf`) below a blank line when it has one.
+ * @param {any} started a TurnStarted
+ * @param {string} input the input's text
+ */
+export const userContentOf = (started, input) => {
+  const note = turnNoteOf(started);
+  return note === undefined ? input : `${input}\n\n${note}`;
+};
+harden(userContentOf);
 
 /** `providerContext.format` of a replayed native context (opaque payload). */
 export const NATIVE_CONTEXT_FORMAT = 'native-context';
@@ -72,13 +109,18 @@ export const NATIVE_CONTEXT_FORMAT = 'native-context';
  *   compaction boundary; a round's results in any order)
  * @param {object} options
  * @param {Map<any, string>} options.texts the text of every staged field
+ * @param {boolean} [options.notes] M11: render each turn's note with its
+ *   user message (default true; false for the compaction plan)
  * @param {readonly import('./projection-hooks.js').ProjectionHook[]} [options.hooks]
  *   run in order over the result (default none: the context cache runs
  *   `projection-hooks.js`'s table once over the sealed part and the tail;
  *   M8's hook imports this module, so this module does not import it)
  * @returns {Projection}
  */
-export const projectRecords = (records, { texts, hooks = [] }) => {
+export const projectRecords = (
+  records,
+  { texts, hooks = [], notes = true },
+) => {
   /** @param {any} field */
   const textOf = field => {
     if (!isStaged(field)) return field;
@@ -159,10 +201,11 @@ export const projectRecords = (records, { texts, hooks = [] }) => {
     // Never-dispatched turns (settled without Dispatched) are left out.
     if (group.dispatched || !group.settled) {
       if (group.started !== undefined) {
+        const input = textOf(group.started.input);
         transcript.push({
           kind: 'message',
           role: 'user',
-          content: textOf(group.started.input),
+          content: notes ? userContentOf(group.started, input) : input,
         });
       }
       const order = [...group.rounds.keys()].sort((a, b) => a - b);

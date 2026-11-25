@@ -12,12 +12,17 @@ import './_m1a-prelude.js';
 
 import test from '@endo/ses-ava/test.js';
 
+/* eslint-disable import/no-relative-packages */
+import { texts } from '../../guest/lib/guards/session.js';
+/* eslint-enable import/no-relative-packages */
 import {
   AT,
   OVER,
+  drain,
   makeCompactionSession,
   usageOf,
 } from './_compaction-session.js';
+import { requestId } from './_m2-queue-session.js';
 
 /** @param {any} req */
 const kindsOf = req => req.append.map((/** @type {any} */ r) => r.kind);
@@ -217,4 +222,27 @@ test('an ask the adapter left unanswered is not sent again and ends the asks of 
     ),
     { go: false },
   );
+});
+
+test('a compaction round during a spoken turn carries no spoken note; the system text is the typed one (M11 9.1)', async t => {
+  const s = await makeCompactionSession();
+  await s.turn('typed first', OVER);
+  const typedSystem = s.rounds[0].system;
+  s.session.enqueueOnce(
+    harden({ text: 'spoken second' }),
+    requestId(),
+    AT,
+    harden({ spoken: true, dictated: true }),
+  );
+  await drain();
+  const req = s.last();
+  t.truthy(req.compaction, 'the round asks for a compaction');
+  t.is(req.system, typedSystem, 'byte-identical');
+  for (const note of [texts.readAloudTurnNote, texts.dictatedTurnNote]) {
+    t.false(JSON.stringify(req.system ?? '').includes(note.slice(0, 40)));
+  }
+  t.like(req.append[kindsOf(req).indexOf('turn-started')], {
+    spoken: true,
+    dictated: true,
+  });
 });

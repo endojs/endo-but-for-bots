@@ -54,7 +54,7 @@
 import { interfaces, shapes, texts, textOf } from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
 import { runAgenticTurn } from '../lib/turn-engine.js';
-import { checkSubmission } from '../lib/pending-queue.js';
+import { checkSubmission, markerOf } from '../lib/pending-queue.js';
 import {
   boundToolOutput,
   fitsFrame,
@@ -672,12 +672,7 @@ export const makeTurnRunner = ({
    */
   const systemFor = active => {
     const prompt = config.systemPrompt;
-    // M11 (m11-interfaces.md 9.1): a spoken turn's note follows the part's.
-    const notes = [
-      active.systemNote,
-      active.spoken === true ? texts.spokenTurnNote : undefined,
-    ].filter(line => line !== undefined);
-    const note = notes.length === 0 ? undefined : notes.join('\n\n');
+    const note = active.systemNote;
     if (note === undefined) return prompt;
     if (prompt === undefined) return note;
     if (typeof prompt === 'string') {
@@ -1188,12 +1183,11 @@ export const makeTurnRunner = ({
         attachments.map((/** @type {any} */ a) => a.label),
       );
     }
-    // M11 (m11-interfaces.md 9.1): the entry's spoken marker, kept in the
-    // log so history and export show how the message was made.
-    if (item?.spoken === true) {
-      started.spoken = true;
-      active.spoken = true;
-    }
+    // M11 (m11-interfaces.md 9.1): the entry's spoken-mode facts. The
+    // provider projection (`resources/agent-host/impl/projection.js`)
+    // renders their note with this turn's user message; the round's system
+    // text is the same for every turn.
+    Object.assign(started, markerOf(item));
     // M8 S-5a: the index of TurnStarted (the compaction part reads it).
     active.startIndex = records.append(started);
     active.turn = turn;

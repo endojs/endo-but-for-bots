@@ -398,15 +398,22 @@ test('the resolver composes from the resolved preset snapshot; a given prompt re
   );
 });
 
-test("the spoken turn note: dictated input, read-aloud reply, the spoken introduction's rules (m11 9.1)", t => {
-  const note = sessionTexts.spokenTurnNote;
-  t.true(note.includes('may contain transcription errors'));
-  t.true(note.includes('Your reply will be read aloud'));
+test("the turn notes: dictated input, read-aloud reply with the spoken introduction's rules (m11 9.1)", t => {
+  const dictated = sessionTexts.dictatedTurnNote;
+  const aloud = sessionTexts.readAloudTurnNote;
+  t.true(dictated.includes('may contain transcription errors'));
+  t.false(dictated.includes('read aloud'));
+  t.true(aloud.startsWith('Your reply will be read aloud'));
+  t.false(aloud.includes('transcri'));
+  // `flootIntroduction(true)` mirrors Floot's spoken prompt (m2-w26); no
+  // session composes it since 9.1, and it is the source of these rules.
   const rules = flootIntroduction(true)
     .split('\n')
     .filter(line => line.startsWith('- '));
   t.is(rules.length, 3);
-  t.true(note.endsWith(rules.join('\n')), 'the same three rules');
-  t.false(plain.includes(note));
-  t.deepEqual([...new Set(note.replace(/[\x20-\x7e\n]/g, ''))], ['\u2014']);
+  t.true(aloud.endsWith(rules.join('\n')), 'the same three rules');
+  t.false(plain.includes(dictated));
+  t.false(plain.includes(aloud));
+  t.deepEqual([...new Set(aloud.replace(/[\x20-\x7e\n]/g, ''))], ['\u2014']);
+  t.deepEqual([...new Set(dictated.replace(/[\x20-\x7e]/g, ''))], []);
 });

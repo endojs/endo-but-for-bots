@@ -315,11 +315,17 @@ test('export then import between two real sessions: the same records, usage and 
     ['completed', 'completed', 'completed', 'completed'],
   );
   // M11 9.1: a waiting spoken entry keeps its marker through export and
-  // import (`ExportEntry.spoken`); a typed one exports none.
+  // import (`ExportEntry.spoken`, `.dictated`); a typed one exports none.
   const c = await makeQueueSession();
   await c.submit('running');
   c.session.enqueueOnce(
     harden({ text: 'said' }),
+    requestId(),
+    AT,
+    harden({ spoken: true, dictated: true }),
+  );
+  c.session.enqueueOnce(
+    harden({ text: 'typed aloud' }),
     requestId(),
     AT,
     harden({ spoken: true }),
@@ -330,13 +336,15 @@ test('export then import between two real sessions: the same records, usage and 
     .filter(p => p.part === 'queue')
     .flatMap(p => p.entries);
   t.deepEqual(
-    entries.map(e => [e.submission.text, e.spoken]),
+    entries.map(e => [e.submission.text, e.spoken, e.dictated]),
     [
-      ['said', true],
-      ['typed', undefined],
+      ['said', true, true],
+      ['typed aloud', true, undefined],
+      ['typed', undefined, undefined],
     ],
   );
-  t.false('spoken' in entries[1]);
+  t.false('dictated' in entries[1]);
+  t.false('spoken' in entries[2]);
   const d = await makeQueueSession();
   for (const page of cPages) {
     const chunk =
