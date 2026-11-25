@@ -193,9 +193,30 @@
     opacity: 0.3;
   }
 }
+/* The row's open button: the circle and the lines, reset to look like the
+   row it fills. A span takes its place while the title is being edited. */
+.floot-session-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
 .floot-session-meta {
   flex: 1;
   min-width: 0;
+}
+.floot-session-meta > * {
+  display: block;
 }
 .floot-session-name {
   font-size: 0.85rem;
@@ -230,13 +251,22 @@
   border-radius: 5px;
   font-size: 0.85rem;
   line-height: 1;
-  display: none;
+  display: flex;
   align-items: center;
   justify-content: center;
 }
-.floot-session-item:hover .floot-row-btn,
-.floot-session-item:focus-within .floot-row-btn {
-  display: flex;
+/* With a pointer that can hover, Rename and Delete show while the row is
+   hovered or holds focus. Hidden they stay in the tab order (clipped, not
+   display: none), so Tab from the row reaches them and shows them. Touch
+   screens always show them. */
+@media (hover: hover) {
+  .floot-session-item:not(:hover, :focus-within) .floot-row-btn {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
 }
 .floot-row-btn:hover {
   background: var(--fl-surface3);
@@ -925,9 +955,6 @@
   }
   .floot-backdrop.open {
     display: block;
-  }
-  .floot-row-btn {
-    display: flex;
   }
   .floot-menu-btn {
     display: flex;

@@ -2,7 +2,8 @@
 // The session sidebar (R6-36, R6-37; m3-interfaces.md 9.3; W3.5) in
 // happy-dom over the real controller and the fake powers: rows with their
 // circles and two lines, the empty text, live insert/rename/remove, inline
-// rename keys, delete with confirm, and the row helpers.
+// rename keys, keyboard reach, the inline delete confirmation, and the row
+// helpers.
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { options as preactOptions } from 'preact';
@@ -225,30 +226,79 @@ test.serial('selecting a row opens it; + opens the dialog', async t => {
   t.is(controller.getState().activeKey, 's2');
   t.true(row('s2').classList.contains('active'));
   t.false(row('s1').classList.contains('active'));
-  dom.document.querySelector('.floot-new-btn').click();
+  const newButton = dom.document.querySelector('.floot-new-btn');
+  t.is(newButton.getAttribute('aria-label'), uiTexts.newSession);
+  t.truthy(newButton.querySelector('svg[aria-hidden="true"]'), 'an icon');
+  newButton.click();
   t.true(controller.getState().newSessionOpen);
   await close();
 });
 
 test.serial(
-  'rename: ✎ and double-click; Enter saves, Esc cancels, blur saves',
+  'keyboard: each row is an open button with aria-current, then Rename and Delete',
+  async t => {
+    const fake = makeFakePowers({
+      sessions: [{ title: 'one' }, { title: 'two' }],
+    });
+    const { controller, row, close } = await setup(fake);
+    /** @param {string} key */
+    const open = key => row(key).querySelector('[data-action="open"]');
+    t.is(open('s1').tagName, 'BUTTON');
+    t.is(open('s1').getAttribute('type'), 'button');
+    t.is(open('s1').getAttribute('aria-current'), null);
+    // Enter or Space on the focused button is a click.
+    open('s1').focus();
+    open('s1').click();
+    await flush();
+    t.is(controller.getState().activeKey, 's1');
+    t.is(open('s1').getAttribute('aria-current'), 'true');
+    t.is(open('s2').getAttribute('aria-current'), null);
+    // Tab order inside a row: open, Rename, Delete, all real buttons.
+    t.deepEqual(
+      [...row('s1').querySelectorAll('button')].map(button => [
+        button.getAttribute('data-action'),
+        button.getAttribute('aria-label'),
+        button.hasAttribute('tabindex'),
+      ]),
+      [
+        ['open', null, false],
+        ['rename', uiTextOf.renameSession('one'), false],
+        ['delete', uiTextOf.deleteSession('one'), false],
+      ],
+    );
+    for (const action of ['rename', 'delete']) {
+      const button = row('s1').querySelector(`[data-action="${action}"]`);
+      t.truthy(button.querySelector('svg[aria-hidden="true"]'), action);
+      t.false(/[\u2700-\u27bf\u{1f000}-\u{1faff}]/u.test(button.textContent));
+    }
+    await close();
+  },
+);
+
+test.serial(
+  'rename: the Rename button and double-click; Enter saves, Esc cancels, blur saves',
   async t => {
     const fake = makeFakePowers({ sessions: [{ title: 'old' }] });
     const { dom, control, controller, row, close } = await setup(fake);
     const renames = () => control.callsOf('Session', 'rename').map(c => c[2]);
     const input = () => row('s1').querySelector('.floot-session-title-input');
 
-    row('s1').querySelector('[aria-label="Rename"]').click();
+    row('s1').querySelector('[data-action="rename"]').click();
     await flush();
     t.truthy(input());
     t.is(input().value, 'old');
-    t.is(controller.getState().activeKey, undefined, '✎ does not select');
+    t.is(controller.getState().activeKey, undefined, 'Rename does not select');
     input().value = 'new';
     fire(dom.window, input(), 'input');
     fire(dom.window, input(), 'keydown', { key: 'Enter' });
     await flush();
     t.deepEqual(renames(), ['new']);
     t.is(input(), null);
+    t.is(
+      dom.document.activeElement,
+      row('s1').querySelector('[data-action="open"]'),
+      'Enter returns focus to the row',
+    );
     await flush();
     t.is(row('s1').querySelector('.floot-session-name').textContent, 'new');
 
@@ -265,6 +315,11 @@ test.serial(
     await flush();
     t.is(input(), null);
     t.deepEqual(renames(), ['new'], 'Esc saves nothing');
+    t.is(
+      dom.document.activeElement,
+      row('s1').querySelector('[data-action="open"]'),
+      'Esc returns focus to the row',
+    );
 
     fire(
       dom.window,
@@ -294,31 +349,71 @@ test.serial(
 );
 
 test.serial(
-  'delete asks Delete "<title>"? and deletes only when confirmed',
+  'delete asks Delete "<title>"? inline and deletes only when confirmed',
   async t => {
     const fake = makeFakePowers({ sessions: [{ title: 'doomed' }] });
-    const { control, row, rows, close } = await setup(fake);
+    const { dom, controller, control, row, rows, close } = await setup(fake);
     const target = control.session('s1');
     const globals = /** @type {any} */ (globalThis);
-    /** @type {string[]} */
-    const asked = [];
-    let answer = false;
-    globals.confirm = (/** @type {string} */ text) => {
-      asked.push(text);
-      return answer;
-    };
+    globals.confirm = () => t.fail('the browser confirm is not used');
+    const form = () => row('s1').querySelector('[data-form="delete"]');
+    /** @param {string} action */
+    const button = action =>
+      row('s1').querySelector(`[data-action="${action}"]`);
+    const deletes = () => control.callsOf('SessionFactory', 'deleteSession');
     try {
-      row('s1').querySelector('[aria-label="Delete"]').click();
+      t.is(form(), null);
+      button('delete').click();
       await flush();
-      t.deepEqual(asked, [uiTextOf.confirmDelete('doomed')]);
-      t.is(control.callsOf('SessionFactory', 'deleteSession').length, 0);
+      t.truthy(form());
+      t.is(form().getAttribute('role'), 'group');
+      t.is(form().getAttribute('aria-label'), uiTextOf.confirmDelete('doomed'));
+      t.is(
+        form().querySelector('.thix-row-confirm-text').textContent,
+        uiTextOf.confirmDelete('doomed'),
+      );
+      t.is(button('confirm-delete').textContent, uiTexts.delete);
+      t.is(button('cancel-delete').textContent, uiTexts.cancel);
+      t.is(
+        dom.document.activeElement,
+        button('cancel-delete'),
+        'focus on Cancel',
+      );
+      t.is(
+        controller.getState().activeKey,
+        undefined,
+        'Delete does not select',
+      );
+
+      button('cancel-delete').click();
+      await flush();
+      t.is(form(), null);
+      t.is(
+        dom.document.activeElement,
+        button('delete'),
+        'focus back on Delete',
+      );
+      t.is(deletes().length, 0);
+
+      button('delete').click();
+      await flush();
+      fire(dom.window, button('cancel-delete'), 'keydown', { key: 'Escape' });
+      await flush();
+      t.is(form(), null, 'Esc cancels');
+      t.is(deletes().length, 0);
       t.is(rows().length, 1);
-      answer = true;
-      row('s1').querySelector('[aria-label="Delete"]').click();
+
+      button('delete').click();
       await flush();
-      const deletes = control.callsOf('SessionFactory', 'deleteSession');
-      t.is(deletes.length, 1);
-      t.is(deletes[0][2], target, 'the Session object itself');
+      button('confirm-delete').click();
+      await flush();
+      t.is(deletes().length, 1);
+      t.is(deletes()[0][2], target, 'the Session object itself');
+      t.is(
+        controller.getState().activeKey,
+        undefined,
+        'confirm does not select',
+      );
       t.is(rows().length, 0);
     } finally {
       delete globals.confirm;

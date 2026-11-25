@@ -212,6 +212,7 @@ export const uiTexts = Object.freeze({
   sendNow: 'Send now',
   edit: 'Edit',
   delete: 'Delete',
+  cancel: 'Cancel',
   sendAgain: 'Send again',
   turnFailed: 'This turn did not finish.',
   turnStopped: 'This turn was stopped.',
@@ -228,6 +229,8 @@ export const uiTextOf = Object.freeze({
   confirmDelete: title => `Delete "${title}"?`,
   /** @param {string} title */
   renameSession: title => `Rename "${title}"`,
+  /** @param {string} title */
+  deleteSession: title => `Delete "${title}"`,
   /**
    * R6-36 second line.
    * @param {number} messages

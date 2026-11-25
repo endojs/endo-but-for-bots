@@ -7,18 +7,23 @@
  * The rows are the controller's `state.sessions`, kept live by its list
  * feed; a row is named by the `key` the controller gave it.
  *
- * ✎ or a double-click on the title renames inline (Enter saves, Esc
- * cancels, leaving the field saves); 🗑 asks `Delete "<title>"?` with the
- * browser's `confirm` and deletes through the controller. Selecting a row
- * never waits for or stops a turn (R6-49).
+ * Each row is a button that opens the session (`aria-current` on the open
+ * one), followed by Rename and Delete buttons; all three are in the tab
+ * order, and the two actions show while the row is hovered or holds focus.
+ * Rename or a double-click on the title renames inline (Enter saves, Esc
+ * cancels, leaving the field saves). Delete asks `Delete "<title>"?` in an
+ * inline row (Delete / Cancel; Esc cancels) and deletes through the
+ * controller. Focus returns to the row after a rename or a cancelled delete.
+ * Selecting a row never waits for or stops a turn (R6-49).
  */
 import { h } from 'preact';
-import { useRef, useState } from 'preact/hooks';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 
 import {
   uiTexts,
   uiTextOf,
 } from '../../../resources/agent-host/impl/gateway/protocol.js';
+import { icon } from '../shell/icons.js';
 import {
   countsLabel,
   lifecycleNote,
@@ -26,16 +31,6 @@ import {
   sessionStatusOf,
   statusLabels,
 } from './rows.js';
-
-/**
- * The browser's `confirm`; absent (no window): nothing is deleted.
- *
- * @param {string} text
- */
-const confirmed = text => {
-  const ask = /** @type {any} */ (globalThis).confirm;
-  return typeof ask === 'function' ? Boolean(ask(text)) : false;
-};
 
 /**
  * @param {{
@@ -47,27 +42,51 @@ const confirmed = text => {
 export const Sidebar = ({ state, controller, open }) => {
   const [editing, setEditing] = useState(/** @type {string | null} */ (null));
   const [draft, setDraft] = useState('');
+  const [confirming, setConfirming] = useState(
+    /** @type {string | null} */ (null),
+  );
   // The key being renamed, read by handlers of an older render (a blur
   // after Escape must not save).
   const editingRef = useRef(/** @type {string | null} */ (null));
+  const asideRef = useRef(/** @type {any} */ (null));
+  // A selector, inside the sidebar, to focus after the next render.
+  const focusNext = useRef(/** @type {string | null} */ (null));
+  useLayoutEffect(() => {
+    const selector = focusNext.current;
+    if (selector === null || !asideRef.current) return;
+    focusNext.current = null;
+    asideRef.current.querySelector(selector)?.focus();
+  });
+  /**
+   * @param {string} key
+   * @param {string} action
+   */
+  const refocus = (key, action) => {
+    focusNext.current = `[data-key="${key}"] [data-action="${action}"]`;
+  };
 
   /** @param {any} row */
   const beginRename = row => {
     editingRef.current = row.key;
+    setConfirming(null);
     setEditing(row.key);
     setDraft(row.title);
   };
-  const cancelRename = () => {
+  /** @param {any} row */
+  const cancelRename = row => {
     editingRef.current = null;
+    refocus(row.key, 'open');
     setEditing(null);
   };
   /**
    * @param {any} row
    * @param {string} value
+   * @param {boolean} [keyboard] keep focus on the row (Enter, not blur)
    */
-  const commitRename = (row, value) => {
+  const commitRename = (row, value, keyboard = false) => {
     if (editingRef.current !== row.key) return;
     editingRef.current = null;
+    if (keyboard) refocus(row.key, 'open');
     setEditing(null);
     const title = value.trim();
     if (title !== '' && title !== row.title) {
@@ -75,11 +94,23 @@ export const Sidebar = ({ state, controller, open }) => {
     }
   };
   /** @param {any} row */
-  const remove = row => {
-    if (confirmed(uiTextOf.confirmDelete(row.title))) {
-      controller.deleteSession(row.key);
-    }
+  const askDelete = row => {
+    refocus(row.key, 'cancel-delete');
+    setConfirming(row.key);
   };
+  /** @param {any} row */
+  const cancelDelete = row => {
+    refocus(row.key, 'delete');
+    setConfirming(null);
+  };
+  /** @param {any} row */
+  const remove = row => {
+    setConfirming(null);
+    controller.deleteSession(row.key);
+  };
+
+  /** @param {any} event */
+  const stop = event => event.stopPropagation();
 
   /** @param {any} row */
   const item = row => {
@@ -87,16 +118,9 @@ export const Sidebar = ({ state, controller, open }) => {
     const note = lifecycleNote(row.state);
     const runtime = runtimeLabel(row);
     const isEditing = editing === row.key;
-    return h(
-      'div',
-      {
-        key: row.key,
-        class: `floot-session-item${row.key === (state.sessionPath?.[0]?.key ?? state.activeKey) ? ' active' : ''}`,
-        'data-key': row.key,
-        onClick: () => {
-          if (!isEditing) controller.selectSession(row.key);
-        },
-      },
+    const isConfirming = confirming === row.key;
+    const active = row.key === (state.sessionPath?.[0]?.key ?? state.activeKey);
+    const body = [
       h('span', {
         class: `floot-status-dot floot-status-dot-${status}`,
         role: 'img',
@@ -104,29 +128,29 @@ export const Sidebar = ({ state, controller, open }) => {
         title: statusLabels[status],
       }),
       h(
-        'div',
+        'span',
         { class: 'floot-session-meta' },
-        note ? h('div', { class: 'thix-session-note' }, note) : null,
+        note ? h('span', { class: 'thix-session-note' }, note) : null,
         isEditing
           ? h('input', {
               class: 'floot-session-title-input',
               value: draft,
               autofocus: true,
-              /** @param {any} event */
-              onClick: event => event.stopPropagation(),
+              'aria-label': uiTextOf.renameSession(row.title),
+              onClick: stop,
               /** @param {any} event */
               onInput: event => setDraft(event.target.value),
               /** @param {any} event */
               onKeyDown: event => {
-                if (event.key === 'Enter')
-                  commitRename(row, event.target.value);
-                else if (event.key === 'Escape') cancelRename();
+                if (event.key === 'Enter') {
+                  commitRename(row, event.target.value, true);
+                } else if (event.key === 'Escape') cancelRename(row);
               },
               /** @param {any} event */
               onBlur: event => commitRename(row, event.target.value),
             })
           : h(
-              'div',
+              'span',
               {
                 class: 'floot-session-name',
                 /** @param {any} event */
@@ -139,41 +163,108 @@ export const Sidebar = ({ state, controller, open }) => {
             ),
         runtime
           ? h(
-              'div',
+              'span',
               { class: 'floot-session-runtime', title: runtime },
               runtime,
             )
           : null,
-        h('div', { class: 'floot-session-sub' }, countsLabel(row)),
+        h('span', { class: 'floot-session-sub' }, countsLabel(row)),
       ),
+    ];
+    /**
+     * @param {string} name the button's data-action
+     * @param {string} label
+     * @param {string} iconName
+     * @param {() => void} onClick
+     */
+    const rowButton = (name, label, iconName, onClick) =>
       h(
         'button',
         {
           type: 'button',
           class: 'floot-row-btn',
-          'aria-label': 'Rename',
+          'data-action': name,
+          'aria-label': label,
+          title: label,
           /** @param {any} event */
           onClick: event => {
             event.stopPropagation();
-            beginRename(row);
+            onClick();
           },
         },
-        '✎',
-      ),
-      h(
-        'button',
-        {
-          type: 'button',
-          class: 'floot-row-btn',
-          'aria-label': 'Delete',
-          /** @param {any} event */
-          onClick: event => {
-            event.stopPropagation();
-            remove(row);
-          },
+        icon(iconName, 14),
+      );
+    return h(
+      'div',
+      {
+        key: row.key,
+        class: `floot-session-item${active ? ' active' : ''}`,
+        'data-key': row.key,
+        // The whole row is the pointer target; the open button inside is
+        // the keyboard's, and its click arrives here too.
+        onClick: () => {
+          if (!isEditing) controller.selectSession(row.key);
         },
-        '🗑',
+      },
+      isEditing
+        ? h('span', { class: 'floot-session-open' }, ...body)
+        : h(
+            'button',
+            {
+              type: 'button',
+              class: 'floot-session-open',
+              'data-action': 'open',
+              'aria-current': active ? 'true' : undefined,
+            },
+            ...body,
+          ),
+      rowButton('rename', uiTextOf.renameSession(row.title), 'pencil', () =>
+        beginRename(row),
       ),
+      rowButton('delete', uiTextOf.deleteSession(row.title), 'trash', () =>
+        askDelete(row),
+      ),
+      isConfirming
+        ? h(
+            'div',
+            {
+              class: 'thix-row-confirm',
+              'data-form': 'delete',
+              role: 'group',
+              'aria-label': uiTextOf.confirmDelete(row.title),
+              onClick: stop,
+              /** @param {any} event */
+              onKeyDown: event => {
+                if (event.key === 'Escape') cancelDelete(row);
+              },
+            },
+            h(
+              'span',
+              { class: 'thix-row-confirm-text' },
+              uiTextOf.confirmDelete(row.title),
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'thix-row-confirm-btn danger',
+                'data-action': 'confirm-delete',
+                onClick: () => remove(row),
+              },
+              uiTexts.delete,
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'thix-row-confirm-btn',
+                'data-action': 'cancel-delete',
+                onClick: () => cancelDelete(row),
+              },
+              uiTexts.cancel,
+            ),
+          )
+        : null,
     );
   };
 
@@ -183,6 +274,7 @@ export const Sidebar = ({ state, controller, open }) => {
     {
       id: 'thix-session-sidebar',
       class: `floot-sidebar${open ? ' open' : ''}`,
+      ref: asideRef,
     },
     h(
       'div',
@@ -194,9 +286,10 @@ export const Sidebar = ({ state, controller, open }) => {
           type: 'button',
           class: 'floot-new-btn',
           'aria-label': uiTexts.newSession,
+          title: uiTexts.newSession,
           onClick: () => controller.openNewSession(),
         },
-        '+',
+        icon('plus', 18),
       ),
     ),
     h(

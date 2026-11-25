@@ -205,3 +205,46 @@
   color: var(--fl-text-muted);
   margin-right: 0.4rem;
 }
+
+/* The inline "Delete "<title>"?" row under a session, as the secrets panel
+   confirms a delete: the question, Delete and Cancel. */
+.floot-session-item:has(.thix-row-confirm) {
+  flex-wrap: wrap;
+}
+.thix-row-confirm {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  padding-top: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--fl-text);
+  cursor: default;
+}
+.thix-row-confirm-text {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.thix-row-confirm-btn {
+  padding: 0.15rem 0.55rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 6px;
+  background: var(--fl-surface2);
+  color: var(--fl-text);
+  font: inherit;
+  cursor: pointer;
+}
+.thix-row-confirm-btn:hover {
+  border-color: var(--fl-border-strong);
+}
+.thix-row-confirm-btn.danger {
+  border-color: var(--fl-danger);
+  background: var(--fl-danger);
+  color: var(--fl-on-accent);
+}
+.thix-row-confirm-btn.danger:hover {
+  border-color: var(--fl-danger-strong);
+  background: var(--fl-danger-strong);
+}

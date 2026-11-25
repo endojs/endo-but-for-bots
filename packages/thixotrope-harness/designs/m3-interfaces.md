@@ -706,7 +706,7 @@ it knows and never copies records onto M2's keys, so an optional field a later m
 | spec | view | source data |
 |---|---|---|
 | R6-36 sidebar, status circle, two lines, "No sessions yet" | `UI/src/sessions/Sidebar.js` | rows; `uiTextOf.rowCounts` |
-| R6-37 rename (Enter, Esc, double-click title), delete with `confirm` | `Sidebar.js`, `UI/src/shell/Header.js` | `rename`, `deleteSession` |
+| R6-37 rename (Enter, Esc, double-click title), delete with ~~`confirm`~~ an inline confirm row (*Amended:* the browser `confirm` was replaced by an inline Delete / Cancel row; the row is an open button with `aria-current`, Rename and Delete are reachable by Tab, and the header title is a rename button) | `Sidebar.js`, `UI/src/shell/Header.js` | `rename`, `deleteSession` |
 | R6-38, R6-39 new-session dialog | `UI/src/sessions/NewSession.js` | `listPresets` + `Preset.describe()` (`available`, `unavailableReason` when present), `listBackends`, `listModels`; `ModelRow.reasoningEfforts` for R6-39; feature slot `newSession.field` |
 | R6-40 composer (Enter, Shift+Enter, IME) | `UI/src/conversation/Composer.js` | the addon chain then `Composer.submit` (9.2); slot `composer.addon` with `ComposerAddonProps` |
 | R6-43 blocked sending with a status | `Composer.js` | row state, A-5 |
@@ -952,6 +952,7 @@ answers `fetch`) and `contract-m3.js` (`gatewayTexts`, `uiTexts`, `uiTextOf`).
 | `uiTexts.recoveryTitle`, `recordAcknowledgement` | `Turn journal and recovery`, `Record acknowledgement` | R6-51 |
 | `uiTexts.noSessions`, `sessions`, `startNewSession`, `newChatTitle`, `factoryDefault`, `lastModelList`, `accountsUnreachable` | as R6-36, R6-38 | R6-36, R6-38 |
 | `uiTextOf.confirmDelete(t)` | `Delete "<t>"?` | R6-37 |
+| `uiTextOf.renameSession(t)`, `deleteSession(t)`, `uiTexts.cancel` | `Rename "<t>"`, `Delete "<t>"` (button names), `Cancel` (*Amended:* added with the inline confirm row) | R6-37 |
 | `uiTextOf.rowCounts(m, q)` | `<m> messages · <q> queued` | R6-36 |
 | `uiTextOf.usage(up, down, p)` | `↑<up> ↓<down> · ctx <p>%` | R6-52 |
 | `uiTextOf.thoughtFor(s, running)` | `Thought for 1m2s` when complete, `0m5s` alongside the animated bubble while running | R6-45 |
