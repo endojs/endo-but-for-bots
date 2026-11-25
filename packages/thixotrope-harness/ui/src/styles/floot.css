@@ -61,6 +61,7 @@
   --fl-bar-pad-x: 0.85rem;
   --fl-icon-btn: 32px;
   --fl-bar-pad-y: calc((var(--fl-bar-height) - 1px - var(--fl-icon-btn)) / 2);
+  --fl-focus-ring: 2px solid var(--fl-accent);
 }
 .floot-app {
   position: relative;
@@ -228,7 +229,8 @@
   align-items: center;
   justify-content: center;
 }
-.floot-session-item:hover .floot-row-btn {
+.floot-session-item:hover .floot-row-btn,
+.floot-session-item:focus-within .floot-row-btn {
   display: flex;
 }
 .floot-row-btn:hover {
@@ -1192,4 +1194,21 @@
 }
 .floot-input[aria-disabled='true'] {
   opacity: 0.6;
+}
+
+/* Keyboard focus: one ring for buttons, inputs, links and the other
+   focusable controls. Its specificity (0,2,1) puts it over the
+   `outline: none` (at most 0,2,0) that inputs above set for pointer focus. */
+:is(
+  a[href],
+  button,
+  input,
+  select,
+  textarea,
+  summary,
+  [tabindex],
+  [contenteditable]
+):focus-visible {
+  outline: var(--fl-focus-ring);
+  outline-offset: 2px;
 }
