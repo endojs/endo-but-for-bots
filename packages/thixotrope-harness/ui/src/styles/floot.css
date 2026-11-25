@@ -55,6 +55,12 @@
   --fl-code-string: #c3e88d;
   --fl-code-punctuation: #89ddff;
   --fl-code-comment: #676e95;
+  /* The top bars (session list, session header, inventory sheet): one
+     height, border included, with their icon buttons centred in it. */
+  --fl-bar-height: 52px;
+  --fl-bar-pad-x: 0.85rem;
+  --fl-icon-btn: 32px;
+  --fl-bar-pad-y: calc((var(--fl-bar-height) - 1px - var(--fl-icon-btn)) / 2);
 }
 .floot-app {
   position: relative;
@@ -84,7 +90,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.75rem 0.85rem;
+  box-sizing: border-box;
+  min-height: var(--fl-bar-height);
+  padding: var(--fl-bar-pad-y) var(--fl-bar-pad-x);
   border-bottom: 1px solid var(--fl-border);
 }
 .floot-sidebar-title {
@@ -93,8 +101,8 @@
 }
 .floot-new-btn {
   flex: none;
-  width: 28px;
-  height: 28px;
+  width: var(--fl-icon-btn);
+  height: var(--fl-icon-btn);
   border-radius: 6px;
   border: none;
   background: var(--fl-accent);
@@ -250,7 +258,9 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.75rem 1rem;
+  box-sizing: border-box;
+  min-height: var(--fl-bar-height);
+  padding: var(--fl-bar-pad-y) var(--fl-bar-pad-x);
   background: var(--fl-surface);
   border-bottom: 1px solid var(--fl-border);
   flex-shrink: 0;
@@ -258,8 +268,8 @@
 .floot-menu-btn {
   display: none;
   flex: none;
-  width: 34px;
-  height: 34px;
+  width: var(--fl-icon-btn);
+  height: var(--fl-icon-btn);
   border: none;
   background: transparent;
   color: var(--fl-text-muted);
@@ -296,8 +306,8 @@
 }
 .floot-header-btn {
   flex: none;
-  width: 34px;
-  height: 34px;
+  width: var(--fl-icon-btn);
+  height: var(--fl-icon-btn);
   border: none;
   background: transparent;
   color: var(--fl-text-muted);
@@ -908,9 +918,11 @@
     align-items: center;
     justify-content: center;
   }
+  :root {
+    --fl-bar-pad-x: 0.75rem;
+  }
   .floot-header {
     gap: 0.4rem;
-    padding: 0.6rem 0.75rem;
   }
   .floot-header-btn.chip {
     padding: 0 0.5rem;

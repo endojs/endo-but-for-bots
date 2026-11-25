@@ -53,10 +53,15 @@
 .thix-session-inventory[data-expanded='true'] .thix-inventory-sheet {
   transform: translateX(0);
 }
+/* The same bar as .floot-sidebar-head and .floot-header (floot.css). */
 .thix-inventory-title {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: var(--fl-bar-height);
   font-size: 0.95rem;
   margin: 0;
-  padding: 0.75rem 0.85rem;
+  padding: var(--fl-bar-pad-y) var(--fl-bar-pad-x);
   border-bottom: 1px solid var(--fl-border);
 }
 @media (max-width: 640px) {
