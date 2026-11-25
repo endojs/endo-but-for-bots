@@ -357,7 +357,7 @@ test('sizes: the composed prompt is inline; a maximal preset text may be staged'
 test('the resolver composes from the resolved preset snapshot; a given prompt replaces it (R4-27)', async t => {
   const snapshot = harden({ label: 'p', instructions: 'Answer in French.' });
   // M11 9.1: a spoken (Talk) creation composes the plain introduction; the
-  // voice rules come per turn (texts.spokenTurnNote).
+  // voice rules come with each spoken-mode message (texts.readAloudTurnNote).
   t.is(
     promptTextFor({ spoken: true }, { presetSnapshot: snapshot }),
     composeSystemPrompt({ spoken: false, snapshot }),

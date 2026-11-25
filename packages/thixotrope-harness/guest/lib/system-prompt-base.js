@@ -49,7 +49,11 @@ const applying = (context, sections) =>
  * The composed system prompt (R4-26).
  *
  * @param {object} options
- * @param {boolean} [options.spoken] the session was created spoken (R5-52)
+ * @param {boolean} [options.spoken] the spoken introduction (R5-52). Since
+ *   M11 (m11-interfaces.md 9.1) no creation passes `true` (sessions get
+ *   the plain prompt, the voice rules travel with each spoken-mode
+ *   message); the spoken path is kept, reached from tests only, as the
+ *   word-for-word mirror of Floot's voice prompt the turn notes follow.
  * @param {any} [options.snapshot] the creation's `PresetSnapshot`; its
  *   `instructions` are part 7
  * @param {boolean} [options.userInitiated]

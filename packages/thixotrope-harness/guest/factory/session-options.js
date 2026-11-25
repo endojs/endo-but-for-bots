@@ -27,7 +27,8 @@ export const DEFAULT_TITLE = 'New chat';
 export const DEFAULT_MODEL_ID = 'scripted';
 
 /** Options the guard admits that M1a refuses (later milestones implement them). */
-// M2 W2.6: `systemPrompt` and `spoken` are resolved by `promptResolver`.
+// M2 W2.6: `systemPrompt` is resolved by `promptResolver`; `spoken` is
+// accepted and ignored since M11 (m11-interfaces.md 9.1).
 // M4 W4.1 (H-6): `reasoningEffort` is resolved by `subscriptionEffort`.
 const NOT_YET = harden(['networkPolicy']);
 

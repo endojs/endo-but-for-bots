@@ -320,12 +320,12 @@ test('a shortcut whose preset changes during preflight describes the newly selec
   t.is(rows.ofSession(session)?.modelId, 'current');
 });
 
-test('the creation options: spoken, the shortcut preset, title and at passed through', async t => {
+test('the creation options: the shortcut preset, title and at passed through; no spoken flag (M11 9.1)', async t => {
   const { catalog, created, facet } = voiceSetup();
   const preset = await userPreset(catalog);
   await E(facet).setVoicePreset(preset, catalog.facet.configuration().revision);
   await E(facet).startVoiceSession(harden({ title: 'x', at: 7 }));
-  t.deepEqual(created, [{ preset, spoken: true, title: 'x', at: 7 }]);
+  t.deepEqual(created, [{ preset, title: 'x', at: 7 }]);
 });
 
 test('G-11: a pinned model its backend refuses falls back to the factory default with a warning (D-M11-9)', async t => {
@@ -350,7 +350,6 @@ test('G-11: a pinned model its backend refuses falls back to the factory default
   t.is(answer.warning, voiceTextOf.voiceModelUnavailable('gone'));
   t.deepEqual(created[0], {
     preset: missing,
-    spoken: true,
     backend: fallback,
     modelId: 'default-model',
   });
@@ -366,7 +365,7 @@ test('G-11: a pinned model its backend refuses falls back to the factory default
   );
   const kept = await E(facet).startVoiceSession();
   t.is(kept.warning, undefined);
-  t.deepEqual(created[1], { preset: missing, spoken: true });
+  t.deepEqual(created[1], { preset: missing });
 });
 
 test('launch claims: a duplicate answers the same session; 33 ids forget the first; a launch in progress; a restart re-runs (R6-60)', async t => {

@@ -153,7 +153,9 @@ export const makeVoice = ({ catalog, create, rows, settings, starts }) => {
     const preset = shortcutPreset();
     const record = catalog.recordOf(preset);
     /** @type {Record<string, any>} */
-    const options = { preset, spoken: true };
+    // No `spoken` flag since M11 9.1: a Talk session gets the plain system
+    // prompt; spoken mode is the page's, carried per message.
+    const options = { preset };
     if (title !== undefined) options.title = title;
     if (at !== undefined) options.at = at;
     /** @type {string | undefined} */

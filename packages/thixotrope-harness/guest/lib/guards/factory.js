@@ -308,6 +308,9 @@ const m1aShapeBuilders = {
         systemPrompt: S.Text,
         networkPolicy: M.any(),
         userInitiated: M.boolean(),
+        // Accepted and ignored since M11 (m11-interfaces.md 9.1): the
+        // prompt no longer depends on it; kept so an earlier caller's
+        // options still pass.
         spoken: M.boolean(),
         // When the caller made the request (ms since the epoch): the caller
         // has the clock (as the Composer stamps enqueueOnce); the session's

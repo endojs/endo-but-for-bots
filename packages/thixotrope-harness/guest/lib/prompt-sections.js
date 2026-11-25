@@ -42,8 +42,11 @@ import { mailPromptSections } from './mail-prompt.js';
 const DASH = '\u2014';
 
 /**
- * Floot's introduction (`floot/src/voice-prompt.js`): spoken sessions get
- * the voice rules (R5-52).
+ * Floot's introduction (`floot/src/voice-prompt.js`): spoken sessions got
+ * the voice rules (R5-52). Since M11 (m11-interfaces.md 9.1) every session
+ * gets the plain one and `flootIntroduction(true)` is reached from tests
+ * only: the word-for-word mirror of Floot's voice prompt, whose rules the
+ * read-aloud turn note carries.
  * @param {boolean} spoken
  */
 export const flootIntroduction = spoken =>
