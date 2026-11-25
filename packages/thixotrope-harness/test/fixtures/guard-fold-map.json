@@ -299,7 +299,10 @@
   "interfaces.PresetCatalog": "Development presets may identify a pinned workspace seed.",
   "interfaces.Preset": "Development presets may identify a pinned workspace seed.",
   "m4Interfaces.Accounts": "Accounts.history(backend, offset?) returns a bounded page of observed quota history, or undefined for an unknown pool.",
-  "m4MethodNames.Accounts": "Accounts gains history, a method name already in the gateway vocabulary."
+  "m4MethodNames.Accounts": "Accounts gains history, a method name already in the gateway vocabulary.",
+  "shapes.TurnStarted": "M11 (m11-interfaces.md 9.1): optional spoken and dictated facts of the turn's message.",
+  "shapes.Receipt": "M11 (m11-interfaces.md 9.1): optional unmarked: true, set by Composer.submit when the session's program predates the marker.",
+  "shapes.ExportEntry": "M11 (m11-interfaces.md 9.1): a queued entry carries its spoken and dictated facts."
  },
  "exportsRemoved": [
   "m1bInterfaces",
@@ -360,7 +363,10 @@
   "m4Shapes.MemberHistory": "A member label, provider, bounded quota windows and optional observed credit wallet records.",
   "m4Shapes.CreditRecord": "A bounded observed decimal wallet balance and its confirmation times, using existing gateway vocabulary.",
   "m4Shapes.PoolHistory": "A bounded page of member histories with the pool backend, kind, label and optional next offset.",
-  "m4Shapes.QuotaRecord": "One observed quota percentage with its first reading time and optional repeat count, latest confirmation and reported reset."
+  "m4Shapes.QuotaRecord": "One observed quota percentage with its first reading time and optional repeat count, latest confirmation and reported reset.",
+  "shapes.EnqueueOptions": "M11 (m11-interfaces.md 9.1): the spoken-mode marker { spoken?, dictated? }, the enqueue methods' optional last argument.",
+  "texts.dictatedTurnNote": "M11 (m11-interfaces.md 9.1): the note that the text was dictated, rendered with the turn's user message in the provider projection.",
+  "texts.readAloudTurnNote": "M11 (m11-interfaces.md 9.1): the note that the reply will be read aloud, rendered with the turn's user message in the provider projection."
  },
  "vocabularyAdded": {
   "keys": [
@@ -439,7 +445,9 @@
    "voicesDir",
    "warm",
    "warning",
-   "workspace"
+   "workspace",
+   "dictated",
+   "unmarked"
   ],
   "methods": [
    "alarm",
