@@ -197,8 +197,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.thix-session-path > :last-child {
-  flex-shrink: 0.25;
+/* The ancestors give up their width first (shrink is weighted by width, so
+   a long parent title at 0.25 against 1 still took pixels from a short
+   open session's name); the open session shrinks only once they are at
+   their minimum. */
+.thix-session-path > :not(:last-child) {
+  flex-shrink: 100;
 }
 .thix-session-path > * + *::before {
   content: '›';
