@@ -22,7 +22,7 @@
  *   backendIndex?, modelSelection? })`.
  */
 import { h } from 'preact';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 
 import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
 import { discoveryNotes, matchesModel } from './rows.js';
@@ -116,6 +116,13 @@ export const NewSession = ({ state, controller, features, context }) => {
   const notes = loaded ? discoveryNotes(loaded) : [];
 
   const close = () => controller.closeNewSession();
+  // The dialog takes focus when it opens, so its Escape (and Tab) work
+  // without a click into it first; the Settings view, when open behind it,
+  // leaves Escape to the dialog.
+  const dialogRef = useRef(/** @type {any} */ (null));
+  useLayoutEffect(() => {
+    dialogRef.current?.focus();
+  }, []);
 
   /** @param {any} preset a `state.presets` row, or undefined (no presets) */
   const start = async preset => {
@@ -304,6 +311,8 @@ export const NewSession = ({ state, controller, features, context }) => {
         role: 'dialog',
         'aria-modal': 'true',
         'aria-label': uiTexts.startNewSession,
+        ref: dialogRef,
+        tabIndex: -1,
         // Clicks on the card must not reach the backdrop's dismiss.
         /** @param {any} event */
         onClick: event => event.stopPropagation(),
