@@ -226,6 +226,8 @@ export const uiTexts = Object.freeze({
 export const uiTextOf = Object.freeze({
   /** @param {string} title */
   confirmDelete: title => `Delete "${title}"?`,
+  /** @param {string} title */
+  renameSession: title => `Rename "${title}"`,
   /**
    * R6-36 second line.
    * @param {number} messages

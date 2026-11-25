@@ -1,17 +1,21 @@
 // @ts-check
 /**
  * The header (R6-37, R6-61; m3-interfaces.md 9.3): ☰ (narrow screens), the
- * active session's title (double-click to rename: Enter saves, Esc
- * cancels), `header.chip` features and the Settings control, which opens
- * and closes the Settings view (`Settings.js`: the `app.panel` features and
- * the session's `session.settings`) with or without a session open (not
- * while a subagent is inspected, which shows no features). The
- * header keeps one line (`flex-wrap: nowrap`); the title truncates.
+ * active session's title (a button: click, Enter or Space renames, Enter
+ * saves, Esc cancels, and focus returns to the title), `header.chip`
+ * features and the Settings control, which opens and closes the Settings
+ * view (`Settings.js`: the `app.panel` features and the session's
+ * `session.settings`) with or without a session open (not while a subagent
+ * is inspected, which shows no features). The header keeps one line
+ * (`flex-wrap: nowrap`); the title truncates.
  */
 import { h } from 'preact';
-import { useState } from 'preact/hooks';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 
-import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
+import {
+  uiTexts,
+  uiTextOf,
+} from '../../../resources/agent-host/impl/gateway/protocol.js';
 import { settingsTexts } from './Settings.js';
 import { Slot } from './Slot.js';
 
@@ -42,6 +46,14 @@ export const Header = ({
   toggleInventory,
 }) => {
   const [editing, setEditing] = useState(/** @type {string | null} */ (null));
+  // Set by Enter and Esc: put focus back on the title once it is a button.
+  const refocus = useRef(false);
+  const titleRef = useRef(/** @type {any} */ (null));
+  useLayoutEffect(() => {
+    if (!refocus.current || !titleRef.current) return;
+    refocus.current = false;
+    titleRef.current.focus();
+  });
   const view = state.view;
   const title = view ? view.info.title : uiTexts.pageTitle;
   const commit = () => {
@@ -127,23 +139,32 @@ export const Header = ({
             /** @param {any} event */
             onInput: event => setEditing(event.target.value),
             /** @param {any} event */
+            'aria-label': uiTextOf.renameSession(title),
             onKeyDown: event => {
-              if (event.key === 'Enter') commit();
-              else if (event.key === 'Escape') setEditing(null);
+              if (event.key === 'Enter') {
+                refocus.current = true;
+                commit();
+              } else if (event.key === 'Escape') {
+                refocus.current = true;
+                setEditing(null);
+              }
             },
             onBlur: commit,
           })
-        : h(
-            'div',
-            {
-              class: 'floot-header-title',
-              title: view ? 'Double-click to rename' : undefined,
-              onDblClick: () => {
-                if (view) setEditing(view.info.title);
+        : view
+          ? h(
+              'button',
+              {
+                type: 'button',
+                class: 'floot-header-title',
+                ref: titleRef,
+                title,
+                'aria-label': uiTextOf.renameSession(title),
+                onClick: () => setEditing(view.info.title),
               },
-            },
-            title,
-          ),
+              title,
+            )
+          : h('div', { class: 'floot-header-title' }, title),
     h(Slot, { slot: 'header.chip', features, context, class: 'thix-chips' }),
     state.sessionPath?.[1]
       ? null

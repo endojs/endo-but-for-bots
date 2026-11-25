@@ -295,9 +295,18 @@
   color: var(--fl-text);
   background: var(--fl-surface2);
 }
+/* A button when a session is open (it renames), reset to read as text. */
 .floot-header-title {
   flex: 1;
   min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
   font-size: 0.95rem;
   font-weight: 600;
   white-space: nowrap;

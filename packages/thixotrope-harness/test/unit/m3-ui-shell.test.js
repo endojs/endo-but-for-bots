@@ -245,7 +245,7 @@ test.serial('status bar shows getUsage as ↑in ↓out · ctx N%', async t => {
 });
 
 test.serial(
-  'header: double-click the title, Enter renames; Esc cancels',
+  'header: the title is a button that renames; Enter saves, Esc cancels, focus returns',
   async t => {
     const fake = makeFakePowers({ sessions: [{ title: 'old title' }] });
     const { dom, controller, powers, control } = await setup({ fake });
@@ -254,7 +254,13 @@ test.serial(
     await flush();
     const title = () => dom.document.querySelector('.floot-header-title');
     t.is(title().textContent, 'old title');
-    fire(dom.window, title(), 'dblclick');
+    t.is(title().tagName, 'BUTTON', 'reachable by Tab');
+    t.is(
+      title().getAttribute('aria-label'),
+      uiTextOf.renameSession('old title'),
+    );
+    // Enter or Space on a focused button is a click.
+    title().click();
     await flush();
     let input = dom.document.querySelector('.floot-header-title-input');
     t.truthy(input);
@@ -268,13 +274,15 @@ test.serial(
       control.callsOf('Session', 'rename').map(call => call[2]),
       ['new title'],
     );
-    fire(dom.window, title(), 'dblclick');
+    t.is(dom.document.activeElement, title(), 'focus back on the title');
+    title().click();
     await flush();
     input = dom.document.querySelector('.floot-header-title-input');
     fire(dom.window, input, 'keydown', { key: 'Escape' });
     await flush();
     t.is(control.callsOf('Session', 'rename').length, 1);
     t.truthy(title());
+    t.is(dom.document.activeElement, title(), 'focus back after Esc');
     await dom.close();
   },
 );
