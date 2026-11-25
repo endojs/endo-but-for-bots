@@ -29,6 +29,7 @@ import {
   makeSubscriptionsPart,
 } from '../../resources/agent-host/durable-subscriptions.js';
 import { make as makeManagerVat } from '../../resources/agent-host/durable.js';
+import { pooledClaudeModels } from '../../resources/agent-host/impl/subscriptions/catalog.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E, Far, matches } = /** @type {GuestGlobals} */ (globalThis);
@@ -563,6 +564,57 @@ test('resolveEffort checks the effort against the model row, else answers its de
   await t.throwsAsync(() => pool.resolveEffort(harden({ modelId: 'zz' })), {
     message: textOf.unknownProviderModel('zz'),
   });
+});
+
+test('the pinned resolveEffort takes the efforts the reloaded catalogue lists: Fable and Mythos on a claude pool', async t => {
+  // durable-subscriptions.js is unchanged since 51760a3996, so this is the
+  // installed manager's code; the rows are what impl's pool catalogue makes
+  // (`pooledClaudeModels`, efforts from `claudeEfforts`), reloaded with the
+  // adapter.
+  const pooled = pooledClaudeModels(
+    [
+      [
+        {
+          id: 'claude-fable-5-2',
+          title: 'Fable',
+          description: '',
+          reasoningEfforts: [],
+        },
+        {
+          id: 'claude-mythos-5-2',
+          title: 'Mythos',
+          description: '',
+          reasoningEfforts: [],
+        },
+      ],
+    ],
+    undefined,
+  );
+  const rows = pooled.map(model =>
+    harden({
+      backend: Far('Backend', {}),
+      modelId: model.id,
+      selectionId: model.id,
+      title: model.title,
+      default: false,
+      reasoningEfforts: model.reasoningEfforts,
+    }),
+  );
+  const kit = makeKit({ rows: [rows] });
+  const member = kit.member('claude', 'x');
+  const pool = kit.admin.makePool(
+    harden({ kind: 'claude-pool', label: 'claude', members: [member] }),
+  );
+  for (const modelId of ['claude-fable-5-2', 'claude-mythos-5-2']) {
+    for (const reasoningEffort of ['low', 'medium', 'high', 'max']) {
+      t.deepEqual(
+        // eslint-disable-next-line no-await-in-loop
+        await pool.resolveEffort(harden({ modelId, reasoningEffort })),
+        { reasoningEffort },
+        `${modelId} ${reasoningEffort}`,
+      );
+    }
+  }
 });
 
 // ---------------------------------------------------------------- sink
