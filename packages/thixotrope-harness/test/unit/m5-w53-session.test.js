@@ -19,6 +19,7 @@ import test from '@endo/ses-ava/test.js';
 /* eslint-disable import/no-relative-packages */
 import { shapes, textOf } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
+import { subagentRoleSection } from '../../guest/lib/mail-prompt.js';
 import { RETIRED_TEXT } from '../../guest/lib/retired.js';
 import { makeQueue } from '../../guest/session/queue.js';
 import { runtimeParts } from '../../guest/session/runtime-parts.js';
@@ -359,6 +360,39 @@ test('S2, S3: onClaim sees the entry; the note joins every round of that turn on
   t.false('attachments' in started2);
 });
 
+test('D-M9-26: a subagent (userInitiated false) is told its role on every round, whatever its brief', async t => {
+  const child = await makeM5Session({
+    config: { systemPrompt: 'You are helpful.', userInitiated: false },
+  });
+  await child.submit('Please fix the bug.');
+  t.is(child.last().system, `You are helpful.\n\n${subagentRoleSection}`);
+  t.regex(subagentRoleSection, /^Subagent role \u2014 you are a subagent/);
+  t.regex(subagentRoleSection, /Do the task yourself/);
+  t.true(matches(child.last(), shapes.RoundRequest));
+  const noted = await makeM5Session({
+    config: { systemPrompt: 'You are helpful.', userInitiated: false },
+    sessionOptions: {
+      parts: withProbe({
+        hooks: harden({
+          onClaim: (/** @type {any} */ { active }) => {
+            active.systemNote = 'NOTE';
+          },
+        }),
+      }),
+    },
+  });
+  await noted.submit('a');
+  t.is(
+    noted.last().system,
+    `You are helpful.\n\n${subagentRoleSection}\n\nNOTE`,
+  );
+  const operator = await makeM5Session({
+    config: { systemPrompt: 'You are helpful.' },
+  });
+  await operator.submit('a');
+  t.is(operator.last().system, 'You are helpful.', 'a user session: none');
+});
+
 test('S2: a staged prompt, or a joined text over inlineBytes, goes as two parts', async t => {
   const parts = withProbe({
     hooks: harden({
@@ -464,10 +498,12 @@ test('Session (M5 guard): a runtime without one of its parts is refused at const
   await drain();
   // The packages part opened the entry's attachments for its turn.
   t.true(
-    p.last().append.some(
-      (/** @type {any} */ r) =>
-        r.kind === 'turn-started' && r.attachments?.[0] === 'notes',
-    ),
+    p
+      .last()
+      .append.some(
+        (/** @type {any} */ r) =>
+          r.kind === 'turn-started' && r.attachments?.[0] === 'notes',
+      ),
   );
 });
 

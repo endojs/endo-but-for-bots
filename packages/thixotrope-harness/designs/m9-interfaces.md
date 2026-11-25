@@ -384,6 +384,19 @@ without them; the child inherits), and later rounds describe `spawnSubagent` wit
 options. A guard that cannot be read leaves the spawn to the factory. No probe spawn is sent.
 Rejected: picking the effort in the session (it holds no catalogue).
 
+**D-M9-26. A subagent is told it is one by its session, not by its brief.** A child receives only
+the mail body of each ask (`mail-text.js` `mailTurnInput`), so nothing in its input marks the parent
+as the sender. Its `SessionConfig.userInitiated` is false (the spawn sets it), and the session
+program's `systemFor` adds `mail-prompt.js` `subagentRoleSection` ("Subagent role") to every
+round's system text of such a session, before the turn's note, inside the same two-part `system`.
+It tells the child to do its task itself, which also settles the Delegation section's "Do work you
+can simply do yourself" against a preset that tells its sessions to delegate: preset texts address
+the subagent through the section's heading. It is not a composed section (`PromptContext`
+`userInitiated`): the factory composes a subagent's stored prompt, so a section there would reach
+only freshly provisioned states, while the round text arrives with a session program load.
+Rejected: a marker sentence at the start of the brief as the only signal (a parent that forgets it
+makes its child a project manager that delegates again).
+
 ---
 
 ## 3. Objects and interfaces

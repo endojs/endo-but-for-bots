@@ -65,6 +65,26 @@ than cycling through replacement agents. Synthesize the replies and release your
 helpers when finished.`;
 
 /**
+ * A subagent's role (D-M9-26): the session program adds it to every round's
+ * system text of a session whose `SessionConfig.userInitiated` is false
+ * (every subagent, R4-69), so a child knows it is one however its brief is
+ * worded: the mail body it receives carries no sign of its sender. Not a
+ * composed section: the factory composes a subagent's stored prompt, so a
+ * section there would reach only a freshly provisioned state; the round's
+ * system text is the session program's and arrives with a program load.
+ * It reconciles the Delegation section's "Do work you can simply do
+ * yourself" with a preset that delegates everything: a subagent does its
+ * task itself. Its heading is what preset texts key on
+ * (`scripts/project-preset.mjs` `subagentRoleHeading`).
+ */
+export const subagentRoleSection = `Subagent role ${DASH} you are a subagent: a parent session created you with
+spawnSubagent, and every task you receive comes from it through askSubagent,
+which answers it with your reply. Do the task yourself; your instructions'
+advice to delegate is for the parent, not for you. Spawn subagents of your own
+only when the brief asks for it. Your reply is what the parent receives: give it
+what it needs to check your work, and say plainly what you could not do.`;
+
+/**
  * The two entries (`prompt-sections.js` `PromptSection`): every session
  * holds a mailbox (`SessionServices.mail`), and the delegation text names
  * its own condition.

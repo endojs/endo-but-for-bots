@@ -164,7 +164,8 @@ const guestText = trimmed(guestSection);
  * @property {boolean} spoken the session was created spoken (R5-52)
  * @property {any} [snapshot] the creation's `PresetSnapshot` (data only)
  * @property {boolean} [userInitiated] a session the operator created (M9
- *   sets false for subagents; no M5 entry reads it)
+ *   sets false for subagents; no entry reads it: a subagent's role is the
+ *   session program's round text, `mail-prompt.js` `subagentRoleSection`)
  */
 
 /**
