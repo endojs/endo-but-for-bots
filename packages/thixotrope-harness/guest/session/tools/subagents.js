@@ -57,6 +57,7 @@ import {
   subagentModelAttachment,
   subagentModelLabel,
 } from '../../lib/subagent-model.js';
+import { workspaceSeedLabel } from '../../lib/workspace-seed.js';
 import { isValidLabel } from '../labels.js';
 import { fieldBytes, isStaged } from '../staging.js';
 import { inspectFor } from './inspect-client.js';
@@ -372,6 +373,19 @@ const spawnEntry = harden({
       // and travels as the child's `subagentModelLabel` endowment.
       const direct = !chosen || (await part.whenSpawnOptions()) !== false;
       let { attachments } = attached;
+      // D-M9-28: the legacy project source goes to every child, which
+      // opens its own checkout of the same revision from it.
+      const source = context.services?.projectSource;
+      if (source !== undefined) {
+        if (attachments.some(a => a.label === workspaceSeedLabel))
+          return failed(mailTextOf.duplicateAttachment(workspaceSeedLabel));
+        if (attachments.length >= ML.maxAttachments)
+          return failed(mailTextOf.tooManyAttachments(attachments.length + 1));
+        attachments = harden([
+          ...attachments,
+          harden({ label: workspaceSeedLabel, value: source }),
+        ]);
+      }
       if (!direct) {
         if (attachments.some(a => a.label === subagentModelLabel))
           return failed(mailTextOf.duplicateAttachment(subagentModelLabel));

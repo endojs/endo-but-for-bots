@@ -43,6 +43,10 @@ export const makeSpareMaker = () => {
                 endowments: services.endowments.filter(
                   (/** @type {any} */ entry) => entry !== marker,
                 ),
+                // Kept out of the inventory, passed on to each subagent:
+                // a factory that predates project revisions gives a child
+                // only its parent's attachments (D-M9-28).
+                projectSource: marker.value,
               },
             }),
           ),

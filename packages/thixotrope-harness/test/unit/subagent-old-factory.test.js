@@ -20,7 +20,8 @@ import {
   subagentModelLabel,
 } from '../../guest/lib/subagent-model.js';
 import { makeLabels } from '../../guest/session/labels.js';
-import { makeSession } from '../../guest/session/session.js';
+import { makeSpareMaker } from '../../guest/session/main.js';
+import { workspaceSeedLabel } from '../../guest/lib/workspace-seed.js';
 import { subagentsPart } from '../../guest/session/subagents.js';
 import { subagentToolEntries } from '../../guest/session/tools/subagents.js';
 import { olderDelegationGuard } from '../fixtures/old-factory-guards.js';
@@ -78,7 +79,16 @@ const makeChild = (request, parentConfig) => {
   const host = Far('SessionHostFacet', {
     liveChannel: () => Far('LivePublisher', { publish: () => {} }),
   });
-  const made = makeSession({
+  /** @type {any[]} */
+  const seeded = [];
+  const environment = Far('EnvironmentControl', {
+    useWorkspaceSeed: (/** @type {any} */ marker) => {
+      seeded.push(marker);
+      return harden({ project: 'thixotrope', commit: 'ab'.repeat(20) });
+    },
+  });
+  // The real session program's entry (`main.js`), as the factory calls it.
+  const made = makeSpareMaker().make({
     // The old spawn: the parent's resolved model, effort and window.
     config: harden({
       key: `child-${request.name}`,
@@ -91,13 +101,19 @@ const makeChild = (request, parentConfig) => {
       createdAt: AT,
       userInitiated: false,
     }),
-    services: harden({ backend, host, endowments: request.attachments }),
+    services: harden({
+      backend,
+      host,
+      environment,
+      endowments: request.attachments,
+    }),
     rowReporter: Far('RowReporter', { changed: () => {} }),
   });
-  return { made, rounds };
+  return { made, rounds, seeded };
 };
 
-const setup = () => {
+/** @param {{ projectSource?: any }} [options] */
+const setup = ({ projectSource } = {}) => {
   const parentConfig = harden({
     modelId: 'claude-fable-5-2',
     reasoningEffort: 'medium',
@@ -128,11 +144,17 @@ const setup = () => {
       return harden({ state: 'ok', rows });
     },
   });
-  const services = harden({ subagents: delegation, backend });
+  const services = harden({
+    subagents: delegation,
+    backend,
+    ...(projectSource === undefined ? {} : { projectSource }),
+  });
   const part = subagentsPart.make(
     /** @type {any} */ ({ services, config: parentConfig }),
   );
-  const labels = makeLabels({ seeds: [] });
+  const labels = makeLabels({
+    seeds: [{ label: 'x', value: Far('X', {}), source: 'endowment' }],
+  });
   const runtime = harden({ labels, services, subagents: part });
   part.hooks.onClaim(/** @type {any} */ ({ active: { claimAt: AT } }));
   let n = 0;
@@ -159,7 +181,8 @@ const setup = () => {
       children.get(name)
     );
     await drain();
-    child.made.session.enqueueOnce(
+    const made = await child.made;
+    made.session.enqueueOnce(
       harden({ text: 'do the task' }),
       `${AT}-00000000-0000-4000-8000-00000000000${n}`,
       AT,
@@ -199,10 +222,11 @@ test('an older factory: a child spawned with modelId and reasoningEffort runs on
   t.is(round.options.modelId, 'claude-opus-5-5');
   t.is(round.options.reasoningEffort, 'high');
   t.is(round.options.maxOutputTokens, 64_000, 'the model row cap');
-  const listed = await s.children.get('impl')?.made.session.getInfo();
+  const impl = await s.children.get('impl')?.made;
+  const listed = await impl.session.getInfo();
   t.is(listed.modelId, 'claude-opus-5-5', 'the child says so in its info');
   t.is(listed.reasoningEffort, 'high');
-  const page = await s.children.get('impl')?.made.session.getInventoryPage();
+  const page = await impl.session.getInventoryPage();
   t.false(
     JSON.stringify(page).includes(subagentModelLabel),
     'the marker is not in the inventory',
@@ -276,4 +300,33 @@ test('a user session ignores a subagent-model endowment; a malformed one is igno
   ]);
   t.is(subagentConfig(child, bad), child);
   t.is(subagentConfig(child, undefined), child);
+});
+
+test('a legacy project source goes to every child, which opens its checkout from it (D-M9-28)', async t => {
+  const marker = Far('WorkspaceSeedMarker', {});
+  const s = setup({ projectSource: marker });
+  await s.spawn({ name: 'impl', modelId: 'claude-opus-5-5' });
+  t.deepEqual(
+    s.spawns[0].attachments.map((/** @type {any} */ a) => a.label),
+    [workspaceSeedLabel, subagentModelLabel],
+  );
+  t.is(s.spawns[0].attachments[0].value, marker);
+  const { round } = await s.firstRound('impl');
+  t.is(round.options.modelId, 'claude-opus-5-5');
+  t.deepEqual(s.children.get('impl')?.seeded, [marker], 'the child seeded');
+  await s.spawn({ name: 'plain' });
+  t.is(s.spawns[1].attachments[0].value, marker);
+  t.deepEqual(
+    await s.spawn({
+      name: 'twice',
+      attachments: [{ name: workspaceSeedLabel, petName: 'x' }],
+    }),
+    {
+      status: 'failed',
+      text: mailTextOf.duplicateAttachment(workspaceSeedLabel),
+    },
+  );
+  const without = setup();
+  await without.spawn({ name: 'plain' });
+  t.deepEqual(without.spawns[0].attachments, [], 'no source, none sent');
 });
