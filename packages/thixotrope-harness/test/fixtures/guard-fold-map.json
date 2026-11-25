@@ -303,8 +303,8 @@
   "shapes.TurnStarted": "M11 (m11-interfaces.md 9.1): optional spoken and dictated facts of the turn's message.",
   "shapes.Receipt": "M11 (m11-interfaces.md 9.1): optional unmarked: true, set by Composer.submit when the session's program predates the marker.",
   "shapes.ExportEntry": "M11 (m11-interfaces.md 9.1): a queued entry carries its spoken and dictated facts.",
-  "m4Interfaces.SubscriptionsAdmin": "Add a subscription to a pool: checkCredential(pool, secret) answers ok or a code, never a value; addPoolMember(pool, member) applies makePool's rules and the credential check (m4-interfaces.md 3.1)",
-  "m4MethodNames.SubscriptionsAdmin": "SubscriptionsAdmin gains checkCredential and addPoolMember",
+  "m4Interfaces.SubscriptionsAdmin": "Add a subscription to a pool: checkCredential(pool, secret) answers ok or a code, never a value; addPoolMember(pool, member) applies makePool's rules and the credential check; addMember(pool, newPoolMember) checks first, then makes and adds in one step (m4-interfaces.md 3.1)",
+  "m4MethodNames.SubscriptionsAdmin": "SubscriptionsAdmin gains checkCredential, addPoolMember and addMember",
   "m4Interfaces.CredentialOps": "checkCredential(secret, provider): the adapter reads the Secret and answers ok or a code, never the value (m4-interfaces.md 3.2)",
   "m4MethodNames.CredentialOps": "CredentialOps gains checkCredential"
  },
@@ -377,7 +377,8 @@
   "textOf.subagentEffortUnknown": "D-M9-25: a refusal of a spawn model or effort that names what is offered",
   "textOf.subagentEffortNone": "D-M9-25: a refusal of a spawn model or effort that names what is offered",
   "textOf.reservedAttachment": "D-M9-27, D-M9-28: a refusal of a spawn attachment under a label only the session program attaches",
-  "m4Shapes.CredentialCheck": "A credential check answer: { ok: true } or { ok: false, code } with a fixed code, keys already in the gateway vocabulary"
+  "m4Shapes.CredentialCheck": "A credential check answer: { ok: true } or { ok: false, code } with a fixed code, keys already in the gateway vocabulary",
+  "m4Shapes.NewPoolMember": "addMember's argument: a label and a Secret, weight and declared profile optional (the pool decides the provider); keys already in the gateway vocabulary"
  },
  "vocabularyAdded": {
   "keys": [
@@ -498,7 +499,8 @@
    "take",
    "transcribe",
    "addPoolMember",
-   "checkCredential"
+   "checkCredential",
+   "addMember"
   ]
  }
 }

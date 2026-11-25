@@ -118,6 +118,21 @@ const m4ShapeBuilders = {
       },
     ),
   /**
+   * `SubscriptionsAdmin.addMember` argument: a new member of the pool's
+   * provider (the pool decides it), made and added in one step.
+   */
+  NewPoolMember: () =>
+    record(
+      {
+        label: S.Label,
+        credential: R('Secret'),
+      },
+      {
+        weight: atMost(subscriptionLimits.maxWeight),
+        declared: T.DeclaredProfile,
+      },
+    ),
+  /**
    * What a credential check answers (`SubscriptionsAdmin.checkCredential`,
    * `CredentialOps.checkCredential`): ok, or a fixed code
    * (`credentialCheckCodes`); never the value, a token or a parse message.
@@ -493,7 +508,13 @@ const m4InterfaceBuilders = {
       ),
       // Checks as `makePool`, then the member's credential (as
       // `checkCredential`); answers once the adapter has taken the push.
+      // Idempotent: a member already in the pool answers done.
       addPoolMember: M.callWhen(R('Backend'), R('PoolMember')).returns(done),
+      // The pool rules and the credential check before anything is made,
+      // then makes the member and adds it in one crank (3.1).
+      addMember: M.callWhen(R('Backend'), T.NewPoolMember).returns(
+        R('PoolMember'),
+      ),
     }),
   /** One member account of a pool (R3-233, R8-13). */
   PoolMember: () =>
@@ -597,6 +618,7 @@ export const m4MethodNames = harden({
     'accounts',
     'checkCredential',
     'addPoolMember',
+    'addMember',
   ],
   PoolMember: ['describe', 'retire'],
   PoolBackend: [

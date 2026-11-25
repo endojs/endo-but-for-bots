@@ -164,6 +164,12 @@ const shapeSamples = {
     weight: 2,
     declared,
   },
+  NewPoolMember: {
+    label: 'first',
+    credential: secret,
+    weight: 2,
+    declared,
+  },
   CredentialCheck: { ok: false, code: 'WRONG_PROVIDER' },
   MemberInfo: {
     provider: 'claude',
@@ -339,6 +345,10 @@ const methodSamples = {
       returns: shapeSamples.CredentialCheck,
     },
     addPoolMember: { args: [backend, member], returns: undefined },
+    addMember: {
+      args: [backend, shapeSamples.NewPoolMember],
+      returns: member,
+    },
   },
   PoolMember: {
     describe: { args: [], returns: shapeSamples.MemberInfo },

@@ -608,7 +608,8 @@ export const makeSubscriptionsPart = ({
    * calls; a crash between them leaves an active member in no pool, seen
    * in `listMembers` and not in any `describePool`. The operator finishes
    * by repeating both (`makeMember` answers the same member) or undoes with
-   * `PoolMember.retire()`.
+   * `PoolMember.retire()`. `addMember` makes and adds in one step and is
+   * what the panel uses.
    *
    * Idempotent: a member that is already an active member of this pool
    * answers done (a retry after a lost answer), with no check and no push.
@@ -627,6 +628,64 @@ export const makeSubscriptionsPart = ({
     return announcePoolsChanged();
   };
 
+  /**
+   * What `addMember` would do now, or a refusal: the pool rules, the
+   * label rule of `makeMember` (R8-31) and the bounds, before anything is
+   * made.
+   * @param {PoolRecord} record
+   * @param {'claude' | 'codex'} provider
+   * @param {{ label: string, credential: any }} description
+   * @returns {{ member?: any, done: boolean }} `member`: the active member
+   *   under this label with this credential (made by an earlier step that
+   *   did not finish); `done`: it is already in the pool
+   */
+  const planAdd = (record, provider, { label, credential }) => {
+    assertActivePool(record);
+    if (!secretRecords.has(credential)) throw secretError('UNKNOWN_SECRET');
+    const member = memberList.find(entry => memberOf(entry).label === label);
+    if (member !== undefined) {
+      const entry = memberOf(member);
+      if (entry.credential !== credential || entry.provider !== provider)
+        throw Error(subscriptionTexts.memberConflict);
+      if (record.members.includes(member)) return { member, done: true };
+      assertRoom(record);
+      return { member, done: false };
+    }
+    assertRoom(record);
+    if (memberList.length >= subscriptionLimits.maxMembers)
+      throw secretError('CREATE_FAILED');
+    return { done: false };
+  };
+
+  /**
+   * Make a member of the pool's provider from `description` and add it to
+   * the pool in one step: the pool rules and the bounds, then the
+   * credential check, then the rules again; the member is made and
+   * appended in that last crank, then `poolsChanged()`. A predictable
+   * refusal (pool full or retired, a label conflict, a failed check) makes
+   * nothing. Idempotent by label and Secret: a retry answers the same
+   * member; an unfinished `makeMember` under that label and Secret is
+   * finished (added) here.
+   * @param {any} pool
+   * @param {{ label: string, credential: any, weight?: number, declared?: any }} description
+   */
+  const addMember = async (pool, description) => {
+    const record = poolOf(pool);
+    const provider = providerOf(record.spec.kind);
+    const first = planAdd(record, provider, description);
+    if (first.done) return first.member;
+    const check = await checkSecret(description.credential, provider);
+    if (!check.ok)
+      throw Error(subscriptionTextOf.credentialCheckFailed(check.code));
+    const plan = planAdd(record, provider, description);
+    if (plan.done) return plan.member;
+    const member =
+      plan.member ?? makeMember(harden({ ...description, provider }));
+    record.members = harden([...record.members, member]);
+    await announcePoolsChanged();
+    return member;
+  };
+
   const admin = makeExo('SubscriptionsAdmin', m4Interfaces.SubscriptionsAdmin, {
     makeMember,
     listMembers,
@@ -638,6 +697,7 @@ export const makeSubscriptionsPart = ({
       withCredentialOps(credentialOps => E(credentialOps).accounts()),
     checkCredential,
     addPoolMember,
+    addMember,
   });
 
   // ---- sink methods (the adapter only; m4SinkMethodGuards) ----

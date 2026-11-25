@@ -794,6 +794,158 @@ test('restart between makeMember and addPoolMember: the member is listed and in 
   t.deepEqual(kit.admin.describePool(pool).members, [a, made, late]);
 });
 
+test('addMember: the pool rules and the check come before anything is made; then made and added in one step, one push', async t => {
+  const kit = makeKit();
+  const a = kit.member('codex', 'a');
+  const pool = kit.admin.makePool(
+    harden({ kind: 'codex-pool', label: 'p', members: [a] }),
+  );
+  const pushes = () =>
+    kit.calls.filter(([name]) => name === 'poolsChanged').length;
+  const memberCount = () => kit.admin.listMembers().members.length;
+
+  const secret = kit.makeSecret('new');
+  const made = await kit.admin.addMember(
+    pool,
+    harden({ label: 'new', credential: secret }),
+  );
+  t.like(made.describe(), { provider: 'codex', label: 'new', weight: 1 });
+  t.deepEqual(kit.admin.describePool(pool).members, [a, made]);
+  t.is(pushes(), 1);
+  t.like(
+    kit.calls.find(([name]) => name === 'checkCredential'),
+    { 1: secret, 2: 'codex' },
+    'checked for the pool provider',
+  );
+  // A retry after a lost answer: the same member, nothing more.
+  const checks = kit.calls.filter(([n]) => n === 'checkCredential').length;
+  t.is(
+    await kit.admin.addMember(
+      pool,
+      harden({ label: 'new', credential: secret }),
+    ),
+    made,
+  );
+  t.is(pushes(), 1);
+  t.is(kit.calls.filter(([n]) => n === 'checkCredential').length, checks);
+
+  // A failed check makes nothing.
+  const bad = kit.makeSecret('bad');
+  kit.checks.set(bad, harden({ ok: false, code: 'WRONG_PROVIDER' }));
+  await t.throwsAsync(
+    kit.admin.addMember(pool, harden({ label: 'bad', credential: bad })),
+    failsWith(subscriptionTextOf.credentialCheckFailed('WRONG_PROVIDER')),
+  );
+  t.is(memberCount(), 2);
+  // The adapter unreachable: fail closed, nothing made.
+  kit.setLost(true);
+  await t.throwsAsync(
+    kit.admin.addMember(
+      pool,
+      harden({ label: 'lost', credential: kit.makeSecret() }),
+    ),
+    failsWith('manager lost'),
+  );
+  kit.setLost(false);
+  t.is(memberCount(), 2);
+  // Another Secret under a label in use; an unknown Secret.
+  await t.throwsAsync(
+    kit.admin.addMember(
+      pool,
+      harden({ label: 'new', credential: kit.makeSecret() }),
+    ),
+    failsWith(subscriptionTexts.memberConflict),
+  );
+  await t.throwsAsync(
+    kit.admin.addMember(
+      pool,
+      harden({ label: 'x', credential: Far('Secret', {}) }),
+    ),
+    secretFailed('UNKNOWN_SECRET'),
+  );
+  // A full pool and a retired pool refuse before the check.
+  for (let i = 2; i < subscriptionLimits.maxPoolMembers; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await kit.admin.addMember(
+      pool,
+      harden({ label: `m${i}`, credential: kit.makeSecret() }),
+    );
+  }
+  const before = kit.calls.filter(([n]) => n === 'checkCredential').length;
+  const count = memberCount();
+  await t.throwsAsync(
+    kit.admin.addMember(
+      pool,
+      harden({ label: 'over', credential: kit.makeSecret() }),
+    ),
+    failsWith(subscriptionTexts.poolFull),
+  );
+  await kit.admin.retirePool(pool);
+  await t.throwsAsync(
+    kit.admin.addMember(
+      pool,
+      harden({ label: 'late', credential: kit.makeSecret() }),
+    ),
+    failsWith(subscriptionTexts.retired),
+  );
+  t.is(memberCount(), count, 'no member made');
+  t.is(kit.calls.filter(([n]) => n === 'checkCredential').length, before);
+});
+
+test('addMember finishes an unfinished makeMember (same label and Secret); the rules are applied again after the check', async t => {
+  /** @type {(() => void)[]} */
+  const held = [];
+  const kit = makeKit({
+    checkGate: () =>
+      new Promise(resolve => held.push(() => resolve(undefined))),
+  });
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+  const a = kit.member('claude', 'a');
+  const pool = kit.admin.makePool(
+    harden({ kind: 'claude-pool', label: 'p', members: [a] }),
+  );
+  // A crash after makeMember, before the add: addMember finishes it.
+  const secret = kit.makeSecret('orphan');
+  const orphan = kit.admin.makeMember(
+    harden({ provider: 'claude', label: 'orphan', credential: secret }),
+  );
+  const finishing = kit.admin.addMember(
+    pool,
+    harden({ label: 'orphan', credential: secret }),
+  );
+  await settle();
+  /** @type {() => void} */ (held.pop())();
+  t.is(await finishing, orphan);
+  t.deepEqual(kit.admin.describePool(pool).members, [a, orphan]);
+
+  // Two concurrent adds of one description: one member, added once.
+  const fresh = kit.makeSecret('fresh');
+  const description = harden({ label: 'fresh', credential: fresh });
+  const first = kit.admin.addMember(pool, description);
+  const second = kit.admin.addMember(pool, description);
+  await settle();
+  t.is(held.length, 2);
+  for (const release of held.splice(0)) release();
+  const [one, two] = await Promise.all([first, second]);
+  t.is(one, two);
+  t.deepEqual(kit.admin.describePool(pool).members, [a, orphan, one]);
+
+  // The pool retired during the check: refused, nothing made.
+  const late = kit.admin.addMember(
+    pool,
+    harden({ label: 'late', credential: kit.makeSecret() }),
+  );
+  await settle();
+  await kit.admin.retirePool(pool);
+  /** @type {() => void} */ (held.pop())();
+  await t.throwsAsync(late, failsWith(subscriptionTexts.retired));
+  t.false(
+    kit.admin
+      .listMembers()
+      .members.some((/** @type {any} */ m) => m.describe().label === 'late'),
+  );
+});
+
 test('the pool Backend forwards describe, listModels, resolveModel and open with its spec', async t => {
   const kit = makeKit();
   const member = kit.member('claude', 'a');
