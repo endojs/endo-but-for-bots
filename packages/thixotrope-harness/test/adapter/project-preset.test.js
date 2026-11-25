@@ -14,12 +14,17 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import {
   choosePresetModel,
+  editedInstructionsNote,
   implementerModel,
+  instructionsKind,
+  noPoolNote,
+  planPreset,
   presetDefaults,
   projectInstructions,
   publishSource,
   resolveBackend,
   savePreset,
+  subagentRoleHeading,
 } from '../../scripts/project-preset.mjs';
 
 const git = promisify(execFile);
@@ -78,7 +83,7 @@ test('publishing pins committed source, leaves the operator checkout alone, and 
   await t.throwsAsync(publishSource(state, repo, 'HEAD'));
 });
 
-test('all published defaults upgrade to a ten-minute cold build, preserving operator edits', t => {
+test('all published defaults upgrade to the current one; an operator edit is kept with a note, or replaced on request', async t => {
   const workflow = [
     'You are developing the Thixotrope harness in your own persistent Git checkout at /workspace.',
     'On first use, run sh -c "cd /workspace && thix-selfdev-prepare" to install the locked Linux dependencies and build the worker boot bundles offline.',
@@ -88,9 +93,26 @@ test('all published defaults upgrade to a ten-minute cold build, preserving oper
   const current = projectInstructions(undefined);
   t.regex(current, /first thix-selfdev-prepare command.*timeoutMs to 600000/);
   t.is(projectInstructions(current), current);
+  t.is(instructionsKind(current), 'current');
+  t.is(instructionsKind(undefined), 'absent');
   const operational = `${workflow} For the first thix-selfdev-prepare command, set the shell tool's timeoutMs to 600000 (10 minutes) for the cold build. For nested integration tests set THIX_HARNESS_TMP=/tmp/thix. For a separate supervisor create a short private state directory on that same Linux scratch mount.`;
-  t.true(current.endsWith(operational), 'the operational text is kept');
-  t.is(projectInstructions(operational), current, 'the last default upgrades');
+  t.is(
+    projectInstructions(operational),
+    current,
+    'the cold-build default upgrades',
+  );
+  // The first delegating default (603845d2a), word for word.
+  const delegating = `${[
+    'Roles. If your task came from a parent session through askSubagent, you are its implementer: do the work yourself in your own /workspace checkout as described below, commit it, and answer with the commit hashes, git diff HEAD, the commands you ran with their results, and what you could not do. Do not spawn subagents of your own unless the brief asks for it or the work truly needs it.',
+    'Otherwise you are the project manager and quality-control master for the work you are given. Do not implement it yourself: plan it, then delegate each piece to an Opus 5.5 subagent with spawnSubagent { name, modelId: "claude-opus-5-5" } and no systemPrompt, so the child keeps these instructions (a systemPrompt would replace them). Give each a self-contained brief in askSubagent: it sees none of your conversation, so state the goal, the files, the constraints, the tests to run and when to stop, and begin with "You are the implementer for this task."',
+    "Pass a subagent's work on only after checking it: read its diff, run the relevant tests yourself, and send it back with concrete fixes when it falls short. Stop each subagent when its work is accepted. Report faithfully what was done, what you verified and how, and what remains unverified or failed.",
+  ].join(' ')} ${operational}`;
+  t.is(instructionsKind(delegating), 'earlier');
+  t.is(
+    projectInstructions(delegating),
+    current,
+    'the delegating default upgrades',
+  );
   t.is(projectInstructions(`${operational} Mine.`), `${operational} Mine.`);
   for (const suffix of [
     'Use a separate short /tmp state path for nested supervisors.',
@@ -100,9 +122,42 @@ test('all published defaults upgrade to a ten-minute cold build, preserving oper
     const old = `${workflow} ${suffix}`;
     t.is(projectInstructions(old), current);
     const customized = `${old} Run my local checks.`;
+    t.is(instructionsKind(customized), 'edited');
     t.is(projectInstructions(customized), customized);
+    t.is(projectInstructions(customized, { replace: true }), current);
   }
   t.is(projectInstructions(''), '');
+  t.is(projectInstructions('', { replace: true }), current);
+
+  // The plan says so: a note for a kept edit, another for a replaced one.
+  /** @type {Record<string, any>} */
+  let view = {
+    label: 'Thixotrope development',
+    template: 'development',
+    workspaceSeed: { project: 'thixotrope', commit: 'ef'.repeat(20) },
+    available: true,
+    instructions: 'Operator text',
+  };
+  const catalog = {
+    configuration: () => ({ presets: [{ describe: () => view }], revision: 0 }),
+  };
+  const kept = await planPreset(catalog, 'thixotrope');
+  t.is(kept.prompt, 'Operator text');
+  t.deepEqual(kept.notes, [editedInstructionsNote]);
+  t.regex(editedInstructionsNote, /--replace-instructions/);
+  const replaced = await planPreset(catalog, 'thixotrope', undefined, {
+    replaceInstructions: true,
+  });
+  t.is(replaced.prompt, current);
+  t.deepEqual(replaced.notes, [
+    "the operator's edited instructions are replaced by the current default",
+  ]);
+  view = { ...view, instructions: delegating };
+  t.deepEqual(
+    (await planPreset(catalog, 'thixotrope')).notes,
+    [],
+    'an earlier default is no edit',
+  );
 });
 
 test('refreshing the same project commit removes legacy effort once', async t => {
@@ -139,25 +194,34 @@ test('refreshing the same project commit removes legacy effort once', async t =>
   t.is(view.modelId, 'custom-model');
 });
 
-test('the default instructions make the session a delegating project manager and its subagents implementers', t => {
+test('the default instructions key the roles on the subagent section, fall back on an older factory, and hand commits back as a bundle', t => {
   const text = projectInstructions(undefined);
   t.is(implementerModel, 'claude-opus-5-5');
-  t.regex(text, /project manager and quality-control master/);
+  t.is(subagentRoleHeading, 'Subagent role');
+  t.regex(text, /If this prompt has a "Subagent role" section/);
   t.regex(
     text,
-    /spawnSubagent \{ name, modelId: "claude-opus-5-5" \} and no systemPrompt/,
+    /Otherwise you are the project manager and quality-control master/,
   );
-  t.regex(text, /self-contained brief/);
-  t.regex(text, /read its diff, run the relevant tests yourself/);
-  t.regex(text, /Report faithfully/);
-  t.regex(text, /through askSubagent, you are its implementer/);
-  t.regex(text, /Do not spawn subagents of your own unless/);
+  t.regex(text, /replaces the general advice to do simple work yourself/);
+  t.regex(
+    text,
+    /spawnSubagent \{ name, modelId: "claude-opus-5-5", attachments: \[\{ name: "handback", petName: "handback-NAME" \}\] \} and no systemPrompt/,
+  );
+  t.regex(text, /offers no modelId or refuses it, spawn without it/);
+  t.regex(text, /begin its askSubagent brief with "You are the implementer/);
+  t.regex(text, /spawn no subagents unless the brief asks for it/);
+  t.false(text.includes('git diff HEAD'), 'empty after a commit');
   for (const kept of [
     '/workspace',
     'thix-selfdev-prepare',
     'timeoutMs to 600000',
     'THIX_HARNESS_TMP=/tmp/thix',
-    'git diff HEAD',
+    'git bundle create /tmp/hb.bundle $(git reflog --format=%H HEAD | tail -n 1)..HEAD',
+    'git fetch /tmp/NAME.bundle HEAD:NAME',
+    'E(workspace).merge("NAME")',
+    'about 31,000 characters',
+    'rerun it from i = 2000 * E(box).count()',
   ])
     t.true(text.includes(kept), kept);
   t.true(text.length <= 4096, 'within presetInstructionsUnits');
@@ -285,16 +349,43 @@ test('a preset without a backend gets the Claude pool, Fable 5.2, checked at med
         'claude-fable-5-2 starts sessions at reasoning effort medium, not high (offered: low, medium, high, xhigh, max); presets carry no effort, so pick it per session',
     },
   );
-  // The implied medium on a model without it is a note, not a failure
-  // (a live catalogue read before the Fable effort fix is loaded).
+  // A row with no efforts at all: the running agent-host's efforts table
+  // is stale. The implied medium only notes it; --effort fails with it.
+  const stale =
+    "claude-fable-5-2 has no reasoning efforts in the running agent-host's model catalogue, so it cannot be checked at medium. If the model takes efforts, that agent-host has a stale efforts table: restart the supervisor on a tree that has the fix, then publish again";
   const old = makeBackend('Claude', 'claude-pool', {
     'claude-fable-5-2': { efforts: [] },
   });
   const noted = await choosePresetModel(undefined, { backends: [old] });
   t.is(noted.modelId, 'claude-fable-5-2');
-  t.deepEqual(noted.notes, [
-    'claude-fable-5-2 starts sessions at reasoning effort none, not medium (offered: none); presets carry no effort, so pick it per session',
-  ]);
+  t.deepEqual(noted.notes, [stale]);
+  await t.throwsAsync(
+    choosePresetModel(undefined, {
+      backends: [old],
+      reasoningEffort: 'medium',
+    }),
+    { message: stale },
+  );
+  // No Claude pool and no --backend: no backend, with a note.
+  t.deepEqual(await choosePresetModel(undefined, { backends: [chatgpt] }), {
+    backend: undefined,
+    modelId: undefined,
+    notes: [noPoolNote],
+  });
+  t.deepEqual(await choosePresetModel(undefined, { backends: [] }), {
+    backend: undefined,
+    modelId: undefined,
+    notes: [noPoolNote],
+  });
+  await t.throwsAsync(
+    choosePresetModel(undefined, {
+      backends: [chatgpt],
+      modelId: 'claude-fable-5-2',
+    }),
+    { message: /^--model and --effort need a backend/ },
+  );
+  // A preset that already names a backend keeps it without a Claude pool.
+  t.like(await choosePresetModel(edited, { backends: [chatgpt] }), edited);
   await t.throwsAsync(
     choosePresetModel(undefined, {
       backends,
@@ -350,4 +441,49 @@ test('savePreset saves the chosen backend object and model, and a republish with
   await savePreset(catalog, {}, seed, false, choice);
   t.is(view?.modelId, 'claude-opus-5-5', 'kept without an option');
   t.is(saves, 2);
+});
+
+test('the plan refuses a wrong effort with nothing saved, and savePreset saves without a backend when the state has no Claude pool', async t => {
+  const seed = /** @type {const} */ ({
+    project: 'thixotrope',
+    commit: 'cd'.repeat(20),
+  });
+  const claude = makeBackend('Claude', 'claude-pool', claudeModels);
+  /** @type {Record<string, any> | undefined} */
+  let view;
+  let saves = 0;
+  const preset = {
+    describe: () => view,
+    save: (/** @type {object} */ record) => {
+      saves += 1;
+      view = { ...record, available: true };
+    },
+  };
+  const catalog = {
+    configuration: () => ({
+      presets: view === undefined ? [] : [preset],
+      revision: saves,
+    }),
+    create: (/** @type {object} */ record) => {
+      saves += 1;
+      view = { ...record, available: true };
+      return { preset };
+    },
+  };
+  await t.throwsAsync(
+    planPreset(catalog, 'thixotrope', {
+      backends: [claude],
+      reasoningEffort: 'high',
+    }),
+    { message: /starts sessions at reasoning effort medium, not high/ },
+  );
+  t.is(saves, 0);
+  const chatgpt = makeBackend('ChatGPT', 'codex-pool');
+  const { notes } = await savePreset(catalog, {}, seed, false, {
+    backends: [chatgpt],
+  });
+  t.deepEqual(notes, [noPoolNote]);
+  t.is(saves, 1);
+  t.false('backend' in (view ?? {}));
+  t.false('modelId' in (view ?? {}));
 });
