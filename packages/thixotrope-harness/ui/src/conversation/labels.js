@@ -13,8 +13,6 @@ export const labels = Object.freeze({
   /** @param {number} bytes */
   showAll: bytes => `Show all (${bytes} bytes)`,
   loadingText: 'Loading…',
-  rawOn: 'Show the conversation',
-  rawOff: 'Show raw JSON',
   editQueued: 'Edit queued message',
   save: 'Save',
   cancel: 'Cancel',

@@ -2,7 +2,7 @@
 // The conversation views (m3-interfaces.md 9.2, 9.3; W3.6) in happy-dom,
 // driven by the W3.4 controller over the fake GatewayPowers: streaming
 // bubble, thinking row and phase, tool groups and "Thought for", exec
-// highlight, raw view, plain text and links, status rows (R6-51), the
+// highlight, plain text and links, status rows (R6-51), the
 // recovery panel's paging and acknowledgement, queue rows and the hold
 // line, Stop, blocked sending (A-5), the sendError line, the usage bar and
 // large content paging.
@@ -161,7 +161,7 @@ test.serial(
 );
 
 test.serial(
-  'tool groups, "Thought for", exec highlight and the raw view',
+  'tool groups, "Thought for", exec highlight and no raw JSON toggle',
   async t => {
     t.is(uiTextOf.thoughtFor(62, true), '1m2s');
     const fake = makeFakePowers({ sessions: [{ key: 'a' }] });
@@ -214,16 +214,8 @@ test.serial(
       $$('.floot-msg-row.assistant > .floot-msg').map(el => el.textContent),
       ['done'],
     );
-    // `</>`: raw JSON of the entries as the controller holds them
-    const toggle = $('.thix-raw-toggle');
-    t.is(toggle?.textContent, uiTexts.rawView);
-    await act(dom, toggle, 'click');
-    const raw = $('.thix-raw-view')?.textContent ?? '';
-    t.true(raw.includes('"type": "turn-start"'));
-    t.true(raw.includes(`"turnId": "${turnId}"`));
-    t.is($('.floot-actions'), null);
-    await act(dom, $('.thix-raw-toggle'), 'click');
-    t.is($('.thix-raw-view'), null);
+    // The raw JSON view (`</>`) was removed; nothing toggles the transcript.
+    t.is($('.thix-raw-toggle'), null);
     await dom.close();
   },
 );

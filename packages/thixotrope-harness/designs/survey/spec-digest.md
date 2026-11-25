@@ -37,7 +37,7 @@ Reading aid:
 | P-19 | daily | Git workspace capability with branch tracking, status/diff/log/stage/commit/merge/stash; no rewrite, no remotes | R3-40, R3-240, R3-246..R3-248 | C | git | M |
 | P-20 | daily | Built-in presets `chat-only`, `general`, `voice`, `development`, `new-project`, `full-control` + user presets; snapshotted at creation | R3-7, R3-11..R3-17, R3-20..R3-22, R4-4 | C+D | none | M |
 | P-21 | daily | Tool results cut at fixed size with explicit notice; images exempt | R3-25, R4-46, R4-100 | C+D | none | S |
-| P-22 | daily | Conversation view: streaming bubble, thinking row, collapsible tool groups, failed/stopped/interrupted rows, raw view | R6-40, R6-45, R6-46, R6-51 | C | browser | M |
+| P-22 | daily | Conversation view: streaming bubble, thinking row, collapsible tool groups, failed/stopped/interrupted rows, raw view (built in M3, since removed) | R6-40, R6-45, R6-46, R6-51 | C | browser | M |
 | P-23 | daily | Reconnect overlay with backoff, full UI rebuild, reattach running turn | R6-12, R6-13, R6-14 | C+D | browser | S |
 | P-24 | daily | Phone layout: session list as drawer on narrow screens | R6-61 | C (640 px D) | browser | S |
 | P-25 | daily | Every device sees the same sessions, transcripts, queue, presets | R4-52, R5-54, R6-59 | C | none | S |
@@ -239,7 +239,7 @@ Acceptance tests:
 5. Close the tab mid-turn; reopen; the turn finished on the server and is in the transcript.
 6. Send during a turn: greyed queued entry with Send now / Edit / Delete; after restart the queue is held with a reason line.
 7. Exactly-once: drop the connection between send and ack; resend from the saved draft creates no duplicate.
-8. Tool calls fold into "Thought for …" groups; `exec` shows highlighted source; `</>` raw view; "Load earlier messages" pages history.
+8. Tool calls fold into "Thought for …" groups; `exec` shows highlighted source; `</>` raw view (built in M3, since removed from the UI); "Load earlier messages" pages history.
 9. Failed/stopped/interrupted turns show the fixed status rows; Details opens "Turn journal and recovery" with "Record acknowledgement".
 10. At 640 px or less the sidebar becomes a drawer.
 11. A reply containing an `endowidget` block renders in isolation; a widget over 65,536 units or 2,048 nodes is refused.

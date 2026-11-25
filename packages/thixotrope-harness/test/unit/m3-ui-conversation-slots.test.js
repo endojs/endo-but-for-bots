@@ -12,7 +12,6 @@ import { h, render } from 'preact';
 
 import { makeController } from '../../ui/src/controller/index.js';
 import * as conversation from '../../ui/src/conversation/index.js';
-import { rawJson } from '../../ui/src/conversation/RawView.js';
 import { mount } from '../../ui/src/shell/index.js';
 import { makeFakePowers, makeTestDom } from './_m3-fake-powers.js';
 
@@ -366,7 +365,7 @@ test.serial(
   },
 );
 
-test.serial('the empty conversation and the raw view of presences', async t => {
+test.serial('the empty conversation', async t => {
   const dom = makeTestDom();
   const view = {
     info: {},
@@ -392,8 +391,5 @@ test.serial('the empty conversation and the raw view of presences', async t => {
   );
   t.is(dom.document.querySelector('.floot-history-earlier'), null);
   render(null, dom.root);
-  const text = rawJson({ blob: Far('Blob', {}), n: 10n, s: 'x' });
-  t.true(text.includes('"blob": "[Alleged: Blob]"'));
-  t.true(text.includes('"n": "10n"'));
   await dom.close();
 });

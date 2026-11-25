@@ -807,7 +807,6 @@ test.serial(
       t.deepEqual(controller.getState().view?.readingPosition, {
         turnId: turn,
         offset: -25,
-        raw: false,
       });
       const targetAgain = [...restored.querySelectorAll('[data-turn]')].find(
         row => row.getAttribute('data-turn') === turn,

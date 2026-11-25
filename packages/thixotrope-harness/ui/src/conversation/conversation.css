@@ -1,12 +1,6 @@
 /* Conversation views (W3.6): what floot.css (Floot at 1315bef86) has no
    rule for. Colours come from Floot's variables. */
 
-.thix-conversation-tools {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.thix-raw-toggle,
 .thix-details-btn,
 .thix-text-error button,
 .thix-show-all,
@@ -20,11 +14,6 @@
   border-radius: 6px;
   padding: 0.15rem 0.5rem;
   cursor: pointer;
-}
-
-.thix-raw-toggle.on {
-  color: var(--fl-accent);
-  border-color: var(--fl-accent);
 }
 
 .thix-conversation {

@@ -1,22 +1,19 @@
 // @ts-check
 /**
- * The conversation region (P-22; m3-interfaces.md 9.3; W3.6): the `</>`
- * toggle, the transcript (or its raw JSON) and the
- * queue. The shell renders it in its main region and the `Composer` below
- * it; `Recovery` replaces it while the recovery panel is open. The view
+ * The conversation region (P-22; m3-interfaces.md 9.3; W3.6): the transcript
+ * and the queue. The shell renders it in its main region and the `Composer`
+ * below it; `Recovery` replaces it while the recovery panel is open. The view
  * renders the controller's state and calls only controller actions.
  *
  * Scrolling: the transcript follows new content while the reader is at its
  * bottom, and stays put once they scroll up.
  */
 import { h } from 'preact';
-import { useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useLayoutEffect, useRef } from 'preact/hooks';
 
-import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
 import { labels } from './labels.js';
 import { MessageList } from './MessageList.js';
 import { Queue } from './Queue.js';
-import { RawView } from './RawView.js';
 
 /** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
@@ -32,7 +29,6 @@ const STICK_PX = 48;
  * }} props
  */
 export const Conversation = ({ state, controller, features, context }) => {
-  const [raw, setRaw] = useState(Boolean(state.view?.readingPosition?.raw));
   const scroller = useRef(/** @type {HTMLDivElement | null} */ (null));
   const stick = useRef(true);
   const view = state.view;
@@ -59,21 +55,18 @@ export const Conversation = ({ state, controller, features, context }) => {
             return {
               turnId: row.getAttribute('data-turn'),
               offset: bounds.top - edge,
-              raw,
             };
         }
         return undefined;
       }),
-    [controller, raw],
+    [controller],
   );
 
   const requestEarlier = () => {
     const element = scroller.current;
     if (!element || state.connection !== 'open' || view?.earlier !== 'more')
       return;
-    const node = element.querySelector(
-      raw ? '.thix-raw-view > :first-child' : '.thix-turn',
-    );
+    const node = element.querySelector('.thix-turn');
     if (node)
       anchor.current = {
         node,
@@ -178,28 +171,10 @@ export const Conversation = ({ state, controller, features, context }) => {
         if (towardTop && element.scrollTop < 120) requestEarlier();
       },
     },
-    h(
-      'div',
-      { class: 'thix-conversation-tools' },
-      h(
-        'button',
-        {
-          type: 'button',
-          class: `thix-raw-toggle${raw ? ' on' : ''}`,
-          title: raw ? labels.rawOn : labels.rawOff,
-          'aria-pressed': raw ? 'true' : 'false',
-          onClick: () => setRaw(!raw),
-        },
-        uiTexts.rawView,
-      ),
-    ),
-
     empty
       ? h('div', { class: 'floot-empty-state' }, labels.emptyConversation)
       : null,
-    raw
-      ? h(RawView, { view })
-      : h(MessageList, { view, controller, features, context }),
-    raw ? null : h(Queue, { state, controller }),
+    h(MessageList, { view, controller, features, context }),
+    h(Queue, { state, controller }),
   );
 };

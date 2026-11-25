@@ -80,7 +80,7 @@ const TURN_SEALED =
  */
 
 /**
- * @typedef {{turnId:string, offset:number, raw:boolean}} ReadingPosition
+ * @typedef {{turnId:string, offset:number}} ReadingPosition
  */
 
 /**

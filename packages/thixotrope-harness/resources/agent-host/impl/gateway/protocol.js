@@ -212,7 +212,6 @@ export const uiTexts = Object.freeze({
   recoveryTitle: 'Turn journal and recovery',
   recordAcknowledgement: 'Record acknowledgement',
   thinking: 'thinking',
-  rawView: '</>',
 });
 
 /** Templated UI texts. */

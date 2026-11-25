@@ -950,7 +950,7 @@ W3.8 alone; files, entry points and estimates in `m3-interfaces.md` 10, 17)
 | W3.3 manager side and seams | A | `resources/agent-host/durable-gateway.js`; seams H2 (`durable.js`), H3 (`AH/attach.js`) | `AgentHostAdmin.gateway()` -> `GatewayAdmin` (`serve`, `status`, `rotateSignIn`, `stop`) over a kit registration carrying the operator, added to the manager facet's guard by `withGatewayAdmin`; `makeAttach` `bindings` | unit: the M3 guards (contract samples), `withGatewayAdmin` methods = M2's plus `gateway` (pins `payload.methodGuards`, CC-072), `GatewayAdmin` with a fake kit, attach dispatch; bundle sizes (session and exec growth 0 bytes) | no |
 | W3.4 UI foundation | A | `ui/build.mjs`, `ui/index.html`, `ui/src/{main.js,features.js,net,controller,shell,styles}`, `test/unit/_m3-fake-powers.js` | esbuild bundle (SES, captp, Preact) into `AH/gateway/assets/`; fragment parsing; connection with the R6-14 schedule and "Server starting..."; controller (sessions, presets with availability, live view, records kept as received, exactly-once drafts with Web Locks sent and resent through the `composer.addon` chain, rebuild and re-attach); shell, overlay, drawer, status bar, feature slots (a `feature.js` exports one feature or an array) | unit with happy-dom | no |
 | W3.5 sessions UI | B | `ui/src/sessions/` | sidebar (circles, two lines, live), rename and delete, new-session dialog (presets from `describe()`, unavailable ones disabled with their reason; backends; catalogue with Factory default; R6-39) | unit with fake powers | no |
-| W3.6 conversation UI | B | `ui/src/conversation/` | streaming bubble, thinking row, tool groups, exec highlight, raw view, links, status rows, recovery panel and acknowledgement, queue rows, Stop, blocked sending, send-error line, usage bar, large content; `composer.addon` props (input, caret, `replaceRange`) and `message.renderer` props (`{ context, turn, record }`) | unit with fake powers | no |
+| W3.6 conversation UI | B | `ui/src/conversation/` | streaming bubble, thinking row, tool groups, exec highlight, ~~raw view~~ (removed later, M3 acceptance 8), links, status rows, recovery panel and acknowledgement, queue rows, Stop, blocked sending, send-error line, usage bar, large content; `composer.addon` props (input, caret, `replaceRange`) and `message.renderer` props (`{ context, turn, record }`) | unit with fake powers | no |
 | W3.7 gateway wiring | B | `AH/gateway/index.js`, seams H4-H5, `scripts/gateway.mjs`, `test/integration/{_m3-gateway,m3-gateway,m3-sessions}*` | `makeGatewayService` composes W3.1-W3.2 for the kit binding, with `GatewayContext.secretWriter` for extensions; provisioning step; operator script (serve, status, rotate, stop, url) | integration: acceptance 1-3, 10-14 (protocol), 16; kill points K1, K2 | **yes** |
 | W3.8 integration | alone | `test/browser/_harness.mjs`, `test/browser/m3-*.mjs`, `test/integration/m3-reconnect.test.js`, `perf/{ui,gateway,gateway-session}.perf.mjs`, `perf/_m3-client.mjs` | `startBrowserGateway({ template, provision? }) -> { page, url, client, close() }` for M3, M4 and M5 browser files; browser acceptance, kill points K3-K5, every perf row; checks `m3-interfaces.md` 5 against M2 as merged | browser (Playwright, `THIX_HARNESS_BROWSER=1`) and integration | **yes** |
 
@@ -977,8 +977,9 @@ through the Node client or the browser)
 7. SIGKILL the daemon mid-turn with two pages open: both show the interrupted or outcome-unknown
    row; Details opens "Turn journal and recovery"; "Record acknowledgement" works while idle; no
    provider request or tool run happened twice (K5).
-8. Tool calls fold into "Thought for ..." groups; `exec` shows highlighted source; `</>` raw
-   view; scrolling up pages a 300-turn imported session back to turn 1 across the
+8. Tool calls fold into "Thought for ..." groups; `exec` shows highlighted source; ~~`</>` raw
+   view~~ (passed at M3, since removed from the UI; see m3-interfaces.md acceptance 8);
+   scrolling up pages a 300-turn imported session back to turn 1 across the
    archive; a 1 MiB reply renders fully.
 9. At 640 px the sidebar becomes a drawer; at 641 px it does not.
 10. A call carrying a 100 KiB string to a session method, one with a record of 2,000 invented
@@ -1050,7 +1051,7 @@ never re-based. Rows and readings: J-10060..J-10064.
 | 5 close and reopen mid-turn; reload re-attaches | `m3-reconnect`, `m3-ui` | pass | pass |
 | 6 resend from the saved draft, no duplicate (K3, K4) | `m3-reconnect`, `m3-ui` | pass | pass |
 | 7 SIGKILL mid-turn with two pages (K5) | `m3-reconnect`, `m3-ui-restart` | pass | pass |
-| 8 tool groups, exec highlight, raw view, 300-turn paging, 1 MiB reply | `m3-ui-history` (`m3-300` template) | pass; held 110 s | pass (J-9605's live-watch gap open, minor) |
+| 8 tool groups, exec highlight, raw view (since removed), 300-turn paging, 1 MiB reply | `m3-ui-history` (`m3-300` template) | pass; held 110 s | pass (J-9605's live-watch gap open, minor) |
 | 9 drawer at 640 px, none at 641 px | `m3-ui` | pass | pass |
 | 10 100 KiB, 2,000 keys, page-made object, invented `networkPolicy` refused | `m3-gateway` | pass; no delivery for the refused calls | pass |
 | 11 K1 same port and secret; rotation; K2 one valid secret | `m3-gateway` | pass | pass |

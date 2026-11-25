@@ -6,7 +6,7 @@
  * imported 300-turn session, `perf/_m3-client.mjs`):
  *
  * - tool calls fold into a "Thought for ..." group; an `exec` call shows
- *   its `code` highlighted; `</>` shows the raw JSON;
+ *   its `code` highlighted (the `</>` raw JSON view was removed);
  * - scrolling up pages the 300-turn session back to turn 1
  *   across the archive with every turn once;
  * - a reply longer than its history preview survives settling and reload;
@@ -138,7 +138,7 @@ run('setup: m3-300 template, scripted backend for live turns', async t => {
 });
 
 run(
-  'acceptance 8: tool groups, exec highlight, raw view, 1 MiB reply',
+  'acceptance 8: tool groups, exec highlight, no raw view, 1 MiB reply',
   async t => {
     if (!harness) throw Error('setup failed');
     const page = harness.page;
@@ -165,15 +165,7 @@ run(
       (await turn.locator('.floot-code [class*="floot-tok-"]').count()) > 0,
       'exec source highlighted',
     );
-    // `</>` replaces the conversation with each turn's raw JSON.
-    await page.locator('.thix-raw-toggle').first().click();
-    const raw =
-      (await page
-        .locator('.thix-raw-view .floot-tool-pre')
-        .last()
-        .textContent()) ?? '';
-    t.notThrows(() => JSON.parse(raw), 'the raw view is JSON');
-    await page.locator('.thix-raw-toggle').first().click();
+    t.is(await page.locator('.thix-raw-toggle').count(), 0, 'no raw view');
 
     // 1 MiB reply.
     await send(page, 'mega');

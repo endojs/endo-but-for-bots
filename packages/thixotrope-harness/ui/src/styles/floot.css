@@ -712,17 +712,6 @@
   color: var(--fl-green);
 }
 
-.floot-tool {
-  max-width: 80%;
-  background: #1a1a2e;
-  border: 1px solid #2a2a3e;
-  border-radius: 10px;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.8rem;
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  color: var(--fl-tool);
-  animation: floot-fade 0.15s ease;
-}
 .floot-tool-label {
   font-size: 0.65rem;
   text-transform: uppercase;
@@ -738,10 +727,6 @@
   max-height: 150px;
   overflow-y: auto;
 }
-/* `.floot-tool` is now emitted only by the raw debug view, which has no result
-   rows: a tool call and its result are one action entry below, so the `result`
-   modifier this block used to carry went with the two-row rendering. */
-
 /* ── Agent actions ──────────────────────────────────────────────────────────
    Every action between two replies collapses into one group, and each action
    inside it collapses its call and result together. Both are closed by default
@@ -1173,8 +1158,7 @@
    80% of a 390px screen wastes a third of the width it needs most. */
 @media (max-width: 640px) {
   .floot-msg,
-  .floot-actions,
-  .floot-tool {
+  .floot-actions {
     max-width: 92%;
   }
 
