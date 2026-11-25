@@ -84,6 +84,41 @@ test('attachments go through enqueueMessageOnce, none through enqueueOnce', asyn
   t.is(args[3][0].value, notes);
 });
 
+test('the spoken marker is passed on as the last argument; a typed call is unchanged (M11 9.1)', async t => {
+  const { session, calls } = fakeSession();
+  const composer = makeComposer({ now: () => AT });
+  const notes = Far('Notes', {});
+  await E(composer).submit(session, 'typed', ID);
+  await E(composer).submit(session, 'typed', ID, harden({ spoken: false }));
+  await E(composer).submit(session, 'said', ID, harden({ spoken: true }));
+  await E(composer).submit(
+    session,
+    'said @notes',
+    ID,
+    harden({ attachments: [{ label: 'notes', value: notes }], spoken: true }),
+  );
+  t.deepEqual(
+    calls.map(([m, args]) => [m, args.length]),
+    [
+      ['enqueueOnce', 3],
+      ['enqueueOnce', 3],
+      ['enqueueOnce', 4],
+      ['enqueueMessageOnce', 5],
+    ],
+  );
+  t.deepEqual(calls[2][1][3], { spoken: true });
+  t.deepEqual(calls[3][1][4], { spoken: true });
+  await t.throwsAsync(() =>
+    E(composer).submit(
+      session,
+      'x',
+      ID,
+      harden(/** @type {any} */ ({ spoken: 'yes' })),
+    ),
+  );
+  t.is(calls.length, 4, 'the guard refuses a marker that is not a boolean');
+});
+
 test('the guard refuses 33 attachments; a long text is refused before staging', async t => {
   const blobs = testBlobs();
   t.teardown(blobs.cleanup);

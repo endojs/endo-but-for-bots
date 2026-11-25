@@ -18,6 +18,7 @@ export const LOCK_PREFIX = 'familiar.send:';
  * @property {string} sessionKey
  * @property {string} text
  * @property {string} requestId
+ * @property {true} [spoken] M11: sent from spoken mode (m11-interfaces.md 9.1)
  */
 
 /**
@@ -46,7 +47,12 @@ export const readDraft = (storage, sessionKey) => {
       typeof parsed.requestId === 'string' &&
       parsed.sessionKey === sessionKey
     ) {
-      return { sessionKey, text: parsed.text, requestId: parsed.requestId };
+      return {
+        sessionKey,
+        text: parsed.text,
+        requestId: parsed.requestId,
+        ...(parsed.spoken === true ? { spoken: true } : {}),
+      };
     }
   } catch {
     // unreadable: treated as none
@@ -67,6 +73,7 @@ export const writeDraft = (storage, draft) => {
         sessionKey: draft.sessionKey,
         text: draft.text,
         requestId: draft.requestId,
+        ...(draft.spoken === true ? { spoken: true } : {}),
       }),
     );
   } catch {

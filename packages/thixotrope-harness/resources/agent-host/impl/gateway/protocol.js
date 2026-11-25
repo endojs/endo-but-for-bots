@@ -170,6 +170,8 @@ export const uiSlots = Object.freeze([
    * `ComposerAddonProps`, optional `send` override.
    */
   'composer.addon',
+  /** Controls inside the compose bar, before Send (the voice mode switch). */
+  'composer.action',
   /** Extra fields of the "Start a new session" dialog (internet toggle). */
   'newSession.field',
   /**
@@ -429,6 +431,9 @@ export const uiTextOf = Object.freeze({
  * @property {string} text
  * @property {string} requestId
  * @property {boolean} resend
+ * @property {true} [spoken] sent from spoken mode (m11-interfaces.md 9.1):
+ *   an addon that submits passes `{ spoken: true }` in `Composer.submit`'s
+ *   options
  */
 
 /**

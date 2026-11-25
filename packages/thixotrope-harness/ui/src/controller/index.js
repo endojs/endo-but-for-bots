@@ -227,7 +227,7 @@ export const makeController = ({
   const listeners = new Set();
   /**
    * Submission listeners (`onSubmission`; m11-interfaces.md H10, D-M11-20):
-   * told `{ sessionKey, session, requestId, receipt }` after each `send` is
+   * told `{ sessionKey, session, requestId, receipt, spoken }` after each `send` is
    * answered; cleared on every attach (a feature registers again on the
    * connection's new `FeatureContext`).
    * @type {Set<(notice: Record<string, any>) => void>}
@@ -1129,8 +1129,15 @@ export const makeController = ({
    * @param {string} text
    * @param {string} requestId
    * @param {boolean} resend
+   * @param {boolean} [spoken] M11: sent from spoken mode (m11-interfaces.md 9.1)
    */
-  const sendThroughChain = async (session, text, requestId, resend) => {
+  const sendThroughChain = async (
+    session,
+    text,
+    requestId,
+    resend,
+    spoken = false,
+  ) => {
     for (const addon of addons()) {
       if (typeof addon.send === 'function') {
         const answer = addon.send({
@@ -1139,11 +1146,20 @@ export const makeController = ({
           text,
           requestId,
           resend,
+          ...(spoken ? { spoken: true } : {}),
         });
         if (answer !== undefined) return answer;
       }
     }
-    return E(powers.composer).submit(session, text, requestId);
+    // A typed send's call is unchanged: the marker is only ever `true`.
+    return spoken
+      ? E(powers.composer).submit(
+          session,
+          text,
+          requestId,
+          harden({ spoken: true }),
+        )
+      : E(powers.composer).submit(session, text, requestId);
   };
 
   /**
@@ -1181,7 +1197,13 @@ export const makeController = ({
             return;
           }
           try {
-            await sendThroughChain(session, draft.text, draft.requestId, true);
+            await sendThroughChain(
+              session,
+              draft.text,
+              draft.requestId,
+              true,
+              draft.spoken === true,
+            );
             clearDraft(storage, sessionKey, draft.requestId);
             resendErrors.delete(sessionKey);
           } catch (error) {
@@ -1576,11 +1598,15 @@ export const makeController = ({
       }),
 
     /**
-     * Send the composer's text exactly once (9.2).
+     * Send the composer's text exactly once (9.2). `spoken: true` marks a
+     * message sent from spoken mode (m11-interfaces.md 9.1): the draft
+     * keeps the marker, so a resend after a reload carries it too.
      *
      * @param {string} text
+     * @param {{ spoken?: boolean }} [options]
      */
-    send: async text => {
+    send: async (text, options = {}) => {
+      const spoken = options.spoken === true;
       const key = state.activeKey;
       if (key === undefined || !state.view || inspecting()) return undefined;
       if (!locks) {
@@ -1594,16 +1620,28 @@ export const makeController = ({
         return await underLock(key, async () => {
           const saved = readDraft(storage, key);
           const requestId = saved ? saved.requestId : makeRequestId();
-          writeDraft(storage, { sessionKey: key, text, requestId });
+          writeDraft(storage, {
+            sessionKey: key,
+            text,
+            requestId,
+            ...(spoken ? { spoken: true } : {}),
+          });
           const receipt = await sendThroughChain(
             session,
             text,
             requestId,
             false,
+            spoken,
           );
           clearDraft(storage, key, requestId);
           if (rootInputs.get(key)?.text === text) rootInputs.delete(key);
-          const notice = { sessionKey: key, session, requestId, receipt };
+          const notice = {
+            sessionKey: key,
+            session,
+            requestId,
+            receipt,
+            spoken,
+          };
           for (const listener of [...submissionListeners]) {
             try {
               listener(notice);

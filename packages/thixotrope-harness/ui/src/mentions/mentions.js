@@ -355,7 +355,7 @@ export const makeMentions = ({ storage: storageOf = defaultStorage } = {}) => {
    * @param {import('../../../resources/agent-host/impl/gateway/protocol.js').ComposerSendRequest} request
    * @returns {Promise<any> | undefined}
    */
-  const send = ({ context, session, text, requestId, resend }) => {
+  const send = ({ context, session, text, requestId, resend, spoken }) => {
     const held = sending.get(requestId);
     /** @type {Chip[]} */
     let chips;
@@ -394,7 +394,12 @@ export const makeMentions = ({ storage: storageOf = defaultStorage } = {}) => {
       chips.map(({ label, value }) => ({ label, value })),
     );
     return E(context.powers.composer)
-      .submit(session, text, requestId, harden({ attachments }))
+      .submit(
+        session,
+        text,
+        requestId,
+        harden(spoken ? { attachments, spoken } : { attachments }),
+      )
       .then(receipt => {
         sending.delete(requestId);
         clearLabels(requestId);

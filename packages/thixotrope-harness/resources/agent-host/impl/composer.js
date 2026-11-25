@@ -34,6 +34,11 @@
  * `E(session).enqueueMessageOnce(submission, requestId, at, attachments)`;
  * otherwise `enqueueOnce` as before.
  *
+ * M11 (m11-interfaces.md 9.1): `{ spoken: true }` in the same options marks
+ * a message sent from spoken mode; it is passed on as the enqueue methods'
+ * last argument `{ spoken: true }`, and only then (a typed send's calls are
+ * unchanged). `edit` takes no marker: the entry keeps its own.
+ *
  * A staged file's fate after a failed call (HR-SYN-10). Whatever the
  * Composer can check is checked before staging: blank text, the package
  * length, the attachments; its own guard has the session's argument shapes
@@ -168,11 +173,12 @@ export const makeComposer = ({ now = () => Date.now(), blobs } = {}) => {
      * @param {any} session
      * @param {string} text
      * @param {string} requestId
-     * @param {{ attachments?: any[] }} [options] M5
+     * @param {{ attachments?: any[], spoken?: boolean }} [options] M5, M11
      */
     async submit(session, text, requestId, options = undefined) {
       if (text.trim() === '') throw Error(texts.blankSubmission);
       const attachments = options?.attachments ?? [];
+      const marker = options?.spoken === true ? [harden({ spoken: true })] : [];
       if (attachments.length > 0) {
         if (text.length > limits.packageTextUnits) {
           throw Error(textOf.packageTooLong(text.length));
@@ -189,8 +195,9 @@ export const makeComposer = ({ now = () => Date.now(), blobs } = {}) => {
               requestId,
               now(),
               attachments,
+              ...marker,
             )
-          : E(session).enqueueOnce(submission, requestId, now());
+          : E(session).enqueueOnce(submission, requestId, now(), ...marker);
       if (utf8Bytes(text) <= limits.inlineBytes) {
         return remember(session, await enqueue(harden({ text })));
       }

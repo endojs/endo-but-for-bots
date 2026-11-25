@@ -1164,9 +1164,10 @@ export const makeFakePowers = ({
      * @param {any} session
      * @param {string} text
      * @param {string} requestId
+     * @param {any[]} options recorded only when given (M11 `{ spoken }`)
      */
-    submit: async (session, text, requestId) => {
-      enter('Composer', 'submit', [session, text, requestId]);
+    submit: async (session, text, requestId, ...options) => {
+      enter('Composer', 'submit', [session, text, requestId, ...options]);
       const s = byFacet.get(session);
       if (!s) throw Error('unknown session');
       const known = s.receipts.get(requestId);
