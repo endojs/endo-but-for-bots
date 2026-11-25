@@ -27,7 +27,7 @@
 
 .thix-text-error,
 .thix-send-error {
-  color: #dc2626;
+  color: var(--fl-danger);
   font-size: 0.85rem;
 }
 

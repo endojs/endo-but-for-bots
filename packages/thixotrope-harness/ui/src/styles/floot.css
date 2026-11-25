@@ -1,9 +1,12 @@
 /*
  * Copied from packages/space-floot/src/floot.css of this repository (D-M3-5,
- * owner decision 6): the views keep its look and class names. Changes: this
- * comment only. Shell-only rules are in shell.css.
+ * owner decision 6): the views keep its look and class names. Changes: rules
+ * no harness view renders are removed; the tokens are on :root and replace
+ * the literals that repeated them; the top bars share one height and icon
+ * size; a :focus-visible ring is added. Shell-only rules are in shell.css.
  */
-.floot-app {
+/* Design tokens, on :root so the page body and every view share them. */
+:root {
   --fl-bg: var(--bg-primary, #0f0f10);
   --fl-surface: var(--bg-secondary, #17171a);
   --fl-surface2: var(--bg-sidebar, #1f1f23);
@@ -23,6 +26,37 @@
   --fl-tool: #a78bfa;
   --fl-mail: #0e7490;
   --fl-mail-text: #e0f2fe;
+  --fl-accent-strong: #2563eb;
+  --fl-on-accent: #fff;
+  --fl-danger: #dc2626;
+  --fl-danger-strong: #b91c1c;
+  --fl-amber-line: rgba(245, 158, 11, 0.45);
+  /* Tool calls, action groups and queued messages: purple on near-black. */
+  --fl-tool-bg: #1a1a2e;
+  --fl-tool-bg-deep: #16162a;
+  --fl-tool-hover: #1e1e36;
+  --fl-tool-border: #2a2a3e;
+  --fl-tool-divider: #23233a;
+  --fl-tool-input-border: #4a4a6a;
+  --fl-tool-label: #7c6fbf;
+  --fl-tool-text: #c4b5fd;
+  --fl-tool-faint: #6b6b8c;
+  --fl-tool-name: #a5b4fc;
+  --fl-tool-result-label: #4ade80;
+  --fl-tool-result-text: #bbf7d0;
+  --fl-pending-bg: #2a2a3e;
+  --fl-pending-text: #b8b8cc;
+  --fl-delete-border: #7c2a2a;
+  --fl-delete-text: #f87171;
+  /* Syntax colours of exec source. */
+  --fl-code-text: #d8d8f0;
+  --fl-code-keyword: #c792ea;
+  --fl-code-literal: #f78c6c;
+  --fl-code-string: #c3e88d;
+  --fl-code-punctuation: #89ddff;
+  --fl-code-comment: #676e95;
+}
+.floot-app {
   position: relative;
   height: 100%;
   display: flex;
@@ -64,7 +98,7 @@
   border-radius: 6px;
   border: none;
   background: var(--fl-accent);
-  color: #fff;
+  color: var(--fl-on-accent);
   cursor: pointer;
   font-size: 1.2rem;
   line-height: 1;
@@ -74,7 +108,7 @@
   transition: background 0.15s;
 }
 .floot-new-btn:hover {
-  background: #2563eb;
+  background: var(--fl-accent-strong);
 }
 .floot-session-list {
   flex: 1;
@@ -304,7 +338,7 @@
 }
 .floot-header-btn.chip.attention {
   color: var(--fl-amber);
-  border-color: rgba(245, 158, 11, 0.45);
+  border-color: var(--fl-amber-line);
 }
 .floot-header-btn.chip.attention.on {
   border-color: var(--fl-amber);
@@ -512,16 +546,16 @@
 .floot-send {
   border: none;
   background: var(--fl-accent);
-  color: #fff;
+  color: var(--fl-on-accent);
 }
 .floot-send:hover {
-  background: #2563eb;
+  background: var(--fl-accent-strong);
 }
 .floot-send.cancel {
-  background: #dc2626;
+  background: var(--fl-danger);
 }
 .floot-send.cancel:hover {
-  background: #b91c1c;
+  background: var(--fl-danger-strong);
 }
 .floot-send svg {
   width: 20px;
@@ -553,14 +587,14 @@
   font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #7c6fbf;
+  color: var(--fl-tool-label);
   margin-bottom: 0.25rem;
 }
 .floot-tool-pre {
   white-space: pre-wrap;
   word-break: break-all;
   margin: 0;
-  color: #c4b5fd;
+  color: var(--fl-tool-text);
   max-height: 150px;
   overflow-y: auto;
 }
@@ -570,8 +604,8 @@
    so the transcript reads as conversation, with the machinery one click away. */
 .floot-actions {
   max-width: 80%;
-  background: #16162a;
-  border: 1px solid #2a2a3e;
+  background: var(--fl-tool-bg-deep);
+  border: 1px solid var(--fl-tool-border);
   border-radius: 10px;
   font-size: 0.8rem;
   font-family: 'SF Mono', 'Fira Code', monospace;
@@ -595,15 +629,15 @@
 }
 .floot-actions-head:hover,
 .floot-action-head:hover {
-  background: #1e1e36;
+  background: var(--fl-tool-hover);
 }
 .floot-caret {
   flex: none;
-  color: #7c6fbf;
+  color: var(--fl-tool-label);
 }
 .floot-actions-count {
   flex: none;
-  color: #c4b5fd;
+  color: var(--fl-tool-text);
   font-weight: 600;
 }
 .floot-actions-detail,
@@ -611,22 +645,22 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #7c6fbf;
+  color: var(--fl-tool-label);
 }
 .floot-action-preview {
   min-width: 0;
   flex: 1;
-  color: #6b6b8c;
+  color: var(--fl-tool-faint);
 }
 .floot-actions-body {
-  border-top: 1px solid #2a2a3e;
+  border-top: 1px solid var(--fl-tool-border);
 }
 .floot-action + .floot-action {
-  border-top: 1px solid #23233a;
+  border-top: 1px solid var(--fl-tool-divider);
 }
 .floot-action-name {
   flex: none;
-  color: #a5b4fc;
+  color: var(--fl-tool-name);
 }
 .floot-action-running {
   flex: none;
@@ -640,37 +674,37 @@
   margin-top: 0.5rem;
 }
 .floot-action-section.result .floot-tool-label {
-  color: #4ade80;
+  color: var(--fl-tool-result-label);
 }
 .floot-action-section.result .floot-tool-pre {
-  color: #bbf7d0;
+  color: var(--fl-tool-result-text);
 }
 
 /* JavaScript tokens for the exec-family entries. */
 .floot-code {
-  color: #d8d8f0;
+  color: var(--fl-code-text);
 }
 .floot-tok-keyword {
-  color: #c792ea;
+  color: var(--fl-code-keyword);
 }
 .floot-tok-literal,
 .floot-tok-number {
-  color: #f78c6c;
+  color: var(--fl-code-literal);
 }
 .floot-tok-string,
 .floot-tok-template {
-  color: #c3e88d;
+  color: var(--fl-code-string);
 }
 .floot-tok-regexp,
 .floot-tok-punctuation {
-  color: #89ddff;
+  color: var(--fl-code-punctuation);
 }
 .floot-tok-comment {
-  color: #676e95;
+  color: var(--fl-code-comment);
   font-style: italic;
 }
 .floot-tok-identifier {
-  color: #d8d8f0;
+  color: var(--fl-code-text);
 }
 
 /* ── Pending submissions ───────────────────────────────────────────────────
@@ -679,8 +713,8 @@
    needs no badge; a label on every queued line would just be noise. */
 .floot-msg-row.pending .floot-msg {
   opacity: 0.55;
-  background: #2a2a3e;
-  color: #b8b8cc;
+  background: var(--fl-pending-bg);
+  color: var(--fl-pending-text);
 }
 /* Why queued messages are not moving, above them. */
 .floot-pending-hold {
@@ -701,28 +735,28 @@
 .floot-pending-action {
   padding: 0 0.4rem;
   background: none;
-  border: 1px solid #2a2a3e;
+  border: 1px solid var(--fl-tool-border);
   border-radius: 6px;
-  color: #7c6fbf;
+  color: var(--fl-tool-label);
   cursor: pointer;
   font: inherit;
   font-size: 0.7rem;
 }
 .floot-pending-action:hover {
-  background: #1e1e36;
-  color: #c4b5fd;
+  background: var(--fl-tool-hover);
+  color: var(--fl-tool-text);
 }
 .floot-pending-delete:hover {
-  border-color: #7c2a2a;
-  color: #f87171;
+  border-color: var(--fl-delete-border);
+  color: var(--fl-delete-text);
 }
 .floot-pending-input {
   width: min(80%, 32rem);
   min-height: 3.5rem;
   padding: 0.5rem 0.75rem;
-  border: 1px solid #4a4a6a;
+  border: 1px solid var(--fl-tool-input-border);
   border-radius: 12px;
-  background: #1a1a2e;
+  background: var(--fl-tool-bg);
   color: var(--fl-user-text);
   font: inherit;
   resize: vertical;
@@ -827,7 +861,7 @@
 /* A thought inside an action group reads as prose, not code: the app's face
    rather than the group's monospace, whole words, and no scroll box. */
 .floot-action.thought .floot-action-name {
-  color: #c4b5fd;
+  color: var(--fl-tool-text);
 }
 .floot-thought-text {
   margin: 0;
@@ -1050,11 +1084,11 @@
 .floot-operator-panel button.primary {
   border-color: var(--fl-accent);
   background: var(--fl-accent);
-  color: #fff;
+  color: var(--fl-on-accent);
 }
 .floot-operator-panel button.primary:hover {
-  border-color: #2563eb;
-  background: #2563eb;
+  border-color: var(--fl-accent-strong);
+  background: var(--fl-accent-strong);
 }
 .floot-operator-panel button.primary:disabled {
   border-color: var(--fl-accent);
@@ -1116,7 +1150,7 @@
   background: var(--fl-surface2);
 }
 .floot-recovery-turn.unknown {
-  border-color: rgba(245, 158, 11, 0.45);
+  border-color: var(--fl-amber-line);
 }
 .floot-recovery-turn.unknown > summary {
   color: var(--fl-amber);
