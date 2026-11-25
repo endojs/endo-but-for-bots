@@ -136,6 +136,11 @@ const statusBecomes = (page, text) =>
       'development',
     );
     try {
+      // Settings shows "This session" by default only when the section
+      // answers within settingsSettleMs; under load it may not, so pick it
+      // (it is listed once the section renders, and is remembered for the
+      // reopening below).
+      await page.locator('[role="tab"][data-section="session"]').click();
       await page.locator('.floot-execution').waitFor();
       t.is(
         await page.locator('.floot-execution h3').textContent(),
@@ -166,7 +171,7 @@ const statusBecomes = (page, text) =>
       t.is(held.entries.length, 0, 'nothing was queued');
       t.is(held.hold?.reason, 'stopped');
 
-      // Settings reopens on This session (its default here).
+      // Settings reopens on This session (the section picked last).
       await page.locator('button[aria-label="Settings"]').click();
       await page.locator('.floot-execution [data-action="resume"]').click();
       await statusBecomes(page, executionTexts.running);
