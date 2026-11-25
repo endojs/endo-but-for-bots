@@ -280,7 +280,13 @@ export const mailToolArgumentNames = harden({
   resolveRequest: harden(['messageNumber', 'value']),
   rejectRequest: harden(['messageNumber', 'reason']),
   submitForm: harden(['messageNumber', 'values']),
-  spawnSubagent: harden(['name', 'systemPrompt', 'attachments']),
+  spawnSubagent: harden([
+    'name',
+    'systemPrompt',
+    'attachments',
+    'modelId',
+    'reasoningEffort',
+  ]),
   askSubagent: harden(['name', 'task', 'timeoutSeconds', 'attachments']),
   stopSubagent: harden(['name']),
   attachment: harden(['name', 'petName']),
@@ -713,6 +719,13 @@ export const textOf = harden({
    */
   systemPromptTooLong: (bytes, limit) =>
     `The subagent's systemPrompt is ${bytes} bytes; the limit is ${limit}`,
+  /**
+   * D-M9-25: a spawn's `modelId` or `reasoningEffort` out of shape.
+   * @param {string} field
+   * @param {number} limit
+   */
+  spawnOptionInvalid: (field, limit) =>
+    `The subagent's ${field} must be a nonblank string of at most ${limit} characters; omit it to use your own`,
   /** @param {string} name */
   subagentExists: name => `A subagent named ${q(name)} already exists`,
   /**

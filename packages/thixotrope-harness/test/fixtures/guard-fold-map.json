@@ -237,7 +237,7 @@
   "shapes.SubmitOptions": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
   "shapes.Envelope": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
   "shapes.MailDraft": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
-  "shapes.SpawnRequest": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
+  "shapes.SpawnRequest": "J-12596: mail and delegation edges can carry bounded JSON copies or object references; D-M9-25: optional modelId and reasoningEffort, the child model and effort",
   "shapes.AskRequest": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
   "shapes.OperatorDraft": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
   "shapes.OperatorReply": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
@@ -245,7 +245,7 @@
   "interfaces.Outbox": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
   "interfaces.OperatorMailbox": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
   "interfaces.OperatorMessage": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
-  "interfaces.Delegation": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
+  "interfaces.Delegation": "J-12596: mail and delegation edges can carry bounded JSON copies or object references; D-M9-25: optional modelId and reasoningEffort, the child model and effort",
   "interfaces.SubagentHandle": "J-12596: mail and delegation edges can carry bounded JSON copies or object references",
   "shapes.WatchSnapshot": "J-12596: optional revision of the session inventory",
   "interfaces.ExecPowersSource": "J-12596: supervise a published object and list live child bindings",
@@ -366,7 +366,12 @@
   "m4Shapes.QuotaRecord": "One observed quota percentage with its first reading time and optional repeat count, latest confirmation and reported reset.",
   "shapes.EnqueueOptions": "M11 (m11-interfaces.md 9.1): the spoken-mode marker { spoken?, dictated? }, the enqueue methods' optional last argument.",
   "texts.dictatedTurnNote": "M11 (m11-interfaces.md 9.1): the note that the text was dictated, rendered with the turn's user message in the provider projection.",
-  "texts.readAloudTurnNote": "M11 (m11-interfaces.md 9.1): the note that the reply will be read aloud, rendered with the turn's user message in the provider projection."
+  "texts.readAloudTurnNote": "M11 (m11-interfaces.md 9.1): the note that the reply will be read aloud, rendered with the turn's user message in the provider projection.",
+  "textOf.spawnOptionInvalid": "D-M9-25: a refusal of a spawn model or effort that names what is offered",
+  "textOf.subagentModelUnknown": "D-M9-25: a refusal of a spawn model or effort that names what is offered",
+  "textOf.subagentCatalogUnavailable": "D-M9-25: a refusal of a spawn model or effort that names what is offered",
+  "textOf.subagentEffortUnknown": "D-M9-25: a refusal of a spawn model or effort that names what is offered",
+  "textOf.subagentEffortNone": "D-M9-25: a refusal of a spawn model or effort that names what is offered"
  },
  "vocabularyAdded": {
   "keys": [

@@ -58,7 +58,7 @@ modules (section 12).
 | P / R | M9 builds | left to |
 | --- | --- | --- |
 | P-41 mail | a per-session inbox (runtime part `inbox`); mail between sessions and with the operator through one post office in the factory vat; packages with attachments adopted with M5's `adopt`; typed requests and forms answered with `resolveRequest`, `rejectRequest`, `submitForm`; mail-started turns, at most one per message, across restarts; the buffered reply or `Error: ...`; `listMessages`, `send`, `reply`, `dismiss` | the operator inbox view (M12 Home, W12.4a) and the CLI's mail commands (M12) read the API built here |
-| P-42 subagents | `spawnSubagent`, `askSubagent`, `stopSubagent`; hidden child sessions from the spare pool inheriting backend, model, effort, preset snapshot (and the network policy once M7 stores one); tree limit counting spawns in flight, depth limit; ask timeout on an adapter timer; depth-first stop and delete; asks across a restart end without hanging | the child's own environment and shell come from M6's builders through the ordinary create path |
+| P-42 subagents | `spawnSubagent`, `askSubagent`, `stopSubagent`; hidden child sessions from the spare pool inheriting backend, model, effort (unless the parent names a model or effort, D-M9-25), preset snapshot (and the network policy once M7 stores one); tree limit counting spawns in flight, depth limit; ask timeout on an adapter timer; depth-first stop and delete; asks across a restart end without hanging | the child's own environment and shell come from M6's builders through the ordinary create path |
 | prompt part 4 | the delegation section and the mail-tools paragraph (Fae's words, rewritten where the harness differs) | |
 
 R items: R3-33, R3-34, R3-39, R3-214, R3-215, R3-216, R3-217, R3-218 (listing, reply, dismissal;
@@ -224,7 +224,8 @@ answers a `SubagentHandle`. R4-70's subscription selector is inherited by the sa
 harness a subscription is chosen by the Backend object itself (a `claude-pool` or `codex-pool`
 Backend, M4), and the pool's stored effort answer (`subscriptionEffort`, the last create
 resolver) is the parent's `reasoningEffort`, so passing the parent's resolved `backend` and effort
-is the whole inheritance; no selector name exists to copy (WX X-12). The parent's `subagents` part keeps a name -> handle cache, re-read with
+is the whole inheritance; no selector name exists to copy (WX X-12). A parent may name the child's
+model and effort instead (D-M9-25). The parent's `subagents` part keeps a name -> handle cache, re-read with
 `Delegation.children()` after a recovery. One question in flight per subagent (Fae); an ask is an
 answered call to the handle, bounded by an adapter-timer deadline armed as the exec tool arms its
 own. Rejected: the parent minting its children (it holds no factory authority and must not).
@@ -352,6 +353,31 @@ entries: shell (`runCommand`, `inspectShell`), `viewImage`, mail (`listMessages`
 (`spawnSubagent`, `askSubagent`, `stopSubagent`). M6's part and service are `environment`
 (`SessionServices.environment`); M9 names nothing else of M6's.
 
+**D-M9-25. A parent may choose its child's model and effort on its own backend.** `spawnSubagent`
+takes `{ name, systemPrompt?, attachments?, modelId?, reasoningEffort? }`; the session tool checks
+only the size of the two strings (`modelIdUnits`, `effortUnits`; `mailTextOf.spawnOptionInvalid`)
+and forwards them in `SpawnRequest`. The factory decides, in the spawn, after the reservation:
+- neither given: the parent's resolved model and effort, unchanged, and no backend call (what every
+  child got before D-M9-25);
+- `modelId` given: it must be a row of the parent's backend catalogue (`Backend.listModels`, at most
+  8 pages of `modelPageRows`; `postOfficeTextOf.subagentModelUnknown` names up to 24 offered ids,
+  `subagentCatalogUnavailable` when a page answers `unavailable`). A scripted backend has no
+  catalogue and takes any id, as `createSession` does;
+- `reasoningEffort` given: on a pool backend the pool's own `resolveEffort` decides (it knows the
+  Codex `ultra`/`max` spelling); its refusal becomes `subagentEffortUnknown`, naming the model row's
+  efforts. Any other backend takes no effort (`subagentEffortNone`);
+- a new model without an effort keeps the parent's effort when the pool takes it for that model,
+  else none is passed and the creation's `subscriptionEffort` stores the model's default.
+The creation's resolvers then check the choice again as for any `createSession`. Each refusal is the
+tool's failed result before any child exists, and the name is free again. The child stays on the
+parent's backend (and so its subscription pool): naming another backend would need a `Backend`
+object the parent does not hold and a policy for which backends a child may reach, so it is left
+out. Nothing stored changes: the child's choice is in its own `SessionConfig` as for any session,
+and the fields are optional in `SpawnRequest`, so stored records, a factory's in-memory inheritance
+and spawns in flight across a restart are valid as they are. A session program that sends the
+fields to a factory installed before D-M9-25 gets that factory's guard refusal; without them it
+works as before. Rejected: picking the effort in the session (it holds no catalogue).
+
 ---
 
 ## 3. Objects and interfaces
@@ -394,7 +420,7 @@ stated. "Retired break" is what a caller does when the call breaks with the hub'
 | | `list(PageOptions?) -> OperatorMailPage`, `rev()`, `addressOf(Session)` | gateway, CLI (M12) | answered | page of 32 rows, <= 24 KB out | factory lost | none |
 | `OperatorMessage` (operator) | `describe()`, `take(edge)`, `reply(OperatorReply)`, `dismiss()` | gateway | answered | reply as `send` | factory lost | `dismiss` releases its staged body (`AgentHostAdmin.releaseBlobs`, one answered call) |
 | `RequestHandle` (operator) | `describe()`, `whenSettled()`, `cancel()` | gateway, CLI | answered; `whenSettled` stays pending until settled | < 9 KB | factory lost; a gateway reconnect re-calls `whenSettled` | `cancel` sends `cancelMail` to the recipient (sendOnly) |
-| `Delegation` (one per session below the depth limit, `SessionServices.subagents`) | `spawn(SpawnRequest) -> SpawnAnswer` | session: `spawnSubagent` (crank D) | answered | request <= 12 KB (system prompt inline, 32 attachments) | parent: factory lost, tool failed | admission (one tree walk to the root, <= depth 64), then the ordinary creation (m1a 9, m2 7.2): a spare take or a cold create, `make`, `bindSession` |
+| `Delegation` (one per session below the depth limit, `SessionServices.subagents`) | `spawn(SpawnRequest) -> SpawnAnswer` | session: `spawnSubagent` (crank D) | answered | request <= 12 KB (system prompt inline, 32 attachments, model and effort ids) | parent: factory lost, tool failed | admission (one tree walk to the root, <= depth 64), then the ordinary creation (m1a 9, m2 7.2): a spare take or a cold create, `make`, `bindSession` |
 | | `children() -> SubagentList` | `subagents` part after recovery | answered | <= 64 infos, < 9 KB | factory lost | none |
 | `SubagentHandle` (parent's `subagents` part; also a mail address) | `ask(AskRequest) -> AskAnswer` | session: `askSubagent` | answered; pending until the child's reply, the parent's `cancelAsk` or the child's loss | request <= 12 KB in; answer <= 12 KB out (inline or a cut staged copy) | parent: factory lost | the reply's crank: one `copy` with `maxUnits` (adapter) then the answer |
 | | `cancelAsk()` | `subagents` part (`onCancel`, `onRecover`, deadline) | sendOnly | tiny | dropped silently | one `cancelMail` to the child (sendOnly) |
@@ -613,7 +639,8 @@ through `AgentHostAdmin.releaseBlobs`), because for the operator the reply is th
 P, crank D: name rule, unique among live children, attachment labels; `E(delegation).spawn(req)`.
 Factory: admission (node of P; `depth(P) + 1 <= maxDepth` is guaranteed because P holds a
 `Delegation` only below it; descendants of P's root plus spawns in flight `< maxDescendants`, else
-`treeLimit`); the reservation is recorded, stamped with `starts.current()`; `create({ title:
+`treeLimit`); the reservation is recorded, stamped with `starts.current()`; the child's model and effort are
+chosen (D-M9-25: the parent's unless the request names them, checked against the catalogue); `create({ title:
 childTitle(P.title, name), backend, modelId, reasoningEffort, preset, systemPrompt, userInitiated:
 false, at }, { parent: P.row })` (seam F3); on success the node is linked, the reservation
 released, and the answer is `{ handle, title }`. The child's `SessionServices.endowments` are the
@@ -1034,7 +1061,9 @@ tree build `postOfficeTexts`/`postOfficeTextOf` (moved there at the settle, J-11
 `mailFraud`, `notAnAddress`, `requestClosed`, `operatorInboxFull`, `recipientLost`, `bodyCut`,
 `envelopeTooLarge`, `treeLimit`, `subagentLost`, `answerAttachments`, `childTitle`), and a session
 forwards those as tool results without building them. Added at the settle: `mailTexts.imported`
-(an imported message cannot be answered, D-M9-21).
+(an imported message cannot be answered, D-M9-21). Added by D-M9-25:
+`mailTextOf.spawnOptionInvalid` (session) and `postOfficeTextOf.subagentModelUnknown`,
+`subagentCatalogUnavailable`, `subagentEffortUnknown`, `subagentEffortNone` (factory).
 Existing texts reused: `textOf.errorResult` (`Error: ...`), `texts.toolOutcomeUnknown`,
 `texts.interruptedBeforeDispatch`, `textOf.truncationMarker`, `textOf.tooManyAttachments`,
 `textOf.noPackage`, `textOf.noEdge`, `texts.blobNotOwned`.

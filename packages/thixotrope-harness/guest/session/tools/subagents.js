@@ -7,11 +7,13 @@
  * limit, R4-69). The state is the `subagents` runtime part's
  * (`../subagents.js`), reached as `context.runtime.subagents`.
  *
- * - `spawnSubagent({ name, systemPrompt?, attachments? })`: the name rule
- *   (`subagentNameSource`, D-M9-12) and uniqueness among the live children
- *   and the spawns in flight, an inline `systemPrompt` (D-M9-20), the
- *   attachments resolved by label; then `Delegation.spawn`, and the answered
- *   handle is bound under the name.
+ * - `spawnSubagent({ name, systemPrompt?, attachments?, modelId?,
+ *   reasoningEffort? })`: the name rule (`subagentNameSource`, D-M9-12) and
+ *   uniqueness among the live children and the spawns in flight, an inline
+ *   `systemPrompt` (D-M9-20), the attachments resolved by label, a model and
+ *   an effort of the guard's size (D-M9-25: the factory checks them against
+ *   the catalogue; absent, the child keeps the parent's); then
+ *   `Delegation.spawn`, and the answered handle is bound under the name.
  * - `askSubagent({ name, task, timeoutSeconds?, attachments? })`: one ask
  *   per child, its deadline armed on the turn's endpoint (`timeoutSeconds`,
  *   default 86,400); `SubagentHandle.ask` answers the reply text already
@@ -75,6 +77,8 @@ const argumentsOf = {
   name: ['string', { type: 'string', pattern: subagentNameSource }],
   petName: ['string', { type: 'string' }],
   systemPrompt: ['string', { type: 'string' }],
+  modelId: ['string', { type: 'string' }],
+  reasoningEffort: ['string', { type: 'string' }],
   task: ['string', { type: 'string' }],
   timeoutSeconds: ['integer', { type: 'integer' }],
   attachments: [
@@ -126,7 +130,7 @@ const tools = harden({
   spawnSubagent: toolOf(
     'spawnSubagent',
     1,
-    'Create a subagent: a hidden helper session like yours holding only the attachments ({name, petName}; petName subagents/<name> passes a subagent). Then use askSubagent and stopSubagent by its name.',
+    'Create a subagent: a hidden helper session like yours holding only the attachments ({name, petName}; petName subagents/<name> passes a subagent). It runs on your backend with your model and reasoning effort unless you give modelId (a model of your backend) or reasoningEffort (one that model offers). Then use askSubagent and stopSubagent by its name.',
   ),
   askSubagent: toolOf(
     'askSubagent',
@@ -334,6 +338,22 @@ const spawnEntry = harden({
             mailTextOf.systemPromptTooLong(bytes, ML.systemPromptBytes),
           );
       }
+      // D-M9-25: absent, the child keeps the parent's model and effort.
+      const modelId = values.get('modelId');
+      const reasoningEffort = values.get('reasoningEffort');
+      for (const [field, value, limit] of /** @type {const} */ ([
+        ['modelId', modelId, ML.modelIdUnits],
+        ['reasoningEffort', reasoningEffort, ML.effortUnits],
+      ])) {
+        if (
+          value !== undefined &&
+          (isStaged(value) ||
+            typeof value !== 'string' ||
+            value.trim() === '' ||
+            value.length > limit)
+        )
+          return failed(mailTextOf.spawnOptionInvalid(field, limit));
+      }
       const attached = attachmentsOf(values.get('attachments'), context);
       if ('outcome' in attached) return attached.outcome;
       const spawnRequest = harden({
@@ -341,6 +361,8 @@ const spawnEntry = harden({
         attachments: attached.attachments,
         at: part.at(),
         ...(systemPrompt === undefined ? {} : { systemPrompt }),
+        ...(modelId === undefined ? {} : { modelId }),
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       });
       if (attached.attachments.length && !fitsFrame(spawnRequest))
         return failed(texts.frameLimit);

@@ -207,6 +207,38 @@ export const textOf = harden({
    */
   treeLimit: limit =>
     `Subagent tree limit of ${limit} reached; use existing helpers or finish the task yourself.`,
+  /**
+   * D-M9-25: a spawn's `modelId` is not in the parent's backend catalogue.
+   * @param {string} modelId
+   * @param {string} backend the backend's label
+   * @param {readonly string[]} offered model ids, at most a page
+   */
+  subagentModelUnknown: (modelId, backend, offered) =>
+    `Model ${q(modelId)} is not in the catalogue of backend ${q(backend)}${
+      offered.length === 0 ? '' : `; it offers ${offered.join(', ')}`
+    }. Choose one of those or omit modelId to use your own model.`,
+  /**
+   * D-M9-25: the catalogue could not be read to check a spawn's model.
+   * @param {string} backend
+   */
+  subagentCatalogUnavailable: backend =>
+    `The model catalogue of backend ${q(backend)} could not be read; try again or omit modelId to use your own model.`,
+  /**
+   * D-M9-25: a spawn's `reasoningEffort` that its model does not offer.
+   * @param {string} modelId
+   * @param {string} effort
+   * @param {readonly string[]} offered
+   */
+  subagentEffortUnknown: (modelId, effort, offered) =>
+    offered.length === 0
+      ? `Model ${q(modelId)} offers no reasoning effort; omit reasoningEffort.`
+      : `Model ${q(modelId)} does not offer reasoning effort ${q(effort)}; it offers ${offered.join(', ')}.`,
+  /**
+   * D-M9-25: a spawn's `reasoningEffort` on a backend that takes none.
+   * @param {string} backend
+   */
+  subagentEffortNone: backend =>
+    `Backend ${q(backend)} takes no reasoning effort; omit reasoningEffort.`,
   /** @param {string} name */
   subagentLost: name =>
     `Subagent ${q(name)} stopped working (its session was lost); stop it and spawn another`,
@@ -958,9 +990,14 @@ const postOfficeShapeBuilders = {
         attachments: S.Attachments,
         at: count,
       },
-      // Inline only (D-M9-20): the factory composes the child's prompt
-      // as text in the creation's resolver.
-      { systemPrompt: text(limits.inlineBytes) },
+      {
+        // Inline only (D-M9-20): the factory composes the child's prompt
+        // as text in the creation's resolver.
+        systemPrompt: text(limits.inlineBytes),
+        // D-M9-25: absent, the child keeps the parent's model and effort.
+        modelId: S.ModelId,
+        reasoningEffort: text(limits.effortUnits),
+      },
     ),
   SpawnAnswer: () =>
     record(

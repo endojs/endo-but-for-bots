@@ -708,3 +708,49 @@ test('heldObject resolves subagents/<name> in the part and other labels in the l
     refused: textOf.unknownLabel('kid'),
   });
 });
+
+test('spawnSubagent: modelId and reasoningEffort reach the spawn; absent, none is sent; out of shape, refused before any send', async t => {
+  const parameters = JSON.parse(spawnTool.describe().parameters);
+  t.deepEqual(parameters.properties.modelId, { type: 'string' });
+  t.deepEqual(parameters.properties.reasoningEffort, { type: 'string' });
+  t.deepEqual(parameters.required, ['name']);
+  t.regex(spawnTool.describe().description, /modelId.*reasoningEffort/);
+  const fake = makeDelegation();
+  const { call } = setup({ delegation: fake.delegation });
+  t.deepEqual(await outcome(call(spawnTool, { name: 'plain' }).result), [
+    'ok',
+    mailTextOf.spawned('plain'),
+  ]);
+  t.false('modelId' in fake.log[0][1]);
+  t.false('reasoningEffort' in fake.log[0][1]);
+  t.deepEqual(
+    await outcome(
+      call(spawnTool, {
+        name: 'opus',
+        modelId: 'claude-opus-5-5',
+        reasoningEffort: 'medium',
+      }).result,
+    ),
+    ['ok', mailTextOf.spawned('opus')],
+  );
+  t.is(fake.log[1][1].modelId, 'claude-opus-5-5');
+  t.is(fake.log[1][1].reasoningEffort, 'medium');
+  for (const [field, value, limit] of /** @type {const} */ ([
+    ['modelId', '', limits.modelIdUnits],
+    ['modelId', 'm'.repeat(limits.modelIdUnits + 1), limits.modelIdUnits],
+    ['reasoningEffort', ' ', limits.effortUnits],
+    ['reasoningEffort', 'e'.repeat(limits.effortUnits + 1), limits.effortUnits],
+  ])) {
+    t.deepEqual(
+      // eslint-disable-next-line no-await-in-loop
+      await outcome(call(spawnTool, { name: 'bad', [field]: value }).result),
+      ['failed', mailTextOf.spawnOptionInvalid(field, limit)],
+    );
+  }
+  t.regex(
+    (await call(spawnTool, { name: 'bad', modelId: 7 }).result).text,
+    /modelId/,
+    'a non-string is refused by the closed reader',
+  );
+  t.is(fake.log.length, 2, 'nothing sent for a refused option');
+});

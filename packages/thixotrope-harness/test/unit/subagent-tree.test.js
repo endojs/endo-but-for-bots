@@ -21,6 +21,7 @@ import {
   textOf as mailTextOf,
 } from '../../guest/lib/guards/session.js';
 import { textOf as postOfficeTextOf } from '../../guest/lib/guards/factory.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 import { ANSWER_UNITS, makeSubagents } from '../../guest/factory/subagents.js';
 /* eslint-enable import/no-relative-packages */
 
@@ -633,4 +634,187 @@ test("a child is made from its parent's preset snapshot, not a new one", async t
   );
   await spawn(childDelegation, 'grandkid');
   t.is(tree.created[1].how.presetSnapshot, snapshot);
+});
+
+/**
+ * A pool Backend with a two-page catalogue (D-M9-25): `calls` lists the
+ * methods asked, in order.
+ * @param {{ kind?: string, state?: 'ok' | 'unavailable' }} [options]
+ */
+const makePool = ({ kind = 'claude-pool', state = 'ok' } = {}) => {
+  /** @type {string[]} */
+  const calls = [];
+  /** @type {Record<string, string[]>} */
+  const efforts = {
+    'claude-fable-5-2': ['low', 'medium', 'high', 'xhigh', 'max'],
+    'claude-opus-5-5': ['low', 'medium', 'high', 'xhigh', 'max'],
+    'claude-haiku-4-5': [],
+  };
+  const ids = Object.keys(efforts);
+  const backend = Far('Backend', {
+    describe: () => {
+      calls.push('describe');
+      return harden({ kind, label: 'Claude' });
+    },
+    /** @param {any} request */
+    listModels: request => {
+      calls.push(`listModels:${request.after ?? ''}`);
+      if (state !== 'ok') return harden({ rows: [], state });
+      const first = request.after === undefined;
+      const page = first ? ids.slice(0, 2) : ids.slice(2);
+      return harden({
+        rows: page.map(modelId => ({
+          backend,
+          modelId,
+          selectionId: modelId,
+          title: modelId,
+          default: false,
+          reasoningEfforts: efforts[modelId],
+        })),
+        state,
+        ...(first ? { next: 'page-2' } : {}),
+      });
+    },
+    /** @param {{ modelId: string, reasoningEffort: string }} request */
+    resolveEffort: ({ modelId, reasoningEffort }) => {
+      calls.push(`resolveEffort:${modelId}:${reasoningEffort}`);
+      if (!efforts[modelId]?.includes(reasoningEffort))
+        throw Error(subscriptionTexts.unsupportedEffort);
+      return harden({ reasoningEffort });
+    },
+  });
+  return { backend, calls };
+};
+
+/**
+ * @param {any} delegation
+ * @param {string} name
+ * @param {Record<string, string>} choice
+ */
+const spawnWith = (delegation, name, choice) =>
+  E(delegation).spawn(harden({ name, attachments: none, at: AT, ...choice }));
+
+test('D-M9-25: a spawn naming no model keeps the parent backend, model and effort without asking the backend', async t => {
+  const tree = makeTree();
+  const pool = makePool();
+  const parent = tree.addParent('Lead', {
+    backend: pool.backend,
+    modelId: 'claude-fable-5-2',
+    reasoningEffort: 'medium',
+  });
+  await spawn(parent.delegation, 'worker');
+  const [made] = tree.created;
+  t.is(made.options.backend, pool.backend);
+  t.is(made.options.modelId, 'claude-fable-5-2');
+  t.is(made.options.reasoningEffort, 'medium');
+  t.deepEqual(pool.calls, []);
+});
+
+test('D-M9-25: a requested model is checked in the catalogue and keeps the parent effort it offers', async t => {
+  const tree = makeTree();
+  const pool = makePool();
+  const parent = tree.addParent('Lead', {
+    backend: pool.backend,
+    modelId: 'claude-fable-5-2',
+    reasoningEffort: 'medium',
+  });
+  await spawnWith(parent.delegation, 'opus', { modelId: 'claude-opus-5-5' });
+  t.is(tree.created[0].options.modelId, 'claude-opus-5-5');
+  t.is(tree.created[0].options.backend, pool.backend);
+  t.is(tree.created[0].options.reasoningEffort, 'medium');
+  // A model on the second page without the parent's effort: none is
+  // passed, so the creation stores the model's default.
+  await spawnWith(parent.delegation, 'haiku', { modelId: 'claude-haiku-4-5' });
+  t.is(tree.created[1].options.modelId, 'claude-haiku-4-5');
+  t.false('reasoningEffort' in tree.created[1].options);
+  t.true(pool.calls.includes('listModels:page-2'));
+  // Model and effort both given.
+  await spawnWith(parent.delegation, 'deep', {
+    modelId: 'claude-opus-5-5',
+    reasoningEffort: 'xhigh',
+  });
+  t.is(tree.created[2].options.reasoningEffort, 'xhigh');
+  // An effort alone applies to the parent's model.
+  await spawnWith(parent.delegation, 'quick', { reasoningEffort: 'low' });
+  t.is(tree.created[3].options.modelId, 'claude-fable-5-2');
+  t.is(tree.created[3].options.reasoningEffort, 'low');
+});
+
+test('D-M9-25: an unknown model or effort is refused with what is offered, before any creation', async t => {
+  const tree = makeTree();
+  const pool = makePool();
+  const parent = tree.addParent('Lead', {
+    backend: pool.backend,
+    modelId: 'claude-fable-5-2',
+    reasoningEffort: 'medium',
+  });
+  await t.throwsAsync(
+    spawnWith(parent.delegation, 'a', { modelId: 'claude-nothing' }),
+    {
+      message: postOfficeTextOf.subagentModelUnknown(
+        'claude-nothing',
+        'Claude',
+        ['claude-fable-5-2', 'claude-opus-5-5', 'claude-haiku-4-5'],
+      ),
+    },
+  );
+  await t.throwsAsync(
+    spawnWith(parent.delegation, 'b', {
+      modelId: 'claude-opus-5-5',
+      reasoningEffort: 'ultra',
+    }),
+    {
+      message: postOfficeTextOf.subagentEffortUnknown(
+        'claude-opus-5-5',
+        'ultra',
+        ['low', 'medium', 'high', 'xhigh', 'max'],
+      ),
+    },
+  );
+  await t.throwsAsync(
+    spawnWith(parent.delegation, 'c', {
+      modelId: 'claude-haiku-4-5',
+      reasoningEffort: 'low',
+    }),
+    {
+      message: postOfficeTextOf.subagentEffortUnknown(
+        'claude-haiku-4-5',
+        'low',
+        [],
+      ),
+    },
+  );
+  t.is(tree.created.length, 0);
+  t.is(tree.tree.status().reservations, 0, 'every reservation released');
+  // The name is free again after a refusal.
+  await spawnWith(parent.delegation, 'a', { modelId: 'claude-opus-5-5' });
+  t.is(tree.created.length, 1);
+
+  const down = makePool({ state: 'unavailable' });
+  const other = tree.addParent('Other', {
+    backend: down.backend,
+    modelId: 'claude-fable-5-2',
+  });
+  await t.throwsAsync(
+    spawnWith(other.delegation, 'x', { modelId: 'claude-opus-5-5' }),
+    { message: postOfficeTextOf.subagentCatalogUnavailable('Claude') },
+  );
+});
+
+test('D-M9-25: an effort on a backend that takes none is refused; a scripted backend takes any model', async t => {
+  const tree = makeTree();
+  const api = makePool({ kind: 'anthropic' });
+  const parent = tree.addParent('Api', { backend: api.backend });
+  await t.throwsAsync(
+    spawnWith(parent.delegation, 'a', { reasoningEffort: 'medium' }),
+    { message: postOfficeTextOf.subagentEffortNone('Claude') },
+  );
+  await spawnWith(parent.delegation, 'b', { modelId: 'claude-opus-5-5' });
+  t.is(tree.created[0].options.modelId, 'claude-opus-5-5');
+  t.false('reasoningEffort' in tree.created[0].options);
+  const scripted = makePool({ kind: 'scripted' });
+  const local = tree.addParent('Local', { backend: scripted.backend });
+  await spawnWith(local.delegation, 'c', { modelId: 'anything' });
+  t.is(tree.created[1].options.modelId, 'anything');
+  t.deepEqual(scripted.calls, ['describe'], 'no catalogue read');
 });
