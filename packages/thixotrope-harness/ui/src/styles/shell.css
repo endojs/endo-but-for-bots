@@ -86,6 +86,18 @@ body {
   font: inherit;
   cursor: pointer;
 }
+/* With nothing to say (no status text, no chip, no session usage) the strip
+   is not drawn; StatusBar.js still renders it, so no markup changes. */
+.floot-status-bar:has(> .thix-status-line:empty):not(
+    :has(.thix-chips:not(:empty), .thix-usage)
+  ) {
+  display: none;
+}
+/* The usage figures are quiet; the account chips beside them keep full
+   colour, so a blocked chip's amber or red is not dimmed. */
+.thix-usage {
+  opacity: 0.6;
+}
 .thix-status-line {
   min-width: 0;
   overflow: hidden;

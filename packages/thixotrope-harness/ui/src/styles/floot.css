@@ -479,13 +479,8 @@
 }
 .floot-tokens {
   margin-left: auto;
-  opacity: 0.6;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-.floot-account.blocked {
-  color: var(--fl-danger, #c0392b);
-  opacity: 1;
 }
 .floot-settings-heading {
   display: flex;
