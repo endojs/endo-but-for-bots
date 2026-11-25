@@ -22,6 +22,7 @@ import { h } from 'preact';
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 
 import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
+import { icon } from '../shell/icons.js';
 import { ConversationSlot } from './slots.js';
 
 /** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
@@ -157,7 +158,7 @@ export const Composer = ({ state, controller, features, context }) => {
           disabled: Boolean(blocked) || sending,
           onClick: send,
         },
-        '↑',
+        icon('send'),
       ),
     ),
   );
