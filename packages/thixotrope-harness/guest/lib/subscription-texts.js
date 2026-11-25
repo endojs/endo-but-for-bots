@@ -53,6 +53,22 @@ export const subscriptionTexts = harden({
   credentialInvalid: 'Subscription credential is not valid for this provider',
   /** Harness: the provider refused the credential after one renewal. */
   credentialRejected: 'Subscription credential rejected by the provider',
+  /** Harness (a member added to a pool): a credential of the other provider. */
+  credentialWrongProvider:
+    'This secret holds a credential for another provider than the pool',
+  /** Harness (a member added to a pool): the check found nothing wrong. */
+  credentialReady:
+    'This secret holds a credential in the format this provider expects',
+  /** Harness: `addPoolMember` of a member the pool already has. */
+  memberInPool: 'This member is already in the pool',
+  /** Harness: `addPoolMember` to a pool at `maxPoolMembers`. */
+  poolFull: 'This pool already has as many members as a pool can hold',
+  /** Harness: a credential check of a revoked Secret. */
+  credentialRevoked: 'This secret is revoked',
+  /** Harness: a credential check of a Secret no longer in the store. */
+  credentialMissing: 'This secret is no longer in the store',
+  /** Harness: a credential check whose read failed (the value is never named). */
+  credentialUnreadable: 'This secret could not be read; try again',
   /** R4-84 provenance labels, word for word. */
   provenanceObserved: 'observed',
   provenanceDeclared: 'declared',
@@ -106,6 +122,30 @@ export const subscriptionTextOf = harden({
    */
   memberFailed: (label, code) =>
     `Subscription member "${label}" failed: "${code}"`,
+  /**
+   * Harness: a failed credential check (`CredentialOps.checkCredential`,
+   * `SubscriptionsAdmin.addPoolMember`) in plain words; never the value, a
+   * token or a parse message.
+   * @param {string} code a `credentialCheckCodes` entry
+   */
+  credentialCheckFailed: code => {
+    switch (code) {
+      case 'INVALID':
+        return subscriptionTexts.credentialInvalid;
+      case 'WRONG_PROVIDER':
+        return subscriptionTexts.credentialWrongProvider;
+      case 'EXPIRED':
+        return subscriptionTexts.credentialExpired;
+      case 'CONSUMED':
+        return subscriptionTexts.credentialConsumed;
+      case 'REVOKED':
+        return subscriptionTexts.credentialRevoked;
+      case 'UNKNOWN_SECRET':
+        return subscriptionTexts.credentialMissing;
+      default:
+        return subscriptionTexts.credentialUnreadable;
+    }
+  },
 });
 
 /**
@@ -141,6 +181,22 @@ export const subscriptionCodes = harden([
   'GENERATION_CONFLICT',
   'UNREACHABLE',
   'RETIRED',
+]);
+
+/**
+ * The codes a credential check answers (`CredentialCheck`, m4-interfaces
+ * 3.1, 3.2): the value's format (`INVALID`, `WRONG_PROVIDER`), what it
+ * says (`EXPIRED` with no refresh token, `CONSUMED` by an interrupted
+ * renewal) and the store's (`REVOKED`, `UNKNOWN_SECRET`, `READ_FAILED`).
+ */
+export const credentialCheckCodes = harden([
+  'INVALID',
+  'WRONG_PROVIDER',
+  'EXPIRED',
+  'CONSUMED',
+  'REVOKED',
+  'UNKNOWN_SECRET',
+  'READ_FAILED',
 ]);
 
 /** The two pool kinds (`BackendKind` widening, m4-interfaces 1.4 H-1). */

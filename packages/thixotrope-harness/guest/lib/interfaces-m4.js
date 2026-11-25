@@ -117,6 +117,16 @@ const m4ShapeBuilders = {
         declared: T.DeclaredProfile,
       },
     ),
+  /**
+   * What a credential check answers (`SubscriptionsAdmin.checkCredential`,
+   * `CredentialOps.checkCredential`): ok, or a fixed code
+   * (`credentialCheckCodes`); never the value, a token or a parse message.
+   */
+  CredentialCheck: () =>
+    M.or(
+      record({ ok: true }),
+      record({ ok: false, code: text(limits.secretCodeUnits) }),
+    ),
   /** `PoolMember.describe()`: never the credential or its key. */
   MemberInfo: () =>
     record(
@@ -476,6 +486,14 @@ const m4InterfaceBuilders = {
       // XB, X-FIX: answers once the adapter has taken the push (3.1).
       retirePool: M.callWhen(R('Backend')).returns(done),
       accounts: M.callWhen().returns(R('Accounts')),
+      // The adapter reads the Secret and checks its format for the pool's
+      // provider; the answer is ok or a code, never the value (3.1).
+      checkCredential: M.callWhen(R('Backend'), R('Secret')).returns(
+        T.CredentialCheck,
+      ),
+      // Checks as `makePool`, then the member's credential (as
+      // `checkCredential`); answers once the adapter has taken the push.
+      addPoolMember: M.callWhen(R('Backend'), R('PoolMember')).returns(done),
     }),
   /** One member account of a pool (R3-233, R8-13). */
   PoolMember: () =>
@@ -533,6 +551,11 @@ const m4InterfaceBuilders = {
       // its next use; the retirement returns to the operator only after
       // this answer, so the next turn sees it).
       poolsChanged: M.call().returns(done),
+      // 3.2: reads the Secret (resolved by presence, never a value out) and
+      // answers whether it holds a credential of this provider's format.
+      checkCredential: M.callWhen(R('Secret'), T.Provider).returns(
+        T.CredentialCheck,
+      ),
     }),
   /** Adapter-local: audit pages up to 1,000 events, 0 vat deliveries (R7-63). */
   AuditReader: () =>
@@ -572,6 +595,8 @@ export const m4MethodNames = harden({
     'describePool',
     'retirePool',
     'accounts',
+    'checkCredential',
+    'addPoolMember',
   ],
   PoolMember: ['describe', 'retire'],
   PoolBackend: [
@@ -604,6 +629,7 @@ export const m4MethodNames = harden({
     'auditReader',
     'accounts',
     'poolsChanged',
+    'checkCredential',
   ],
   AuditReader: ['page'],
   Accounts: ['list', 'forBackend', 'forSession', 'history', 'refresh', 'watch'],

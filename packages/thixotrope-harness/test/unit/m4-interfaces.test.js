@@ -26,6 +26,7 @@ import {
 } from '../../guest/lib/interfaces-m4.js';
 import { subscriptionLimits } from '../../guest/lib/subscription-limits.js';
 import {
+  credentialCheckCodes,
   subscriptionTextOf,
   subscriptionTexts,
   poolKinds,
@@ -163,6 +164,7 @@ const shapeSamples = {
     weight: 2,
     declared,
   },
+  CredentialCheck: { ok: false, code: 'WRONG_PROVIDER' },
   MemberInfo: {
     provider: 'claude',
     label: 'first',
@@ -332,6 +334,11 @@ const methodSamples = {
     describePool: { args: [backend], returns: shapeSamples.PoolDescription },
     retirePool: { args: [backend], returns: undefined },
     accounts: { args: [], returns: far('Accounts') },
+    checkCredential: {
+      args: [backend, secret],
+      returns: shapeSamples.CredentialCheck,
+    },
+    addPoolMember: { args: [backend, member], returns: undefined },
   },
   PoolMember: {
     describe: { args: [], returns: shapeSamples.MemberInfo },
@@ -364,6 +371,7 @@ const methodSamples = {
     auditReader: { args: [], returns: far('AuditReader') },
     accounts: { args: [], returns: far('Accounts') },
     poolsChanged: { args: [], returns: undefined },
+    checkCredential: { args: [secret, 'codex'], returns: { ok: true } },
   },
   AuditReader: {
     page: {
@@ -656,9 +664,29 @@ test('the fixed M4 texts (section 13)', t => {
     'credentialInvalid',
     'credentialRejected',
     'noSubscriptionAccounts',
+    'credentialWrongProvider',
+    'credentialReady',
+    'memberInPool',
+    'poolFull',
+    'credentialRevoked',
+    'credentialMissing',
+    'credentialUnreadable',
   ]) {
     const value = /** @type {any} */ (subscriptionTexts)[name];
     t.is(typeof value, 'string', name);
     t.regex(/** @type {string} */ (value), /^[^\n]+$/, name);
   }
+  // Every check code has its own plain words; an unknown code is a read failure.
+  const words = credentialCheckCodes.map(code =>
+    subscriptionTextOf.credentialCheckFailed(code),
+  );
+  t.is(new Set(words).size, credentialCheckCodes.length);
+  t.is(
+    subscriptionTextOf.credentialCheckFailed('WRONG_PROVIDER'),
+    'This secret holds a credential for another provider than the pool',
+  );
+  t.is(
+    subscriptionTextOf.credentialCheckFailed('SOMETHING_ELSE'),
+    subscriptionTexts.credentialUnreadable,
+  );
 });
