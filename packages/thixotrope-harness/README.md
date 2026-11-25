@@ -89,14 +89,43 @@ started supervisor, create a state directory under that path. This private
 Linux filesystem supports Unix sockets and executable workers. Its contents
 last for the lifetime of the container. Source and edits stay on `/workspace`.
 
+The preset makes the session a project manager and quality-control master.
+It plans the work and delegates each piece to a Claude Opus 5.5 subagent
+(`spawnSubagent` with `modelId: "claude-opus-5-5"`). It reads the returned
+diff and runs the tests before accepting the work. A subagent spawned without
+a `systemPrompt` gets the same preset instructions from its parent's preset
+snapshot. Those instructions make a session tasked through `askSubagent` the
+implementer, and it delegates again only when the work needs it. A
+`systemPrompt` replaces the child's whole prompt. `spawnSubagent` keeps the
+parent's backend, model and effort unless `modelId` or `reasoningEffort` is
+given. The factory checks both against the parent backend's catalogue.
+
 An operator can publish the preset to a running, provisioned state. From
 `packages/thixotrope-harness`, with Docker running and a full project checkout:
 
 ```sh
 project_ref=$(git rev-parse HEAD)
 project_image=$(./oci/selfdev/build.sh "$project_ref")
-node scripts/project-preset.mjs "$state" --repo ../.. --ref "$project_ref" --image "$project_image"
+node scripts/project-preset.mjs "$state" --repo ../.. --ref "$project_ref" --image "$project_image" \
+  --backend claude-pool --model claude-fable-5-2 --effort medium
 ```
+
+A new preset defaults to the single `claude-pool` backend with
+`claude-fable-5-2`. Republishing without `--backend` or `--model` keeps the
+saved backend and model. `--backend` takes a backend label, or a kind such as
+`claude-pool`. The script resolves it to the factory's Backend object and
+fails when none or several match. It checks `--model` against that backend's
+catalogue. Presets store no effort, so `--effort` only checks that the model
+starts its sessions at that effort. The script fails if not.
+
+The `modelId` and `reasoningEffort` arguments of `spawnSubagent` need both
+the current session program and the current factory. The factory is installed
+once per state and has no live upgrade before M13. An older factory refuses a
+spawn that names a model or an effort, but a spawn without them still works.
+To get the new factory, export the state with `scripts/export.mjs`, provision
+a fresh state and import the export there.
+Claude Fable 5.2's efforts come from the agent-host implementation
+directory. A daemon restart picks them up.
 
 Set `state` to the supervisor's state directory. Rebuild the image when the Yarn lockfile or native Rust worker changes.
 The image build needs access to the locked upstream dependencies. Once built, the session runs offline
