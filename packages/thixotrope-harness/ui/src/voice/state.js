@@ -8,7 +8,8 @@
  *
  * Page-level parts live for the page: the player, the wake lock, the
  * microphone (capture, endpointer, pre-roll, spoken draft), auto-speak
- * (page memory, R5-55), the launch id already used. Connection parts are
+ * (page memory, R5-55), the launch id already used, and the session view
+ * in spoken mode (m11-interfaces.md 9.1). Connection parts are
  * rebuilt whenever the controller gives a new `FeatureContext` (every
  * attach): the `Speech` service and `Voice` presence, the configuration and
  * the server preferences, the audio port and its socket, the submission
@@ -258,6 +259,9 @@ harden(replayPiecesOf);
  * @property {boolean} speechIn
  * @property {boolean} speechOut
  * @property {boolean} micOn
+ * @property {boolean} spoken the view is in spoken mode (9.1): the mic
+ *   listens, each dictated send carries the spoken marker and its reply
+ *   is read aloud
  * @property {number} level the last block's RMS
  * @property {number} floor
  * @property {number} threshold
@@ -315,6 +319,12 @@ export const makeVoiceState = ({
   let talking = false;
   /** @type {string | undefined} */
   let launchedId;
+  /**
+   * The session whose view is in spoken mode (9.1); undefined in text mode.
+   * One at a time: the page has one microphone. Leaving that view ends it.
+   * @type {string | undefined}
+   */
+  let spokenKey;
   let meter = { level: 0, floor: 0, threshold: 0 };
   /** @type {Record<string, any>} */
   let settings = resolveVoiceSettings();
@@ -628,8 +638,9 @@ export const makeVoiceState = ({
    */
   const onSubmission = (c, notice) => {
     const { sessionKey, session, requestId, receipt } = notice;
-    // Nothing is read for a send that will not be spoken (no crank, rule 9).
-    if (conn !== c || !receipt || !speaks()) return;
+    // Nothing is read for a send that will not be spoken (no crank, rule 9):
+    // only a send from spoken mode is read aloud (9.1).
+    if (conn !== c || !receipt || notice.spoken !== true || !speaks()) return;
     if (receipt.state === 'started') {
       turnIdOf(receipt).then(
         turnId => speakFresh(sessionKey, session, turnId),
@@ -691,7 +702,7 @@ export const makeVoiceState = ({
           utteranceOpen: m.endpointer.speaking(),
         });
         if (typeof text === 'string' && state.activeKey === m.draftKey) {
-          controller.send(text);
+          controller.send(text, { spoken: true });
         }
       },
       Math.max(0, sendAt - now()),
@@ -782,8 +793,10 @@ export const makeVoiceState = ({
     notify();
   };
 
+  /** The mic off, and with it spoken mode (9.1). */
   const micOff = () => {
     const m = mic;
+    spokenKey = undefined;
     if (!m) return;
     mic = undefined;
     m.capture.stop();
@@ -885,6 +898,9 @@ export const makeVoiceState = ({
       await selectWhenListed(answer.key);
     } finally {
       talking = false;
+      // The view the mic listens in (the new session's, once selected) is
+      // in spoken mode (9.1).
+      if (mic) spokenKey = viewState().activeKey;
       notify();
     }
   };
@@ -895,7 +911,10 @@ export const makeVoiceState = ({
     if (id === undefined || launchedId !== undefined) return;
     launchedId = id;
     startSession(c, { invocationId: id, at: now() })
-      .then(() => micOn({ immediate: true }))
+      .then(() => {
+        micOn({ immediate: true });
+        spokenKey = viewState().activeKey;
+      })
       .catch(report);
   };
 
@@ -963,6 +982,10 @@ export const makeVoiceState = ({
     if (bargeIn && !busy()) {
       bargeIn = false;
       notify();
+    }
+    // Spoken mode belongs to one session view: leaving it ends it (9.1).
+    if (spokenKey !== undefined && !talking && state.activeKey !== spokenKey) {
+      micOff();
     }
     updateWake();
   };
@@ -1092,6 +1115,7 @@ export const makeVoiceState = ({
         speechIn: Boolean(configuration && configuration.speechIn),
         speechOut: Boolean(configuration && configuration.speechOut),
         micOn: mic !== undefined,
+        spoken: mic !== undefined,
         ...meter,
         autoSpeak: autoSpeak(),
         playing: player.playing(),
@@ -1119,17 +1143,31 @@ export const makeVoiceState = ({
       };
     },
 
-    /** The mic tap (R5-55): on, or off discarding the unsent text (R5-48). */
-    toggleMic() {
-      if (mic) micOff();
-      else micOn();
-    },
-
-    /** The speaker tap: "Mute replies" stops the current reply (R5-48). */
-    toggleSpeaker() {
-      player.unlock();
-      autoSpeakChoice = !autoSpeak();
-      if (!autoSpeakChoice) stopPlayback();
+    /**
+     * The mode switch of the active session's view (9.1), called inside
+     * the tap (R5-44, R5-55). Spoken mode turns the mic on; text mode turns
+     * it off, discarding the unsent dictation (R5-48), and stops the reply
+     * being read. Spoken mode needs both speech in and speech out.
+     */
+    toggleMode() {
+      if (mic) {
+        micOff();
+        stopPlayback();
+        notify();
+        return;
+      }
+      const key = viewState().activeKey;
+      const configuration = conn && conn.configuration;
+      if (
+        key === undefined ||
+        !configuration ||
+        !configuration.speechIn ||
+        !configuration.speechOut
+      ) {
+        return;
+      }
+      micOn();
+      spokenKey = key;
       notify();
     },
 

@@ -129,6 +129,13 @@ export const Composer = ({ state, controller, features, context }) => {
           }
         },
       }),
+      // Controls inside the bar, before Send (the voice mode switch).
+      h(ConversationSlot, {
+        slot: 'composer.action',
+        features,
+        context,
+        class: 'thix-composer-actions',
+      }),
       view.busy
         ? h(
             'button',

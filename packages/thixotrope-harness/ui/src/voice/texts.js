@@ -6,11 +6,16 @@
  */
 
 export const voiceUiTexts = Object.freeze({
-  /** R5-56 compose bar. */
-  micOn: 'Start listening',
-  micOff: 'Stop listening',
-  muteReplies: 'Mute replies',
-  speakReplies: 'Speak replies',
+  /**
+   * The compose bar's mode switch (m11-interfaces.md 9.1): its accessible
+   * name, with `aria-pressed` for the state, and the tooltips of the two
+   * states.
+   */
+  spokenMode: 'Spoken mode',
+  toSpokenMode: 'Switch to spoken mode: speak your messages, hear the replies',
+  toTextMode: 'Switch to text mode',
+  /** The level meter's name while listening. */
+  inputLevel: 'Input level',
   /** R5-46. */
   continuingInBackground: 'continuing in background…',
   /** R5-56 settings. */
@@ -26,8 +31,12 @@ export const voiceUiTexts = Object.freeze({
   voiceShortcut: 'Voice shortcut',
   playMessage: 'Play message',
   playbackUnavailable: 'This message could not be played.',
-  /** The voice shortcut button (a spoken session from the shortcut preset). */
+  /**
+   * The voice shortcut button (a spoken session from the shortcut preset),
+   * in the Voice panel since M11 9.1.
+   */
   talk: 'Talk',
+  talkHint: 'Start a new session with the Voice shortcut, in spoken mode',
   /** Shown when the page has no microphone permission or no secure context. */
   captureFailure: Object.freeze({
     denied: 'Allow microphone access in your browser to start listening.',

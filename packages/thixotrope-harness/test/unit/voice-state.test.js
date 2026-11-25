@@ -38,7 +38,10 @@ import {
   voiceStateOf,
 } from '../../ui/src/voice/state.js';
 import { voiceUiTexts } from '../../ui/src/voice/texts.js';
-import { VoiceControls } from '../../ui/src/voice/VoiceControls.js';
+import {
+  VoiceControls,
+  VoiceModeSwitch,
+} from '../../ui/src/voice/VoiceControls.js';
 import { VoicePanel } from '../../ui/src/voice/VoicePanel.js';
 import { makeFakePowers, makeTestDom } from './_m3-fake-powers.js';
 import { runEffectsPromptly } from './_m4-ui-fakes.js';
@@ -619,6 +622,7 @@ test('the controller tells submission listeners each answered send, and forgets 
   t.is(notices[0].sessionKey, 's1');
   t.is(notices[0].requestId, 'req1');
   t.is(notices[0].receipt.state, 'started');
+  t.false(notices[0].spoken, 'a typed send');
   await controller.attach(powers);
   await flush();
   await controller.send('again');
@@ -630,6 +634,7 @@ test('the features show only on a connection that serves speech', async t => {
     feature.map(item => [item.id, item.slot]),
     [
       ['voice.controls', 'composer.addon'],
+      ['voice.mode', 'composer.action'],
       ['voice.panel', 'app.panel'],
       ['voice.replay', 'message.action'],
     ],
@@ -663,7 +668,7 @@ test("auto-speak: a started send of this page is spoken with the settings; anoth
   const { controller, state, log, sockets, control, powers } = await setup();
   const session = control.session;
   await controller.selectSession('s1');
-  await controller.send('hello');
+  await controller.send('hello', { spoken: true });
   await flush();
   const speaks = callsNamed(log.calls, 'speak');
   t.is(speaks.length, 1);
@@ -676,13 +681,20 @@ test("auto-speak: a started send of this page is spoken with the settings; anoth
   t.is(sockets[0].url, 'ws://127.0.0.1:8920/audio');
   t.true(state.view().autoSpeak);
 
+  // A typed send (no spoken marker) is not spoken (9.1).
+  control.play('s1');
+  await flush();
+  await controller.send('typed');
+  await flush();
+  t.is(callsNamed(log.calls, 'speak').length, 1);
+
   // A turn this page did not send (another page's submit) is not spoken.
   await E(powers.composer).submit(session('s1'), 'from elsewhere', 'other1');
   await flush();
   t.is(callsNamed(log.calls, 'speak').length, 1);
 
   // Muted: nothing more is spoken, and the playback stops.
-  state.toggleSpeaker();
+  state.setAutoSpeak(false);
   t.false(state.view().autoSpeak);
   t.true(sockets[0].playbacks[0].stopped);
 });
@@ -704,7 +716,7 @@ test('auto-speak: a queued send is spoken when its turn starts, after one receip
   });
   await controller.selectSession('s1');
   await flush();
-  await controller.send('queued one');
+  await controller.send('queued one', { spoken: true });
   await flush();
   t.is(callsNamed(log.calls, 'speak').length, 0);
   t.is(control.callsOf('Session', 'getSubmissionReceipt').length, 0);
@@ -721,13 +733,13 @@ test('a muted page reads no receipt and no turn status for its sends (no extra c
     sessions: [{ key: 's1', running: 'earlier' }],
   });
   await controller.selectSession('s1');
-  state.toggleSpeaker();
+  state.setAutoSpeak(false);
   t.false(state.view().autoSpeak);
-  await controller.send('queued while muted');
+  await controller.send('queued while muted', { spoken: true });
   control.play('s1');
   await flush();
   control.play('s1');
-  await controller.send('started while muted');
+  await controller.send('started while muted', { spoken: true });
   await flush();
   t.is(control.callsOf('Session', 'getSubmissionReceipt').length, 0);
   t.is(control.callsOf('Turn', 'getStatus').length, 0);
@@ -741,7 +753,7 @@ test('waiting submissions are bounded', async t => {
   await controller.selectSession('s1');
   for (let i = 0; i < WAITING_KEPT + 3; i += 1) {
     // eslint-disable-next-line no-await-in-loop
-    await controller.send(`queued ${i}`);
+    await controller.send(`queued ${i}`, { spoken: true });
   }
   await flush();
   control.play('s1');
@@ -761,7 +773,7 @@ test('dictation: calibration, onset with pre-roll, partials replace, final then 
     control,
   } = await setup();
   await controller.selectSession('s1');
-  state.toggleMic();
+  state.toggleMode();
   await flush();
   t.true(state.view().micOn);
   t.is(captures.length, 1);
@@ -791,6 +803,7 @@ test('dictation: calibration, onset with pre-roll, partials replace, final then 
   const submits = control.callsOf('Composer', 'submit');
   t.is(submits.length, 1);
   t.is(submits[0][3], 'hello world');
+  t.deepEqual(submits[0][5], { spoken: true }, 'the spoken marker (9.1)');
   t.is(controller.getState().view?.input.text, '');
 });
 
@@ -798,7 +811,7 @@ test('dictation: a short burst is discarded; an edited box is sent as edited; cl
   const { controller, state, sockets, blocks, advance, control } =
     await setup();
   await controller.selectSession('s1');
-  state.toggleMic();
+  state.toggleMode();
   await flush();
   blocks(0.001, 1200);
   blocks(0.2, 170);
@@ -829,14 +842,14 @@ test('mic off discards the unsent dictation and its box; a failed capture says s
   const { controller, state, sockets, captures, blocks, advance, control } =
     await setup();
   await controller.selectSession('s1');
-  state.toggleMic();
+  state.toggleMode();
   await flush();
   blocks(0.001, 1200);
   blocks(0.2, 600);
   blocks(0.001, 1300);
   const [utterance] = sockets[0].utterances;
   utterance.handlers.onEvent({ type: 'final', text: 'send this' });
-  state.toggleMic();
+  state.toggleMode();
   t.false(state.view().micOn);
   t.true(captures[0].stopped);
   t.is(controller.getState().view?.input.text, '');
@@ -845,7 +858,8 @@ test('mic off discards the unsent dictation and its box; a failed capture says s
   t.is(control.callsOf('Composer', 'submit').length, 0);
 
   const failing = await setup({ failCapture: true });
-  failing.state.toggleMic();
+  await failing.controller.selectSession('s1');
+  failing.state.toggleMode();
   await flush();
   t.false(failing.state.view().micOn);
   t.is(failing.state.view().note, voiceUiTexts.captureFailure.denied);
@@ -854,11 +868,11 @@ test('mic off discards the unsent dictation and its box; a failed capture says s
 test('barge-in during a busy turn stops playback and shows continuing in background (R5-46)', async t => {
   const { controller, state, sockets, blocks, player, control } = await setup();
   await controller.selectSession('s1');
-  await controller.send('tell me a story');
+  await controller.send('tell me a story', { spoken: true });
   await flush();
   t.is(sockets[0].playbacks.length, 1);
   player.audible = true;
-  state.toggleMic();
+  state.toggleMode();
   await flush();
   blocks(0.001, 1200);
   const stopsBefore = player.stops;
@@ -874,7 +888,7 @@ test('barge-in during a busy turn stops playback and shows continuing in backgro
 test('a preference change is used at once, written once after the debounce, and restarts the playback (R5-50)', async t => {
   const { controller, state, log, sockets, advance, storage } = await setup();
   await controller.selectSession('s1');
-  await controller.send('hello');
+  await controller.send('hello', { spoken: true });
   await flush();
   state.setPreference('speed', 2);
   state.setPreference('noiseW', 1);
@@ -909,7 +923,53 @@ test('Talk starts a spoken session from the shortcut, selects it, shows the warn
   t.is(controller.getState().activeKey, `v${log.calls.indexOf(start) + 1}`);
   t.is(state.view().note, 'The voice preset model is not available');
   t.true(state.view().micOn);
+  t.true(state.view().spoken, 'the new session view is in spoken mode');
   t.false(state.view().talking);
+});
+
+test('a spoken send that failed keeps the marker in its draft and resends with it (9.1, M3 K3/K4)', async t => {
+  const { controller, control, powers } = await setup();
+  await controller.selectSession('s1');
+  control.failNext('Composer', 'submit', Error('link down'));
+  await controller.send('said once', { spoken: true });
+  // The draft (the controller's storage) is resent on the next attach.
+  await controller.attach(powers);
+  await flush();
+  const submits = control.callsOf('Composer', 'submit');
+  t.is(submits.length, 2);
+  t.is(submits[1][3], 'said once');
+  t.is(submits[1][4], submits[0][4], 'the same request id');
+  t.deepEqual(submits[1][5], { spoken: true });
+});
+
+test('spoken mode belongs to one session view; typed sends in it carry no marker (9.1)', async t => {
+  const { controller, state, captures, control } = await setup({
+    sessions: [{ key: 's1' }, { key: 's2' }],
+  });
+  await controller.selectSession('s1');
+  t.false(state.view().spoken);
+  state.toggleMode();
+  t.true(state.view().spoken);
+  t.is(captures.length, 1, 'mic opened inside the tap');
+  // A message typed and sent with Send in spoken mode is a typed message.
+  await controller.send('typed in spoken mode');
+  const [typed] = control.callsOf('Composer', 'submit');
+  t.is(typed.length, 5, 'no options argument');
+  await controller.selectSession('s2');
+  await flush();
+  t.false(state.view().spoken, 'leaving the view ends spoken mode');
+  t.true(captures[0].stopped);
+  state.toggleMode();
+  t.true(state.view().spoken);
+  state.toggleMode();
+  t.false(state.view().spoken);
+  t.false(state.view().micOn);
+
+  const off = await setup({ enabled: false });
+  await off.controller.selectSession('s1');
+  off.state.toggleMode();
+  t.false(off.state.view().spoken, 'needs speech in and out');
+  t.is(off.captures.length, 0);
 });
 
 test('a launch link starts its session once, records in invocation mode, and not again after a reconnect', async t => {
@@ -1010,7 +1070,7 @@ test.serial(
 test('only automatic speech suppresses a reply that settled before live playback opened', async t => {
   const { controller, state, sockets } = await setup();
   await controller.selectSession('s1');
-  await controller.send('hello');
+  await controller.send('hello', { spoken: true });
   await flush();
   const abort = { type: 'abort', reason: speechTexts.turnNotLive };
   sockets[0].playbacks[0].handlers.onEvent(abort);
@@ -1032,7 +1092,7 @@ test('a rejected playback open suppresses the automatic race and reports a manua
   sockets[0].playback = () => {
     throw Error(speechTexts.turnNotLive);
   };
-  await controller.send('hello');
+  await controller.send('hello', { spoken: true });
   await flush();
   t.is(state.view().note, '');
   await state.replay({ role: 'assistant', text: 'a' });
@@ -1072,9 +1132,9 @@ test('the shortcut preset is chosen by object with the catalogue revision; a sta
 test('the wake lock is wanted while the mic is on or the turn runs, and released after (P-66)', async t => {
   const { controller, state, wake, control } = await setup();
   await controller.selectSession('s1');
-  state.toggleMic();
+  state.toggleMode();
   t.true(wake[wake.length - 1]);
-  state.toggleMic();
+  state.toggleMode();
   t.false(wake[wake.length - 1]);
   await controller.send('hello');
   await flush();
@@ -1087,7 +1147,7 @@ test('the wake lock is wanted while the mic is on or the turn runs, and released
 test('a new connection drops the old port and listener; the page state stays', async t => {
   const { controller, state, powers, sockets, voiceOf, log } = await setup();
   await controller.selectSession('s1');
-  state.toggleMic();
+  state.toggleMode();
   await flush();
   t.is(sockets.length, 1);
   await controller.attach(powers);
@@ -1096,7 +1156,7 @@ test('a new connection drops the old port and listener; the page state stays', a
   t.true(sockets[0].closed());
   t.true(state.view().micOn, 'the mic stays on');
   await controller.selectSession('s1');
-  await controller.send('after reconnect');
+  await controller.send('after reconnect', { spoken: true });
   await flush();
   t.is(callsNamed(log.calls, 'speak').length, 1, 'the new listener speaks');
   t.is(callsNamed(log.calls, 'openAudio').length, 2);
@@ -1108,26 +1168,38 @@ test.serial('the controls and the panel render the state', async t => {
   try {
     const { controller, state, captures } = await setup();
     const context = controller.featureContext();
-    render(h(VoiceControls, { context }), dom.root);
-    await flush();
-    const buttons = [...dom.document.querySelectorAll('button')].map(
-      button => button.textContent,
+    await controller.selectSession('s1');
+    render(
+      h('div', null, [
+        h(VoiceControls, { context }),
+        h(VoiceModeSwitch, { context }),
+      ]),
+      dom.root,
     );
-    t.deepEqual(buttons, [
-      voiceUiTexts.micOn,
-      voiceUiTexts.muteReplies,
-      voiceUiTexts.talk,
-    ]);
-    dom.document
-      .querySelector('.thix-voice-mic')
-      .dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    await flush();
+    t.is(dom.document.querySelectorAll('.thix-voice-meter').length, 0);
+    const buttons = [...dom.document.querySelectorAll('button')];
+    t.is(buttons.length, 1, 'one mode switch, no pills');
+    const [button] = buttons;
+    t.is(button.getAttribute('aria-label'), voiceUiTexts.spokenMode);
+    t.is(button.getAttribute('aria-pressed'), 'false');
+    t.is(button.title, voiceUiTexts.toSpokenMode);
+    t.truthy(button.querySelector('svg'));
+    t.is(button.textContent, '');
+    button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
     await flush();
     t.is(captures.length, 1);
+    const pressed = dom.document.querySelector('.thix-voice-mode');
+    t.is(pressed.getAttribute('aria-pressed'), 'true');
+    t.is(pressed.title, voiceUiTexts.toTextMode);
     t.is(
-      dom.document.querySelector('.thix-voice-mic').textContent,
-      voiceUiTexts.micOff,
+      dom.document.querySelectorAll('.thix-voice-meter').length,
+      1,
+      'the meter shows while listening',
     );
-    state.toggleMic();
+    state.toggleMode();
+    await flush();
+    t.is(dom.document.querySelectorAll('.thix-voice-meter').length, 0);
 
     render(h(VoicePanel, { context }), dom.root);
     await flush();
@@ -1144,6 +1216,11 @@ test.serial('the controls and the panel render the state', async t => {
       ['tools', true],
       ['mine', false],
     ]);
+    t.is(
+      dom.document.querySelector('.thix-voice-talk').textContent,
+      voiceUiTexts.talk,
+      'Talk is in the Voice panel',
+    );
     render(null, dom.root);
   } finally {
     await dom.close();
@@ -1151,16 +1228,21 @@ test.serial('the controls and the panel render the state', async t => {
 });
 
 test.serial(
-  'unconfigured speech explains the disabled microphone and speaker in the composer',
+  'unconfigured speech explains the disabled mode switch in the composer',
   async t => {
     runEffectsPromptly();
     const dom = makeTestDom();
     try {
       const { controller } = await setup({ enabled: false });
       const context = controller.featureContext();
-      render(h(VoiceControls, { context }), dom.root);
-      t.true(dom.document.querySelector('.thix-voice-mic').disabled);
-      t.true(dom.document.querySelector('.thix-voice-speaker').disabled);
+      render(
+        h('div', null, [
+          h(VoiceControls, { context }),
+          h(VoiceModeSwitch, { context }),
+        ]),
+        dom.root,
+      );
+      t.true(dom.document.querySelector('.thix-voice-mode').disabled);
       t.true(dom.root.textContent.includes(voiceUiTexts.speechInOff));
       t.true(dom.root.textContent.includes(voiceUiTexts.speechOutOff));
       render(h(VoicePanel, { context }), dom.root);

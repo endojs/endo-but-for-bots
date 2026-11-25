@@ -1,18 +1,47 @@
-/* The voice controls, panel and replay (M11; R5-56). */
+/* The voice controls, panel and replay (M11; R5-56; 9.1). */
 .thix-voice-controls {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
   width: 100%;
 }
-.thix-voice-row {
+.thix-composer-actions {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  flex-wrap: wrap;
+  flex: none;
+  align-self: center;
 }
-.thix-voice-mic,
-.thix-voice-speaker,
+.thix-voice-mode {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fl-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.thix-voice-mode:hover {
+  background: var(--fl-surface2);
+  color: var(--fl-text);
+}
+.thix-voice-mode.on {
+  background: var(--fl-surface3);
+  color: var(--fl-green, var(--fl-text));
+}
+.thix-voice-mode:focus-visible {
+  outline: 2px solid var(--fl-accent);
+  outline-offset: 1px;
+}
+.thix-voice-mode:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: transparent;
+}
 .thix-voice-talk {
   border: 1px solid var(--fl-border);
   border-radius: 999px;
@@ -23,22 +52,14 @@
   padding: 0.2rem 0.7rem;
   cursor: pointer;
 }
-.thix-voice-mic.on,
-.thix-voice-speaker.on {
-  background: var(--fl-surface3);
-  border-color: var(--fl-text-muted);
-}
-.thix-voice-mic:disabled,
-.thix-voice-speaker:disabled,
 .thix-voice-talk:disabled {
   opacity: 0.5;
   cursor: default;
 }
 .thix-voice-meter {
   position: relative;
-  flex: 1 1 4rem;
-  min-width: 4rem;
-  height: 0.5rem;
+  width: 100%;
+  height: 0.25rem;
   border-radius: 4px;
   background: var(--fl-surface2);
   overflow: hidden;

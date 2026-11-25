@@ -184,17 +184,22 @@ const voiceStubs = () => {
     /** @param {any} p */
     const openSession = async p => {
       await p.locator(`.floot-session-item[data-key="${key}"]`).click();
-      await p.locator('.thix-voice-mic').waitFor({ timeout: 30_000 });
+      await p.locator('.thix-voice-mode').waitFor({ timeout: 30_000 });
     };
     await openSession(page);
     // Page B watches the same session.
     const pageB = await gw.newPage();
     await openSession(pageB);
 
-    // The mic: calibration on silence, then a burst of tone.
-    const mic = page.locator('.thix-voice-mic');
-    t.is((await mic.textContent())?.trim(), 'Start listening');
+    // Spoken mode (9.1): the icon switch in the compose bar, next to Send;
+    // no meter until it listens. Calibration on silence, then a burst of
+    // tone.
+    const mic = page.locator('.floot-compose .thix-voice-mode');
+    t.is(await mic.getAttribute('aria-label'), 'Spoken mode');
+    t.is(await mic.getAttribute('aria-pressed'), 'false');
+    t.is(await page.locator('.thix-voice-meter').count(), 0);
     await mic.click();
+    t.is(await mic.getAttribute('aria-pressed'), 'true');
     await waitFor(
       () => page.evaluate(() => globalThis.thixVoiceTest.gumCalls > 0),
       10_000,
@@ -305,9 +310,17 @@ const voiceStubs = () => {
       30_000,
       'both turns completed',
     );
+    // 9.1: both dictated messages carry the spoken marker end to end.
+    const started = (await E(session).getHistoryPage()).turns.map(
+      (/** @type {any} */ turn) =>
+        turn.records.find((/** @type {any} */ r) => r.kind === 'turn-started')
+          ?.spoken,
+    );
+    t.deepEqual(started.slice(0, 2), [true, true]);
     // 18: the wake lock was held while the mic was on; released after.
     await mic.click();
-    t.is((await mic.textContent())?.trim(), 'Start listening');
+    t.is(await mic.getAttribute('aria-pressed'), 'false');
+    t.is(await page.locator('.thix-voice-meter').count(), 0);
     const wake = await waitFor(
       async () => {
         const log = await page.evaluate(() => globalThis.thixVoiceTest.wake);

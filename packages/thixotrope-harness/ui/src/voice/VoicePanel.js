@@ -3,7 +3,8 @@
  * The Voice panel (`voice.panel` in `app.panel`; R5-50, R5-53, R5-55,
  * R5-56; owner question O-9): Spoken replies (On — autoplay / Off), the
  * voice, the sliders Speed, Expression, Phoneme variation and Sentence
- * pause, and the Voice shortcut's preset. Opening it reads the shared
+ * pause, the Voice shortcut's preset and Talk (a new spoken session from
+ * that preset; m11-interfaces.md 9.1). Opening it reads the shared
  * preferences and the shortcut again; a change is used at once and written
  * after the debounce (`VoiceState.setPreference`).
  */
@@ -122,6 +123,20 @@ export const VoicePanel = ({ context }) => {
             entry.label,
           ),
         ),
+      ),
+    ),
+    row(
+      '',
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'thix-voice-talk',
+          title: voiceUiTexts.talkHint,
+          disabled: view.talking || !view.speechIn,
+          onClick: () => voice.talk(),
+        },
+        voiceUiTexts.talk,
       ),
     ),
     view.note

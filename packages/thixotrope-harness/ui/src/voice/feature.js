@@ -1,9 +1,10 @@
 // @ts-check
 /**
  * The voice features (`designs/m11-interfaces.md` section 9; P-33..P-35,
- * P-49, P-66, R6-60): the compose-bar controls (`voice.controls`, mic,
- * speaker, level meter, Talk), the Voice panel (`voice.panel`) and the
- * per-message Play button (`voice.replay`). Each is shown only on a connection
+ * P-49, P-66, R6-60): the mode switch in the compose bar (`voice.mode`,
+ * 9.1), the level meter and voice notes above it (`voice.controls`), the
+ * Voice panel with Talk (`voice.panel`) and the per-message Play button
+ * (`voice.replay`). Each is shown only on a connection
  * whose gateway serves the `speech` extras service.
  *
  * State: one `VoiceState` per page, reached from the `FeatureContext`
@@ -16,7 +17,7 @@
  * harness review, fold item F-5) the lookup below becomes that cache.
  */
 import { voiceUiTexts } from './texts.js';
-import { VoiceControls } from './VoiceControls.js';
+import { VoiceControls, VoiceModeSwitch } from './VoiceControls.js';
 import { VoicePanel } from './VoicePanel.js';
 import { ReplayButton } from './ReplayButton.js';
 import { browserVoiceIo, voiceStateOf } from './state.js';
@@ -48,6 +49,12 @@ export const feature = harden([
     slot: 'composer.addon',
     when: speechServed,
     component: VoiceControls,
+  },
+  {
+    id: 'voice.mode',
+    slot: 'composer.action',
+    when: speechServed,
+    component: VoiceModeSwitch,
   },
   {
     id: 'voice.panel',
