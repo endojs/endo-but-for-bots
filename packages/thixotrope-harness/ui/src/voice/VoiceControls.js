@@ -9,7 +9,11 @@
  * - `VoiceControls` (`voice.controls` in `composer.addon`, above the
  *   bar): the level meter with its noise-floor and threshold markers,
  *   only while listening, and one line for "continuing in background…",
- *   the last warning or speech that is not configured.
+ *   the last warning or why spoken mode cannot run (visible text, which
+ *   the disabled switch names with `aria-describedby`).
+ * - While no switch is on screen (another panel or view hides the compose
+ *   bar) spoken mode pauses: each mounted switch is counted
+ *   (`VoiceState.switchShown`).
  *
  * Talk (a new spoken session from the Voice shortcut) is in the Voice
  * panel (`VoicePanel.js`).
@@ -18,7 +22,8 @@ import { h } from 'preact';
 import { useLayoutEffect, useState } from 'preact/hooks';
 
 import { meterFraction } from './endpointing.js';
-import { voiceStateOf } from './state.js';
+import { endpointingDefaults } from './endpointing-defaults.js';
+import { unavailableReason, voiceStateOf } from './state.js';
 import { voiceUiTexts } from './texts.js';
 
 /** @import { FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
@@ -41,6 +46,22 @@ export const useVoiceState = context => {
   }, [voice]);
   return voice;
 };
+
+/** The id of the visible line that says why spoken mode cannot run. */
+const REASON_ID = 'thix-voice-reason';
+
+/**
+ * Why the view's spoken mode cannot run, or ''.
+ * @param {import('./state.js').VoiceView} view
+ */
+const reasonOf = view =>
+  view.speechIn && view.speechOut
+    ? ''
+    : unavailableReason(
+        view.configured
+          ? { speechIn: view.speechIn, speechOut: view.speechOut }
+          : undefined,
+      );
 
 /** @param {number} fraction */
 const percent = fraction => `${Math.round(fraction * 1000) / 10}%`;
@@ -71,11 +92,11 @@ const micIcon = () =>
  */
 export const VoiceModeSwitch = ({ context }) => {
   const voice = useVoiceState(context);
+  useLayoutEffect(() => voice.switchShown(), [voice]);
   const view = voice.view();
   const available = view.speechIn && view.speechOut;
-  const unavailable = !view.speechIn
-    ? voiceUiTexts.speechInOff
-    : voiceUiTexts.speechOutOff;
+  const unavailable = reasonOf(view);
+  const disabled = !available && !view.spoken;
   const hint = view.spoken
     ? voiceUiTexts.toTextMode
     : voiceUiTexts.toSpokenMode;
@@ -86,8 +107,9 @@ export const VoiceModeSwitch = ({ context }) => {
       class: `thix-voice-mode${view.spoken ? ' on' : ''}`,
       'aria-label': voiceUiTexts.spokenMode,
       'aria-pressed': view.spoken ? 'true' : 'false',
-      title: available || view.spoken ? hint : unavailable,
-      disabled: !available && !view.spoken,
+      title: disabled ? unavailable : hint,
+      ...(disabled ? { 'aria-describedby': REASON_ID } : {}),
+      disabled,
       onClick: () => voice.toggleMode(),
     },
     micIcon(),
@@ -100,15 +122,7 @@ export const VoiceModeSwitch = ({ context }) => {
 export const VoiceControls = ({ context }) => {
   const voice = useVoiceState(context);
   const view = voice.view();
-  const off =
-    view.configured && (!view.speechIn || !view.speechOut)
-      ? [
-          !view.speechIn && voiceUiTexts.speechInOff,
-          !view.speechOut && voiceUiTexts.speechOutOff,
-        ]
-          .filter(Boolean)
-          .join('. ')
-      : '';
+  const off = view.spoken ? '' : reasonOf(view);
   const status = view.bargeIn ? voiceUiTexts.continuingInBackground : view.note;
   if (!view.micOn && !off && !status) return null;
   return h(
@@ -121,7 +135,12 @@ export const VoiceControls = ({ context }) => {
             class: 'thix-voice-meter',
             role: 'meter',
             'aria-label': voiceUiTexts.inputLevel,
-            'aria-valuenow': view.level,
+            'aria-valuemin': 0,
+            'aria-valuemax': endpointingDefaults.meterFullScale,
+            'aria-valuenow': Math.min(
+              view.level,
+              endpointingDefaults.meterFullScale,
+            ),
           },
           h('div', {
             class: 'thix-voice-meter-fill',
@@ -137,7 +156,7 @@ export const VoiceControls = ({ context }) => {
           }),
         )
       : null,
-    off ? h('div', { class: 'thix-voice-note' }, off) : null,
+    off ? h('div', { class: 'thix-voice-note', id: REASON_ID }, off) : null,
     status
       ? h('div', { class: 'thix-voice-note', role: 'status' }, status)
       : null,

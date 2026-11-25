@@ -355,7 +355,15 @@ export const makeMentions = ({ storage: storageOf = defaultStorage } = {}) => {
    * @param {import('../../../resources/agent-host/impl/gateway/protocol.js').ComposerSendRequest} request
    * @returns {Promise<any> | undefined}
    */
-  const send = ({ context, session, text, requestId, resend, spoken }) => {
+  const send = ({
+    context,
+    session,
+    text,
+    requestId,
+    resend,
+    spoken,
+    dictated,
+  }) => {
     const held = sending.get(requestId);
     /** @type {Chip[]} */
     let chips;
@@ -398,7 +406,12 @@ export const makeMentions = ({ storage: storageOf = defaultStorage } = {}) => {
         session,
         text,
         requestId,
-        harden(spoken ? { attachments, spoken } : { attachments }),
+        // M11 (m11-interfaces.md 9.1): the spoken-mode facts, true only.
+        harden({
+          attachments,
+          ...(spoken === true ? { spoken: true } : {}),
+          ...(dictated === true ? { dictated: true } : {}),
+        }),
       )
       .then(receipt => {
         sending.delete(requestId);

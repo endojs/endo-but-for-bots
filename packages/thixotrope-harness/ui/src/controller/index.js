@@ -38,6 +38,21 @@ import {
 /** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 /** @import { DraftStorage } from './drafts.js' */
 
+/**
+ * M11 (m11-interfaces.md 9.1): a send's spoken-mode facts, only true ones.
+ * @typedef {{ spoken?: true, dictated?: true }} VoiceMarker
+ */
+
+/**
+ * The true facts of `options` (anything else is no fact).
+ * @param {any} options
+ * @returns {VoiceMarker}
+ */
+const trueFacts = options => ({
+  ...(options?.spoken === true ? { spoken: true } : {}),
+  ...(options?.dictated === true ? { dictated: true } : {}),
+});
+
 /** `Content.read` page size (`limits.blobPageBytes`). */
 export const CONTENT_PAGE_BYTES = 20_480;
 /** Sessions per `listSessions` page (`limits.sessionPageRows`). */
@@ -227,12 +242,19 @@ export const makeController = ({
   const listeners = new Set();
   /**
    * Submission listeners (`onSubmission`; m11-interfaces.md H10, D-M11-20):
-   * told `{ sessionKey, session, requestId, receipt, spoken }` after each `send` is
-   * answered; cleared on every attach (a feature registers again on the
-   * connection's new `FeatureContext`).
+   * told `{ sessionKey, session, requestId, receipt, spoken, dictated }`
+   * after each `send` is answered; cleared on every attach (a feature
+   * registers again on the connection's new `FeatureContext`).
    * @type {Set<(notice: Record<string, any>) => void>}
    */
   const submissionListeners = new Set();
+  /**
+   * M11 (m11-interfaces.md 9.1): asked at each `send` for the spoken-mode
+   * facts of that send (`markSends`); page-wide, kept across attaches (the
+   * page's voice state registers once).
+   * @type {Set<(sessionKey: string, text: string) => VoiceMarker | undefined>}
+   */
+  const sendMarkers = new Set();
 
   /** @type {any} */
   let powers;
@@ -1129,14 +1151,15 @@ export const makeController = ({
    * @param {string} text
    * @param {string} requestId
    * @param {boolean} resend
-   * @param {boolean} [spoken] M11: sent from spoken mode (m11-interfaces.md 9.1)
+   * @param {VoiceMarker} [marker] M11: the spoken-mode facts
+   *   (m11-interfaces.md 9.1), only true ones
    */
   const sendThroughChain = async (
     session,
     text,
     requestId,
     resend,
-    spoken = false,
+    marker = {},
   ) => {
     for (const addon of addons()) {
       if (typeof addon.send === 'function') {
@@ -1146,19 +1169,14 @@ export const makeController = ({
           text,
           requestId,
           resend,
-          ...(spoken ? { spoken: true } : {}),
+          ...marker,
         });
         if (answer !== undefined) return answer;
       }
     }
-    // A typed send's call is unchanged: the marker is only ever `true`.
-    return spoken
-      ? E(powers.composer).submit(
-          session,
-          text,
-          requestId,
-          harden({ spoken: true }),
-        )
+    // A typed send's call is unchanged: the facts are only ever `true`.
+    return Object.keys(marker).length > 0
+      ? E(powers.composer).submit(session, text, requestId, harden(marker))
       : E(powers.composer).submit(session, text, requestId);
   };
 
@@ -1202,7 +1220,7 @@ export const makeController = ({
               draft.text,
               draft.requestId,
               true,
-              draft.spoken === true,
+              trueFacts(draft),
             );
             clearDraft(storage, sessionKey, draft.requestId);
             resendErrors.delete(sessionKey);
@@ -1379,6 +1397,19 @@ export const makeController = ({
       submissionListeners.add(listener);
       return () => {
         submissionListeners.delete(listener);
+      };
+    },
+    /**
+     * M11 (m11-interfaces.md 9.1): `provider(sessionKey, text)` answers the
+     * spoken-mode facts of a send about to be made (`{ spoken?, dictated? }`,
+     * only `true` counts), or undefined; kept across attaches.
+     * @param {(sessionKey: string, text: string) => VoiceMarker | undefined} provider
+     * @returns {() => void} unregister
+     */
+    markSends: provider => {
+      sendMarkers.add(provider);
+      return () => {
+        sendMarkers.delete(provider);
       };
     },
     /**
@@ -1598,17 +1629,29 @@ export const makeController = ({
       }),
 
     /**
-     * Send the composer's text exactly once (9.2). `spoken: true` marks a
-     * message sent from spoken mode (m11-interfaces.md 9.1): the draft
-     * keeps the marker, so a resend after a reload carries it too.
+     * Send the composer's text exactly once (9.2). M11 (m11-interfaces.md
+     * 9.1): `spoken: true` marks a message sent from spoken mode (its reply
+     * is read aloud), `dictated: true` one whose text came from dictation;
+     * each is set by the caller or by a `markSends` provider (the view's
+     * mode, so a typed send in spoken mode is marked too). The draft keeps
+     * the facts, so a resend after a reload carries them.
      *
      * @param {string} text
-     * @param {{ spoken?: boolean }} [options]
+     * @param {{ spoken?: boolean, dictated?: boolean }} [options]
      */
     send: async (text, options = {}) => {
-      const spoken = options.spoken === true;
       const key = state.activeKey;
       if (key === undefined || !state.view || inspecting()) return undefined;
+      /** @type {VoiceMarker} */
+      const marker = { ...trueFacts(options) };
+      for (const provider of [...sendMarkers]) {
+        try {
+          Object.assign(marker, trueFacts(provider(key, text)));
+        } catch {
+          // a feature's provider must not fail the send
+        }
+      }
+      const spoken = marker.spoken === true;
       if (!locks) {
         updateView({ sendError: uiTexts.noWebLocks });
         return undefined;
@@ -1624,14 +1667,14 @@ export const makeController = ({
             sessionKey: key,
             text,
             requestId,
-            ...(spoken ? { spoken: true } : {}),
+            ...marker,
           });
           const receipt = await sendThroughChain(
             session,
             text,
             requestId,
             false,
-            spoken,
+            marker,
           );
           clearDraft(storage, key, requestId);
           if (rootInputs.get(key)?.text === text) rootInputs.delete(key);
@@ -1641,6 +1684,7 @@ export const makeController = ({
             requestId,
             receipt,
             spoken,
+            dictated: marker.dictated === true,
           };
           for (const listener of [...submissionListeners]) {
             try {

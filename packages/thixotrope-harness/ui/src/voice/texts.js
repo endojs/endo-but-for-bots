@@ -47,6 +47,19 @@ export const voiceUiTexts = Object.freeze({
       'The microphone could not start. Check your audio input and try again.',
   }),
   micUnavailable: 'The microphone is not available on this page',
+  /** Spoken mode is unavailable until the speech configuration is read. */
+  speechUnknown: 'Speech is not available yet',
+  /**
+   * M11 9.1: spoken mode paused (microphone off) while the compose bar and
+   * its switch were not on screen.
+   */
+  spokenModePaused:
+    'Spoken mode was paused while the compose bar was hidden. Switch it on to continue.',
+  /** Talk's session was started but did not appear in the list in time. */
+  talkNotListed: 'The new voice session did not appear; nothing was changed.',
+  /** A spoken-mode message went to a session whose program predates 9.1. */
+  sentUnmarked:
+    'This session runs an earlier program: the message was sent without its spoken-mode note, so the model was not told the reply is read aloud.',
   speechInOff: 'Speech input is not configured on this server',
   speechOutOff: 'Speech output is not configured on this server',
 });

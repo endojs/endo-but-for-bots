@@ -133,7 +133,9 @@ export const VoicePanel = ({ context }) => {
           type: 'button',
           class: 'thix-voice-talk',
           title: voiceUiTexts.talkHint,
-          disabled: view.talking || !view.speechIn,
+          // The same requirement as the mode switch (9.1); the panel shows
+          // which half is missing above.
+          disabled: view.talking || !view.speechIn || !view.speechOut,
           onClick: () => voice.talk(),
         },
         voiceUiTexts.talk,

@@ -432,8 +432,10 @@ export const uiTextOf = Object.freeze({
  * @property {string} requestId
  * @property {boolean} resend
  * @property {true} [spoken] sent from spoken mode (m11-interfaces.md 9.1):
- *   an addon that submits passes `{ spoken: true }` in `Composer.submit`'s
+ *   an addon that submits passes `spoken: true` in `Composer.submit`'s
  *   options
+ * @property {true} [dictated] its text came from dictation (9.1): passed
+ *   on the same way
  */
 
 /**

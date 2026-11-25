@@ -259,7 +259,9 @@ const joined = (before, after) =>
  * The kept text of one mic session and its grace send (R5-20, R5-22).
  * Every method answers what the compose box shows now (`box`), so the
  * caller writes it with `controller.replaceInput`; `sendAt` is when to call
- * `due` (the caller's timer), absent when no send is armed.
+ * `due` (the caller's timer), absent when no send is armed. `mirrors`
+ * answers whether a box still shows what dictation last wrote (M11 9.1:
+ * such a text sent by hand is dictated text).
  *
  * @param {{ graceMs?: number }} [options]
  */
@@ -267,9 +269,14 @@ export const makeSpokenDraft = ({
   graceMs = endpointingDefaults.graceMs,
 } = {}) => {
   let pending = '';
+  /** What dictation last wrote to the box ('' once sent or discarded). */
+  let shown = '';
   /** @type {number | undefined} */
   let sendAt;
-  const state = () => harden({ box: pending, sendAt });
+  const state = () => {
+    shown = pending;
+    return harden({ box: pending, sendAt });
+  };
   return harden({
     /** An utterance opened: a pending send waits for its final (R5-20). */
     onset() {
@@ -282,10 +289,8 @@ export const makeSpokenDraft = ({
      * @param {string} text
      */
     partial(text) {
-      return harden({
-        box: joined(pending, String(text ?? '').trim()),
-        sendAt,
-      });
+      shown = joined(pending, String(text ?? '').trim());
+      return harden({ box: shown, sendAt });
     },
     /**
      * The utterance's final: kept text joins the pending text and the grace
@@ -324,11 +329,21 @@ export const makeSpokenDraft = ({
       const text = String(box ?? '').trim();
       if (!text || !micOn) {
         pending = '';
+        shown = '';
         return undefined;
       }
       if (utteranceOpen) return undefined;
       pending = '';
+      shown = '';
       return text;
+    },
+    /**
+     * Whether `box` still shows exactly what dictation last wrote (trimmed).
+     *
+     * @param {string} box
+     */
+    mirrors(box) {
+      return shown !== '' && String(box ?? '').trim() === shown.trim();
     },
     /**
      * The mic went off (R5-48): the unsent text is dropped. Answers whether
@@ -340,6 +355,7 @@ export const makeSpokenDraft = ({
     discard(box) {
       const mirror = pending !== '' && String(box ?? '') === pending;
       pending = '';
+      shown = '';
       sendAt = undefined;
       return mirror;
     },

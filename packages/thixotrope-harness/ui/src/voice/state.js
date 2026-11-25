@@ -66,6 +66,23 @@ export const REPLAY_INLINE_UNITS = 300_000;
 /** How long Talk and a launch wait for the new session's row (ms). */
 export const LIST_WAIT_MS = 10_000;
 
+/**
+ * Why spoken mode cannot run with `configuration` (9.1: it needs speech in
+ * and speech out), or '' when it can.
+ *
+ * @param {Record<string, any> | undefined} configuration
+ */
+export const unavailableReason = configuration => {
+  if (!configuration) return voiceUiTexts.speechUnknown;
+  return [
+    !configuration.speechIn && voiceUiTexts.speechInOff,
+    !configuration.speechOut && voiceUiTexts.speechOutOff,
+  ]
+    .filter(Boolean)
+    .join('. ');
+};
+harden(unavailableReason);
+
 /** The largest caret position `replaceInput` clamps to the text's end. */
 const WHOLE = Number.MAX_SAFE_INTEGER;
 
@@ -325,6 +342,13 @@ export const makeVoiceState = ({
    * @type {string | undefined}
    */
   let spokenKey;
+  /**
+   * The mode switches on screen (`switchShown`, 9.1): spoken mode pauses
+   * when the last one leaves the screen and says so when one returns.
+   */
+  let switches = 0;
+  /** Spoken mode was paused while no switch was on screen. */
+  let paused = false;
   let meter = { level: 0, floor: 0, threshold: 0 };
   /** @type {Record<string, any>} */
   let settings = resolveVoiceSettings();
@@ -387,6 +411,15 @@ export const makeVoiceState = ({
   const autoSpeak = () =>
     autoSpeakChoice ??
     Boolean(conn && conn.configuration && conn.configuration.speechOut);
+
+  /** Speech in and out are both configured: spoken mode can run (9.1). */
+  const speechBoth = () =>
+    Boolean(
+      conn &&
+      conn.configuration &&
+      conn.configuration.speechIn &&
+      conn.configuration.speechOut,
+    );
 
   /** Whether this page's fresh turns are spoken now (R5-45). */
   const speaks = () =>
@@ -638,6 +671,12 @@ export const makeVoiceState = ({
    */
   const onSubmission = (c, notice) => {
     const { sessionKey, session, requestId, receipt } = notice;
+    // Composer.submit sent a marked message unmarked: the session's program
+    // predates the marker (9.1).
+    if (conn === c && receipt && receipt.unmarked === true) {
+      note = voiceUiTexts.sentUnmarked;
+      notify();
+    }
     // Nothing is read for a send that will not be spoken (no crank, rule 9):
     // only a send from spoken mode is read aloud (9.1).
     if (conn !== c || !receipt || notice.spoken !== true || !speaks()) return;
@@ -702,7 +741,7 @@ export const makeVoiceState = ({
           utteranceOpen: m.endpointer.speaking(),
         });
         if (typeof text === 'string' && state.activeKey === m.draftKey) {
-          controller.send(text, { spoken: true });
+          controller.send(text, { spoken: true, dictated: true });
         }
       },
       Math.max(0, sendAt - now()),
@@ -797,6 +836,7 @@ export const makeVoiceState = ({
   const micOff = () => {
     const m = mic;
     spokenKey = undefined;
+    paused = false;
     if (!m) return;
     mic = undefined;
     m.capture.stop();
@@ -885,24 +925,45 @@ export const makeVoiceState = ({
    * `Voice.startVoiceSession`, then select the answered session and show
    * its warning (G-11).
    *
+   * its warning (G-11). A failure (the call rejects, or the session is not
+   * listed in time) puts back what was before: the microphone, the view in
+   * spoken mode and the auto-speak choice. Answers whether the new session
+   * is the one in view.
+   *
    * @param {Connection} c
    * @param {Record<string, any>} request
+   * @param {boolean} micWasOn the mic was on before the caller opened it
+   * @returns {Promise<boolean>}
    */
-  const startSession = async (c, request) => {
+  const startSession = async (c, request, micWasOn) => {
+    const before = { autoSpeakChoice, spokenKey };
     talking = true;
     autoSpeakChoice = true;
     notify();
+    let started = false;
     try {
       const answer = await E(voiceOf(c)).startVoiceSession(request);
       if (answer.warning) note = answer.warning;
       await selectWhenListed(answer.key);
+      started = viewState().activeKey === answer.key;
+      if (!started) note = voiceUiTexts.talkNotListed;
     } finally {
       talking = false;
-      // The view the mic listens in (the new session's, once selected) is
-      // in spoken mode (9.1).
-      if (mic) spokenKey = viewState().activeKey;
+      if (started) {
+        // The view the mic listens in (the new session's) is in spoken
+        // mode (9.1).
+        if (mic) spokenKey = viewState().activeKey;
+      } else {
+        autoSpeakChoice = before.autoSpeakChoice;
+        if (!micWasOn || viewState().activeKey !== before.spokenKey) {
+          micOff();
+        } else {
+          spokenKey = before.spokenKey;
+        }
+      }
       notify();
     }
+    return started;
   };
 
   /** @param {Connection} c */
@@ -910,12 +971,34 @@ export const makeVoiceState = ({
     const id = launchIdOf(location());
     if (id === undefined || launchedId !== undefined) return;
     launchedId = id;
-    startSession(c, { invocationId: id, at: now() })
-      .then(() => {
+    // The same requirement as the switch and Talk (9.1).
+    if (!speechBoth()) {
+      note = unavailableReason(c.configuration);
+      notify();
+      return;
+    }
+    startSession(c, { invocationId: id, at: now() }, false)
+      .then(started => {
+        if (!started) return;
         micOn({ immediate: true });
         spokenKey = viewState().activeKey;
+        notify();
       })
       .catch(report);
+  };
+
+  /**
+   * No mode switch is on screen (9.1): spoken mode pauses, the microphone
+   * off, and the note says so when a switch is shown again. A Talk or
+   * launch that is selecting its session is not paused.
+   */
+  const pauseIfHidden = () => {
+    if (switches > 0 || !mic || talking) return;
+    micOff();
+    stopPlayback();
+    paused = true;
+    note = voiceUiTexts.spokenModePaused;
+    notify();
   };
 
   // --------------------------------------------------- connection load
@@ -990,6 +1073,28 @@ export const makeVoiceState = ({
     updateWake();
   };
   controller.subscribe(onControllerChange);
+
+  // Every send from the view in spoken mode is a spoken-mode message, typed
+  // or dictated (9.1, the mode governs); dictated when the box still shows
+  // what dictation wrote. A send takes the box: the unsent dictation goes,
+  // with the utterance in progress (its final would fill the box again).
+  controller.markSends?.(
+    (/** @type {string} */ sessionKey, /** @type {string} */ text) => {
+      const m = mic;
+      if (!m || spokenKey !== sessionKey) return undefined;
+      const dictated = m.draft.mirrors(text);
+      m.draft.discard('');
+      clearGrace();
+      if (m.utterance) {
+        const open = m.utterance;
+        m.utterance = undefined;
+        open.abort();
+      }
+      return harden(
+        dictated ? { spoken: true, dictated: true } : { spoken: true },
+      );
+    },
+  );
 
   // A typed send gets its receipt after the user gesture has ended.
   watchActivation(() => {
@@ -1158,14 +1263,7 @@ export const makeVoiceState = ({
       }
       const key = viewState().activeKey;
       const configuration = conn && conn.configuration;
-      if (
-        key === undefined ||
-        !configuration ||
-        !configuration.speechIn ||
-        !configuration.speechOut
-      ) {
-        return;
-      }
+      if (key === undefined || !configuration || !speechBoth()) return;
       micOn();
       spokenKey = key;
       notify();
@@ -1213,12 +1311,39 @@ export const makeVoiceState = ({
       notify();
     },
 
-    /** Talk (P-49): a spoken session from the shortcut preset, mic on. */
+    /**
+     * Talk (P-49): a spoken session from the shortcut preset, mic on. It
+     * needs speech in and speech out, as the switch does (9.1).
+     */
     talk() {
       const c = conn;
-      if (!c || !c.speech || talking) return;
+      if (!c || !c.speech || talking || !speechBoth()) return;
+      const micWasOn = mic !== undefined;
       micOn();
-      startSession(c, { at: now() }).catch(report);
+      startSession(c, { at: now() }, micWasOn).catch(report);
+    },
+
+    /**
+     * A mode switch is on screen (its component's mount); answers the
+     * call for its unmount. When the last one leaves, spoken mode pauses
+     * (after the render settles: a remount is not a leave).
+     *
+     * @returns {() => void}
+     */
+    switchShown() {
+      switches += 1;
+      if (paused) {
+        paused = false;
+        note = voiceUiTexts.spokenModePaused;
+        notify();
+      }
+      let shown = true;
+      return () => {
+        if (!shown) return;
+        shown = false;
+        switches -= 1;
+        if (switches === 0 && mic) setTimer(pauseIfHidden, 0);
+      };
     },
 
     /**

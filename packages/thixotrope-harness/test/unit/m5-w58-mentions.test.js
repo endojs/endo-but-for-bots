@@ -394,6 +394,37 @@ test('send: chips go as attachments in insertion order; without chips the plain 
   t.false(m.addChip(key, { label: 'one-more', value: Far('Thing', {}) }));
 });
 
+test('send with chips carries the spoken-mode facts to Composer.submit, true ones only (M11 9.1)', async t => {
+  const page = setupPowers();
+  const storage = makeStorage();
+  const { m, controller, key } = await openPage(page, { storage });
+  m.addChip(key, { label: 'notes', value: page.things.get('notes') });
+  await controller.send('read @notes', { spoken: true, dictated: true });
+  t.deepEqual(Object.keys(page.submits[0][3]).sort(), [
+    'attachments',
+    'dictated',
+    'spoken',
+  ]);
+  t.is(page.submits[0][3].spoken, true);
+  t.is(page.submits[0][3].dictated, true);
+
+  // The view's mode marks a send made without options (the voice state's
+  // `markSends`): typed in spoken mode is spoken, not dictated.
+  const stop = controller.markSends(sessionKey =>
+    sessionKey === key ? harden({ spoken: true }) : undefined,
+  );
+  m.addChip(key, { label: 'calc', value: page.things.get('calc') });
+  await controller.send('typed @calc');
+  t.deepEqual(Object.keys(page.submits[1][3]).sort(), [
+    'attachments',
+    'spoken',
+  ]);
+  stop();
+  m.addChip(key, { label: 'mail', value: page.things.get('mail') });
+  await controller.send('text mode @mail', /** @type {any} */ ({ spoken: 1 }));
+  t.deepEqual(Object.keys(page.submits[2][3]), ['attachments']);
+});
+
 test('a resend after a reconnect sends the same chips; after a reload it throws attachmentsLost and the draft is kept', async t => {
   const page = setupPowers();
   const storage = makeStorage();

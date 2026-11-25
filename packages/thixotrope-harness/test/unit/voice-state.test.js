@@ -27,6 +27,7 @@ import { makeController } from '../../ui/src/controller/index.js';
 import { endpointingDefaults } from '../../ui/src/voice/endpointing-defaults.js';
 import { feature } from '../../ui/src/voice/feature.js';
 import {
+  LIST_WAIT_MS,
   REPLAY_INLINE_UNITS,
   VOICE_CACHE_KEY,
   WAITING_KEPT,
@@ -120,8 +121,9 @@ const configuration = harden({
  *
  * @param {{ calls: any[][] }} log
  * @param {boolean} [enabled]
+ * @param {boolean} [speechOut] speech out alone, when it differs
  */
-const makeFakeSpeech = (log, enabled = true) => {
+const makeFakeSpeech = (log, enabled = true, speechOut = enabled) => {
   let utterances = 0;
   let playbacks = 0;
   const port = makeExo('AudioPort', speechInterfaces.AudioPort, {
@@ -153,7 +155,7 @@ const makeFakeSpeech = (log, enabled = true) => {
       return harden({
         ...configuration,
         speechIn: enabled,
-        speechOut: enabled,
+        speechOut,
       });
     },
     status() {
@@ -182,7 +184,7 @@ const makeFakeSpeech = (log, enabled = true) => {
  * The factory's `Voice` on the real guard (appendix A), over a fake
  * preset catalogue and the fake powers' sessions.
  *
- * @param {{ calls: any[][], prefs: any, presets: any[], chosen?: any, revision: number, addSession: (key: string) => any, warning?: string }} state
+ * @param {{ calls: any[][], prefs: any, presets: any[], chosen?: any, revision: number, addSession: (key: string) => any, warning?: string, failStart?: Error, unlisted?: boolean }} state
  */
 const makeFakeVoice = state =>
   makeExo('Voice', interfaces.Voice, {
@@ -213,8 +215,12 @@ const makeFakeVoice = state =>
     /** @param {any} [request] */
     async startVoiceSession(request = {}) {
       state.calls.push(['startVoiceSession', request]);
+      if (state.failStart) throw state.failStart;
       const key = `v${state.calls.length}`;
-      const session = state.addSession(key);
+      // `unlisted`: started, but its row never reaches the list.
+      const session = state.unlisted
+        ? Far('Session', {})
+        : state.addSession(key);
       return harden({
         session,
         key,
@@ -440,6 +446,9 @@ const makeFakeIo = ({ hash = '', failCapture = false } = {}) => {
  * @param {string} [options.warning]
  * @param {boolean} [options.enabled]
  * @param {boolean} [options.withSpeech]
+ * @param {boolean} [options.speechOut]
+ * @param {boolean} [options.unmarked] the Composer answers `unmarked: true`
+ *   (a session whose program predates the marker, 9.1)
  */
 const setup = async ({
   prefs = harden({}),
@@ -450,9 +459,11 @@ const setup = async ({
   warning,
   enabled = true,
   withSpeech = true,
+  speechOut = enabled,
+  unmarked = false,
 } = {}) => {
   const log = { calls: /** @type {any[][]} */ ([]) };
-  const { speech, port } = makeFakeSpeech(log, enabled);
+  const { speech, port } = makeFakeSpeech(log, enabled, speechOut);
   const presets = [
     Far('Preset', {
       describe: async () => ({
@@ -482,6 +493,9 @@ const setup = async ({
     chosen: undefined,
     revision: 7,
     warning,
+    /** @type {Error | undefined} */
+    failStart: undefined,
+    unlisted: false,
     /** @param {string} key */
     addSession: key => fakeRef.control.addSession({ key }),
   };
@@ -501,6 +515,21 @@ const setup = async ({
     extras: withSpeech ? [{ label: 'speech', service: speech }] : [],
   });
   fakeRef = fake;
+  const powers = unmarked
+    ? harden({
+        ...fake.powers,
+        composer: Far('Composer', {
+          /** @param {any[]} args */
+          submit: async (...args) =>
+            harden({
+              ...(await /** @type {any} */ (E(fake.powers.composer)).submit(
+                ...args,
+              )),
+              unmarked: true,
+            }),
+        }),
+      })
+    : fake.powers;
   const storage = makeStorage();
   let id = 0;
   const controller = makeController({
@@ -512,7 +541,7 @@ const setup = async ({
       return `req${id}`;
     },
   });
-  await controller.attach(fake.powers);
+  await controller.attach(powers);
   await flush();
   const page = makeFakeIo({ hash, failCapture });
   const voiceOf = () =>
@@ -803,8 +832,63 @@ test('dictation: calibration, onset with pre-roll, partials replace, final then 
   const submits = control.callsOf('Composer', 'submit');
   t.is(submits.length, 1);
   t.is(submits[0][3], 'hello world');
-  t.deepEqual(submits[0][5], { spoken: true }, 'the spoken marker (9.1)');
+  t.deepEqual(
+    submits[0][5],
+    { spoken: true, dictated: true },
+    'the spoken-mode facts (9.1): read aloud, and dictated',
+  );
   t.is(controller.getState().view?.input.text, '');
+});
+
+test('the mode governs: in spoken mode a typed send is spoken, dictated text sent by hand is dictated; text mode marks nothing (9.1)', async t => {
+  const { controller, state, sockets, blocks, advance, control, log } =
+    await setup();
+  await controller.selectSession('s1');
+  await controller.send('typed in text mode');
+  t.is(control.callsOf('Composer', 'submit')[0].length, 5, 'no options');
+  control.play('s1');
+  await flush();
+
+  state.toggleMode();
+  await flush();
+  blocks(0.001, 1200);
+  blocks(0.2, 600);
+  const [utterance] = sockets[0].utterances;
+  utterance.handlers.onEvent({ type: 'partial', text: 'what is the' });
+  // Sent with Send or Enter while the box still shows the dictation.
+  await controller.send('what is the');
+  let submits = control.callsOf('Composer', 'submit');
+  t.deepEqual(submits[1][5], { spoken: true, dictated: true });
+  await flush();
+  t.is(callsNamed(log.calls, 'speak').length, 1, 'its reply is read aloud');
+  control.play('s1');
+  await flush();
+
+  // The dictation was taken by that send, its utterance with it.
+  t.is(utterance.aborted, speechTexts.stopped);
+  blocks(0.001, 1300);
+  utterance.handlers.onEvent({ type: 'final', text: 'what is the time' });
+  controller.setInput('');
+  advance(endpointingDefaults.graceMs);
+  await flush();
+  t.is(control.callsOf('Composer', 'submit').length, 2);
+
+  // Typed (or edited) in spoken mode: read aloud, not dictated.
+  controller.setInput('typed in spoken mode');
+  await controller.send('typed in spoken mode');
+  submits = control.callsOf('Composer', 'submit');
+  t.deepEqual(submits[2][5], { spoken: true });
+  await flush();
+  t.is(callsNamed(log.calls, 'speak').length, 2, 'read aloud too');
+});
+
+test('a send the session took unmarked (an earlier program) says so (9.1)', async t => {
+  const { controller, state } = await setup({ unmarked: true });
+  await controller.selectSession('s1');
+  state.toggleMode();
+  await controller.send('hello');
+  await flush();
+  t.is(state.view().note, voiceUiTexts.sentUnmarked);
 });
 
 test('dictation: a short burst is discarded; an edited box is sent as edited; clearing it cancels', async t => {
@@ -942,7 +1026,7 @@ test('a spoken send that failed keeps the marker in its draft and resends with i
   t.deepEqual(submits[1][5], { spoken: true });
 });
 
-test('spoken mode belongs to one session view; typed sends in it carry no marker (9.1)', async t => {
+test('spoken mode belongs to one session view; every send in it is spoken (9.1)', async t => {
   const { controller, state, captures, control } = await setup({
     sessions: [{ key: 's1' }, { key: 's2' }],
   });
@@ -951,10 +1035,10 @@ test('spoken mode belongs to one session view; typed sends in it carry no marker
   state.toggleMode();
   t.true(state.view().spoken);
   t.is(captures.length, 1, 'mic opened inside the tap');
-  // A message typed and sent with Send in spoken mode is a typed message.
+  // The mode governs: a message typed and sent with Send is spoken.
   await controller.send('typed in spoken mode');
   const [typed] = control.callsOf('Composer', 'submit');
-  t.is(typed.length, 5, 'no options argument');
+  t.deepEqual(typed[5], { spoken: true });
   await controller.selectSession('s2');
   await flush();
   t.false(state.view().spoken, 'leaving the view ends spoken mode');
@@ -970,6 +1054,55 @@ test('spoken mode belongs to one session view; typed sends in it carry no marker
   off.state.toggleMode();
   t.false(off.state.view().spoken, 'needs speech in and out');
   t.is(off.captures.length, 0);
+});
+
+test('Talk and a launch link need speech in and speech out, as the switch does (9.1)', async t => {
+  const noOut = await setup({ speechOut: false });
+  await noOut.controller.selectSession('s1');
+  noOut.state.toggleMode();
+  noOut.state.talk();
+  await flush(20);
+  t.is(noOut.captures.length, 0);
+  t.is(callsNamed(noOut.log.calls, 'startVoiceSession').length, 0);
+  t.false(noOut.state.view().spoken);
+
+  const link = await setup({ speechOut: false, hash: '&voice=inv-9' });
+  await flush(20);
+  t.is(callsNamed(link.log.calls, 'startVoiceSession').length, 0);
+  t.is(link.captures.length, 0);
+  t.is(link.state.view().note, voiceUiTexts.speechOutOff);
+});
+
+test('a failed Talk puts back the view it left: text mode stays text, spoken stays spoken, auto-speak as chosen', async t => {
+  const { controller, state, voiceState, captures, advance } = await setup();
+  await controller.selectSession('s1');
+  state.setAutoSpeak(false);
+  voiceState.failStart = Error('no voice preset');
+  state.talk();
+  t.true(state.view().micOn, 'opened inside the tap');
+  await flush(20);
+  t.false(state.view().micOn, 'text mode again');
+  t.true(captures[0].stopped);
+  t.false(state.view().autoSpeak, 'the choice is kept');
+  t.is(state.view().note, 'no voice preset');
+  t.is(controller.getState().activeKey, 's1');
+
+  // In spoken mode already; the new session never lists.
+  voiceState.failStart = undefined;
+  voiceState.unlisted = true;
+  state.toggleMode();
+  t.true(state.view().spoken);
+  state.talk();
+  await flush(20);
+  advance(LIST_WAIT_MS);
+  await flush(20);
+  t.false(state.view().talking);
+  t.is(controller.getState().activeKey, 's1');
+  t.true(state.view().spoken, 'still spoken mode in s1');
+  t.is(state.view().note, voiceUiTexts.talkNotListed);
+  t.false(state.view().autoSpeak);
+  await controller.send('still spoken');
+  t.false(captures[1].stopped);
 });
 
 test('a launch link starts its session once, records in invocation mode, and not again after a reconnect', async t => {
@@ -1197,6 +1330,12 @@ test.serial('the controls and the panel render the state', async t => {
       1,
       'the meter shows while listening',
     );
+    const meter = dom.document.querySelector('.thix-voice-meter');
+    t.is(meter.getAttribute('aria-valuemin'), '0');
+    t.is(
+      meter.getAttribute('aria-valuemax'),
+      String(endpointingDefaults.meterFullScale),
+    );
     state.toggleMode();
     await flush();
     t.is(dom.document.querySelectorAll('.thix-voice-meter').length, 0);
@@ -1228,6 +1367,61 @@ test.serial('the controls and the panel render the state', async t => {
 });
 
 test.serial(
+  'spoken mode pauses while its switch is off screen and says so on return (9.1)',
+  async t => {
+    runEffectsPromptly();
+    const dom = makeTestDom();
+    try {
+      const { controller, state, captures, advance, control } = await setup();
+      await controller.selectSession('s1');
+      const context = controller.featureContext();
+      const bar = (/** @type {number} */ n) =>
+        h('div', { key: String(n) }, [
+          h(VoiceControls, { context }),
+          h(VoiceModeSwitch, { context }),
+        ]);
+      render(bar(1), dom.root);
+      await flush();
+      state.toggleMode();
+      t.true(state.view().spoken);
+      // A remount (a new tree in one render) is not a leave.
+      render(bar(2), dom.root);
+      advance(0);
+      await flush();
+      t.true(state.view().spoken);
+
+      // Another panel or view replaces the compose bar.
+      render(h(VoicePanel, { context }), dom.root);
+      advance(0);
+      await flush();
+      t.false(state.view().micOn, 'microphone off');
+      t.false(state.view().spoken);
+      t.true(captures[0].stopped);
+      await controller.send('typed while away');
+      t.is(
+        control.callsOf('Composer', 'submit')[0].length,
+        5,
+        'nothing is marked',
+      );
+
+      state.setAutoSpeak(true); // another note-free change in between
+      render(bar(3), dom.root);
+      await flush();
+      t.is(
+        dom.document
+          .querySelector('.thix-voice-mode')
+          .getAttribute('aria-pressed'),
+        'false',
+      );
+      t.true(dom.root.textContent.includes(voiceUiTexts.spokenModePaused));
+      render(null, dom.root);
+    } finally {
+      await dom.close();
+    }
+  },
+);
+
+test.serial(
   'unconfigured speech explains the disabled mode switch in the composer',
   async t => {
     runEffectsPromptly();
@@ -1242,11 +1436,18 @@ test.serial(
         ]),
         dom.root,
       );
-      t.true(dom.document.querySelector('.thix-voice-mode').disabled);
+      const button = dom.document.querySelector('.thix-voice-mode');
+      t.true(button.disabled);
       t.true(dom.root.textContent.includes(voiceUiTexts.speechInOff));
       t.true(dom.root.textContent.includes(voiceUiTexts.speechOutOff));
+      // The reason is visible text that the disabled switch points to.
+      const reason = dom.document.getElementById(
+        button.getAttribute('aria-describedby'),
+      );
+      t.true(reason.textContent.includes(voiceUiTexts.speechInOff));
       render(h(VoicePanel, { context }), dom.root);
       t.true(dom.document.querySelector('.thix-voice-autospeak').disabled);
+      t.true(dom.document.querySelector('.thix-voice-talk').disabled);
       render(null, dom.root);
     } finally {
       await dom.close();
