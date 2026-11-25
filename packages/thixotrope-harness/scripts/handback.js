@@ -29,7 +29,7 @@
 export const handBackExec = [
   'const sh = await E(powers).lookup("shell"), to = await E(powers).lookup("parent-shell");',
   'const run = (s, c, ...a) => E(s).runCommand("sh", ["-c", c, "sh", ...a.map(String)]);',
-  'const r = await run(sh, "b=$(git reflog --format=%H HEAD | tail -n 1) h=$(git rev-parse HEAD) && [ $b != $h ] || exit 0; f=.git/hb-$h; [ -s $f ] || { git bundle create $f.b $b..HEAD && base64 -w0 $f.b > $f.t && mv $f.t $f; } && echo $h $(wc -c < $f)");',
+  'const r = await run(sh, "b=$(git reflog --format=%H HEAD | tail -n 1) h=$(git rev-parse HEAD) && [ $b != $h ] || exit 0; f=.git/hb-$h; [ -s $f ] || { git bundle create $f.b $b..HEAD && base64 < $f.b | tr -d \\"\\n\\" > $f.t && mv $f.t $f; } && echo $h $(wc -c < $f)");',
   'if (r.exitCode) return r.stderr; const [h, n] = r.stdout.split(" "); if (!n) return "no commits";',
   'for (let i = 2500 * (await run(to, "mkdir -p .git/handback/$1 && ls .git/handback/$1 | grep -c ^1", h)).stdout; i < +n; i += 2500) {',
   'const p = await run(sh, "cut -c $1-$2 .git/hb-$3", i + 1, i + 2500, h); if (p.exitCode) return p.stderr;',
