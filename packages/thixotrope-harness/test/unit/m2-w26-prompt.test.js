@@ -182,8 +182,9 @@ test('a given systemPrompt replaces the composition; a blank one fails creation 
   }
   t.is(promptTextFor({}, {}), composeSystemPrompt({ spoken: false }));
   t.is(
+    // M11 9.1: a spoken (Talk) creation composes the plain introduction.
     promptTextFor({ spoken: true }, { presetSnapshot: { label: 'chat-only' } }),
-    composeSystemPrompt({ spoken: true }),
+    composeSystemPrompt({ spoken: false }),
   );
   t.is(
     promptTextFor(
@@ -305,7 +306,7 @@ test('the resolver is in the hook table after the preset snapshot; createSession
   });
   t.is(
     /** @type {any} */ (spoken).systemPrompt,
-    composeSystemPrompt({ spoken: true }),
+    composeSystemPrompt({ spoken: false }),
   );
   const given = await resolveCreateOptions(
     harden({ backend, systemPrompt: 'Only haiku.' }),

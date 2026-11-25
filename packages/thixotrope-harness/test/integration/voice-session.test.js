@@ -204,7 +204,10 @@ run(
     t.is(await listed(), before + 1);
     const spoken = await promptsOf(slice, answer.session, made.log);
     t.true(spoken.length > 0);
-    t.is(spoken[0].systemDigest, sha16(composeSystemPrompt({ spoken: true })));
+    // M11 9.1: a Talk session's prompt is the plain one; a message sent
+    // from spoken mode adds the spoken turn note to its own turn only, and
+    // this one is submitted without the marker.
+    t.is(spoken[0].systemDigest, sha16(composeSystemPrompt({ spoken: false })));
 
     // A typed session from the same preset, on its own backend's log.
     const typedBackend = await slice.makeBackend(script);

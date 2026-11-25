@@ -12,6 +12,7 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { texts, textOf } from '../../guest/lib/interfaces.js';
+import { texts as sessionTexts } from '../../guest/lib/guards/session.js';
 import { limits } from '../../guest/lib/limits.js';
 import { RETIRED_TEXT } from '../../guest/lib/retired.js';
 import { makeQueue } from '../../guest/session/queue.js';
@@ -607,4 +608,106 @@ test('adoptTool grants through the grants part and answers by its schema read', 
     [good.value, 'adopted'],
     [bad.value, 'adopted'],
   ]);
+});
+
+// ------------------------------------------------- M11 spoken marker (9.1)
+
+const spokenNote = sessionTexts.spokenTurnNote;
+
+/**
+ * @param {any} req
+ * @returns {any}
+ */
+const startedIn = req =>
+  req.append.find((/** @type {any} */ r) => r.kind === 'turn-started');
+
+test('a spoken message: the note on every round of its turn only, TurnStarted.spoken; a typed one has neither', async t => {
+  const s = await makeM5Session();
+  s.session.enqueueOnce(
+    harden({ text: 'what time is it' }),
+    requestId(),
+    AT,
+    harden({ spoken: true }),
+  );
+  await drain();
+  t.is(s.last().system, `You are helpful.\n\n${spokenNote}`);
+  t.true(startedIn(s.last()).spoken);
+  s.answer([{ name: 'list', args: '{}' }]);
+  await drain();
+  t.is(s.last().system, `You are helpful.\n\n${spokenNote}`, 'every round');
+  s.answer();
+  await drain();
+
+  s.session.enqueueOnce(harden({ text: 'typed' }), requestId(), AT);
+  await drain();
+  t.is(s.last().system, 'You are helpful.');
+  t.false('spoken' in startedIn(s.last()));
+  s.answer();
+  await drain();
+
+  // With attachments: the mention line, then the spoken note.
+  s.session.enqueueMessageOnce(
+    harden({ text: 'look' }),
+    requestId(),
+    AT,
+    attach(['notes']),
+    harden({ spoken: true }),
+  );
+  await drain();
+  t.is(
+    s.last().system,
+    `You are helpful.\n\n${textOf.mentionLine(1, ['notes'])}\n\n${spokenNote}`,
+  );
+  t.true(startedIn(s.last()).spoken);
+});
+
+test('the spoken marker is guarded: only `{ spoken: boolean }`; false is a typed message', async t => {
+  const s = await makeM5Session();
+  for (const options of [{ spoken: 'yes' }, { spoken: true, extra: 1 }, 1]) {
+    t.throws(() =>
+      s.session.enqueueOnce(
+        harden({ text: 'x' }),
+        requestId(),
+        AT,
+        harden(options),
+      ),
+    );
+  }
+  t.is(s.rounds.length, 0, 'nothing stored');
+  s.session.enqueueOnce(
+    harden({ text: 'typed' }),
+    requestId(),
+    AT,
+    harden({ spoken: false }),
+  );
+  await drain();
+  t.is(s.last().system, 'You are helpful.');
+  t.false('spoken' in startedIn(s.last()));
+});
+
+test('a queued spoken entry keeps its marker through an edit and a restart hold', async t => {
+  const s = await makeM5Session();
+  await s.send('running');
+  const queued = s.session.enqueueOnce(
+    harden({ text: 'queued' }),
+    requestId(),
+    AT,
+    harden({ spoken: true }),
+  );
+  /** @type {any} */ (queued.entry).edit(harden({ text: 'queued, edited' }));
+  t.true(/** @type {any} */ (s.queue().first()).spoken, 'kept by the edit');
+  // The running turn is interrupted by a restart: its input stays in the
+  // log once and nothing is re-queued; the waiting entry is held.
+  await s.restartAdapter();
+  t.is(s.session.listPending().hold?.reason, 'restart');
+  t.true(/** @type {any} */ (s.queue().items()[0]).spoken, 'kept by the hold');
+  // A new message releases the hold; the held spoken entry runs first.
+  s.session.enqueueOnce(harden({ text: 'typed' }), requestId(), AT);
+  await drain();
+  t.is(s.last().system, `You are helpful.\n\n${spokenNote}`);
+  t.is(startedIn(s.last()).input, 'queued, edited');
+  t.true(startedIn(s.last()).spoken);
+  s.answer();
+  await drain();
+  t.is(s.last().system, 'You are helpful.', 'the typed one after it');
 });

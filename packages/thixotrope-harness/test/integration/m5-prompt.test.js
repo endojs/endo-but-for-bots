@@ -135,10 +135,12 @@ run(
     await turn(typed.session, 'again');
     promptIs(typed.log, plain, 'typed');
 
+    // M11 9.1: a session created spoken composes the plain prompt; the voice
+    // rules come with each message sent from spoken mode (its turn note).
     const voiced = await sessionWith({ spoken: true });
     await turn(voiced.session, 'two rounds');
     await turn(voiced.session, 'again');
-    promptIs(voiced.log, spoken, 'spoken');
+    promptIs(voiced.log, plain, 'created spoken');
 
     const given = 'You answer in one word.';
     const replaced = await sessionWith({ systemPrompt: given, spoken: true });

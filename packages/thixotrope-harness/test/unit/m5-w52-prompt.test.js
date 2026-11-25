@@ -37,6 +37,7 @@ import {
   mailToolsSection,
 } from '../../guest/lib/mail-prompt.js';
 import { composeSystemPrompt } from '../../guest/lib/system-prompt-base.js';
+import { texts as sessionTexts } from '../../guest/lib/guards/session.js';
 import { promptResolver, promptTextFor } from '../../guest/session/prompt.js';
 import { resolveCreateOptions } from '../../guest/factory/session-options.js';
 /* eslint-enable import/no-relative-packages */
@@ -303,13 +304,10 @@ test('built-in prompt sizes preserve inline creation for the default presets', t
       const bytes = utf8Bytes(
         promptTextFor({ spoken: isSpoken }, { presetSnapshot: preset }),
       );
-      // The spoken introduction and full development environment together
-      // already require staging; all other defaults fit the inline frame.
-      const staged =
-        isSpoken && ['development', 'voice'].includes(preset.label);
-      t.is(
+      // M11 9.1: a spoken (Talk) creation composes the plain introduction,
+      // so every default fits the inline frame.
+      t.false(
         bytes > limits.inlineBytes,
-        staged,
         `${preset.label}, spoken=${isSpoken}: ${bytes} bytes`,
       );
     }
@@ -358,9 +356,11 @@ test('sizes: the composed prompt is inline; a maximal preset text may be staged'
 
 test('the resolver composes from the resolved preset snapshot; a given prompt replaces it (R4-27)', async t => {
   const snapshot = harden({ label: 'p', instructions: 'Answer in French.' });
+  // M11 9.1: a spoken (Talk) creation composes the plain introduction; the
+  // voice rules come per turn (texts.spokenTurnNote).
   t.is(
     promptTextFor({ spoken: true }, { presetSnapshot: snapshot }),
-    composeSystemPrompt({ spoken: true, snapshot }),
+    composeSystemPrompt({ spoken: false, snapshot }),
   );
   t.is(
     promptTextFor(
@@ -393,6 +393,20 @@ test('the resolver composes from the resolved preset snapshot; a given prompt re
   );
   t.is(
     /** @type {any} */ (voiced).systemPrompt,
-    `${spoken}\n\nAnswer in French.`,
+    `${plain}\n\nAnswer in French.`,
+    'M11 9.1: a Talk creation composes the plain introduction',
   );
+});
+
+test("the spoken turn note: dictated input, read-aloud reply, the spoken introduction's rules (m11 9.1)", t => {
+  const note = sessionTexts.spokenTurnNote;
+  t.true(note.includes('may contain transcription errors'));
+  t.true(note.includes('Your reply will be read aloud'));
+  const rules = flootIntroduction(true)
+    .split('\n')
+    .filter(line => line.startsWith('- '));
+  t.is(rules.length, 3);
+  t.true(note.endsWith(rules.join('\n')), 'the same three rules');
+  t.false(plain.includes(note));
+  t.deepEqual([...new Set(note.replace(/[\x20-\x7e\n]/g, ''))], ['\u2014']);
 });

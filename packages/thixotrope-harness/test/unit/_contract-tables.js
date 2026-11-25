@@ -210,6 +210,8 @@ export const seamLater = harden({
     'SpeechInSettings',
     'SpeechOutSettings',
     'SpeechSettings',
+    // M11 9.1: the spoken marker of the enqueue methods.
+    'EnqueueOptions',
   ]),
   interfaces: harden([
     'Voice',

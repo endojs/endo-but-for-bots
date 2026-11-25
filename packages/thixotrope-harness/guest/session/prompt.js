@@ -13,8 +13,9 @@
  *   `texts.blankSystemPrompt`, before any row or vat is made (R4-6).
  * - otherwise the composition of `guest/lib/system-prompt-base.js` over the
  *   section table `guest/lib/prompt-sections.js` from the resolved preset
- *   snapshot (part 7 is its `instructions`), spoken when `spoken: true` was
- *   given.
+ *   snapshot (part 7 is its `instructions`). `spoken: true` (a Talk
+ *   session) no longer changes it: since M11 the voice rules come per
+ *   turn, with a message sent from spoken mode (m11-interfaces.md 9.1).
  * - a prompt over `inlineBytes` is staged through
  *   `E(context.admin).writersFor()` (no session yet: the session holds the
  *   StagedText from its first use, M1b 17.3), in pieces of at most
@@ -77,8 +78,10 @@ export const promptTextFor = (options, resolved) => {
     }
     return given;
   }
+  // M11 (m11-interfaces.md 9.1): always the plain introduction; a Talk
+  // session's spoken turns carry the voice rules in their turn note.
   return composeSystemPrompt({
-    spoken: options.spoken === true,
+    spoken: false,
     snapshot: resolved.presetSnapshot,
   });
 };

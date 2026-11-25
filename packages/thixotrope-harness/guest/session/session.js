@@ -229,14 +229,16 @@ export const makeSession = (
    * @param {string} requestId
    * @param {number} at
    * @param {readonly { label: string, value: any }[]} [attachments]
+   * @param {{ spoken?: boolean }} [options] M11: the spoken marker
    */
-  const enqueue = (submission, requestId, at, attachments) => {
+  const enqueue = (submission, requestId, at, attachments, options) => {
     runner.see(at);
     const { receipt, added } = queue.enqueueOnce(
       submission,
       requestId,
       at,
       attachments,
+      options?.spoken === true,
     );
     if (!added) return receipt;
     if (runner.claimNext() === undefined) return receipt;
@@ -274,11 +276,14 @@ export const makeSession = (
      * @param {any} submission inline `{ text }` or a StagedText
      * @param {string} requestId
      * @param {number} at
+     * @param {{ spoken?: boolean }} [options] M11 (m11-interfaces.md 9.1)
      */
-    enqueueOnce(submission, requestId, at) {
+    enqueueOnce(submission, requestId, at, options) {
       refuseIfDeleting();
       refuseIfStopped();
-      return inCrank(() => enqueue(submission, requestId, at));
+      return inCrank(() =>
+        enqueue(submission, requestId, at, undefined, options),
+      );
     },
     /** @param {string} requestId */
     getSubmissionReceipt(requestId) {
@@ -327,13 +332,14 @@ export const makeSession = (
      * @param {string} requestId
      * @param {number} at
      * @param {any[]} attachments
+     * @param {{ spoken?: boolean }} [options] M11 (m11-interfaces.md 9.1)
      */
-    enqueueMessageOnce(submission, requestId, at, attachments) {
+    enqueueMessageOnce(submission, requestId, at, attachments, options) {
       refuseIfDeleting();
       refuseIfStopped();
       return inCrank(() => {
         checkAttachments(submission, attachments);
-        return enqueue(submission, requestId, at, attachments);
+        return enqueue(submission, requestId, at, attachments, options);
       });
     },
     /** M5 (2.5): the session's granted tools (W5.6's `grants` part). */

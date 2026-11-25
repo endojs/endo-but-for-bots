@@ -314,6 +314,44 @@ test('export then import between two real sessions: the same records, usage and 
     turns.map((/** @type {any} */ p) => p.state),
     ['completed', 'completed', 'completed', 'completed'],
   );
+  // M11 9.1: a waiting spoken entry keeps its marker through export and
+  // import (`ExportEntry.spoken`); a typed one exports none.
+  const c = await makeQueueSession();
+  await c.submit('running');
+  c.session.enqueueOnce(
+    harden({ text: 'said' }),
+    requestId(),
+    AT,
+    harden({ spoken: true }),
+  );
+  c.session.enqueueOnce(harden({ text: 'typed' }), requestId(), AT);
+  const cPages = exportAll(c.internal);
+  const entries = cPages
+    .filter(p => p.part === 'queue')
+    .flatMap(p => p.entries);
+  t.deepEqual(
+    entries.map(e => [e.submission.text, e.spoken]),
+    [
+      ['said', true],
+      ['typed', undefined],
+    ],
+  );
+  t.false('spoken' in entries[1]);
+  const d = await makeQueueSession();
+  for (const page of cPages) {
+    const chunk =
+      page.part === 'queue' ? harden({ ...page, hold: undefined }) : page;
+    const { next: _next, ...rest } = chunk;
+    d.internal.importState(harden(JSON.parse(JSON.stringify(rest))));
+  }
+  await drain();
+  t.deepEqual(
+    exportAll(d.internal)
+      .filter(p => p.part === 'queue')
+      .flatMap(p => p.entries),
+    entries,
+  );
+
   // After its end, a chunk is answered without effect (a resend).
   t.deepEqual(
     b.internal.importState(harden({ part: 'records', from: 0, records: [] })),

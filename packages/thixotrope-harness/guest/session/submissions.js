@@ -75,9 +75,16 @@ export const makeSubmissions = ({ pending, onChange = () => {} }) => {
      * @param {string} requestId
      * @param {number} at
      * @param {readonly { label: string, value: any }[]} [attachments] M5
+     * @param {boolean} [spoken] M11: sent from spoken mode
      */
-    enqueue: (submission, requestId, at, attachments = undefined) => {
-      const result = pending.enqueue(submission, requestId, at, attachments);
+    enqueue: (submission, requestId, at, attachments, spoken) => {
+      const result = pending.enqueue(
+        submission,
+        requestId,
+        at,
+        attachments,
+        spoken,
+      );
       if (result.added) userSent();
       return result;
     },

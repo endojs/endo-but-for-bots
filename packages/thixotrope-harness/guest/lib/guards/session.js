@@ -528,6 +528,16 @@ export const texts = harden({
    * merged; the group fold deletes it.
    */
   notBuiltYet: 'This harness does not provide this yet',
+  /**
+   * M11 (m11-interfaces.md 9.1): the note a turn whose message was sent
+   * from spoken mode adds to its system prompt, after any other note. The
+   * three rules are the spoken introduction's (`prompt-sections.js`
+   * `flootIntroduction(true)`), word for word.
+   */
+  spokenTurnNote: `The user spoke this message and it was transcribed, so it may contain transcription errors (misheard, missing or extra words, odd punctuation); answer what they meant. Your reply will be read aloud, so:
+- Keep responses short and conversational ${DASH} usually one to three sentences.
+- Avoid markdown, code blocks, bullet lists, and emoji; write as you would speak.
+- Answer directly. Speak plain summaries; never read code, secrets, or raw tool output aloud.`,
 });
 
 /**
@@ -947,6 +957,13 @@ const m1aShapeBuilders = {
     ),
   /** A user submission: inline text, or (M1b) a StagedText over inlineBytes. */
   Submission: () => M.or(record({ text: S.SubmissionText }), B.StagedText),
+  /**
+   * How a submission was made (m11-interfaces.md 9.1, the spoken marker):
+   * `spoken: true` for a message sent from a view in spoken mode. The
+   * optional last argument of `enqueueOnce` and `enqueueMessageOnce`;
+   * absent, or `spoken: false`, is a typed message.
+   */
+  EnqueueOptions: () => record({}, { spoken: M.boolean() }),
   /** A tool call as the model returned it; `args` is the model's JSON text (or staged). */
   ToolCall: () =>
     record({
@@ -975,12 +992,15 @@ const m1aShapeBuilders = {
         at: count,
       },
       // M5 widening (W5.3; m5-interfaces.md 9.1 H-6): the labels of the
-      // message's attachments (R3-8, R4-29), never the objects.
+      // message's attachments (R3-8, R4-29), never the objects. M11
+      // (m11-interfaces.md 9.1): `spoken: true` for a message sent from
+      // spoken mode; absent on a typed one and on every older record.
       {
         attachments: list(
           text(limits.endowmentLabelUnits),
           limits.maxAttachments,
         ),
+        spoken: true,
       },
     ),
   Dispatched: () => record({ kind: 'dispatched', turnId: S.Id, round: count }),
@@ -1332,11 +1352,10 @@ export const methodsOf = harden({
     getInfo: M.call().returns(S.SessionInfo),
     rename: M.call(text(limits.titleUnits)).returns(done),
     watch: M.call().returns(S.WatchSnapshot),
-    enqueueOnce: M.call(
-      S.Submission,
-      text(limits.requestIdUnits),
-      count,
-    ).returns(S.Receipt),
+    enqueueOnce: M.call(S.Submission, text(limits.requestIdUnits), count)
+      // M11 (m11-interfaces.md 9.1): the spoken marker.
+      .optional(S.EnqueueOptions)
+      .returns(S.Receipt),
     getSubmissionReceipt: M.call(text(limits.requestIdUnits)).returns(
       M.or(done, S.Receipt),
     ),
@@ -1621,11 +1640,15 @@ const m2ShapeBuilders = {
 
   /** One waiting entry as exported. */
   ExportEntry: () =>
-    record({
-      submission: S.Submission,
-      requestId: text(limits.requestIdUnits),
-      at: count,
-    }),
+    record(
+      {
+        submission: S.Submission,
+        requestId: text(limits.requestIdUnits),
+        at: count,
+      },
+      // M11 (m11-interfaces.md 9.1): the entry's spoken marker.
+      { spoken: true },
+    ),
   /**
    * `SessionInternal.exportState` page and `importState` chunk: one `part`
    * each, in the order head, archive, records, queue, end.
@@ -1694,8 +1717,12 @@ const importChunkView = () => {
 const objectShapeBuilders = {
   // `EdgeLabel`, `Attachment`, `Attachments`: in `./base.js` since WX.1
   // (`./mail.js` reads them and `./session.js` imports `./mail.js`).
-  /** `Composer.submit`'s optional fourth argument (M5). */
-  SubmitOptions: () => record({}, { attachments: S.Attachments }),
+  /**
+   * `Composer.submit`'s optional fourth argument: the attachments (M5) and
+   * the spoken marker (M11, m11-interfaces.md 9.1).
+   */
+  SubmitOptions: () =>
+    record({}, { attachments: S.Attachments, spoken: M.boolean() }),
   /** A stored JSON value as `ExecPowersSource` carries it: the model's text. */
   // JsonValue is shared with mail attachments in base.js.
   /** `ExecPowersSource.lookup` answer. */
@@ -1770,7 +1797,10 @@ const m2Versions = {
         text(limits.requestIdUnits),
         count,
         S.Attachments,
-      ).returns(S.Receipt),
+      )
+        // M11 (m11-interfaces.md 9.1): the spoken marker.
+        .optional(S.EnqueueOptions)
+        .returns(S.Receipt),
       // R3-6: the session's granted tools.
       grants: M.call().returns(R('SessionGrants')),
       // Environments (m6-interfaces.md 15.1, seam S-1; WX.1).

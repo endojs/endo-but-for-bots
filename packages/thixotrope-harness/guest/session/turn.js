@@ -672,7 +672,12 @@ export const makeTurnRunner = ({
    */
   const systemFor = active => {
     const prompt = config.systemPrompt;
-    const note = active.systemNote;
+    // M11 (m11-interfaces.md 9.1): a spoken turn's note follows the part's.
+    const notes = [
+      active.systemNote,
+      active.spoken === true ? texts.spokenTurnNote : undefined,
+    ].filter(line => line !== undefined);
+    const note = notes.length === 0 ? undefined : notes.join('\n\n');
     if (note === undefined) return prompt;
     if (prompt === undefined) return note;
     if (typeof prompt === 'string') {
@@ -1182,6 +1187,12 @@ export const makeTurnRunner = ({
       started.attachments = harden(
         attachments.map((/** @type {any} */ a) => a.label),
       );
+    }
+    // M11 (m11-interfaces.md 9.1): the entry's spoken marker, kept in the
+    // log so history and export show how the message was made.
+    if (item?.spoken === true) {
+      started.spoken = true;
+      active.spoken = true;
     }
     // M8 S-5a: the index of TurnStarted (the compaction part reads it).
     active.startIndex = records.append(started);

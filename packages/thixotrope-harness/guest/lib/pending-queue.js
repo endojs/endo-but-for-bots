@@ -31,7 +31,10 @@
  * (`[{ label, value }]`, checked by `packages.js`). The receipt's
  * fingerprint covers the labels too (`StoredReceipt.labels`, not the
  * objects): a retry under the same request id must carry the same labels
- * in the same order. An edit keeps the attachments; a cancel and the claim
+ * in the same order. M11 (m11-interfaces.md 9.1): an entry sent from
+ * spoken mode carries `spoken: true` (absent on a typed one); it is not
+ * part of the fingerprint, and an edit keeps it with the rest of the item.
+ * An edit keeps the attachments; a cancel and the claim
  * drop them from the entry (after the claim the turn's package holds them,
  * until the turn settles). Worst case of the labels kept by receipts:
  * 4,096 x 32 labels of 80 units, about 31 MB, with the strings shared with
@@ -86,6 +89,7 @@ export const REQUEST_ID = /^\d{13}-[0-9a-f-]{36}$/;
  * @property {number} at when it was submitted (the Composer's stamp)
  * @property {string} requestId
  * @property {readonly { label: string, value: any }[]} [attachments] M5
+ * @property {true} [spoken] M11: sent from spoken mode
  * @typedef {object} Internal
  * @property {QueueItem} item
  * @property {string} preview the text cut to messagePreviewUnits
@@ -270,9 +274,16 @@ export const makePendingQueue = ({ makeEntry, onChange = () => {} }) => {
    * @param {string} requestId
    * @param {number} at
    * @param {readonly { label: string, value: any }[]} [attachments] M5
+   * @param {boolean} [spoken] M11: sent from spoken mode
    * @returns {{ stored: StoredReceipt, added: boolean, internal?: Internal }}
    */
-  const enqueue = (submission, requestId, at, attachments = undefined) => {
+  const enqueue = (
+    submission,
+    requestId,
+    at,
+    attachments = undefined,
+    spoken = false,
+  ) => {
     checkSubmission(submission);
     REQUEST_ID.test(requestId) || refuse(texts.invalidRequestId);
     const issued = Number(requestId.slice(0, 13));
@@ -308,11 +319,15 @@ export const makePendingQueue = ({ makeEntry, onChange = () => {} }) => {
     };
     const entry = makeEntry(internal);
     const attached = attachments !== undefined && attachments.length > 0;
-    internal.item = harden(
-      attached
-        ? { entry, key, submission, at, requestId, attachments }
-        : { entry, key, submission, at, requestId },
-    );
+    internal.item = harden({
+      entry,
+      key,
+      submission,
+      at,
+      requestId,
+      ...(attached ? { attachments } : {}),
+      ...(spoken ? { spoken: true } : {}),
+    });
     waiting.add(internal);
     /** @type {StoredReceipt} */
     const stored = {
