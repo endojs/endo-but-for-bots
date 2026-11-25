@@ -124,8 +124,10 @@ once per state and has no live upgrade before M13. An older factory refuses a
 spawn that names a model or an effort, but a spawn without them still works.
 To get the new factory, export the state with `scripts/export.mjs`, provision
 a fresh state and import the export there.
-Claude Fable 5.2's efforts come from the agent-host implementation
-directory. A daemon restart picks them up.
+The table of efforts that the catalogue offers for Claude Fable 5.2 is in the
+agent-host native resource (`claudeEfforts` in
+`resources/agent-host/impl/subscriptions/messages.js`). A state runs the
+agent-host code it was installed with.
 
 Set `state` to the supervisor's state directory. Rebuild the image when the Yarn lockfile or native Rust worker changes.
 The image build needs access to the locked upstream dependencies. Once built, the session runs offline
