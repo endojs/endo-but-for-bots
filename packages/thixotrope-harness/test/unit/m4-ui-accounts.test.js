@@ -802,7 +802,7 @@ test.serial(
 );
 
 test.serial(
-  'an installed manager without addMember shows a note instead of the form',
+  'neither the installed manager nor the adapter adds members: a note instead of the form',
   async t => {
     const s = await setup({ oldManager: true });
     tearDownAfter(t, s);
@@ -814,11 +814,8 @@ test.serial(
       subscriptionTexts.managerPredatesAdd,
     );
     t.true(
-      subscriptionTexts.managerPredatesAdd.includes(
-        "this installation's subscriptions manager predates adding members".replace(
-          /^t/,
-          'T',
-        ),
+      subscriptionTexts.managerPredatesAdd.startsWith(
+        "This installation's agent host predates adding subscriptions",
       ),
     );
     // The rest of the panel still works.

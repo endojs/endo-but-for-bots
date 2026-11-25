@@ -53,6 +53,8 @@ export const addMemberTexts = harden({
   unpooled: 'Interrupted adds',
   unpooledNote:
     'An earlier add was interrupted after the subscription was made: add it to this pool or retire it.',
+  unpooledAgainNote:
+    'An earlier add was interrupted after the subscription was made: add it again with the same secret and label (that finishes the add) or retire it.',
   addExisting: 'Add to this pool',
   retire: 'Retire',
   confirmRetire: 'Retire permanently (it leaves every pool)',
@@ -346,6 +348,11 @@ export const AddMember = ({
   const [canAdd, setCanAdd] = useState(
     /** @type {boolean | undefined} */ (undefined),
   );
+  /** Who adds (`feed.addPath`): the manager, or the adapter over a pinned one. */
+  /** @type {[string | undefined, (v: string | undefined) => void]} */
+  const [path, setPath] = useState(
+    /** @type {string | undefined} */ (undefined),
+  );
   const [open, setOpen] = useState(false);
   /** @type {[any[] | undefined, (v: any[] | undefined) => void]} */
   const [secrets, setSecrets] = useState(
@@ -384,9 +391,11 @@ export const AddMember = ({
 
   useEffect(() => {
     let live = true;
-    call(() => feed.canAddMembers()).then(
+    call(() => feed.addPath()).then(
       answer => {
-        if (live) setCanAdd(answer);
+        if (!live) return;
+        setPath(answer);
+        setCanAdd(answer !== undefined);
       },
       () => {
         if (live) setCanAdd(false);
@@ -670,7 +679,13 @@ export const AddMember = ({
           'div',
           { class: 'm4-unpooled' },
           h('h4', null, addMemberTexts.unpooled),
-          h('p', { class: 'm4-note' }, addMemberTexts.unpooledNote),
+          h(
+            'p',
+            { class: 'm4-note' },
+            path === 'adapter'
+              ? addMemberTexts.unpooledAgainNote
+              : addMemberTexts.unpooledNote,
+          ),
           h(
             'ul',
             null,
@@ -679,12 +694,14 @@ export const AddMember = ({
                 'li',
                 { key: idOf(member), 'data-unpooled': name },
                 h('span', null, name),
-                button(
-                  'add-existing',
-                  addMemberTexts.addExisting,
-                  () => addExisting(member),
-                  { name: addMemberTexts.addExistingNamed(name) },
-                ),
+                path === 'adapter'
+                  ? null
+                  : button(
+                      'add-existing',
+                      addMemberTexts.addExisting,
+                      () => addExisting(member),
+                      { name: addMemberTexts.addExistingNamed(name) },
+                    ),
                 h(RetireButton, {
                   name,
                   disabled: busy !== '',
