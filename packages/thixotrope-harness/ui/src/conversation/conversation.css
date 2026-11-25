@@ -36,6 +36,14 @@
   padding: 0.25rem 0.75rem;
 }
 
+/* The compose bar's `composer.action` slot, before Send (m3 9.2). */
+.thix-composer-actions {
+  display: flex;
+  align-items: center;
+  flex: none;
+  align-self: center;
+}
+
 .thix-composer-blocked,
 .thix-turn-status-reason,
 .thix-turn-status-note,
