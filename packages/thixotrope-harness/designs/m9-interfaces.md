@@ -420,6 +420,18 @@ only freshly provisioned states, while the round text arrives with a session pro
 Rejected: a marker sentence at the start of the brief as the only signal (a parent that forgets it
 makes its child a project manager that delegates again).
 
+**D-M9-28. A legacy project source is passed on to each child.** A preset published with
+`project-preset.mjs --legacy-factory` carries the project revision as the endowment
+`thixotrope-project-source` (a `WorkspaceSeedMarker`), which the session program's `make` takes
+out of the inventory and hands to `EnvironmentControl.useWorkspaceSeed`. The installed factory
+gives a child only the attachments its parent lists (`presetEndowments` returns nothing when
+`delegated` is set), so the child's workspace was empty. The session program keeps the marker as
+`services.projectSource` and `spawnSubagent` adds it to every spawn under the same label (a
+model's own attachment of that label is refused while it does); the child's `make` then seeds its
+workspace as its parent's did. A session with no marker (a current factory carries the revision
+in the preset snapshot) sends none. Rejected: telling the parent to attach it (the model does not
+hold it, by design).
+
 ---
 
 ## 3. Objects and interfaces

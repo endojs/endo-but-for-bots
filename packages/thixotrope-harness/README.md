@@ -164,9 +164,12 @@ sessions. Sessions already created retain their own checkout and revision.
 If the host uses an older installed factory that predates project revisions,
 add `--legacy-factory` to load the current session program and convey the
 revision through a private source capability. This requires the current
-environments manager. On a legacy factory, a delegated child gets an empty
-workspace because that factory omits preset endowments on delegation. A
-current factory gives each child its own checkout of the saved revision.
+environments manager. A legacy factory omits preset endowments on
+delegation, so the session program passes the parent's private source
+capability to each child it spawns, and the child opens its own checkout of
+the same revision (designs/m9-interfaces.md D-M9-28); the parent must have
+been created after the program load. A current factory gives each child its
+own checkout of the saved revision.
 The runner image applies across the installation.
 The command requires `--replace-runner` to change an existing runtime,
 image or shell allowlist.
