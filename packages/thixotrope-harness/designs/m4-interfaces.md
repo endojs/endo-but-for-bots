@@ -228,9 +228,11 @@ and write the Secret before it is a member. The add's pool refresh is the member
 read, and the Subscriptions panel shows its result on the new member (`firstReadOk`, or
 `firstReadRejected` with Retire, inline-confirmed, and "replace the secret and try again").
 
-The Add subscription form asks `E(admin).__getMethodNames__()` once per connection: a manager
-without `addMember` and `checkCredential` (a state provisioned before them keeps its installed
-manager while the adapter and UI load from the checkout) gets
+The Add subscription form always calls the adapter's `Accounts.checkCredential` and
+`Accounts.addMember`; it never introspects (the gateway guard refuses `__getMethodNames__`,
+`unknownMethod`). The adapter asks the manager in process and uses its own `addMember` and
+`checkCredential` when it has them, else keeps the addition (3.5). Only an adapter that itself
+lacks the methods (its refusal names the missing method) gets
 `subscriptionTexts.managerPredatesAdd` in place of the form. The failure reasons (6) are
 adapter-side only and need no manager change.
 `poolsChanged()` also marks every pool the `Accounts` view keeps stale, so its next read
@@ -289,10 +291,13 @@ immutable `spec.members`, and `poolChanged` ignores a member not in them.
 The adapter, which is reloaded from the checkout, keeps the additions
 instead (`impl/subscriptions/pool-additions.js`):
 
-- `Accounts.addMember(backend, { label, credential })`. The UI asks
-  `__getMethodNames__()` once per connection. It uses the manager's
-  `addMember` and `checkCredential` when it has them, else these on
-  `Accounts`, else it shows the note.
+- `Accounts.addMember(backend, { label, credential })`. The page always
+  calls it (and `checkCredential`, `poolMembers`) and never
+  introspects: the gateway refuses `__getMethodNames__`. The adapter asks
+  the manager in process and forwards to its `addMember` and
+  `checkCredential` when it has them; else it keeps the addition.
+  The subscriptions module is given `getSecrets()` only, never the
+  Operator.
   - The adapter path first resolves the Secret to its store key
     (`resolveSecrets`). It refuses a label held by another key, a key
     already serving the pool (`memberConflict`), and a pool of
@@ -306,32 +311,72 @@ instead (`impl/subscriptions/pool-additions.js`):
   additions. `Accounts.poolMembers(backend)` lists both;
   `checkCredential(backend, secret)` is the format check.
 - After a restart the adapter has the file but no object. It finds them
-  through the gateway's operator: `getSecrets().catalog()` gives the
+  through `getSecrets()` of the gateway's operator: `getSecrets().catalog()` gives the
   Secret with the kept key, and `subscriptions().listMembers()` gives the
   active members.
   - For a kept label some active member has, `makeMember(label, Secret)`
     answers that member (the old manager answers the existing one when
     the Secret matches), so the search never makes one.
-  - A kept label no active member has was retired, and the entry is
-    dropped.
-  - Until the gateway has an operator (its first bind), the pool serves
-    its spec members only and asks again every 5 s.
+  - An entry is dropped only on a definite answer: the pool is not in a
+    whole `listPools` or was remade, the label is not active in a
+    complete member list, the provider differs, the Secret is absent
+    from the complete catalogue, `makeMember` answers `memberConflict`,
+    the member's creation serial differs, the presence or the pool
+    describes `retired`, or the entry migrated (below).
+  - Any other failure (no operator yet, a list, catalogue, describe,
+    resolve or make that failed) keeps the entry pending with a code
+    (`UNREACHABLE`, `LIST_FAILED`, `CATALOG_FAILED`, `DESCRIBE_FAILED`,
+    `RESOLVE_FAILED`, `MAKE_FAILED`, `MIGRATE_FAILED`); the pool serves
+    what it has, asks again every 5 s, reports it once through `onError`
+    and carries `additionsNote { code, unrestored }` on its
+    `PoolAccounts` ("1 added subscription could not be restored: CODE").
+    Pending entries are bounded by the file's own bounds.
+  - A pool's first selection waits for its kept additions, at most
+    15 s; after that it serves its spec members and keeps asking.
 - Retirement stays the manager's. `PoolMember.retire` announces
   `poolsChanged`, and the next load drops the member. A retired pool
   drops its entries.
+- **Identity.** Labels are reused, so an entry records creation serials
+  (the member's place in `listMembers`, which only appends): `specSerials`
+  for the pool's spec members and `serial` for each addition. A pool
+  whose spec member serials differ was remade, possibly under the same
+  label, and its entries are dropped rather than carried over. A member
+  retired and remade with the same label and Secret while the adapter was
+  away has another serial and is dropped (the person did not add the new
+  one). Entries of pools the manager no longer lists, and entries whose
+  Secret is gone, are dropped and do not count towards `maxPools` or
+  `maxPoolMembers`.
+- **The file.** `pool-additions.json` (format
+  `thixotrope-harness-pool-additions-2`; `-1` is still read) is parsed
+  all or nothing and written atomically (temporary file, rename). One
+  that cannot be parsed is reported once (`FILE_CORRUPT`), hard-linked
+  aside as `pool-additions.json.<ISO time>[-n].unreadable` (never over
+  another) and removed; one that cannot be read is asked again every 5 s
+  (`FILE_UNREADABLE`). Adds are refused (`additionsUnreadable`) and
+  nothing is written while either holds; each pool shows the note.
+- **Two processes.** A reload can start the new adapter before the old
+  one exits. Writes take `pool-additions.json.lock` (exclusive create,
+  holding the pid); a second process reads but refuses adds
+  (`additionsLocked`) until the lock is let go at close or exit. A lock
+  whose pid is dead is taken over, and taking it rereads the file.
+- **Migration.** On a manager that has `addPoolMember` (a later
+  install), each restored addition is added to the manager's pool once
+  and its entry dropped; a failure keeps it (`MIGRATE_FAILED`).
 
 **What is lost on a pinned manager.**
 
 - An added member's marks and last-served records are sent to the
-  manager, which ignores them (not a spec member). They hold for the
-  adapter's life and are lost at its restart. A refused member is asked
-  again, once, after a restart.
+  manager, which ignores them (not a spec member). Without more, a reload
+  lost a 429 mark, and the member could be chosen again before its
+  window reset. The adapter therefore keeps each added member's mark in
+  its entry and feeds it back at load; last-served records are still
+  lost at a restart.
 - The manager's `describePool` lists spec members only; the UI adds
   `Accounts.poolMembers`.
 - An interrupted add (member made, file not written) leaves an unpooled
-  member. The form offers no "add to this pool" button there (no
-  `addPoolMember`). Adding again with the same Secret and label finishes
-  it.
+  member. Its "Add to this pool" is refused (no `addPoolMember`); the
+  form then says that adding again with the same Secret and label
+  finishes it.
 - Failure reasons (`usageFailure`, `catalogFailure`) and the last-good
   model list (`member-reads.json`) pass only adapter guards (`Accounts`,
   `MemberAccount`), so they work unchanged. The old manager's
