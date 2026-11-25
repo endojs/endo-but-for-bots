@@ -391,15 +391,28 @@ only `SessionServices.endowments`. The parent's session program (`tools/subagent
 the choice by the D-M9-25 rule against its own `services.backend` (the child's backend too; a
 pool `Backend` has `describe` and `listModels`, read from the reloaded catalogue) and adds one
 attachment `subagent-model`, a `JsonValue` (`{ json }`, which the old `Attachments` guard admits)
-naming `modelId`, `reasoningEffort` and the model row's `contextLength` and `maxOutputTokens`. The
-child's session program reads it once in `makeSession` (`subagentConfig`, only when
-`userInitiated` is false), replaces the inherited model, effort, window and output cap in the
-config it runs on, and keeps the attachment out of its inventory. Every round already sends
-`options.modelId` and `options.reasoningEffort`, and the reloaded provider uses them
-(`impl/subscriptions/provider.js`), so the child's rounds run on the choice. The factory's own row
-keeps the parent's model id; a child row is never listed (`userInitiated` false) and is not
-exported (D-M9-21), so nothing reads it. A refusal (unknown model, an effort the model does not
-offer, an unreadable catalogue) is the same text the factory gives, before any spawn.
+naming `modelId` and `reasoningEffort`, nothing else. The child's session program (`main.js`
+`make`, only when `userInitiated` is false) does not trust it: `checkedSubagentConfig` reads it with
+the closed reader (a field outside those two refuses the whole marker), checks the model against
+its own backend's catalogue and the effort against the model's row by the same rule, and takes the
+window and output cap from `Backend.resolveModel`, as a creation does (a Claude pool's rows carry
+neither; `resolveModel` answers the pool settings, 200000 and 16384 by default). A marker that is
+not one, a refused choice or a backend that cannot answer leaves the config the factory made: the
+child runs on its parent's recorded model. The marker is kept out of the inventory. Both labels the
+session program mints, `subagent-model` and `thixotrope-project-source`, are reserved: a model's
+own `spawnSubagent` attachment under either is refused (`reservedAttachment`) on every path,
+whatever the factory and whether a project source is held, since the store tool lets a model bind
+any copy data under a pet name. Every round already sends `options.modelId` and
+`options.reasoningEffort`, and the reloaded provider uses them (`impl/subscriptions/provider.js`),
+so the child's rounds run on the choice. The factory's own row keeps the parent's model id; a child
+row is never listed (`userInitiated` false) and is not exported (D-M9-21). Because the factory's
+record is not what such a child runs on, the child's `make` marks it `services.modelOverridden`,
+and its own spawns then always carry a marker with its model and effort as the default (also on a
+current factory, which would otherwise copy the recorded model): a grandchild defaults to its
+parent's model at every depth. A refusal (unknown model, an effort the model does not offer, an
+unreadable catalogue) is the same text the factory gives, before any spawn. The child's check runs
+in each `make`, so a session vat re-made while the catalogue is unreadable falls back to the
+recorded model for that incarnation.
 Rejected: an inline `systemPrompt` (it replaces the composed prompt and is text, not data); a
 preset the child is created from (`spawn` copies the parent's snapshot; there is no field to name
 another); the child changing its model through a session interface (no `Session` or
@@ -427,7 +440,7 @@ out of the inventory and hands to `EnvironmentControl.useWorkspaceSeed`. The ins
 gives a child only the attachments its parent lists (`presetEndowments` returns nothing when
 `delegated` is set), so the child's workspace was empty. The session program keeps the marker as
 `services.projectSource` and `spawnSubagent` adds it to every spawn under the same label (a
-model's own attachment of that label is refused while it does); the child's `make` then seeds its
+model's own attachment of that label is always refused, D-M9-27); the child's `make` then seeds its
 workspace as its parent's did. A session with no marker (a current factory carries the revision
 in the preset snapshot) sends none. Rejected: telling the parent to attach it (the model does not
 hold it, by design).

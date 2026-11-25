@@ -152,9 +152,13 @@ What takes effect when:
   once per state and is not changed; the session program reads its
   `Delegation` guard, and on a factory that predates the two fields the
   parent checks the choice against its backend's catalogue and sends it to
-  the child as a `subagent-model` attachment, which the child's session
-  program applies to its own rounds (designs/m9-interfaces.md D-M9-27).
-  Both parent and child must have been created after the program load.
+  the child as a `subagent-model` attachment. The child's session program
+  checks it again against the same catalogue, takes the window and output
+  cap from the backend as a creation does, and applies it to its own
+  rounds; its own children then default to that model at every depth
+  (designs/m9-interfaces.md D-M9-27). A model cannot attach anything under
+  that label or `thixotrope-project-source` itself. Both parent and child
+  must have been created after the program load.
 
 Set `state` to the supervisor's state directory. Rebuild the image when the Yarn lockfile or native Rust worker changes.
 The image build needs access to the locked upstream dependencies. Once built, the session runs offline
