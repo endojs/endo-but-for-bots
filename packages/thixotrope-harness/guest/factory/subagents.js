@@ -58,6 +58,7 @@
  * used as record keys.
  */
 import { limits } from '../lib/limits.js';
+import { chooseSubagentModel } from '../lib/subagent-model.js';
 import {
   interfaces as factoryInterfaces,
   texts as postOfficeTexts,
@@ -75,7 +76,7 @@ import { stagePrompt } from '../session/prompt.js';
 /** @import { Row, RowTable } from './rows.js' */
 /** @import { StartCount } from './starts.js' */
 /** @import { PostOffice } from './post-office.js' */
-const { E, defineExoClass, makePromiseKit } = /** @type {GuestGlobals} */ (
+const { defineExoClass, makePromiseKit } = /** @type {GuestGlobals} */ (
   globalThis
 );
 
@@ -87,11 +88,6 @@ export const ANSWER_UNITS = limits.toolOutputUnits - 1280;
 const LISTED_CHILDREN = 64;
 /** A parent chain longer than this is not followed (a guard, not a limit). */
 const DEPTH_WALK = 64;
-/** Catalogue pages a spawn's model check reads at most (D-M9-25). */
-const MODEL_PAGES = 8;
-/** Model ids a refusal names at most. */
-const OFFERED_MODELS = 24;
-const POOL_KINDS = harden(['claude-pool', 'codex-pool']);
 
 /**
  * What a child inherits from its parent: the parent's resolved creation
@@ -493,105 +489,17 @@ export const makeSubagents = ({
   };
 
   /**
-   * The catalogue row of `modelId` on `backend` (D-M9-25), with the ids read
-   * on the way for a refusal.
-   * @param {any} backend
-   * @param {string} label the backend's label
-   * @param {string} modelId
-   */
-  const modelRow = async (backend, label, modelId) => {
-    /** @type {string[]} */
-    const seen = [];
-    /** @type {string | undefined} */
-    let after;
-    for (let page = 0; page < MODEL_PAGES; page += 1) {
-      // eslint-disable-next-line no-await-in-loop
-      const answer = await E(backend).listModels(
-        harden(
-          after === undefined
-            ? { limit: limits.modelPageRows }
-            : { after, limit: limits.modelPageRows },
-        ),
-      );
-      if (answer.state !== 'ok')
-        throw Error(postOfficeTextOf.subagentCatalogUnavailable(label));
-      for (const row of answer.rows) {
-        if (row.modelId === modelId) return { row, seen };
-        if (seen.length < OFFERED_MODELS && !seen.includes(row.modelId))
-          seen.push(row.modelId);
-      }
-      if (answer.next === undefined) break;
-      after = answer.next;
-    }
-    return { row: undefined, seen };
-  };
-
-  /**
-   * Whether a pool model's catalogue row offers `reasoningEffort`: the row's
-   * `reasoningEfforts`, with the pool's one spelling rule (R4-23: a Codex
-   * row lists Fae's `ultra` as `max`). Data, not a refusal's text: the
-   * creation's `resolveEffort` (`subscription-options.js`) still checks the
-   * chosen effort, and its failure is the spawn's.
-   * @param {string} kind the backend's kind
-   * @param {any} row the model's catalogue row, or undefined
-   * @param {string} reasoningEffort
-   */
-  const offersEffort = (kind, row, reasoningEffort) => {
-    const listed =
-      kind === 'codex-pool' && reasoningEffort === 'ultra'
-        ? 'max'
-        : reasoningEffort;
-    return row?.reasoningEfforts?.includes(listed) === true;
-  };
-
-  /**
-   * The model and effort of a child (D-M9-25).
+   * The model and effort of a child (D-M9-25; `subagent-model.js`, shared
+   * with the session program's path for an older factory, D-M9-27).
    * @param {Inheritance} from the parent's
    * @param {string | undefined} modelId requested
    * @param {string | undefined} reasoningEffort requested
-   * @returns {Promise<{ modelId: string, reasoningEffort?: string }>}
    */
   const chooseModel = async (from, modelId, reasoningEffort) => {
-    if (modelId === undefined && reasoningEffort === undefined)
-      return from.reasoningEffort === undefined
-        ? { modelId: from.modelId }
-        : { modelId: from.modelId, reasoningEffort: from.reasoningEffort };
-    const { kind, label } = await E(from.backend).describe();
-    const target = modelId ?? from.modelId;
-    const pooled = POOL_KINDS.includes(kind);
-    if (reasoningEffort !== undefined && !pooled)
-      throw Error(postOfficeTextOf.subagentEffortNone(label));
-    /** @type {any} */
-    let row;
-    if (modelId !== undefined && kind !== 'scripted') {
-      const found = await modelRow(from.backend, label, modelId);
-      if (found.row === undefined)
-        throw Error(
-          postOfficeTextOf.subagentModelUnknown(modelId, label, found.seen),
-        );
-      row = found.row;
-    }
-    if (!pooled) return { modelId: target };
-    row ??= (await modelRow(from.backend, label, target)).row;
-    if (reasoningEffort !== undefined) {
-      if (offersEffort(kind, row, reasoningEffort))
-        return { modelId: target, reasoningEffort };
-      throw Error(
-        postOfficeTextOf.subagentEffortUnknown(
-          target,
-          reasoningEffort,
-          row?.reasoningEfforts ?? [],
-        ),
-      );
-    }
-    // A new model alone: the parent's effort where the model offers it,
-    // else the model's default (the creation's `subscriptionEffort`).
-    if (
-      from.reasoningEffort !== undefined &&
-      offersEffort(kind, row, from.reasoningEffort)
-    )
-      return { modelId: target, reasoningEffort: from.reasoningEffort };
-    return { modelId: target };
+    const choice = await chooseSubagentModel(from, modelId, reasoningEffort);
+    return choice.reasoningEffort === undefined
+      ? { modelId: choice.modelId }
+      : { modelId: choice.modelId, reasoningEffort: choice.reasoningEffort };
   };
 
   /** @param {Reservation} reservation */

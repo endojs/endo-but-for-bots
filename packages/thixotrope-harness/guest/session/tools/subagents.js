@@ -12,7 +12,9 @@
  *   uniqueness among the live children and the spawns in flight, an inline
  *   `systemPrompt` (D-M9-20), the attachments resolved by label, a model and
  *   an effort of the guard's size (D-M9-25: the factory checks them against
- *   the catalogue; absent, the child keeps the parent's); then
+ *   the catalogue; absent, the child keeps the parent's; on an older
+ *   factory, whose guard takes neither, the parent checks them and sends
+ *   them as the child's `subagent-model` endowment, D-M9-27); then
  *   `Delegation.spawn`, and the answered handle is bound under the name.
  * - `askSubagent({ name, task, timeoutSeconds?, attachments? })`: one ask
  *   per child, its deadline armed on the turn's endpoint (`timeoutSeconds`,
@@ -51,6 +53,10 @@ import {
 import { limits } from '../../lib/limits.js';
 import { parseClosedArgs } from '../../lib/tool-args.js';
 import { fitsFrame, messageOf } from '../../lib/bounded.js';
+import {
+  subagentModelAttachment,
+  subagentModelLabel,
+} from '../../lib/subagent-model.js';
 import { isValidLabel } from '../labels.js';
 import { fieldBytes, isStaged } from '../staging.js';
 import { inspectFor } from './inspect-client.js';
@@ -148,18 +154,6 @@ const tools = harden({
   ),
   attachment: toolOf('attachment', 2),
 });
-
-/**
- * D-M9-25: `spawnSubagent` as offered on a factory whose `SpawnRequest`
- * predates `modelId` and `reasoningEffort` (the session part read it from
- * the factory's guard): the same tool without the two options.
- */
-const spawnWithoutOptions = toolOf(
-  'spawnSubagent',
-  1,
-  'Create a subagent: a hidden helper session like yours holding only the attachments ({name, petName}; petName subagents/<name> passes a subagent). It runs on your backend with your model and reasoning effort (this harness cannot choose them per subagent). Then use askSubagent and stopSubagent by its name.',
-  ['modelId', 'reasoningEffort'],
-).description;
 
 /**
  * Read a tool's arguments, inline or staged (`splitArgs` in the exec vat).
@@ -340,10 +334,7 @@ const withName = (tool, work) => async (request, ports, context) => {
 const spawnEntry = harden({
   name: 'spawnSubagent',
   site: 'guest',
-  describe: (_ports, _services, runtime) =>
-    runtime?.subagents?.spawnOptions?.() === false
-      ? spawnWithoutOptions
-      : tools.spawnSubagent.description,
+  describe: () => tools.spawnSubagent.description,
   available,
   execute: withName(
     'spawnSubagent',
@@ -373,24 +364,37 @@ const spawnEntry = harden({
         )
           return failed(mailTextOf.spawnOptionInvalid(field, limit));
       }
-      // D-M9-25: an older factory's closed SpawnRequest would refuse the
-      // options with a raw guard error; its guard says so first.
-      if (
-        (modelId !== undefined || reasoningEffort !== undefined) &&
-        (await part.whenSpawnOptions()) === false
-      )
-        return failed(texts.spawnOptionsUnsupported);
       const attached = attachmentsOf(values.get('attachments'), context);
       if ('outcome' in attached) return attached.outcome;
+      const chosen = modelId !== undefined || reasoningEffort !== undefined;
+      // D-M9-27: an older factory's closed SpawnRequest takes neither
+      // option (its guard says so, read once): the choice is checked here
+      // and travels as the child's `subagentModelLabel` endowment.
+      const direct = !chosen || (await part.whenSpawnOptions()) !== false;
+      let { attachments } = attached;
+      if (!direct) {
+        if (attachments.some(a => a.label === subagentModelLabel))
+          return failed(mailTextOf.duplicateAttachment(subagentModelLabel));
+        if (attachments.length >= ML.maxAttachments)
+          return failed(mailTextOf.tooManyAttachments(attachments.length + 1));
+        /** @type {any} */
+        let choice;
+        try {
+          choice = await part.chooseModel(modelId, reasoningEffort);
+        } catch (error) {
+          return failed(messageOf(error));
+        }
+        attachments = harden([...attachments, subagentModelAttachment(choice)]);
+      }
       const spawnRequest = harden({
         name,
-        attachments: attached.attachments,
+        attachments,
         at: part.at(),
         ...(systemPrompt === undefined ? {} : { systemPrompt }),
-        ...(modelId === undefined ? {} : { modelId }),
-        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+        ...(direct && modelId !== undefined ? { modelId } : {}),
+        ...(direct && reasoningEffort !== undefined ? { reasoningEffort } : {}),
       });
-      if (attached.attachments.length && !fitsFrame(spawnRequest))
+      if (attachments.length && !fitsFrame(spawnRequest))
         return failed(texts.frameLimit);
       part.spawning(name, context.turn);
       /** @type {any} */

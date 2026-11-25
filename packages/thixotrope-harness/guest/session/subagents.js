@@ -36,10 +36,11 @@
  * (`__getInterfaceGuard__`: the `SpawnRequest` pattern is matched against a
  * request naming both), once per incarnation and only when a spawn names
  * one, so a session that does not use them sends nothing more. An older
- * factory's closed record answers false: the spawn is refused with
- * `spawnOptionsUnsupported` before it is sent, and later rounds describe
- * `spawnSubagent` without the two options. An answer that cannot be read
- * (no guard) is unknown, and the spawn is sent as it is.
+ * factory's closed record answers false: the choice is made here
+ * (`chooseModel`, the factory's rule against this session's own backend)
+ * and the spawn carries it as the child's `subagent-model` endowment
+ * (D-M9-27). An answer that cannot be read (no guard) is unknown, and the
+ * spawn is sent with the fields as it is.
  *
  * Nothing here is exported with the session (D-M9-21): an imported row has
  * a `Delegation` of its own and no children. Guest rules.
@@ -51,6 +52,7 @@ import {
   texts,
 } from '../lib/guards/session.js';
 import { makeCallTable } from './tools/call-table.js';
+import { chooseSubagentModel } from '../lib/subagent-model.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { HookTurn } from './runtime-parts.js' */
@@ -107,7 +109,7 @@ harden(spawnTakesOptions);
 
 export const subagentsPart = harden({
   name: /** @type {const} */ ('subagents'),
-  /** @param {{ services: any, inventoryChanged?: () => void }} runtime */
+  /** @param {{ services: any, config?: any, inventoryChanged?: () => void }} runtime */
   make: runtime => {
     /** @type {Map<string, {handle: any, childKey?: string}>} */
     const handles = new Map();
@@ -188,6 +190,27 @@ export const subagentsPart = harden({
           });
         optionsAsked = reading;
         return reading;
+      },
+      /**
+       * D-M9-27: the child's model and effort as the factory would choose
+       * them (`subagent-model.js`), from this session's own backend, model
+       * and effort, for a factory whose guard takes neither.
+       * @param {string | undefined} modelId
+       * @param {string | undefined} reasoningEffort
+       */
+      chooseModel: (modelId, reasoningEffort) => {
+        const { config, services } = runtime;
+        return chooseSubagentModel(
+          harden({
+            backend: services.backend,
+            modelId: config.modelId,
+            ...(config.reasoningEffort === undefined
+              ? {}
+              : { reasoningEffort: config.reasoningEffort }),
+          }),
+          modelId,
+          reasoningEffort,
+        );
       },
       /** The claim time of the current turn (spawn and ask `at`). */
       at: () => at,
