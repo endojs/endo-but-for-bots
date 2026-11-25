@@ -147,13 +147,14 @@ What takes effect when:
 - The session program (the subagent role section, the `spawnSubagent`
   description and its check of the factory): through `project-preset.mjs
   --legacy-factory`, which loads it.
-- The factory's `SpawnRequest` guard (`modelId`, `reasoningEffort`): only on
-  a freshly provisioned state. The factory is installed once per state and
-  has no live upgrade before M13. Export the state with `scripts/export.mjs`,
-  provision a fresh state and import the export there. On an older factory
-  the session program reads the factory's guard, describes `spawnSubagent`
-  without the two options and refuses them with what to do; a spawn without
-  them works, and the child runs on the parent's model.
+- A subagent's model and effort (`spawnSubagent` `modelId`,
+  `reasoningEffort`): with the session program. The factory is installed
+  once per state and is not changed; the session program reads its
+  `Delegation` guard, and on a factory that predates the two fields the
+  parent checks the choice against its backend's catalogue and sends it to
+  the child as a `subagent-model` attachment, which the child's session
+  program applies to its own rounds (designs/m9-interfaces.md D-M9-27).
+  Both parent and child must have been created after the program load.
 
 Set `state` to the supervisor's state directory. Rebuild the image when the Yarn lockfile or native Rust worker changes.
 The image build needs access to the locked upstream dependencies. Once built, the session runs offline

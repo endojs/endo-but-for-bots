@@ -379,10 +379,33 @@ and spawns in flight across a restart are valid as they are. A factory installed
 has the closed `SpawnRequest` without the fields. The session program reads that from the
 `Delegation`'s own interface guard (`__getInterfaceGuard__`, matching a request naming both against
 the `spawn` argument pattern), once per incarnation and only when a spawn names a field: on such a
-factory the spawn is refused before it is sent with `texts.spawnOptionsUnsupported` (spawn again
-without them; the child inherits), and later rounds describe `spawnSubagent` without the two
-options. A guard that cannot be read leaves the spawn to the factory. No probe spawn is sent.
-Rejected: picking the effort in the session (it holds no catalogue).
+factory the choice travels as an attachment (D-M9-27). A guard that cannot be read leaves the spawn
+to the factory. No probe spawn is sent. The rule itself is `guest/lib/subagent-model.js`
+`chooseSubagentModel`, which the factory and the session program share.
+
+**D-M9-27. On a factory installed before D-M9-25 the parent sends the choice as an attachment.**
+The factory is pinned on an existing state, and its `SpawnRequest` is the closed record
+`{ name, attachments, at, systemPrompt? }`; its `spawn` copies the parent's model, effort, backend
+and preset snapshot into the child's creation and passes the attachments through as the child's
+only `SessionServices.endowments`. The parent's session program (`tools/subagents.js`) then checks
+the choice by the D-M9-25 rule against its own `services.backend` (the child's backend too; a
+pool `Backend` has `describe` and `listModels`, read from the reloaded catalogue) and adds one
+attachment `subagent-model`, a `JsonValue` (`{ json }`, which the old `Attachments` guard admits)
+naming `modelId`, `reasoningEffort` and the model row's `contextLength` and `maxOutputTokens`. The
+child's session program reads it once in `makeSession` (`subagentConfig`, only when
+`userInitiated` is false), replaces the inherited model, effort, window and output cap in the
+config it runs on, and keeps the attachment out of its inventory. Every round already sends
+`options.modelId` and `options.reasoningEffort`, and the reloaded provider uses them
+(`impl/subscriptions/provider.js`), so the child's rounds run on the choice. The factory's own row
+keeps the parent's model id; a child row is never listed (`userInitiated` false) and is not
+exported (D-M9-21), so nothing reads it. A refusal (unknown model, an effort the model does not
+offer, an unreadable catalogue) is the same text the factory gives, before any spawn.
+Rejected: an inline `systemPrompt` (it replaces the composed prompt and is text, not data); a
+preset the child is created from (`spawn` copies the parent's snapshot; there is no field to name
+another); the child changing its model through a session interface (no `Session` or
+`SessionInternal` method changes model or effort, and the UI picks an effort only at
+`createSession`); and `SessionFactory.createSession` from the parent (a session holds no factory,
+and a session made so is a user session outside the tree).
 
 **D-M9-26. A subagent is told it is one by its session, not by its brief.** A child receives only
 the mail body of each ask (`mail-text.js` `mailTurnInput`), so nothing in its input marks the parent
