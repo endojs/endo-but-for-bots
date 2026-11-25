@@ -424,14 +424,28 @@ and a session made so is a user session outside the tree).
 the mail body of each ask (`mail-text.js` `mailTurnInput`), so nothing in its input marks the parent
 as the sender. Its `SessionConfig.userInitiated` is false (the spawn sets it), and the session
 program's `systemFor` adds `mail-prompt.js` `subagentRoleSection` ("Subagent role") to every
-round's system text of such a session, before the turn's note, inside the same two-part `system`.
+round's system text of such a session whose preset instructions name the heading
+(`takesSubagentRole`), before the turn's note, inside the same two-part `system`. Only presets that
+set up the roles get it: the section's "spawn subagents of your own only when the brief asks for
+it" would change what other presets' subagents do, so they keep the Delegation section's advice.
 It tells the child to do its task itself, which also settles the Delegation section's "Do work you
 can simply do yourself" against a preset that tells its sessions to delegate: preset texts address
 the subagent through the section's heading. It is not a composed section (`PromptContext`
 `userInitiated`): the factory composes a subagent's stored prompt, so a section there would reach
 only freshly provisioned states, while the round text arrives with a session program load.
 Rejected: a marker sentence at the start of the brief as the only signal (a parent that forgets it
-makes its child a project manager that delegates again).
+makes its child a project manager that delegates again); the section for every subagent (a
+behaviour change for presets that never asked for it).
+
+**D-M9-29. A child hands its commits back through its parent's shell.** The project preset's
+parent attaches its own `shell` to each child as `parent-shell`; the child runs
+`scripts/handback.js` `handBackExec`, which writes a base64 git bundle of its commits since its
+seed in numbered 2,500-character pieces under the parent's `.git/handback/<commit>/`, and the
+parent fetches it (`handBackFetch`) and merges it with a merge commit. It is resumable (a rerun
+skips the pieces written), says "no commits" for a child without any, and the fetch checks the
+commit. Rejected: a drop box published from the parent's exec scope (a parent exec deadline retires
+the scope and every piece in it); the answer text alone (cut at about 31,000 characters); a
+workspace-side store the child holds (none exists that two sessions share).
 
 **D-M9-28. A legacy project source is passed on to each child.** A preset published with
 `project-preset.mjs --legacy-factory` carries the project revision as the endowment

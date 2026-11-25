@@ -94,8 +94,9 @@ It plans the work and delegates each piece to a Claude Opus 5.5 subagent
 (`spawnSubagent` with `modelId: "claude-opus-5-5"`). It reads the returned
 diff and runs the tests before accepting the work. A subagent spawned without
 a `systemPrompt` gets the same preset instructions from its parent's preset
-snapshot. Those instructions make a session tasked through `askSubagent` the
-implementer, and it delegates again only when the work needs it. A
+snapshot. Those instructions make a session whose prompt has the session
+program's "Subagent role" section (every subagent of this preset) the
+implementer, which spawns subagents of its own only when its brief asks. A
 `systemPrompt` replaces the child's whole prompt. `spawnSubagent` keeps the
 parent's backend, model and effort unless `modelId` or `reasoningEffort` is
 given. The factory checks both against the parent backend's catalogue.
@@ -120,8 +121,9 @@ catalogue. Presets store no effort, so `--effort` only checks that the model
 starts its sessions at that effort. The script fails if not. It resolves
 and checks the preset name, backend, model and effort before it changes
 anything (the published bundle, the environments, the session program).
-A model row with no efforts at all means the running agent-host has an
-older efforts table: restart the supervisor on a tree with the fix.
+A model row with no efforts at all means the running agent-host adapter has
+an older efforts table: reload the adapter on a tree with the fix (a
+supervisor restart does), then publish again.
 
 Republishing upgrades instructions that are one of the script's earlier
 defaults. It keeps instructions an operator edited and prints a note;
@@ -130,9 +132,15 @@ default makes a session the project manager that delegates implementation
 and makes each subagent (whose session program adds a "Subagent role"
 section) the implementer. A child has its own checkout of the seed commit
 that the parent cannot fetch from, and an `askSubagent` answer is cut at
-about 31,000 characters, so the child hands its commits back as a base64
-git bundle, put in pieces into a drop box the parent publishes and attaches
-at the spawn; the parent fetches the bundle into its own checkout.
+about 31,000 characters, so the parent attaches its own `shell` to each child
+as `parent-shell`, and the child writes its commits as a base64 git bundle
+in numbered pieces under the parent's `.git/handback/<commit>/`
+(`scripts/handback.js`). The parent fetches the bundle into a branch named
+after the child, merges it with a merge commit and runs the tests. A run cut
+by an exec deadline is rerun unchanged and resumes; nothing lives in an exec
+scope, which a deadline retires. The child can run any command in the
+parent's checkout through that shell; the parent runs the child's code in
+its tests anyway.
 
 What takes effect when:
 - The preset's text, backend and model: at once, through
@@ -140,13 +148,15 @@ What takes effect when:
   snapshot it was created with.
 - The efforts table (`claudeEfforts` in
   `resources/agent-host/impl/subscriptions/messages.js`): at the next
-  supervisor restart. `resources/agent-host/impl/**` is loaded from the
-  source tree when the adapter process starts
-  (`resources/agent-host/ephemeral.js`); only the installed durable halves
-  and the factory are pinned to the state.
+  agent-host adapter reload. `resources/agent-host/impl/**` is loaded from
+  the source tree whenever the adapter process starts
+  (`resources/agent-host/ephemeral.js`), which a supervisor restart does;
+  only the installed durable halves and the factory are pinned to the state.
 - The session program (the subagent role section, the `spawnSubagent`
   description and its check of the factory): through `project-preset.mjs
-  --legacy-factory`, which loads it.
+  --legacy-factory`, which loads it. The subagent role section is added only
+  to a subagent whose preset instructions name its heading, as this
+  preset's do; other presets' subagents are unchanged.
 - A subagent's model and effort (`spawnSubagent` `modelId`,
   `reasoningEffort`): with the session program. The factory is installed
   once per state and is not changed; the session program reads its
