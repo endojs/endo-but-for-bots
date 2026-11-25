@@ -26,6 +26,7 @@ import {
   savePreset,
   subagentRoleHeading,
 } from '../../scripts/project-preset.mjs';
+import { handBackExec, handBackFetch } from '../../scripts/handback.js';
 
 const git = promisify(execFile);
 
@@ -194,7 +195,7 @@ test('refreshing the same project commit removes legacy effort once', async t =>
   t.is(view.modelId, 'custom-model');
 });
 
-test('the default instructions key the roles on the subagent section, fall back on an older factory, and hand commits back as a bundle', t => {
+test('the default instructions key the roles on the subagent section, fall back on an older factory, and hand commits back through the parent shell', t => {
   const text = projectInstructions(undefined);
   t.is(implementerModel, 'claude-opus-5-5');
   t.is(subagentRoleHeading, 'Subagent role');
@@ -206,7 +207,7 @@ test('the default instructions key the roles on the subagent section, fall back 
   t.regex(text, /replaces the general advice to do simple work yourself/);
   t.regex(
     text,
-    /spawnSubagent \{ name, modelId: "claude-opus-5-5", attachments: \[\{ name: "handback", petName: "handback-NAME" \}\] \} and no systemPrompt/,
+    /spawnSubagent \{ name, modelId: "claude-opus-5-5", attachments: \[\{ name: "parent-shell", petName: "shell" \}\] \} and no systemPrompt/,
   );
   t.regex(text, /offers no modelId or refuses it, spawn without it/);
   t.regex(text, /begin its askSubagent brief with "You are the implementer/);
@@ -217,13 +218,15 @@ test('the default instructions key the roles on the subagent section, fall back 
     'thix-selfdev-prepare',
     'timeoutMs to 600000',
     'THIX_HARNESS_TMP=/tmp/thix',
-    'git bundle create .git/hb.bundle $(git reflog --format=%H HEAD | tail -n 1)..HEAD',
-    'git fetch .git/NAME.bundle HEAD:NAME',
-    'E(workspace).merge("NAME")',
+    // The text the integration test runs (subagents-handback).
+    `runs this exec code unchanged, and again unchanged if it runs out of time (it resumes): ${handBackExec} It returns`,
+    `runCommand sh ["-c", "${handBackFetch}", "sh", "COMMIT", "NAME"]`,
+    'E(workspace).merge("NAME", { mode: "merge-commit", message: "Merge NAME" })',
     'about 31,000 characters',
-    'rerun it from i = 2000 * E(box).count()',
   ])
     t.true(text.includes(kept), kept);
+  for (const gone of ['powers.publish', 'clear()', 'E(box)'])
+    t.false(text.includes(gone), gone);
   t.true(text.length <= 4096, 'within presetInstructionsUnits');
 });
 

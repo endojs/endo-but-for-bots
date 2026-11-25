@@ -17,8 +17,12 @@ const { guestRoot, loadProgramPieces, sessionEntry } =
   await import('./provision-steps.js');
 const { steps: environmentSteps } =
   await import('./provision-steps/60-environments.js');
+const { handBackExec, handBackFetch } = await import('./handback.js');
 const { installGuestPrelude } = await import('./guest-prelude.js');
 installGuestPrelude();
+const { subagentRoleHeading: roleHeading } =
+  // eslint-disable-next-line import/no-relative-packages -- the session program's own heading
+  await import('../guest/lib/mail-prompt.js');
 const { isDigestPin } =
   await import('../resources/environments/impl/images.js');
 
@@ -46,11 +50,12 @@ const operational = `${projectWorkflow} ${coldBuild} ${scratchInstructions}`;
 /** The model a project manager session delegates implementation to. */
 export const implementerModel = 'claude-opus-5-5';
 /**
- * The heading of the session program's section for a subagent (its
- * `PromptContext.userInitiated` is false; `guest/lib/mail-prompt.js`
- * `subagentRoleSection`), which the roles below key on.
+ * The heading of the session program's section for a subagent
+ * (`guest/lib/mail-prompt.js` `subagentRoleSection`), which the roles below
+ * key on. Naming it is also what makes the session program add the
+ * section to a subagent of this preset (`takesSubagentRole`).
  */
-export const subagentRoleHeading = 'Subagent role';
+export const subagentRoleHeading = roleHeading;
 // The two roles share this one text: a subagent spawned without a
 // systemPrompt is composed from its parent's preset snapshot (factory
 // `create`), and a given systemPrompt replaces the whole composition. The
@@ -58,9 +63,22 @@ export const subagentRoleHeading = 'Subagent role';
 // role" section to a subagent's prompt (userInitiated false).
 const roles = [
   `Roles. If this prompt has a "${subagentRoleHeading}" section, or your task begins with "You are the implementer", you are the implementer: do the task yourself in your own /workspace checkout as below and hand it back as below; spawn no subagents unless the brief asks for it.`,
+  `Otherwise you are the project manager and quality-control master: plan the work and delegate all implementation, even small changes, to subagents (for you this replaces the general advice to do simple work yourself); review, test and report yourself. Spawn each with spawnSubagent { name, modelId: "${implementerModel}", attachments: [{ name: "parent-shell", petName: "shell" }] } and no systemPrompt, which would replace these instructions. If spawnSubagent offers no modelId or refuses it, spawn without it: the child runs on your model. A child sees none of your conversation: begin its askSubagent brief with "You are the implementer for this task." and give the goal, files, constraints, tests to run and when to stop.`,
+].join(' ');
+// The hand-back goes through the parent's shell, not an exec-published
+// object: a parent exec deadline retires everything published in its exec
+// scope (scripts/handback.js).
+const handBack = [
+  'Hand-back. A child has its own checkout and an answer is cut at about 31,000 characters, so the child writes its commits as a git bundle into your checkout through your shell, attached as parent-shell.',
+  `The implementer commits, then runs this exec code unchanged, and again unchanged if it runs out of time (it resumes): ${handBackExec} It returns "handed back COMMIT" or "no commits"; answer with that line, your commits, git diff --stat, the commands run with results, and what you could not do.`,
+  `You then run runCommand sh ["-c", "${handBackFetch}", "sh", "COMMIT", "NAME"] with the child's name as NAME (if it fails, have the child run the code again), read git diff main...NAME, merge in exec with E(workspace).merge("NAME", { mode: "merge-commit", message: "Merge NAME" }) (resolve and commit any conflicts it returns), run the tests, and send it back with fixes when it falls short; its next hand-back merges the same way.`,
+  'Stop each child when its work is accepted, and report what you verified and how, and what remains unverified.',
+].join(' ');
+const rolesV2 = [
+  `Roles. If this prompt has a "${subagentRoleHeading}" section, or your task begins with "You are the implementer", you are the implementer: do the task yourself in your own /workspace checkout as below and hand it back as below; spawn no subagents unless the brief asks for it.`,
   `Otherwise you are the project manager and quality-control master: plan the work and delegate all implementation, even small changes, to subagents (for you this replaces the general advice to do simple work yourself); review, test and report yourself. Spawn each with spawnSubagent { name, modelId: "${implementerModel}", attachments: [{ name: "handback", petName: "handback-NAME" }] } and no systemPrompt, which would replace these instructions. If spawnSubagent offers no modelId or refuses it, spawn without it: the child runs on your model. A child sees none of your conversation: begin its askSubagent brief with "You are the implementer for this task." and give the goal, files, constraints, tests to run and when to stop.`,
 ].join(' ');
-const handBack = [
+const handBackV2 = [
   'Hand-back. A child has its own checkout of the seed commit that you cannot fetch from, and an answer is cut at about 31,000 characters, so its commits come back as a git bundle through a drop box.',
   'Before each spawn, in exec: let p = []; await powers.publish("handback-NAME", { clear() { p = []; return 0; }, put(s) { p.push(s); return p.length; }, count() { return p.length; }, piece(i) { return p[i]; } }).',
   // eslint-disable-next-line no-template-curly-in-string -- exec code the model runs
@@ -91,6 +109,8 @@ const earlierInstructions = harden([
   ].map(suffix => `${workflowV1} ${suffix}`),
   operationalV1,
   `${delegationV1} ${operationalV1}`,
+  // Round 3: the exec-scope drop box.
+  `${rolesV2} ${handBackV2} ${operational}`,
 ]);
 
 /**
@@ -120,7 +140,7 @@ harden(projectInstructions);
 
 /** The note for kept operator-edited instructions (or none). */
 export const editedInstructionsNote =
-  "the preset's instructions differ from every default this script published, so they are kept as the operator's edit and the current default (project manager and implementer roles, bundle hand-back) is not applied; give --replace-instructions to replace them";
+  "the preset's instructions differ from every default this script published, so they are kept as the operator's edit and the current default (project manager and implementer roles, hand-back through the parent shell) is not applied; give --replace-instructions to replace them";
 
 /** The defaults of a preset that has no backend of its own. */
 export const presetDefaults = harden({

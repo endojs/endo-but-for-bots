@@ -169,6 +169,7 @@ export const regressionLists = Object.freeze({
       'subagents',
       'subagents-restart',
       'subagents-environment',
+      'subagents-handback',
     ]
       .map(name => `test/integration/${name}.test.js`)
       .concat('test/browser/subagent-inspection.test.mjs'),
