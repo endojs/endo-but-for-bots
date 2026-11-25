@@ -21,6 +21,7 @@
 import { h } from 'preact';
 import { useLayoutEffect, useState } from 'preact/hooks';
 
+import { icon } from '../shell/icons.js';
 import { meterFraction } from './endpointing.js';
 import { endpointingDefaults } from './endpointing-defaults.js';
 import { unavailableReason, voiceStateOf } from './state.js';
@@ -66,27 +67,6 @@ const reasonOf = view =>
 /** @param {number} fraction */
 const percent = fraction => `${Math.round(fraction * 1000) / 10}%`;
 
-/** A microphone, stroked in the text colour (Feather-style, 24 x 24). */
-const micIcon = () =>
-  h(
-    'svg',
-    {
-      viewBox: '0 0 24 24',
-      width: 20,
-      height: 20,
-      fill: 'none',
-      stroke: 'currentColor',
-      'stroke-width': 2,
-      'stroke-linecap': 'round',
-      'stroke-linejoin': 'round',
-      'aria-hidden': 'true',
-      focusable: 'false',
-    },
-    h('rect', { x: 9, y: 2, width: 6, height: 12, rx: 3 }),
-    h('path', { d: 'M5 10a7 7 0 0 0 14 0' }),
-    h('path', { d: 'M12 17v4' }),
-  );
-
 /**
  * @param {{ context: FeatureContext }} props
  */
@@ -112,7 +92,7 @@ export const VoiceModeSwitch = ({ context }) => {
       disabled,
       onClick: () => voice.toggleMode(),
     },
-    micIcon(),
+    icon('microphone', 20),
   );
 };
 
