@@ -666,7 +666,6 @@ test('the fixed M4 texts (section 13)', t => {
     'noSubscriptionAccounts',
     'credentialWrongProvider',
     'credentialReady',
-    'memberInPool',
     'poolFull',
     'credentialRevoked',
     'credentialMissing',

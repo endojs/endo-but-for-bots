@@ -59,8 +59,6 @@ export const subscriptionTexts = harden({
   /** Harness (a member added to a pool): the check found nothing wrong. */
   credentialReady:
     'This secret holds a credential in the format this provider expects',
-  /** Harness: `addPoolMember` of a member the pool already has. */
-  memberInPool: 'This member is already in the pool',
   /** Harness: `addPoolMember` to a pool at `maxPoolMembers`. */
   poolFull: 'This pool already has as many members as a pool can hold',
   /** Harness: a credential check of a revoked Secret. */

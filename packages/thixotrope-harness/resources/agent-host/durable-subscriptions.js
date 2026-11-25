@@ -146,7 +146,9 @@ const sameSpec = (a, b) => {
  *   idempotence compares it, so provisioning re-runs answer the same pool
  *   after an operator added members)
  * @property {any[]} members the pool's members (hardened, in order): the
- *   spec's, then each `addPoolMember` (at most `maxPoolMembers`)
+ *   spec's, then each `addPoolMember` or `addMember`; a retired member
+ *   leaves it (at most `maxPoolMembers`, all active once a retirement has
+ *   run; a retired pool holds none)
  * @property {'active' | 'retired'} state
  * @property {Map<any, { member: any, at: number }>} served Session -> where
  *   it was last served, least recently served first (R4-103)
@@ -267,8 +269,10 @@ export const makeSubscriptionsPart = ({
         });
       },
       /**
-       * Retire the member: out of every pool's selection; its mark and the
-       * served records naming it are dropped (3.1).
+       * Retire the member: out of every active pool's member list (so it
+       * no longer counts toward `maxPoolMembers` and no pool holds its
+       * presence); its mark and the served records naming it are dropped
+       * (3.1). A pool's original spec (`makePool` idempotence) keeps it.
        */
       async retire() {
         const member = this.self;
@@ -278,9 +282,13 @@ export const makeSubscriptionsPart = ({
         memberList = memberList.filter(entry => entry !== member);
         marks.delete(member);
         for (const pool of poolList) {
-          const { served } = poolOf(pool);
-          for (const [session, entry] of served) {
-            if (entry.member === member) served.delete(session);
+          const poolRecord = poolOf(pool);
+          if (poolRecord.members.includes(member))
+            poolRecord.members = harden(
+              poolRecord.members.filter(entry => entry !== member),
+            );
+          for (const [session, entry] of poolRecord.served) {
+            if (entry.member === member) poolRecord.served.delete(session);
           }
         }
         return announcePoolsChanged();
@@ -512,6 +520,8 @@ export const makeSubscriptionsPart = ({
     if (record.state === 'retired') return undefined;
     record.state = 'retired';
     record.served.clear();
+    // A retired pool holds no member presence (nothing reads it again).
+    record.members = harden([]);
     poolList = poolList.filter(entry => entry !== pool);
     return announcePoolsChanged();
   };
@@ -553,9 +563,25 @@ export const makeSubscriptionsPart = ({
   };
 
   /**
+   * Room for one more member: the pool's active members are below
+   * `maxPoolMembers` (a retired member leaves every pool's list, so this
+   * bounds what the pool retains, never its lifetime).
+   * @param {PoolRecord} record
+   */
+  const assertRoom = record => {
+    const active = record.members.filter(
+      (/** @type {any} */ member) => memberOf(member).state === 'active',
+    );
+    if (active.length >= subscriptionLimits.maxPoolMembers)
+      throw Error(subscriptionTexts.poolFull);
+  };
+
+  /**
    * `makePool`'s member rules for one more member, and the bound.
    * @param {PoolRecord} record
    * @param {any} member
+   * @returns {{ entry: MemberRecord, done: boolean }} `done`: the member
+   *   is already an active member of this pool (a retried add)
    */
   const assertCanAdd = (record, member) => {
     assertActivePool(record);
@@ -563,11 +589,9 @@ export const makeSubscriptionsPart = ({
     if (entry.state !== 'active') throw Error(subscriptionTexts.retired);
     if (entry.provider !== providerOf(record.spec.kind))
       throw Error(subscriptionTexts.memberKind);
-    if (record.members.includes(member))
-      throw Error(subscriptionTexts.memberInPool);
-    if (record.members.length >= subscriptionLimits.maxPoolMembers)
-      throw Error(subscriptionTexts.poolFull);
-    return entry;
+    if (record.members.includes(member)) return { entry, done: true };
+    assertRoom(record);
+    return { entry, done: false };
   };
 
   /**
@@ -585,16 +609,20 @@ export const makeSubscriptionsPart = ({
    * in `listMembers` and not in any `describePool`. The operator finishes
    * by repeating both (`makeMember` answers the same member) or undoes with
    * `PoolMember.retire()`.
+   *
+   * Idempotent: a member that is already an active member of this pool
+   * answers done (a retry after a lost answer), with no check and no push.
    * @param {any} pool
    * @param {any} member
    */
   const addPoolMember = async (pool, member) => {
     const record = poolOf(pool);
-    const entry = assertCanAdd(record, member);
+    const { entry, done } = assertCanAdd(record, member);
+    if (done) return undefined;
     const check = await checkSecret(entry.credential, entry.provider);
     if (!check.ok)
       throw Error(subscriptionTextOf.credentialCheckFailed(check.code));
-    assertCanAdd(record, member);
+    if (assertCanAdd(record, member).done) return undefined;
     record.members = harden([...record.members, member]);
     return announcePoolsChanged();
   };

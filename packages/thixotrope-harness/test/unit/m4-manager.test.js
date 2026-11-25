@@ -356,12 +356,16 @@ test('makePool is idempotent by label and spec; conflicts, kinds and member stat
     () => kit.admin.makePool(harden({ ...spec, label: 'x', members: [a, b] })),
     failsWith(subscriptionTexts.noUsableMember),
   );
-  t.deepEqual(kit.admin.describePool(pool), {
-    kind: 'claude-pool',
-    label: 'claude',
-    members: [a, b],
-    state: 'active',
-  });
+  t.deepEqual(
+    kit.admin.describePool(pool),
+    {
+      kind: 'claude-pool',
+      label: 'claude',
+      members: [a],
+      state: 'active',
+    },
+    'the retired member left the pool',
+  );
   t.deepEqual(kit.admin.listPools(), { pools: [pool] });
   t.throws(() => kit.admin.describePool(Far('Backend', {})), {
     message: subscriptionTexts.unknownPool,
@@ -532,15 +536,17 @@ test('addPoolMember: makePool rules (active, provider, duplicate, bound), then t
   );
   t.is(kit.sink.poolState(pool).served[0]?.member, b);
 
-  // Duplicate, wrong provider, retired, unknown, retired pool.
-  await t.throwsAsync(
-    kit.admin.addPoolMember(pool, b),
-    failsWith(subscriptionTexts.memberInPool),
+  // Already a member (a retry after a lost answer): done, with no check
+  // and no push.
+  const checksBefore = kit.calls.filter(([n]) => n === 'checkCredential');
+  t.is(await kit.admin.addPoolMember(pool, b), undefined);
+  t.is(await kit.admin.addPoolMember(pool, a), undefined);
+  t.is(pushes(), 1);
+  t.is(
+    kit.calls.filter(([n]) => n === 'checkCredential').length,
+    checksBefore.length,
   );
-  await t.throwsAsync(
-    kit.admin.addPoolMember(pool, a),
-    failsWith(subscriptionTexts.memberInPool),
-  );
+  // Wrong provider, retired, unknown, retired pool.
   const codex = kit.member('codex', 'c');
   await t.throwsAsync(
     kit.admin.addPoolMember(pool, codex),
@@ -590,13 +596,42 @@ test('addPoolMember: at most maxPoolMembers', async t => {
     failsWith(subscriptionTexts.poolFull),
   );
   t.true(fitsFrame(kit.sink.poolState(pool)), 'a full pool state is one frame');
-  // Retiring a member does not shrink the list (as makePool's spec), so
-  // the bound is on what the pool retains.
+  // A retired member leaves the pool: the bound is on what the pool
+  // retains now, never on how many it has had.
   await first.retire();
-  await t.throwsAsync(
-    kit.admin.addPoolMember(pool, kit.member('codex', 'after')),
-    failsWith(subscriptionTexts.poolFull),
+  t.false(kit.admin.describePool(pool).members.includes(first));
+  await kit.admin.addPoolMember(pool, kit.member('codex', 'after'));
+  t.is(
+    kit.admin.describePool(pool).members.length,
+    subscriptionLimits.maxPoolMembers,
   );
+});
+
+test('no lifetime cap: adds and retires over the life of a pool keep succeeding; the pool keeps no retired presence', async t => {
+  const kit = makeKit();
+  const keep = kit.member('claude', 'keep');
+  const pool = kit.admin.makePool(
+    harden({ kind: 'claude-pool', label: 'p', members: [keep] }),
+  );
+  const rounds = 4 * subscriptionLimits.maxPoolMembers;
+  for (let i = 0; i < rounds; i += 1) {
+    const member = kit.member('claude', `m${i}`);
+    // eslint-disable-next-line no-await-in-loop
+    await kit.admin.addPoolMember(pool, member);
+    // eslint-disable-next-line no-await-in-loop
+    await member.retire();
+  }
+  const added = kit.member('claude', 'last');
+  await kit.admin.addPoolMember(pool, added);
+  t.deepEqual(kit.admin.describePool(pool).members, [keep, added]);
+  t.deepEqual(
+    kit.sink.poolState(pool).members.map((/** @type {any} */ e) => e.member),
+    [keep, added],
+  );
+  t.deepEqual(kit.admin.listMembers().members, [keep, added]);
+  // A retired pool holds no members either.
+  await kit.admin.retirePool(pool);
+  t.deepEqual(kit.admin.describePool(pool).members, []);
 });
 
 test('addPoolMember refuses a member whose credential fails the check, in plain words; the pool is unchanged and nothing is pushed', async t => {
@@ -645,7 +680,7 @@ test('addPoolMember refuses a member whose credential fails the check, in plain 
   );
 });
 
-test('addPoolMember applies the rules again after the check: a member retired or added meanwhile is refused', async t => {
+test('addPoolMember applies the rules again after the check: a member retired meanwhile is refused, one added meanwhile answers done', async t => {
   /** @type {(() => void)[]} */
   const held = [];
   let gated = true;
@@ -669,9 +704,14 @@ test('addPoolMember applies the rules again after the check: a member retired or
   const results = await Promise.allSettled([first, second]);
   t.deepEqual(
     results.map(result => result.status),
-    ['fulfilled', 'rejected'],
+    ['fulfilled', 'fulfilled'],
   );
   t.deepEqual(kit.admin.describePool(pool).members, [a, b], 'added once');
+  t.is(
+    kit.calls.filter(([name]) => name === 'poolsChanged').length,
+    1,
+    'pushed once',
+  );
   const c = kit.member('claude', 'c');
   const third = kit.admin.addPoolMember(pool, c);
   await settle();
@@ -947,8 +987,12 @@ test('marks are per member, shared by every pool the member is in, and lifted by
   kit.sink.poolChanged(one, harden({ marks: [{ member: a, mark }] }));
   await a.retire();
   const after = kit.sink.poolState(one);
-  t.is(after.members[0].state, 'retired');
-  t.is(after.members[0].mark, undefined);
+  t.deepEqual(
+    after.members.map((/** @type {any} */ entry) => entry.member),
+    [b],
+    'a retired member leaves the pool, its mark with it',
+  );
+  t.deepEqual(kit.admin.describePool(one).members, [b]);
 });
 
 test('served records: newest wins, 256 per pool, least recently served dropped; a retired member drops its records', async t => {

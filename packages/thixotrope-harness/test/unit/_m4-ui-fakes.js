@@ -262,8 +262,8 @@ export const makeFakeSecrets = ({
       calls.push(['SubscriptionsAdmin', 'addPoolMember', entry?.label]);
       const list = poolMembers.get(pool);
       if (!list || !entry) throw Error('unknown');
-      if (list.includes(member))
-        throw Error('This member is already in the pool');
+      // As the manager: already a member answers done (a retried add).
+      if (list.includes(member)) return;
       const check = checks.get(recordOf(entry.secret).label);
       if (check && !check.ok) throw Error(`check failed: ${check.code}`);
       list.push(member);
