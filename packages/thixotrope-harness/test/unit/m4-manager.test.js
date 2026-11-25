@@ -22,7 +22,10 @@ import {
   m4SinkMethodNames,
 } from '../../guest/lib/interfaces-m4.js';
 import { subscriptionLimits } from '../../guest/lib/subscription-limits.js';
-import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
+import {
+  subscriptionTextOf,
+  subscriptionTexts,
+} from '../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import {
   forwardSinkMethods,
@@ -42,14 +45,17 @@ const failsWith = message => ({ message });
 /**
  * A fake ops facet: records every forward; `credentials()` answers one
  * CredentialOps per facet whose `describeSecrets` knows the keys in
- * `store`.
- * @param {{ rows?: any[][], pushGate?: () => Promise<void> }} [options]
+ * `store` and whose `checkCredential` answers `checks.get(secret)` (else
+ * ok): the value never exists here, as in the manager.
+ * @param {{ rows?: any[][], pushGate?: () => Promise<void>, checkGate?: () => Promise<void> }} [options]
  *   catalogue pages for `listModels`; `pushGate`: `poolsChanged` answers
- *   only once it settles
+ *   only once it settles; `checkGate`: likewise `checkCredential`
  */
-const makeFakeOps = ({ rows = [[]], pushGate } = {}) => {
+const makeFakeOps = ({ rows = [[]], pushGate, checkGate } = {}) => {
   /** @type {any[]} */
   const calls = [];
+  /** @type {Map<any, any>} */
+  const checks = new Map();
   /** @type {Map<string, { generation: number, state: string, bytes: number }>} */
   const store = new Map();
   const auditReader = Far('AuditReader', {});
@@ -85,6 +91,15 @@ const makeFakeOps = ({ rows = [[]], pushGate } = {}) => {
       if (pushGate) await pushGate();
       calls.push(['poolsChanged answered']);
     },
+    /**
+     * @param {any} secret
+     * @param {string} provider
+     */
+    checkCredential: async (secret, provider) => {
+      calls.push(['checkCredential', secret, provider]);
+      if (checkGate) await checkGate();
+      return checks.get(secret) ?? harden({ ok: true });
+    },
   });
   const ops = Far('AgentHostOps', {
     credentials: () => {
@@ -114,16 +129,20 @@ const makeFakeOps = ({ rows = [[]], pushGate } = {}) => {
       return ports;
     },
   });
-  return { ops, calls, store, auditReader, accounts, ports };
+  return { ops, calls, store, checks, auditReader, accounts, ports };
 };
 
 /**
  * The part over the fake ops, with Secrets made like `durable.js` makes
  * them (a presence and a `{ key, label, description }` record).
- * @param {{ rows?: any[][], pushGate?: () => Promise<void> }} [options]
+ * `setLost(true)`: every `withOps` fails as with the adapter between
+ * incarnations; `restartAdapter()`: the next `withOps` meets a new ops
+ * facet (a new adapter incarnation; the part keeps its records).
+ * @param {{ rows?: any[][], pushGate?: () => Promise<void>, checkGate?: () => Promise<void> }} [options]
  */
 const makeKit = options => {
-  const fake = makeFakeOps(options);
+  let fake = makeFakeOps(options);
+  let lost = false;
   /** @type {WeakMap<any, any>} */
   const secretRecords = new WeakMap();
   /** @type {any[]} */
@@ -131,7 +150,10 @@ const makeKit = options => {
   /** @type {Map<any, any>} */
   const hosts = new Map();
   const part = makeSubscriptionsPart({
-    withOps: fn => fn(fake.ops),
+    withOps: async fn => {
+      if (lost) throw Error('manager lost');
+      return fn(fake.ops);
+    },
     whenBound: async host => {
       const session = hosts.get(host);
       if (session === undefined) throw Error(texts.unknownSessionHost);
@@ -178,6 +200,12 @@ const makeKit = options => {
     );
   return {
     ...fake,
+    get calls() {
+      return fake.calls;
+    },
+    get checks() {
+      return fake.checks;
+    },
     part,
     admin: part.admin,
     sink: part.sinkMethods,
@@ -186,6 +214,15 @@ const makeKit = options => {
     bindSession,
     member,
     secretRecords,
+    /** @param {boolean} value */
+    setLost: value => {
+      lost = value;
+    },
+    restartAdapter: () => {
+      const { store } = fake;
+      fake = makeFakeOps(options);
+      for (const [key, info] of store) fake.store.set(key, info);
+    },
   };
 };
 
@@ -463,6 +500,258 @@ test('XB (3.1): a push that cannot be delivered does not fail the retirement', a
   t.is(member.describe().state, 'retired');
   t.is(await kitPart.admin.retirePool(pool), undefined);
   t.is(kitPart.admin.describePool(pool).state, 'retired');
+});
+
+// ------------------------------------------------- adding a pool member
+
+test('addPoolMember: makePool rules (active, provider, duplicate, bound), then the credential check; durable in poolState and describePool; one push', async t => {
+  const kit = makeKit();
+  const a = kit.member('claude', 'a');
+  const spec = harden({ kind: 'claude-pool', label: 'claude', members: [a] });
+  const pool = kit.admin.makePool(spec);
+  const b = kit.member('claude', 'b');
+  const pushes = () =>
+    kit.calls.filter(([name]) => name === 'poolsChanged answered').length;
+
+  t.is(await kit.admin.addPoolMember(pool, b), undefined);
+  t.deepEqual(kit.admin.describePool(pool).members, [a, b]);
+  t.deepEqual(
+    kit.sink.poolState(pool).members.map(entry => entry.member),
+    [a, b],
+  );
+  t.is(pushes(), 1, 'the adapter was told, and answered, before the return');
+  const check = kit.calls.find(([name]) => name === 'checkCredential');
+  t.is(check?.[2], 'claude', 'checked for the pool provider');
+  // Provisioning's makePool with the spec as made still answers the pool.
+  t.is(kit.admin.makePool(spec), pool);
+  // Marks and served records of an added member are kept (it is usable).
+  const { session } = kit.bindSession();
+  kit.sink.poolChanged(
+    pool,
+    harden({ served: [{ session, member: b, at: 5 }] }),
+  );
+  t.is(kit.sink.poolState(pool).served[0]?.member, b);
+
+  // Duplicate, wrong provider, retired, unknown, retired pool.
+  await t.throwsAsync(
+    kit.admin.addPoolMember(pool, b),
+    failsWith(subscriptionTexts.memberInPool),
+  );
+  await t.throwsAsync(
+    kit.admin.addPoolMember(pool, a),
+    failsWith(subscriptionTexts.memberInPool),
+  );
+  const codex = kit.member('codex', 'c');
+  await t.throwsAsync(
+    kit.admin.addPoolMember(pool, codex),
+    failsWith(subscriptionTexts.memberKind),
+  );
+  const gone = kit.member('claude', 'gone');
+  await gone.retire();
+  await t.throwsAsync(
+    kit.admin.addPoolMember(pool, gone),
+    failsWith(subscriptionTexts.retired),
+  );
+  await t.throwsAsync(
+    kit.admin.addPoolMember(pool, Far('PoolMember', {})),
+    failsWith(subscriptionTexts.unknownMember),
+  );
+  await t.throwsAsync(
+    kit.admin.addPoolMember(Far('Backend', {}), b),
+    failsWith(subscriptionTexts.unknownPool),
+  );
+  const other = kit.admin.makePool(
+    harden({ kind: 'claude-pool', label: 'other', members: [a] }),
+  );
+  await kit.admin.retirePool(other);
+  await t.throwsAsync(
+    kit.admin.addPoolMember(other, b),
+    failsWith(subscriptionTexts.retired),
+  );
+  t.deepEqual(kit.admin.describePool(pool).members, [a, b], 'unchanged');
+});
+
+test('addPoolMember: at most maxPoolMembers', async t => {
+  const kit = makeKit();
+  const first = kit.member('codex', 'm0');
+  const pool = kit.admin.makePool(
+    harden({ kind: 'codex-pool', label: 'p', members: [first] }),
+  );
+  for (let i = 1; i < subscriptionLimits.maxPoolMembers; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await kit.admin.addPoolMember(pool, kit.member('codex', `m${i}`));
+  }
+  t.is(
+    kit.admin.describePool(pool).members.length,
+    subscriptionLimits.maxPoolMembers,
+  );
+  await t.throwsAsync(
+    kit.admin.addPoolMember(pool, kit.member('codex', 'over')),
+    failsWith(subscriptionTexts.poolFull),
+  );
+  t.true(fitsFrame(kit.sink.poolState(pool)), 'a full pool state is one frame');
+  // Retiring a member does not shrink the list (as makePool's spec), so
+  // the bound is on what the pool retains.
+  await first.retire();
+  await t.throwsAsync(
+    kit.admin.addPoolMember(pool, kit.member('codex', 'after')),
+    failsWith(subscriptionTexts.poolFull),
+  );
+});
+
+test('addPoolMember refuses a member whose credential fails the check, in plain words; the pool is unchanged and nothing is pushed', async t => {
+  const kit = makeKit();
+  const a = kit.member('claude', 'a');
+  const pool = kit.admin.makePool(
+    harden({ kind: 'claude-pool', label: 'p', members: [a] }),
+  );
+  for (const code of ['INVALID', 'WRONG_PROVIDER', 'EXPIRED', 'CONSUMED']) {
+    const secret = kit.makeSecret(`s-${code}`);
+    kit.checks.set(secret, harden({ ok: false, code }));
+    const member = kit.admin.makeMember(
+      harden({ provider: 'claude', label: code, credential: secret }),
+    );
+    // eslint-disable-next-line no-await-in-loop
+    t.like(await kit.admin.checkCredential(pool, secret), { ok: false, code });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      kit.admin.addPoolMember(pool, member),
+      failsWith(subscriptionTextOf.credentialCheckFailed(code)),
+    );
+  }
+  t.deepEqual(kit.admin.describePool(pool).members, [a]);
+  t.false(kit.calls.some(([name]) => name === 'poolsChanged'));
+  // The adapter unreachable: fail closed.
+  const b = kit.member('claude', 'b');
+  kit.setLost(true);
+  await t.throwsAsync(
+    kit.admin.addPoolMember(pool, b),
+    failsWith('manager lost'),
+  );
+  kit.setLost(false);
+  t.deepEqual(kit.admin.describePool(pool).members, [a]);
+  // checkCredential: a Secret this manager did not mint, a retired pool.
+  await t.throwsAsync(
+    kit.admin.checkCredential(pool, Far('Secret', {})),
+    secretFailed('UNKNOWN_SECRET'),
+  );
+  t.deepEqual(await kit.admin.checkCredential(pool, kit.makeSecret()), {
+    ok: true,
+  });
+  await kit.admin.retirePool(pool);
+  await t.throwsAsync(
+    kit.admin.checkCredential(pool, kit.makeSecret()),
+    failsWith(subscriptionTexts.retired),
+  );
+});
+
+test('addPoolMember applies the rules again after the check: a member retired or added meanwhile is refused', async t => {
+  /** @type {(() => void)[]} */
+  const held = [];
+  let gated = true;
+  const kit = makeKit({
+    checkGate: () =>
+      gated
+        ? new Promise(resolve => held.push(() => resolve(undefined)))
+        : Promise.resolve(),
+  });
+  const a = kit.member('claude', 'a');
+  const pool = kit.admin.makePool(
+    harden({ kind: 'claude-pool', label: 'p', members: [a] }),
+  );
+  const b = kit.member('claude', 'b');
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+  const first = kit.admin.addPoolMember(pool, b);
+  const second = kit.admin.addPoolMember(pool, b);
+  await settle();
+  t.is(held.length, 2, 'both checks are in the adapter');
+  for (const release of held.splice(0)) release();
+  const results = await Promise.allSettled([first, second]);
+  t.deepEqual(
+    results.map(result => result.status),
+    ['fulfilled', 'rejected'],
+  );
+  t.deepEqual(kit.admin.describePool(pool).members, [a, b], 'added once');
+  const c = kit.member('claude', 'c');
+  const third = kit.admin.addPoolMember(pool, c);
+  await settle();
+  await c.retire();
+  gated = false;
+  /** @type {() => void} */ (held.pop())();
+  await t.throwsAsync(third, failsWith(subscriptionTexts.retired));
+  t.deepEqual(kit.admin.describePool(pool).members, [a, b]);
+});
+
+test('restart between makeMember and addPoolMember: the member is listed and in no pool; repeating both finishes, retire undoes', async t => {
+  const kit = makeKit();
+  const a = kit.member('claude', 'a');
+  const pool = kit.admin.makePool(
+    harden({ kind: 'claude-pool', label: 'p', members: [a] }),
+  );
+  const secret = kit.makeSecret('new');
+  const request = harden({
+    provider: 'claude',
+    label: 'new',
+    credential: secret,
+  });
+  // Step 1 committed; the crash comes before step 2 is sent. The adapter
+  // restarts (the manager's records are its heap, which persists).
+  const made = kit.admin.makeMember(request);
+  kit.restartAdapter();
+  /** Members in no active pool: what the operator sees as unfinished. */
+  const unpooled = () => {
+    const inPools = new Set(
+      kit.admin
+        .listPools()
+        .pools.flatMap(
+          (/** @type {any} */ backend) =>
+            kit.admin.describePool(backend).members,
+        ),
+    );
+    return kit.admin
+      .listMembers()
+      .members.filter((/** @type {any} */ m) => !inPools.has(m));
+  };
+  t.deepEqual(unpooled(), [made]);
+  t.is(made.describe().state, 'active');
+  t.deepEqual(kit.admin.describePool(pool).members, [a]);
+  t.deepEqual(
+    kit.sink.poolState(pool).members.map(entry => entry.member),
+    [a],
+    'the adapter loads the pool without it',
+  );
+  // Finish: the same two calls again (makeMember answers the same member).
+  const again = kit.admin.makeMember(request);
+  t.is(again, made);
+  await kit.admin.addPoolMember(pool, again);
+  t.deepEqual(kit.admin.describePool(pool).members, [a, made]);
+  t.deepEqual(unpooled(), []);
+  t.true(
+    kit.calls.some(([name]) => name === 'checkCredential'),
+    'checked through the new adapter incarnation',
+  );
+
+  // Undo instead: a second orphan, retired; it leaves the list.
+  const orphan = kit.admin.makeMember(
+    harden({
+      provider: 'claude',
+      label: 'orphan',
+      credential: kit.makeSecret(),
+    }),
+  );
+  t.deepEqual(unpooled(), [orphan]);
+  await orphan.retire();
+  t.deepEqual(unpooled(), []);
+
+  // A crash during addPoolMember's check (the adapter lost): nothing is
+  // recorded and a retry completes.
+  const late = kit.member('claude', 'late');
+  kit.setLost(true);
+  await t.throwsAsync(kit.admin.addPoolMember(pool, late));
+  kit.setLost(false);
+  t.deepEqual(unpooled(), [late]);
+  await kit.admin.addPoolMember(pool, late);
+  t.deepEqual(kit.admin.describePool(pool).members, [a, made, late]);
 });
 
 test('the pool Backend forwards describe, listModels, resolveModel and open with its spec', async t => {

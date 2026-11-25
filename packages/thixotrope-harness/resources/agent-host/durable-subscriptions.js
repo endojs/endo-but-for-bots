@@ -22,6 +22,12 @@
  * operator's (F.2 a) and are compared only for `makeMember`/`makePool`
  * idempotence (R8-31, R8-23).
  *
+ * Adding a member to a pool (`addPoolMember`, after `makeMember`) is the
+ * one path that checks a credential's format: `makeMember` and `makePool`
+ * stay unchecked, idempotent and free of adapter reads, as provisioning
+ * needs (it makes members of Secrets that may still hold a staged import,
+ * activated later, and re-runs against existing members).
+ *
  * Runs in a vat: prelude globals only (no clock, timers or randomness),
  * closed records, every retained collection bounded (architecture 12).
  */
@@ -29,7 +35,10 @@
 import { texts, textOf } from '../../guest/lib/interfaces.js';
 import { m4Interfaces } from '../../guest/lib/interfaces-m4.js';
 import { subscriptionLimits } from '../../guest/lib/subscription-limits.js';
-import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
+import {
+  subscriptionTextOf,
+  subscriptionTexts,
+} from '../../guest/lib/subscription-texts.js';
 import { limits } from '../../guest/lib/limits.js';
 import { fitsFrame } from '../../guest/lib/bounded.js';
 /* eslint-enable import/no-relative-packages */
@@ -133,7 +142,11 @@ const sameSpec = (a, b) => {
  *   pages by it, HR-SYN-11)
  *
  * @typedef {object} PoolRecord
- * @property {any} spec the `PoolSpec` as given (hardened)
+ * @property {any} spec the `PoolSpec` as given (hardened; `makePool`
+ *   idempotence compares it, so provisioning re-runs answer the same pool
+ *   after an operator added members)
+ * @property {any[]} members the pool's members (hardened, in order): the
+ *   spec's, then each `addPoolMember` (at most `maxPoolMembers`)
  * @property {'active' | 'retired'} state
  * @property {Map<any, { member: any, at: number }>} served Session -> where
  *   it was last served, least recently served first (R4-103)
@@ -483,7 +496,12 @@ export const makeSubscriptionsPart = ({
     if (poolList.length >= subscriptionLimits.maxPools)
       throw Error(subscriptionTexts.poolConflict);
     const pool = makePoolBackend(spec);
-    poolRecords.set(pool, { spec, state: 'active', served: new Map() });
+    poolRecords.set(pool, {
+      spec,
+      members: spec.members,
+      state: 'active',
+      served: new Map(),
+    });
     poolList = [...poolList, pool];
     return pool;
   };
@@ -500,13 +518,85 @@ export const makeSubscriptionsPart = ({
 
   /** @param {any} pool */
   const describePool = pool => {
-    const { spec, state } = poolOf(pool);
+    const { spec, members, state } = poolOf(pool);
     return harden({
       kind: spec.kind,
       label: spec.label,
-      members: spec.members,
+      members,
       state,
     });
+  };
+
+  /**
+   * Ask the adapter whether `secret` holds a credential of `provider`'s
+   * format (`CredentialOps.checkCredential`): `{ ok: true }` or
+   * `{ ok: false, code }`. The value never comes here.
+   * @param {any} secret
+   * @param {'claude' | 'codex'} provider
+   * @returns {Promise<{ ok: true } | { ok: false, code: string }>}
+   */
+  const checkSecret = async (secret, provider) => {
+    if (!secretRecords.has(secret)) throw secretError('UNKNOWN_SECRET');
+    return withCredentialOps(credentialOps =>
+      E(credentialOps).checkCredential(secret, provider),
+    );
+  };
+
+  /**
+   * @param {any} pool
+   * @param {any} secret
+   */
+  const checkCredential = async (pool, secret) => {
+    const record = poolOf(pool);
+    assertActivePool(record);
+    return checkSecret(secret, providerOf(record.spec.kind));
+  };
+
+  /**
+   * `makePool`'s member rules for one more member, and the bound.
+   * @param {PoolRecord} record
+   * @param {any} member
+   */
+  const assertCanAdd = (record, member) => {
+    assertActivePool(record);
+    const entry = memberOf(member);
+    if (entry.state !== 'active') throw Error(subscriptionTexts.retired);
+    if (entry.provider !== providerOf(record.spec.kind))
+      throw Error(subscriptionTexts.memberKind);
+    if (record.members.includes(member))
+      throw Error(subscriptionTexts.memberInPool);
+    if (record.members.length >= subscriptionLimits.maxPoolMembers)
+      throw Error(subscriptionTexts.poolFull);
+    return entry;
+  };
+
+  /**
+   * Add an existing member to an active pool: `makePool`'s rules (active,
+   * the pool's provider, not already in it, at most `maxPoolMembers`), then
+   * the member's credential must pass the adapter's check (a failure is
+   * refused in plain words, `subscriptionTextOf.credentialCheckFailed`;
+   * the adapter unreachable refuses too: fail closed). The rules are
+   * applied again after the check, which awaits the adapter, and the
+   * member is appended in that same crank. Then `poolsChanged()` as a
+   * retirement does, so the adapter reloads the pool.
+   *
+   * Restart (m4-interfaces 10): `makeMember` then `addPoolMember` are two
+   * calls; a crash between them leaves an active member in no pool, seen
+   * in `listMembers` and not in any `describePool`. The operator finishes
+   * by repeating both (`makeMember` answers the same member) or undoes with
+   * `PoolMember.retire()`.
+   * @param {any} pool
+   * @param {any} member
+   */
+  const addPoolMember = async (pool, member) => {
+    const record = poolOf(pool);
+    const entry = assertCanAdd(record, member);
+    const check = await checkSecret(entry.credential, entry.provider);
+    if (!check.ok)
+      throw Error(subscriptionTextOf.credentialCheckFailed(check.code));
+    assertCanAdd(record, member);
+    record.members = harden([...record.members, member]);
+    return announcePoolsChanged();
   };
 
   const admin = makeExo('SubscriptionsAdmin', m4Interfaces.SubscriptionsAdmin, {
@@ -518,6 +608,8 @@ export const makeSubscriptionsPart = ({
     retirePool,
     accounts: async () =>
       withCredentialOps(credentialOps => E(credentialOps).accounts()),
+    checkCredential,
+    addPoolMember,
   });
 
   // ---- sink methods (the adapter only; m4SinkMethodGuards) ----
@@ -528,7 +620,7 @@ export const makeSubscriptionsPart = ({
    */
   const poolState = pool => {
     const record = poolOf(pool);
-    const members = record.spec.members.map((/** @type {any} */ member) => {
+    const members = record.members.map((/** @type {any} */ member) => {
       const entry = memberOf(member);
       const mark = marks.get(member);
       return harden({
@@ -561,7 +653,7 @@ export const makeSubscriptionsPart = ({
     if (record.state === 'retired') return undefined;
     /** @param {any} member */
     const usable = member =>
-      record.spec.members.includes(member) &&
+      record.members.includes(member) &&
       memberRecords.get(member)?.state === 'active';
     for (const { member, mark } of change.marks ?? []) {
       if (usable(member)) {
