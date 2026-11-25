@@ -224,7 +224,11 @@ const valueBecomes = async (locator, value) => {
       await page
         .locator('.thix-mention-option[data-label="notes"]')
         .dispatchEvent('mousedown');
-      t.is(await input.inputValue(), 'look at @notes ');
+      // The pick redraws the input on the next render: poll, not read once.
+      t.true(
+        await valueBecomes(input, 'look at @notes '),
+        `the pick completes the mention (got ${JSON.stringify(await input.inputValue())})`,
+      );
       await input.press('Enter');
       await page
         .locator('.thix-attachments .thix-attachment-chip[data-label="notes"]')
