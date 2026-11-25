@@ -7,6 +7,8 @@
  */
 .thix-settings-toggle {
   width: auto;
+  /* Icon only at phone width: still the bars' square icon button. */
+  min-width: var(--fl-icon-btn);
   gap: 0.35rem;
   padding-inline: 0.5rem;
   white-space: nowrap;
