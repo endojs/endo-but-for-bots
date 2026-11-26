@@ -82,6 +82,23 @@ fn a_proxy_walk_past_two_to_the_thirty_two_mints_no_key() {
     }
 }
 
+/// 2^32 - 1 is no array index, so an allocating walk that reaches it defines
+/// an ordinary named property there, on an ordinary result as on an Array.
+/// Defined by index instead, it went to the index store, where `ownKeys`
+/// listed it but no read, `in` or `Object.keys` found it.
+#[test]
+fn a_result_element_at_two_to_the_thirty_two_minus_one_is_named() {
+    assert_result(
+        "var a = []; a.constructor = { [Symbol.species]: function () { return { a: 1 } } }; \
+         var s = { length: 2 ** 32 - 1 }; s[Symbol.isConcatSpreadable] = true; \
+         var r = a.concat(s, 'x'); var k = String(2 ** 32 - 1); \
+         [r.length, Reflect.ownKeys(r).join(), r[k], k in r, Object.keys(r).join(), \
+          JSON.stringify(Object.getOwnPropertyDescriptor(r, k))].join('|')",
+        "4294967296|a,4294967295,length|x|true|a,4294967295,length|\
+         {\"value\":\"x\",\"writable\":true,\"enumerable\":true,\"configurable\":true}",
+    );
+}
+
 #[test]
 #[cfg_attr(debug_assertions, ignore = "2^24 + 1 steps: run with --release")]
 fn for_each_walks_past_two_to_the_twenty_four() {

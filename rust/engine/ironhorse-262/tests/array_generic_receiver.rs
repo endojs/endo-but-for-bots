@@ -334,6 +334,28 @@ fn a_proxy_walk_past_two_to_the_thirty_two_mints_no_key() {
     );
 }
 
+/// An allocating method defines each element of its Array result by index,
+/// as XS's `mxDefineIndex` does, minting no name for it. Each element used to
+/// intern its index's name, so a 70,000-element result over a Proxy, whose
+/// reads name nothing, met the key space's guest ceiling and threw, and
+/// every later new name in the program threw too.
+#[test]
+fn an_allocating_walk_mints_no_key_per_element() {
+    for walk in [
+        "Array.prototype.map.call(p, function (v) { return v })",
+        "Array.prototype.filter.call(p, function () { return true })",
+        "Array.prototype.flat.call(p)",
+        "(p[Symbol.isConcatSpreadable] = true, [].concat(p))",
+        "Array.prototype.toReversed.call(p)",
+    ] {
+        agrees(&format!(
+            "var a = []; for (var i = 0; i < 70000; i++) a.push(i); var p = new Proxy(a, {{}}); var r; \
+             try {{ r = {walk}.length }} catch (e) {{ r = String(e) }} \
+             var o = {{}}; o['fresh' + 'Name'] = 1; r + ':' + Object.keys(o)"
+        ));
+    }
+}
+
 /// A Proxy's trap lookup is a `[[Get]]` on its handler, which can run guest
 /// code that names the probed index and defines it on the target. The walk
 /// then reads the target by that name: by index it would miss a property the

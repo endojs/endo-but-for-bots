@@ -274,20 +274,14 @@ impl Interp {
     ) -> Result<bool, Step> {
         let index = match key {
             ReadKey::Id(id) => return self.mop_define_own_property(code, inst, id, desc),
-            ReadKey::Index(index) => index,
+            ReadKey::Index(index) if index < u32::MAX => index,
+            // 2^32 - 1 is no array index, so no array item or index store
+            // holds it: like every wider integer key, it is a name.
+            ReadKey::Index(index) => {
+                return self.define_integer_key_by_name(code, inst, u64::from(index), desc)
+            }
             ReadKey::WideIndex(index) => {
-                // A TypedArray answers a canonical numeric key without a name
-                // (and refuses this one: it is out of range). Anywhere else the
-                // define CREATES the named property, so the name is minted.
-                if !self.proxies.contains_key(&inst) {
-                    if let Some(&ta) = self.typed_arrays.get(&inst) {
-                        return self.with_native_frame(LIGHT_FRAME_COST, |vm| {
-                            vm.ta_index_define(code, ta, index.get() as f64, desc)
-                        });
-                    }
-                }
-                let id = self.intern_key_unmetered(index.get().to_string())?;
-                return self.mop_define_own_property(code, inst, id, desc);
+                return self.define_integer_key_by_name(code, inst, index.get(), desc)
             }
         };
         if !self.proxies.contains_key(&inst) {
@@ -339,6 +333,28 @@ impl Interp {
                         return Ok(self.is_compatible_descriptor(false, &desc, Some(&current)));
                     }
                 }
+            }
+        }
+        let id = self.intern_key_unmetered(index.to_string())?;
+        self.mop_define_own_property(code, inst, id, desc)
+    }
+
+    /// `[[DefineOwnProperty]]` of an integer key that is no array index
+    /// (2^32 - 1 or above). A TypedArray answers it without a name (and
+    /// refuses it: it is out of range); anywhere else the define CREATES the
+    /// named property, so the name is minted.
+    fn define_integer_key_by_name(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u64,
+        desc: OrdinaryDescriptor,
+    ) -> Result<bool, Step> {
+        if !self.proxies.contains_key(&inst) {
+            if let Some(&ta) = self.typed_arrays.get(&inst) {
+                return self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+                    vm.ta_index_define(code, ta, index as f64, desc)
+                });
             }
         }
         let id = self.intern_key_unmetered(index.to_string())?;

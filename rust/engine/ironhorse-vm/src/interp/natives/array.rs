@@ -3193,31 +3193,28 @@ impl Interp {
         index: u64,
         value: Slot,
     ) -> Result<(), Step> {
-        // The id is minted here, before the compact arm that does not read it,
-        // because the 256 raw units per element `intern_key` charges are what
-        // `flat_map_retains_calibrated_dense_metering` measured against the
-        // oracle. That pin is why this site was NOT converted alongside
-        // `array_from_define`: there the equivalent claim was checked against
-        // XS and found false (`fx_Array_from_aux` defines through
-        // `mxDefineIndex`, i.e. `(XS_NO_ID, index)`, and interns nothing), but
-        // which XS routine this path mirrors — and so where its 256 units
-        // really come from — has not been established. Do not copy the
-        // `array_from_define` reasoning here without measuring first: the two
-        // comments describe different XS code.
-        //
-        // Consequence, unfixed: this mints one name per element, so
-        // `bigArrayOfArrays.flatMap(x => x)` still walks the `u16` id space
-        // into the saturation guard. `concat` and `slice` do not route
-        // through here and already match the oracle exactly at 70,000
-        // elements.
-        let id = self.array_generic_index_id(index)?;
+        // One slot per element defined, whatever names the program holds. It
+        // is calibrated where XS was measured: with it dense `flatMap` is
+        // raw-exact against XS, its index names interned or not (and 256 raw
+        // short per element without it), and RegExp @@split matches XS's
+        // `fxNewSlot` per item. Elsewhere it keeps a fresh program's cost
+        // where it was. It used to come from interning the index's name
+        // here, which charged only a name the key table did not yet hold and
+        // spent a key id per element, so a 70,000-element result exhausted
+        // the key space. (The generic `splice` still names each index it
+        // reads, and so still pays that name's slot as well.)
+        self.meter.tick_slot_alloc();
         // A compact Array index is strictly below 2^32 - 1. The string
         // "4294967295" and every wider safe-integer key are ordinary
         // properties, including on an Array result; an ordinary custom-species
         // result supports them throughout concat's full safe-integer domain.
         if self.arrays.contains_key(&target) && index < u64::from(u32::MAX) {
             let index = index as u32;
-            let ordinary = self.ordinary_get_own_descriptor(target, id);
+            // An index has an ordinary own property only under a name the key
+            // table holds, so an index it has never named has none.
+            let ordinary = self
+                .index_read_key_id(index)
+                .and_then(|id| self.ordinary_get_own_descriptor(target, id));
             let compact = self.arrays[&target].items().get(&index).copied();
             let compact_is_default = compact.is_some_and(|item| {
                 item.flag & (XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG) == 0
@@ -3238,7 +3235,13 @@ impl Interp {
             configurable: Some(true),
             ..OrdinaryDescriptor::default()
         };
-        if self.mop_define_own_property(code, target, id, descriptor)? {
+        // Defined by index, as XS's `mxDefineIndex` defines it: an Array,
+        // ordinary or TypedArray result holds the element without a name. A
+        // result that holds it under one (a Proxy, whose trap is handed the
+        // key, or an exotic object such as a Map or a primitive wrapper), or
+        // an index of 2^32 - 1 or more, still mints it.
+        let key = self.array_index_read_key(index);
+        if self.mop_define_own_property_read(code, target, key, descriptor)? {
             Ok(())
         } else {
             // XS mxDefineIndex passes XS_NO_ID (0) to fxDefineAll.
