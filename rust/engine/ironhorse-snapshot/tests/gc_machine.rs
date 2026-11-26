@@ -393,7 +393,9 @@ fn small_state_stays_small_with_a_large_free_list() {
         // binds (with the members their constructors read) add only fixed boot
         // state. Keep a tight constant ceiling while allowing those
         // constant-sized rows and the 32-byte cost-table digest in METR.
-        small_len < 1646 + native_name_bytes,
+        // METR also carries the release name, a byte longer from
+        // `ironhorse-meter-10` on.
+        small_len < 1647 + native_name_bytes,
         "small state is O(1) in heap size, got {small_len} bytes for \
          {} free entries",
         manifest.free_len
