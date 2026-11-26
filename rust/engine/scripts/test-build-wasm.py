@@ -62,6 +62,7 @@ class Recipe(unittest.TestCase):
         self.assertEqual(set(build_wasm.CRATES), {
             "ironhorse-meter", "ironhorse-text", "ironhorse-unicode", "ironhorse-regexp",
             "ironhorse-vm", "ironhorse-compile", "ironhorse-runtime", "ironhorse-snapshot",
+            "ironhorse-store-do",
         })
         arguments = build_wasm.crate_arguments()
         self.assertEqual(arguments.count("-p"), len(build_wasm.CRATES))

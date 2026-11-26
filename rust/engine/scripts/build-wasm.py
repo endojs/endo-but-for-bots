@@ -50,6 +50,7 @@ TARGETS = (WASIP1, UNKNOWN)
 CRATES = (
     "ironhorse-meter", "ironhorse-text", "ironhorse-unicode", "ironhorse-regexp",
     "ironhorse-vm", "ironhorse-compile", "ironhorse-runtime", "ironhorse-snapshot",
+    "ironhorse-store-do",
 )
 # Cargo's `package/feature` form, so the feature lands on one member of a
 # multi-package build.

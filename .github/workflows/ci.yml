@@ -788,6 +788,9 @@ jobs:
       - name: Check SQLite heap-store formatting
         run: cargo +1.88.0 fmt --manifest-path Cargo.toml --package ironhorse-store-sqlite -- --check
 
+      - name: Check Durable Object store executor formatting
+        run: cargo +1.88.0 fmt --manifest-path Cargo.toml --package ironhorse-store-do-rusqlite -- --check
+
   test-thixotrope-ironhorse:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-thixotrope-ironhorse']) }}
@@ -896,7 +899,7 @@ jobs:
         run: |
           flags=()
           if [ "$PROFILE" = release ]; then flags+=(--release); fi
-          cargo test --locked "${flags[@]}" -p ironhorse-runtime -p ironhorse-meter -p ironhorse-unicode -p ironhorse-vm -p ironhorse-snapshot -p ironhorse-compile -p ironhorse-regexp --features ironhorse-vm/store-integrity
+          cargo test --locked "${flags[@]}" -p ironhorse-runtime -p ironhorse-meter -p ironhorse-unicode -p ironhorse-vm -p ironhorse-snapshot -p ironhorse-compile -p ironhorse-regexp -p ironhorse-store-do --features ironhorse-vm/store-integrity
 
       - name: Test deterministic Math configuration (oracle-free)
         working-directory: rust/engine
@@ -961,6 +964,14 @@ jobs:
           if [ "$PROFILE" = release ]; then flags+=(--release); fi
           cargo test --locked "${flags[@]}" -p ironhorse-store-sqlite --features ironhorse-vm/store-integrity
           cargo test --locked "${flags[@]}" -p ironhorse-store-sqlite --features ironhorse-vm/store-integrity --example vat_surgery
+
+      - name: Test the Durable Object store against SQLite (root workspace)
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          flags=()
+          if [ "$PROFILE" = release ]; then flags+=(--release); fi
+          cargo test --locked "${flags[@]}" -p ironhorse-store-do-rusqlite --features ironhorse-vm/store-integrity
 
   test-ironhorse-calibration:
     needs: changes

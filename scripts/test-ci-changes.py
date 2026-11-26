@@ -251,6 +251,26 @@ class Repository(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(self.selected(path)["build-ironhorse-wasm"])
 
+    def test_durable_object_store_crates_select_their_jobs(self):
+        """The engine crate is tested, linted and built for wasm; its rusqlite
+        executor, which holds its acceptance suite, is tested and formatted.
+        A change to the snapshot crate reaches both through the graph."""
+        for path in ["rust/engine/ironhorse-store-do/src/store.rs",
+                     "rust/engine/ironhorse-snapshot/src/store.rs"]:
+            with self.subTest(path=path):
+                selected = self.selected(path)
+                self.assertTrue(selected["test-ironhorse"])
+                self.assertTrue(selected["test-ironhorse-oracle"])
+                self.assertTrue(selected["build-ironhorse-wasm"])
+                self.assertTrue(selected["format-ironhorse"])
+        selected = self.selected("rust/endo/ironhorse-store-do-rusqlite/tests/do_store.rs")
+        self.assertTrue(selected["test-ironhorse"])
+        self.assertTrue(selected["format-ironhorse"])
+        self.assertFalse(selected["build-ironhorse-wasm"])
+        self.assertFalse(selected["test-ironhorse-oracle"])
+        self.assertIn("ironhorse-store-do-rusqlite",
+                      self.graph.crates(self.graph.affected(["rust/engine/ironhorse-store-do/src/lib.rs"])))
+
     def test_format_helper_inputs(self):
         self.assertTrue(self.selected("rust/engine/scripts/generate-compiler-opcodes.py")["format-ironhorse"])
 

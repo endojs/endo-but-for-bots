@@ -54,12 +54,14 @@ WORKFLOWS = {
 CORE = {
     "ironhorse-meter", "ironhorse-vm", "ironhorse-snapshot",
     "ironhorse-compile", "ironhorse-regexp", "ironhorse-store-sqlite",
+    "ironhorse-store-do", "ironhorse-store-do-rusqlite",
 }
 # The engine members rust/engine/scripts/build-wasm.py builds for wasm; its
 # test holds this set to the script's list.
 WASM_CRATES = {
     "ironhorse-meter", "ironhorse-text", "ironhorse-unicode", "ironhorse-regexp",
     "ironhorse-vm", "ironhorse-compile", "ironhorse-runtime", "ironhorse-snapshot",
+    "ironhorse-store-do",
 }
 
 
@@ -332,7 +334,8 @@ def classify(paths, graphs, all_jobs=False):
             jobs["viable-release"] = True
         if path == "scripts/update-action-pins.mjs":
             jobs["check-action-pins"] = True
-        if path.endswith(".rs") and (under(path, "rust/engine") or under(path, "rust/endo/ironhorse-store-sqlite")):
+        if path.endswith(".rs") and (under(path, "rust/engine") or under(path, "rust/endo/ironhorse-store-sqlite")
+                                     or under(path, "rust/endo/ironhorse-store-do-rusqlite")):
             jobs["format-ironhorse"] = True
         # Every engine change but documentation: the probe's sources, which no
         # crate graph sees (`stack-lanes/`), its corpus and snippets, the lane
