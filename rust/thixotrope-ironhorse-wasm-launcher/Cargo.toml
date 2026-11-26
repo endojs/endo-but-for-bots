@@ -1,0 +1,14 @@
+[package]
+name = "thixotrope-ironhorse-wasm-launcher"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "thixotrope-ironhorse-wasm-worker"
+path = "src/main.rs"
+
+[dependencies]
+thixotrope-ironhorse-lease = { path = "../thixotrope-ironhorse-lease" }
+rustix = "1.1.4"
+serde_json = "1"

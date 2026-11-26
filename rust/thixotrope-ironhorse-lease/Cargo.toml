@@ -1,0 +1,8 @@
+[package]
+name = "thixotrope-ironhorse-lease"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+rustix = { version = "1.1.4", features = ["fs", "stdio"] }
