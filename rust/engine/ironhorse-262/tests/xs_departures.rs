@@ -765,6 +765,20 @@ const GAPS: &[Row] = &[
         v8: "3f800000,7f800001,ffc00000",
         why: "%TypedArray%.prototype.sort writes a Float32Array's NaNs back as the canonical 0x7FC00000, and a Float64Array's as 0x7FF8000000000000, through the same re-encoding; XS and V8 keep each NaN's bits",
     },
+    Row {
+        program: "var out = ['pending']; (async function () { var inner = { [Symbol.asyncIterator]() { return { next() { return { value: Promise.reject('r'), done: false }; } }; } }; async function* g() { yield* inner; } var r = await g().next(); return typeof r.value + ':' + r.done })().then(function (v) { out[0] = 'fulfilled ' + v; }, function (e) { out[0] = 'rejected ' + e; }); out",
+        ironhorse: "rejected r",
+        xs: "fulfilled object:false",
+        v8: "fulfilled object:false",
+        why: "a `yield*` yields an async delegate's value as it is (ES2024 15.5.5 step 7.a.vi); Ironhorse awaits every delegate's values, so it unwraps a promise and, on a rejected one, completes the generator and rejects the request (with the async-from-sync iterator, item 14A)",
+    },
+    Row {
+        program: "var out = ['pending']; (async function () { var log = []; async function* g() { try { yield* [Promise.reject('r')]; } catch (e) { log.push('caught ' + e); } finally { log.push('finally'); } } var r = await g().next(); return log.join() + '|' + r.done })().then(function (v) { out[0] = 'fulfilled ' + v; }, function (e) { out[0] = 'rejected ' + e; }); out",
+        ironhorse: "rejected r",
+        xs: "fulfilled caught r,finally|true",
+        v8: "fulfilled caught r,finally|true",
+        why: "a sync delegate's rejected value is thrown at the `yield*` (the async-from-sync iterator's rejection, ES2024 27.1.4.4 and 15.5.5), where an enclosing `try` catches it and its `finally` runs; Ironhorse has no such wrapper and completes the generator, rejecting the request (item 14A)",
+    },
 ];
 
 /// The engine's answer, as the rows spell it: the completion value, `throw`
