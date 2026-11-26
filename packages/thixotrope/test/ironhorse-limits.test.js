@@ -1,19 +1,21 @@
 // @ts-check
 import harden from '@endo/harden';
 import test from '@endo/ses-ava/test.js';
-import { createHash } from 'node:crypto';
 
 import {
   makeIronhorseLimits,
   readIronhorseLimits,
 } from '../src/ironhorse/ironhorse-limits.js';
 import { acquireIronhorseRuntime } from '../src/ironhorse/ironhorse-runtime.js';
-import { makeHashPowers } from '../src/platform/node/hashes.js';
+import {
+  bootPaths,
+  makeFakeHost,
+  manifestPath,
+  statePath,
+  workerBinary,
+} from './_ironhorse-runtime-host.js';
 
 /** @import { ExecutionContext } from 'ava' */
-/** @import { FilePowers } from '../src/platform/files.js' */
-/** @import { PathPowers } from '../src/platform/paths.js' */
-/** @import { ProcessPowers } from '../src/platform/processes.js' */
 
 test('Ironhorse configuration preserves wide budgets without numeric rounding', t => {
   const limits = readIronhorseLimits({
@@ -54,147 +56,8 @@ test('Ironhorse configuration rejects unsupported quantities rather than clampin
   }
 });
 
-// The runtime manifest policy is exercised against an in-memory host: a fake
-// lock supervisor that speaks the ownership protocol and a fake file system.
-// The Rust worker is never spawned here; test/ironhorse/limits.js covers the
-// same policy end to end with a built worker.
-
-const statePath = 'state';
-const workerBinary = 'bin/worker';
-const bootPaths = harden(['boot/main.js']);
-const manifestPath = `${statePath}/runtime.json`;
-
-const unused = () => {
-  throw Error('unused by the runtime under test');
-};
-
-/** @param {string} path */
-const enoent = path =>
-  Object.assign(Error(`ENOENT: ${path}`), { code: 'ENOENT' });
-
-const makeFakeHost = () => {
-  /** @type {Map<string, string>} */
-  const texts = new Map([
-    [workerBinary, 'worker bytes'],
-    [bootPaths[0], 'bootstrap bytes'],
-  ]);
-  /** @type {Set<string>} */
-  const directories = new Set();
-  /** @param {string} path */
-  const read = path => {
-    const text = texts.get(path);
-    if (text === undefined) throw enoent(path);
-    return text;
-  };
-  /** @type {FilePowers} */
-  const files = {
-    readText: async path => read(path),
-    readBytes: unused,
-    readChunks: async function* readChunks(path) {
-      yield new TextEncoder().encode(read(path));
-    },
-    writeTextAtomic: async (path, text) => {
-      texts.set(path, text);
-    },
-    makeDirectory: async path => {
-      directories.add(path);
-    },
-    makeTempDirectory: unused,
-    listDirectory: async path => {
-      if (!directories.has(path)) throw enoent(path);
-      const prefix = `${path}/`;
-      const names = [...texts.keys(), ...directories]
-        .filter(entry => entry.startsWith(prefix))
-        .map(entry => entry.slice(prefix.length).split('/')[0]);
-      return [...new Set(names)];
-    },
-    rename: async (from, to) => {
-      texts.set(to, read(from));
-      texts.delete(from);
-    },
-    remove: async path => {
-      texts.delete(path);
-    },
-    copyFile: async (from, to) => {
-      texts.set(to, read(from));
-    },
-    realPath: unused,
-    stat: unused,
-    isPrivateToUser: async () => true,
-    open: async () => ({
-      fd: undefined,
-      writeText: async () => {},
-      sync: async () => {},
-      close: async () => {},
-    }),
-    syncPath: async () => {},
-  };
-  /** @type {ProcessPowers} */
-  const processes = {
-    spawn: () => {
-      const queue = ['{"op":"locked"}'];
-      let ended = false;
-      /** @type {(() => void) | undefined} */
-      let wake;
-      /** @type {(code: number) => void} */
-      let exit = () => {};
-      /** @type {Promise<number | null>} */
-      const exited = new Promise(resolve => {
-        exit = resolve;
-      });
-      const notify = () => {
-        const waiter = wake;
-        wake = undefined;
-        waiter?.();
-      };
-      async function* lines() {
-        await null;
-        for (;;) {
-          const line = queue.shift();
-          if (line !== undefined) {
-            yield line;
-          } else if (ended) {
-            return;
-          } else {
-            // eslint-disable-next-line no-await-in-loop
-            await new Promise(resolve => {
-              wake = () => resolve(undefined);
-            });
-          }
-        }
-      }
-      return {
-        pid: 1,
-        lines,
-        input: () => ({
-          write: text => {
-            if (text === 'prepare\n') queue.push('{"op":"ready"}');
-            notify();
-          },
-          end: () => {
-            ended = true;
-            notify();
-            exit(0);
-          },
-        }),
-        exited,
-        failed: new Promise(() => {}),
-        kill: () => {},
-      };
-    },
-  };
-  /** @type {PathPowers} */
-  const paths = {
-    join: (...parts) => parts.join('/'),
-    dirname: unused,
-    resolve: unused,
-    isAbsolute: unused,
-    fileURLToPath: unused,
-    pathToFileURL: unused,
-  };
-  const hashes = makeHashPowers({ createHash, readChunks: files.readChunks });
-  return harden({ powers: { processes, files, paths, hashes }, texts });
-};
+// The runtime manifest policy is exercised against an in-memory host; see
+// _ironhorse-runtime-host.js.
 
 /**
  * Acquire and immediately release the runtime, returning the parsed manifest.

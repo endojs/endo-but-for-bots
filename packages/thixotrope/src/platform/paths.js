@@ -9,6 +9,7 @@ import harden from '@endo/harden';
  * @typedef {object} PathPowers
  * @property {(...parts: string[]) => string} join
  * @property {(path: string) => string} dirname
+ * @property {(path: string) => string} basename
  * @property {(...parts: string[]) => string} resolve
  * @property {(path: string) => boolean} isAbsolute
  * @property {(url: string | URL) => string} fileURLToPath
@@ -17,6 +18,7 @@ import harden from '@endo/harden';
  * @param {object} host
  * @param {PathPowers['join']} host.join
  * @param {PathPowers['dirname']} host.dirname
+ * @param {PathPowers['basename']} host.basename
  * @param {PathPowers['resolve']} host.resolve
  * @param {PathPowers['isAbsolute']} host.isAbsolute
  * @param {PathPowers['fileURLToPath']} host.fileURLToPath
@@ -26,6 +28,7 @@ import harden from '@endo/harden';
 export const makePathPowers = ({
   join,
   dirname,
+  basename,
   resolve,
   isAbsolute,
   fileURLToPath,
@@ -34,6 +37,7 @@ export const makePathPowers = ({
   harden({
     join,
     dirname,
+    basename,
     resolve,
     isAbsolute,
     fileURLToPath,

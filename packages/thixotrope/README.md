@@ -771,10 +771,18 @@ and installation commands described above.
 
 `runtime.json` records the worker executable hash, ordered bootstrap hashes,
 host delivery protocol, and the current execution limits.
+The supervisor holds the lease through the worker binary run as a lock helper
+(`WORKER --lock-state STATE`), whose first line is `{"op":"locked"}` for the native worker.
+A worker that loads files from beside its executable, such as the WebAssembly worker's launcher,
+adds `"heapFormat"` and the absolute `"parts"` paths to that line, and the manifest then records
+the heap format and each part's name and hash.
+The supervisor refuses a state directory whose heaps are of another format, naming both formats,
+before it compares code identities.
 The worker's SQLite signature includes the code identity digest, excluding mutable limits.
 The supervisor validates this manifest under its lease before restoring heaps or
 cleaning abandoned incarnations, and executes private checked copies throughout
 its lifetime so edits to the original paths cannot change a later wake.
+Parts are copied under their own names beside the private worker copy, where it finds them.
 The engine also validates its own boot-layout signature when restoring a stored image.
 
 Use `demo:ironhorse:counter status PATH` (or the promise variant) for administrative

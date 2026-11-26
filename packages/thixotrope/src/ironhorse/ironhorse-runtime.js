@@ -15,7 +15,85 @@ import { heapCeilingNames, makeIronhorseLimits } from './ironhorse-limits.js';
  * @property {string} hostProtocol
  * @property {string} worker
  * @property {string[]} bootstrap
+ * @property {string} [heapFormat] the heap format a worker names on its
+ * `locked` line; absent for the native worker, whose format is `native`.
+ * @property {[string, string][]} [parts] `[basename, sha256]` of each file
+ * the worker loads from beside its executable, sorted by basename; present
+ * exactly when `heapFormat` is.
  */
+
+const heapFormatPattern = /^[a-z0-9][a-z0-9-]*$/;
+const partNamePattern = /^[A-Za-z0-9._-]+$/;
+const maxParts = 16;
+
+/**
+ * @param {unknown} heapFormat
+ * @returns {string | undefined} what is wrong, if anything
+ */
+const heapFormatProblem = heapFormat => {
+  if (typeof heapFormat !== 'string' || !heapFormatPattern.test(heapFormat))
+    return `heapFormat ${q(heapFormat)} must match ${heapFormatPattern}`;
+  // An absent heap format already means the native one.
+  if (heapFormat === 'native') return 'heapFormat "native" is reserved';
+  return undefined;
+};
+
+/**
+ * Part copies sit beside the numbered binary and boot copies and their
+ * `.tmp` siblings, so a part name must not be able to collide with either or
+ * to leave the private directory.
+ * @param {unknown} name
+ * @returns {string | undefined} what is wrong, if anything
+ */
+const partNameProblem = name => {
+  if (
+    typeof name !== 'string' ||
+    !partNamePattern.test(name) ||
+    name === '.' ||
+    name === '..'
+  )
+    return `part name ${q(name)} must be a file name matching ${partNamePattern}`;
+  if (/^[0-9]+$/.test(name))
+    return `part name ${q(name)} must not be all digits`;
+  if (name.endsWith('.tmp')) return `part name ${q(name)} must not end in .tmp`;
+  return undefined;
+};
+
+/**
+ * Read the engine description a worker's lock helper may add to its `locked`
+ * line: a heap format and the absolute paths of files the worker loads from
+ * beside its executable. Both are absent for the native worker. Fields this
+ * runtime does not know are ignored, so a newer worker may say more.
+ * @param {Pick<PathPowers, 'isAbsolute' | 'basename'>} paths
+ * @param {{ heapFormat?: unknown, parts?: unknown }} locked
+ * @returns {{ heapFormat: string, parts: { path: string, name: string }[] } | undefined}
+ */
+const readLockedEngine = ({ isAbsolute, basename }, locked) => {
+  const { heapFormat, parts } = locked;
+  /** @param {string} problem */
+  const invalid = problem =>
+    Error(`Invalid ownership protocol: ${problem} in the locked message`);
+  if (heapFormat === undefined && parts === undefined) return undefined;
+  if (heapFormat === undefined || parts === undefined)
+    throw invalid('heapFormat and parts must appear together');
+  const formatProblem = heapFormatProblem(heapFormat);
+  if (formatProblem) throw invalid(formatProblem);
+  if (!Array.isArray(parts) || parts.length < 1 || parts.length > maxParts)
+    throw invalid(`parts must be an array of 1 to ${maxParts} paths`);
+  /** @type {Set<string>} */
+  const names = new Set();
+  const read = parts.map(path => {
+    if (typeof path !== 'string' || !isAbsolute(path))
+      throw invalid(`part ${q(path)} must be an absolute path`);
+    const name = basename(path);
+    const nameProblem = partNameProblem(name);
+    if (nameProblem) throw invalid(nameProblem);
+    if (names.has(name)) throw invalid(`part name ${q(name)} is repeated`);
+    names.add(name);
+    return { path, name };
+  });
+  return { heapFormat: /** @type {string} */ (heapFormat), parts: read };
+};
 
 /**
  * @param {HashPowers} hashes
@@ -47,6 +125,8 @@ const checkSavedManifest = (saved, identity, executionLimits) => {
     hostProtocol,
     worker,
     bootstrap,
+    heapFormat,
+    parts,
     limits: previous,
     ...unknownFields
   } = saved;
@@ -57,12 +137,54 @@ const checkSavedManifest = (saved, identity, executionLimits) => {
       `Ironhorse runtime.json is from a newer version: unrecognized manifest field ${q(unknownField)}; use that runtime or migrate to a fresh state directory`,
     );
   }
+  if ((heapFormat === undefined) !== (parts === undefined))
+    throw Error(
+      'Invalid Ironhorse runtime.json: heapFormat and parts must appear together',
+    );
+  if (heapFormat !== undefined) {
+    const problem = heapFormatProblem(heapFormat);
+    if (problem) throw Error(`Invalid Ironhorse runtime.json: ${problem}`);
+    if (!Array.isArray(parts) || parts.length < 1 || parts.length > maxParts)
+      throw Error(
+        `Invalid Ironhorse runtime.json: parts must be an array of 1 to ${maxParts} [name, digest] pairs`,
+      );
+    for (const part of parts) {
+      if (
+        !Array.isArray(part) ||
+        part.length !== 2 ||
+        typeof part[1] !== 'string'
+      )
+        throw Error(
+          `Invalid Ironhorse runtime.json: part ${q(part)} must be a [name, digest] pair`,
+        );
+      const nameProblem = partNameProblem(part[0]);
+      if (nameProblem)
+        throw Error(`Invalid Ironhorse runtime.json: ${nameProblem}`);
+    }
+  }
+  // Heaps of another format are unreadable whatever the code identity, so
+  // that is reported first and on its own.
+  const savedHeapFormat = heapFormat ?? 'native';
+  const ownHeapFormat = identity.heapFormat ?? 'native';
+  if (savedHeapFormat !== ownHeapFormat) {
+    throw Error(
+      `Incompatible Ironhorse runtime: the state directory holds ${q(savedHeapFormat)} heaps and this worker uses ${q(ownHeapFormat)} heaps; use the original worker or migrate to a fresh state directory`,
+    );
+  }
+  /** @type {[string, string][]} */
+  const savedParts = parts ?? [];
+  const ownParts = identity.parts ?? [];
   if (
     hostProtocol !== identity.hostProtocol ||
     worker !== identity.worker ||
     !Array.isArray(bootstrap) ||
     bootstrap.length !== identity.bootstrap.length ||
-    !bootstrap.every((digest, index) => digest === identity.bootstrap[index])
+    !bootstrap.every((digest, index) => digest === identity.bootstrap[index]) ||
+    savedParts.length !== ownParts.length ||
+    !savedParts.every(
+      ([name, digest], index) =>
+        name === ownParts[index][0] && digest === ownParts[index][1],
+    )
   ) {
     throw Error(incompatible);
   }
@@ -120,6 +242,7 @@ export const acquireIronhorseRuntime = async (
 ) => {
   const { spawn } = processes;
   const { join } = paths;
+  const runtimeFiles = [workerBinary, ...bootPaths];
 
   await files.makeDirectory(statePath);
   const ownerFile = await files.open(
@@ -210,18 +333,41 @@ export const acquireIronhorseRuntime = async (
   };
   try {
     const locked = JSON.parse(await receive());
+    if (typeof locked !== 'object' || locked === null)
+      throw Error('Invalid ownership protocol');
     if (locked.op === 'error') throw Error(locked.message);
     if (locked.op !== 'locked') throw Error('Invalid ownership protocol');
+    const engine = readLockedEngine(paths, locked);
+    const parts = engine?.parts ?? [];
+    const sources = [...runtimeFiles, ...parts.map(({ path }) => path)];
     const digests = await Promise.all(
-      [workerBinary, ...bootPaths].map(file => hashFile(hashes, file)),
+      sources.map(file => hashFile(hashes, file)),
     );
     /** @type {RuntimeIdentity} */
     const identity = {
       format: 2,
       hostProtocol: 'sequenced-hub-outbox-v1',
       worker: digests[0],
-      bootstrap: digests.slice(1),
+      bootstrap: digests.slice(1, runtimeFiles.length),
     };
+    // The native worker's identity must stay exactly as it was, keys and
+    // all, so its existing profiles and manifests still match. The format
+    // stays 2 for an engine that names parts: a build that predates
+    // `heapFormat` refuses such a manifest as an unrecognized field.
+    if (engine) {
+      identity.heapFormat = engine.heapFormat;
+      // Sorted by basename in plain code-unit order (names are unique), so
+      // the profile does not depend on the order the worker lists them in.
+      identity.parts = parts
+        .map(
+          ({ name }, index) =>
+            /** @type {[string, string]} */ ([
+              name,
+              digests[runtimeFiles.length + index],
+            ]),
+        )
+        .sort(([a], [b]) => (a < b ? -1 : 1));
+    }
     // Execution limits do not identify code or the snapshot format; keeping
     // them out of the profile lets the same heaps reopen after a change. Only
     // the heap ceilings are monotonic (see checkSavedManifest). The watchdog
@@ -261,9 +407,15 @@ export const acquireIronhorseRuntime = async (
     // daemon lifetime cannot silently change its next worker incarnation.
     const directory = join(statePath, 'runtime', profile);
     await files.makeDirectory(directory);
+    // Parts keep their names, so the private worker copy finds them beside
+    // itself just as the original did.
+    const names = [
+      ...runtimeFiles.map((_, index) => String(index)),
+      ...parts.map(({ name }) => name),
+    ];
     const copies = await Promise.allSettled(
-      [workerBinary, ...bootPaths].map(async (source, index) => {
-        const destination = join(directory, String(index));
+      sources.map(async (source, index) => {
+        const destination = join(directory, names[index]);
         const temporary = `${destination}.tmp`;
         await files.copyFile(source, temporary);
         if ((await hashFile(hashes, temporary)) !== digests[index]) {
@@ -297,7 +449,7 @@ export const acquireIronhorseRuntime = async (
       throw Error('Invalid ownership prepare protocol');
     return harden({
       workerBinary: runtimePaths[0],
-      bootPaths: runtimePaths.slice(1),
+      bootPaths: runtimePaths.slice(1, runtimeFiles.length),
       profile,
       release,
       assertOwned: () => {

@@ -91,6 +91,7 @@ export const makeNodePowers = () => {
   const paths = makePathPowers({
     join: (...parts) => path.join(...parts),
     dirname: p => path.dirname(p),
+    basename: p => path.basename(p),
     resolve: (...parts) => path.resolve(...parts),
     isAbsolute: p => path.isAbsolute(p),
     fileURLToPath: u => url.fileURLToPath(u),

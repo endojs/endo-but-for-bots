@@ -53,9 +53,14 @@ Accepted changes are written atomically and synced before any worker runs.
 Manifest comparison reads the parsed fields, so the key order of `runtime.json` is irrelevant.
 A manifest whose `format` exceeds 2, or that carries a field or execution limit this runtime does
 not define, is reported as written by a newer version rather than as corrupt; it is left untouched.
-A manifest with an older `format`, a different worker or bootstrap digest, or a different delivery
-protocol is reported as incompatible, and one whose known limits are missing or not in canonical
-form is reported as invalid.
+A manifest whose `heapFormat` differs from the worker's, an absent one meaning `native`, is
+reported as holding heaps of another format, before the code identity is compared.
+A build that predates `heapFormat` refuses a manifest carrying it as written by a newer version,
+so naming a heap format did not need a new `format`.
+A manifest with an older `format`, a different worker or bootstrap digest, different worker parts
+(names or digests), or a different delivery protocol is reported as incompatible, and one whose
+known limits are missing or not in canonical form, or whose `heapFormat` or `parts` is malformed,
+is reported as invalid.
 
 Raising limits does not clear existing worker failure metadata or automatically retry a failed vat.
 That recovery workflow remains separate.
