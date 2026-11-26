@@ -1,14 +1,15 @@
 // The product module in a Durable Object: `thixotrope_ironhorse_wasm.wasm`
 // as `rust/thixotrope-ironhorse-wasm/build.py` leaves it, driven through the
 // real `host-abi.mjs` (bundled from its own path, never copied), with
-// `ctx.storage.sql` as the statement executor and one
-// `ctx.storage.transactionSync` per status-answering export call, committed
-// only when the status says so (the crate documentation's "The host's
-// transaction"). Routes answer JSON with the export's status and message,
+// `ctx.storage.sql` as the statement executor and the transactions the
+// crate documentation's "The host's transaction" requires: one
+// `ctx.storage.transactionSync` spanning a fresh worker's open, every boot
+// and ready, and one per call for everything else, each committed only when
+// host-abi's `commits` says every call in it permits it. Routes answer JSON with the export's status and message,
 // wall-clock time, the SQL cursor's row counters, the bytes bound and
 // returned, whether the call committed, and linear memory.
 import { DurableObject } from "cloudflare:workers";
-import { STATUS, makeExports, makeHostImports, makeWasiImports } from "host-abi.mjs";
+import { STATUS, commits, makeExports, makeHostImports, makeWasiImports } from "host-abi.mjs";
 import productModule from "product.wasm";
 
 const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
@@ -30,16 +31,6 @@ const DEFAULT_LIMITS = JSON.stringify({
   chunkCeiling: 268435456,
   requestTimeoutMs: 60000,
 });
-
-// The statuses each export commits on: `ih_request`'s close (1) commits like
-// a reply, since nothing ran; every other non-zero status rolls back.
-const COMMITS = {
-  open: [STATUS.OK],
-  boot: [STATUS.OK],
-  ready: [STATUS.OK],
-  request: [STATUS.OK, STATUS.CLOSE],
-  close: [STATUS.OK],
-};
 
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -135,57 +126,67 @@ export class Product extends DurableObject {
     return had;
   }
 
-  // One status-answering export call inside one `transactionSync`. Answers
-  // the status and message whether the transaction committed or not; a
-  // trap or a JS exception escaping the export (which also rolls the
-  // transaction back) drops the instance, and so does a rolled-back call
-  // whose status said commit (the machine has advanced past the database)
-  // and a caught unwind (the instance is poisoned).
-  async call(kind, f) {
-    const before = { ...this.counters };
+  // Status-answering export calls inside one `transactionSync`, in order,
+  // stopping at the first whose status does not permit the commit
+  // (host-abi's `commits`); the transaction commits only if every call ran
+  // and permitted it. Each call's status and message are answered whether
+  // or not the transaction committed. The instance is dropped, and no other
+  // export called on it, after a trap or a JS exception out of an export
+  // (which rolls the transaction back: the ABI treats it as status 2),
+  // after status 2 itself (the instance is poisoned), and after a rollback
+  // of any call that had succeeded (the machine has advanced past the
+  // database).
+  async transaction(steps) {
     const forced = this.rollbackNext;
     this.rollbackNext = false;
-    const t0 = now();
-    let answer = null;
-    let committed = false;
+    const results = [];
     let trap = null;
+    let committed = false;
+    const t0 = now();
     try {
       this.ctx.storage.transactionSync(() => {
-        answer = f(this.exports);
-        if (forced || !COMMITS[kind].includes(answer.status)) throw new RolledBack();
+        for (const [kind, f] of steps) {
+          const before = { ...this.counters };
+          const start = now();
+          const result = { kind, status: null, message: null };
+          results.push(result);
+          const answer = f(this.exports);
+          result.status = answer.status;
+          result.message = answer.message;
+          result.ms = now() - start;
+          for (const name of Object.keys(this.counters)) result[name] = this.counters[name] - before[name];
+          result.memory = this.memory.buffer.byteLength;
+          result.log = this.log.splice(0);
+          if (!commits(kind, answer.status)) throw new RolledBack();
+        }
+        if (forced) throw new RolledBack();
       });
       committed = true;
     } catch (error) {
       if (!(error instanceof RolledBack)) {
-        trap = error && error.message ? `${error.name}: ${error.message}` : String(error);
+        try {
+          trap = error && error.message ? `${error.name}: ${error.message}` : String(error);
+        } catch {
+          trap = "an exception whose text cannot be read";
+        }
       }
     }
     const ms = now() - t0;
-    const memory = this.memory ? this.memory.buffer.byteLength : null;
+    const succeeded = results.some((result) => result.status !== null && commits(result.kind, result.status));
     let dropped = false;
-    if (trap !== null || answer.status === STATUS.UNWIND || (!committed && COMMITS[kind].includes(answer.status))) {
+    if (trap !== null || results.some((result) => result.status === STATUS.UNWIND) || (!committed && succeeded)) {
       dropped = this.dropInstance();
     }
     const syncMs = committed ? await this.sync() : null;
-    const delta = (name) => this.counters[name] - before[name];
-    return {
-      kind,
-      status: answer ? answer.status : null,
-      message: answer ? answer.message : null,
-      trap,
-      committed,
-      forcedRollback: forced,
-      dropped,
-      ms,
-      syncMs,
-      execs: delta("execs"),
-      rowsRead: delta("rowsRead"),
-      rowsWritten: delta("rowsWritten"),
-      bytesBound: delta("bytesBound"),
-      bytesReturned: delta("bytesReturned"),
-      memory,
-      log: this.log.splice(0),
-    };
+    return { committed, forcedRollback: forced, trap, dropped, ms, syncMs, calls: results, log: this.log.splice(0) };
+  }
+
+  // One status-answering export call in a transaction of its own, answered
+  // flat: the call's figures with the transaction's outcome.
+  async call(kind, f) {
+    const { calls, ...outcome } = await this.transaction([[kind, f]]);
+    const result = calls[0] || { kind, status: null, message: null };
+    return { ...result, ...outcome, log: [...(result.log || []), ...outcome.log] };
   }
 
   async sync() {
@@ -311,8 +312,11 @@ export class Product extends DurableObject {
           });
         }
         case "/open": {
+          // A non-fresh open only: a fresh one is /fresh-boot, since its
+          // open, boots and ready must be one transaction.
+          if (flag("fresh")) throw new BadRequest("a fresh open is one transaction with its boots: use /fresh-boot");
           const options = {
-            fresh: flag("fresh"),
+            fresh: false,
             lazy: flag("lazy"),
             profile: q("profile", "thixotrope-wasm-do"),
             limits: q("limits", DEFAULT_LIMITS),
@@ -320,11 +324,22 @@ export class Product extends DurableObject {
           await this.ensureInstance();
           return json(await this.call("open", (exports) => exports.open(options)));
         }
-        case "/boot": {
-          const source = await request.text();
+        case "/fresh-boot": {
+          // A fresh worker's opening, one transaction: open, each boot
+          // source in order, ready. The body is JSON
+          // `{ profile, limits, boots: [{ name, source }] }`.
+          const body = JSON.parse(await request.text());
           await this.ensureInstance();
-          const name = q("name", "boot");
-          return json({ name, sourceBytes: source.length, ...(await this.call("boot", (exports) => exports.boot(name, source))) });
+          const options = { fresh: true, lazy: false, profile: body.profile, limits: body.limits ?? DEFAULT_LIMITS };
+          const steps = [["open", (exports) => exports.open(options)]];
+          for (const { name, source } of body.boots) steps.push(["boot", (exports) => exports.boot(name, source)]);
+          steps.push(["ready", (exports) => exports.ready()]);
+          const names = ["open", ...body.boots.map(({ name }) => name), "ready"];
+          const outcome = await this.transaction(steps);
+          outcome.calls.forEach((result, i) => {
+            result.name = names[i];
+          });
+          return json(outcome);
         }
         case "/ready":
           await this.ensureInstance();

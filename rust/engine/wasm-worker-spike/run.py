@@ -579,9 +579,44 @@ class Product:
             self.expect(step, answer.get("committed") == committed, f"committed {answer.get('committed')!r}, not {committed}")
         return answer
 
-    def digest(self, step):
-        status, answer = self.wd.get("/digest")
+    def digest(self, step, **params):
+        status, answer = self.wd.get("/digest", **params)
         emit(self.records, {"measure": "product-digest", "step": step, **answer})
+        return answer
+
+    def fresh_boot(self, step, boots, expect_commit=True, **params):
+        """A fresh worker's open, boots and ready in one request and one
+        transaction; each call's figures are a `product-call` record, the
+        transaction's outcome a `product-fresh-boot` record."""
+        body = json.dumps({"profile": self.args.profile, "limits": self.args.limits,
+                           "boots": [{"name": name, "source": source} for name, source in boots]})
+        t0 = time.perf_counter()
+        status, answer = self.wd.post("/fresh-boot", body.encode(), **params)
+        wall_ms = round((time.perf_counter() - t0) * 1000, 1)
+        for call in answer.get("calls") or []:
+            emit(self.records, {"measure": "product-call", "step": f"{step} {call.get('name')}", "route": "/fresh-boot",
+                                **{k: call.get(k) for k in ("kind", "name", "status", "message", "ms", "execs", "rowsRead",
+                                                            "rowsWritten", "bytesBound", "bytesReturned", "memory", "log")}})
+        calls = answer.get("calls") or []
+        emit(self.records, {
+            "measure": "product-fresh-boot",
+            "step": step,
+            "http": status,
+            "wall_ms": wall_ms,
+            "ms": answer.get("ms"),
+            "committed": answer.get("committed"),
+            "dropped": answer.get("dropped"),
+            "trap": answer.get("trap"),
+            "sync_ms": answer.get("syncMs"),
+            "calls": len(calls),
+            "statuses": [c.get("status") for c in calls],
+            "rows_written": sum(c.get("rowsWritten") or 0 for c in calls),
+            "rows_read": sum(c.get("rowsRead") or 0 for c in calls),
+            "bytes_bound": sum(c.get("bytesBound") or 0 for c in calls),
+            "memory": calls[-1].get("memory") if calls else None,
+            "error": answer.get("error"),
+        })
+        self.expect(step, answer.get("committed") is expect_commit, f"committed {answer.get('committed')!r}: {answer}")
         return answer
 
     def evict(self, step):
@@ -612,8 +647,8 @@ class Product:
         self.expect(step, memory.get("hasInstance") is False, "the object kept its instance")
         return record
 
-    def open(self, step, fresh, lazy=False):
-        return self.answer(step, "/open", 0, "", committed=True, fresh=int(fresh), lazy=int(lazy),
+    def open(self, step, lazy=False):
+        return self.answer(step, "/open", 0, "", committed=True, lazy=int(lazy),
                            profile=self.args.profile, limits=self.args.limits)
 
     def ready(self, step):
@@ -639,15 +674,30 @@ def cmd_product(args, wd, records):
     status, probe = wd.get("/probe")
     emit(records, {"measure": "product-probe", **probe})
 
-    # 1. A fresh open, the real boot bundles, ready.
+    # 0. A boot source that throws: the fresh opening's one transaction
+    # rolls back whole, so the object (one of its own) holds no committed
+    # machine, a non-fresh open is refused, and a fresh opening then works.
+    empty = p.digest("failed-boot before", do="failed-boot")
+    failed = p.fresh_boot("failed-boot", [("throws.js", "throw Error('a boot source that throws')")],
+                          expect_commit=False, do="failed-boot")
+    statuses = [c.get("status") for c in failed.get("calls") or []]
+    p.expect("failed-boot statuses", statuses == [0, 1], f"statuses {statuses}")
+    p.expect("failed-boot dropped", failed.get("dropped") is True, "the instance was not dropped")
+    after = p.digest("failed-boot after", do="failed-boot")
+    p.expect("failed-boot digest", after.get("digest") == empty.get("digest"), "storage changed under a failed boot")
+    p.answer("failed-boot resume", "/open", 1, "restore: Empty", committed=False, lazy=0,
+             profile=args.profile, limits=args.limits, do="failed-boot")
+    p.fresh_boot("failed-boot fresh", [], do="failed-boot")
+
+    # 1. A fresh open, the real boot bundles, ready: one transaction.
     status, ensure = wd.get("/instance/ensure")
     emit(records, {"measure": "product-instantiate", "step": "fresh", **ensure})
     t0 = time.perf_counter()
-    p.open("fresh-open", fresh=True)
-    for path in args.boot:
-        source = Path(path).read_text()
-        p.answer(f"boot {Path(path).name}", "/boot", 0, "", committed=True, body=source, name=Path(path).name)
-    p.ready("fresh-ready")
+    booted = p.fresh_boot("fresh", [(Path(path).name, Path(path).read_text()) for path in args.boot])
+    statuses = [c.get("status") for c in booted.get("calls") or []]
+    p.expect("fresh statuses", statuses == [0] * (len(args.boot) + 2), f"statuses {statuses}")
+    ready = (booted.get("calls") or [{}])[-1]
+    p.expect("fresh ready", ready.get("message") == READY_LINE, f"ready {ready.get('message')!r}")
     emit(records, {"measure": "product-boot-total", "wall_ms": round((time.perf_counter() - t0) * 1000, 1),
                    "instantiate_ms": ensure.get("instantiateMs")})
     p.digest("after-boot")
@@ -664,7 +714,7 @@ def cmd_product(args, wd, records):
             p.answer(step, "/request", 0, lambda m: isinstance(m, str) and m.startswith('{"message":') and '"op":"error"' in m,
                      committed=True, body=line)
         elif step == "close-request":
-            p.answer(step, "/request", 1, "", committed=True, body=line)
+            p.answer(step, "/request", 5, "", committed=True, body=line)
         else:
             p.answer(step, "/request", 0, replies[step], committed=True, body=line)
     p.close("close")
@@ -677,7 +727,7 @@ def cmd_product(args, wd, records):
             evicted = p.evict(f"{label} evict")
             status, ensure = wd.get("/instance/ensure")
             emit(records, {"measure": "product-instantiate", "step": label, **ensure})
-            opened = p.open(f"{label} open", fresh=False, lazy=lazy)
+            opened = p.open(f"{label} open", lazy=lazy)
             readied = p.ready(f"{label} ready")
             reply = p.answer(f"{label} request", "/request", 0, reply_of("41"), committed=True,
                              body=json.dumps({"source": "kept"}))
@@ -707,7 +757,7 @@ def cmd_product(args, wd, records):
 
     # 4. A rolled-back call leaves storage at the prior commit, and a new
     # instance resumes that commit.
-    p.open("rollback open", fresh=False)
+    p.open("rollback open")
     p.ready("rollback ready")
     p.answer("rollback request", "/request", 0, reply_of("5"), committed=True, body=json.dumps({"source": "globalThis.y = 5"}))
     wd.get("/rollback-next")
@@ -716,7 +766,7 @@ def cmd_product(args, wd, records):
     after = p.digest("after-rollback")
     p.expect("rollback digest", after.get("digest") == committed.get("digest"), "storage changed under a rolled-back close")
     p.evict("rollback evict")
-    p.open("rollback resume open", fresh=False)
+    p.open("rollback resume open")
     p.ready("rollback resume ready")
     p.answer("rollback resume typeof y", "/request", 0, reply_of("undefined"), committed=True,
              body=json.dumps({"source": "typeof y"}))
@@ -726,7 +776,7 @@ def cmd_product(args, wd, records):
 
     # 5a. A fatal crank: status 3 with the fatal line, then refusals, and
     # nothing committed.
-    p.open("fatal open", fresh=False)
+    p.open("fatal open")
     p.ready("fatal ready")
     p.answer("fatal set", "/request", 0, reply_of("2"), committed=True, body=json.dumps({"source": "kept = 2"}))
     p.answer("fatal crank", "/request", 3,
@@ -739,7 +789,7 @@ def cmd_product(args, wd, records):
              lambda m: isinstance(m, str) and m.startswith("worker is dead after a failed crank: "), committed=False)
     after = p.digest("after-fatal")
     p.expect("fatal digest", after.get("digest") == committed.get("digest"), "storage changed after a fatal crank")
-    p.open("fatal reopen", fresh=False)
+    p.open("fatal reopen")
     p.ready("fatal reopen ready")
     p.answer("fatal reopen kept", "/request", 0, reply_of("41"), committed=True, body=json.dumps({"source": "kept"}))
     p.close("fatal reopen close")
@@ -749,7 +799,7 @@ def cmd_product(args, wd, records):
     # executor's text, nothing committed, and a new instance resumes the
     # prior commit. The fault is armed on the third statement of the close,
     # past the manifest read, among the writes.
-    p.open("fault open", fresh=False)
+    p.open("fault open")
     p.ready("fault ready")
     p.answer("fault set", "/request", 0, reply_of("1"), committed=True, body=json.dumps({"source": "globalThis.z = 1"}))
     wd.get("/fault", at=args.fault_at)
@@ -759,7 +809,7 @@ def cmd_product(args, wd, records):
     p.expect("fault digest", after.get("digest") == committed.get("digest"), "storage changed after a failed statement")
     p.expect("fault close", failed.get("trap") is None, "the failed statement surfaced as an exception")
     p.evict("fault evict")
-    p.open("fault resume open", fresh=False)
+    p.open("fault resume open")
     p.ready("fault resume ready")
     p.answer("fault resume typeof z", "/request", 0, reply_of("undefined"), committed=True,
              body=json.dumps({"source": "typeof z"}))

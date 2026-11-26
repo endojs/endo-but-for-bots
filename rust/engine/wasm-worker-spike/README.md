@@ -27,7 +27,7 @@ It does not link `thixotrope-ironhorse-wasm`, whose `#[no_mangle]` exports would
 | `src/lib.rs` | `extern "C-unwind"` exports, every engine-running body under `catch_unwind`, a status plus a message buffer; the four buffer helpers have no path that unwinds. |
 | `host/worker.js` | The harness module's Durable Object: lazy instantiation, the `sql.exec` shim answering the product ABI's error codes, the WASI preview1 shim std needs, one `transactionSync` per committing call, the instance dropped after any exception. |
 | `host/config.capnp.in` | workerd config for the harness module: one SQLite-backed class, local-disk storage. |
-| `host/product.js` | The product module's Durable Object: `host-abi.mjs` over `ctx.storage.sql`, one `transactionSync` per status-answering export call, rolled back unless the status says commit, with fault injection, forced rollback, a storage digest and `ctx.abort()`. |
+| `host/product.js` | The product module's Durable Object: `host-abi.mjs` over `ctx.storage.sql`, the ABI's transactions (one `transactionSync` around a fresh worker's open, boots and ready, one per call for everything else), each committed only when `host-abi.mjs`'s `commits` permits every call in it, with fault injection, forced rollback, a storage digest and `ctx.abort()`. |
 | `host/product.capnp.in` | workerd config for the product mode, embedding `product.js`, the real `host-abi.mjs` and the product module from their own paths. |
 | `run.py` | Build, serve, and the commands below. |
 | `export-heap/` | Native: a Thixotrope `heap.sqlite` to its canonical container, with the profile string the importer must present. |
@@ -90,14 +90,25 @@ The product mode's records:
 
 - `product-module`: the module's size, uncompressed and gzip level 9, and `workerd_start_ms`, the time from starting workerd to its listening socket (polled every 50 ms), which bounds loading the worker's modules and says nothing about when V8 compiles the wasm's functions.
 - `product-probe` and `product-key-types`: what `sql.exec` does with the values `host-abi.mjs` binds and the columns it answers, and the storage class SQLite gave the integer keys the module wrote.
-- `product-call`: one status-answering export call in one `transactionSync`, with its status and message, whether it `committed`, whether the instance was `dropped`, `ms` inside the object, `wall_ms` at the client, `rowsRead` and `rowsWritten` from the SQL cursors, `bytesBound` and `bytesReturned` (blob and text bytes passed to and answered by `sql.exec`), and `memory` (`memory.buffer.byteLength`) after the call.
+- `product-call`: one status-answering export call, with its status and message, whether it `committed`, whether the instance was `dropped`, `ms` inside the object, `wall_ms` at the client, `rowsRead` and `rowsWritten` from the SQL cursors, `bytesBound` and `bytesReturned` (blob and text bytes passed to and answered by `sql.exec`), and `memory` (`memory.buffer.byteLength`) after the call.
+- `product-fresh-boot`: a fresh worker's opening, its open, every boot and ready in one request and one `transactionSync`: whether it committed, its statuses, its rows and bytes summed over the calls, `ms` inside the object and `wall_ms` at the client; each call inside it is a `product-call` record of its own, without `committed`, which belongs to the transaction.
 - `product-wake`: after `ctx.abort()` (or an idle with `--evict idle`), a new object's instantiate, a non-fresh open, ready and one request, with `wake_to_reply_ms` their sum inside the object and `object_first_request_ms` the new object's first request at the client.
 - `product-digest`: a SHA-256 over every row of the store's tables in key order, so equal digests are equal stored heaps.
 - `product-check`: a check that failed; `product-summary` lists them and the tail of workerd's log.
 
+## The product mode's transactions
+
+The host follows the product ABI's rule ("The host's transaction" in `rust/thixotrope-ironhorse-wasm/src/lib.rs`), taking every commit decision from `commits(exportName, status)` in `host-abi.mjs`: status 0, or 5 (`close` requested) from `ih_request`, permits the commit, and every other status rolls back.
+A fresh worker's `ih_open`, each `ih_boot` and `ih_ready` are one `transactionSync`, driven by one request (`/fresh-boot`) and committed only if every call answered 0, so a failed boot leaves no committed machine; `/open` refuses a fresh open of its own.
+Every other call, a non-fresh `ih_open` and its `ih_ready` included, is a `transactionSync` of its own.
+A trap or a JavaScript exception out of an export rolls its transaction back (the exception is thrown inside the callback) and is treated as status 2: the instance is dropped and no other export is called on it.
+The instance is also dropped after status 2 and after a rollback of any call that had answered 0, since the machine has then advanced past the database.
+After status 3 or 4 the command calls `ih_close` (which answers 1 and commits nothing) before it opens again.
+
 ## The product command
 
-`run.py product` opens fresh, boots `boot.js` and `worker-peer.js`, and answers ready; sends an eval, a `deliver` with one outbound frame, a malformed line and `close`, then closes; resets the object and wakes it, eager and lazy, with a request and a close each; forces one successful close to roll back and shows the digest unchanged and a new object resuming the prior commit; runs a crank that exhausts its budget (status 3, then refusals, then a close that answers 1) and shows the digest unchanged; and fails one statement of a close (status 1 with the executor's text) and shows the digest unchanged and a new object resuming the prior commit.
+`run.py product` first boots a source that throws on an object of its own and shows the opening rolled back whole: the digest is the empty store's, a non-fresh open is refused with `restore: Empty`, and a fresh opening then succeeds.
+It then opens fresh, boots `boot.js` and `worker-peer.js`, and answers ready, in one transaction; sends an eval, a `deliver` with one outbound frame, a malformed line and `close` (status 5), then closes; resets the object and wakes it, eager and lazy, with a request and a close each; forces one successful close to roll back and shows the digest unchanged and a new object resuming the prior commit; runs a crank that exhausts its budget (status 3, then refusals, then a close that answers 1) and shows the digest unchanged; and fails one statement of a close (status 1 with the executor's text) and shows the digest unchanged and a new object resuming the prior commit.
 Each answer is checked against what the product's ABI says it must be.
 
 ## What the harness does not do
