@@ -287,8 +287,9 @@ feature learns each send of its page from the controller's submission notice (H1
 with `spoken: true` (a send from spoken mode, whose turn tells the model the reply is read aloud)
 is spoken. It maps the receipt to its turn
 (`receipt.turnId`, or one `getSubmissionReceipt(requestId)` after the next `turn-start` for a queued
-entry) and calls `speak` when that turn starts, if auto-speak is on and speech out is configured
-(R5-45). Turns of other pages are not spoken.
+entry) and calls `speak` when that turn starts, if that session's view is still in spoken mode and
+speech out is configured (R5-45). Turns of other pages are not spoken. There is no other switch:
+replies are read aloud in spoken mode and only there (owner decision, 2026-11-26).
 
 **D-M11-21. The speech settings are written on the provisioning path, never by a page
 (cross-check X-11 (b)).** `configureSpeech` leaves the page-reachable `Voice` and becomes
@@ -653,7 +654,7 @@ merges with the next; a run of `sentenceUnits` with no boundary is cut at its la
 | a voice message once submitted | session queue (M2 receipts) | kept | M3 K3/K4: the page resends its draft by request id; one entry |
 | ports, tokens, sockets, streams, speech views, engines, warm spare, settings cache | agent-host adapter memory | lost by contract; pages reconnect and open a new port | same; engines exit at stdin EOF (D-M11-15) |
 | a partial transcript in the compose box | the page (the controller's draft once typed into the box, `localStorage`) | the page keeps it across a reconnect; not sent unless the grace send happened | same |
-| device settings cache, auto-speak | browser (`localStorage` key `thix-voice:settings`; auto-speak in page memory, R5-55) | kept / reset per page | same |
+| device settings cache, spoken mode | browser (`localStorage` key `thix-voice:settings`; spoken mode in page memory, one session view, R5-55) | kept / spoken mode ends | same |
 | engine caches (uv, weights, voices) | the engines' own directories, outside the state directory | kept | kept |
 
 **Kill points** (SIGKILL of the supervisor process only, architecture 10; each is a test in
@@ -690,12 +691,14 @@ merges with the next; a run of `sentenceUnits` with no boundary is cut at its la
   open; clearing the box cancels (R5-22).
 - **Playback** (`playback.js`): each PCM frame decoded at its rate (0 means 22,050 Hz) and
   scheduled at max(now, end of the previous); a new playback stops the previous; `audible()` for the
-  echo factor; mute stops the current reply (R5-48); Stop cancels the turn and stops playback.
-- **Fresh turn and auto-speak** (D-M11-20): on the controller's submission notice (H10) the feature
+  echo factor; leaving spoken mode stops the current reply (R5-48); Stop cancels the turn and
+  stops playback.
+- **Fresh turn and reading aloud** (D-M11-20): on the controller's submission notice (H10) the feature
   keeps `{ session, requestId, receipt }` for the active session; a `started` receipt gives
   `turnId` (or `E(receipt.turn).getStatus()`), a queued one is resolved by one
   `getSubmissionReceipt(requestId)` after the session's next `turn-start`; then `speak(session,
-  turnId, options)` if the send was spoken (9.1), auto-speak is on and speech out is configured.
+  turnId, options)` if the send was spoken (9.1), its session's view is still in spoken mode and
+  speech out is configured.
   Barge-in aborts the playback
   stream (the turn continues, "continuing in background…" is shown, R5-46) and the new utterance's
   send queues behind the running turn (R5-47).
@@ -704,7 +707,7 @@ merges with the next; a run of `sentenceUnits` with no boundary is cut at its la
   `setPreferences`, and a running playback restarts from the beginning with the new options (R5-50).
 - **Slots** (M3 6.2): `voice.mode` in `composer.action` (the mode switch, 9.1), `voice.controls`
   in `composer.addon` (the level meter with floor and threshold markers while listening; the voice
-  notes), `voice.panel` in `app.panel` (label "Voice": spoken replies, voice, Speed, Expression,
+  notes), `voice.panel` in `app.panel` (label "Voice": a line saying replies are read in spoken mode, voice, Speed, Expression,
   Phoneme variation, Sentence pause, Voice shortcut preset, Talk), `voice.replay` in
   `message.action` (Play the selected assistant message, including staged text).
   Talk calls `startVoiceSession`, selects the answered `key` (which closes the panel), shows
@@ -716,7 +719,7 @@ merges with the next; a run of `sentenceUnits` with no boundary is cut at its la
 - **Wake lock** (P-66): `navigator.wakeLock.request('screen')` while the mic is on, a playback is
   audible or the active turn is busy; released otherwise and re-requested on visibility.
 - **State** (D-M11-13): one closure per page from `makeVoiceFeature()` holding a `WeakMap` keyed by
-  `context.powers`: port, socket, playback, endpointer, receipts waiting for their turn, auto-speak.
+  `context.powers`: port, socket, playback, endpointer, receipts waiting for their turn.
 
 ### 9.1 Spoken mode and the spoken-mode marker
 
@@ -732,7 +735,12 @@ microphone): leaving that view ends spoken mode. While no switch is on screen (a
 view hides the compose bar; the count of mounted switches) spoken mode pauses, mic off, and the
 compose bar says so when it returns. Talk and a launch link select the new session and leave its
 view in spoken mode; a Talk that fails (the call rejects, or the session is not listed within
-`LIST_WAIT_MS`) puts back the mic, the view in spoken mode and the auto-speak choice.
+`LIST_WAIT_MS`) puts back the mic and the view in spoken mode.
+
+**Per session, never carried (owner decision, 2026-11-26).** Spoken mode does not follow the page
+to another session: opening another session, a new one, or the same one again starts in text
+mode. Nothing keeps a session's mode (not the page, not the server), so the only views in spoken
+mode are the one the person switched and the one a Talk or launch link opened.
 
 **The mode governs.** Every message sent from a view in spoken mode is a spoken-mode message and
 its reply is read aloud: dictated, edited after dictation, or typed and sent with Enter or Send. In
@@ -787,8 +795,11 @@ and ignored. Every session composes the plain introduction (`guest/session/promp
 only, as the word-for-word mirror of Floot's voice prompt. Sessions created spoken before this
 change keep their stored spoken prompt.
 
-**"Spoken replies"** (the Voice panel) is unchanged: the page's mute for the reading aloud of
-spoken-mode replies (owner question).
+**No "Spoken replies" switch** (owner decision, 2026-11-26, replacing the earlier mute): spoken
+replies just means reading the reply aloud, which spoken mode does and text mode never does. The
+Voice panel keeps the voice and the speed sliders and says that replies are read in spoken mode.
+Play message on an assistant bubble stays: it is the person's own tap on one message, not an
+automatic reading. The transcript shows the text in both modes.
 
 ---
 
@@ -935,9 +946,10 @@ WX.1's); W11.9 last. Six to eight agents.
     `speech-timeouts.test.js`.
 11. Replay plays a finished turn's text again, inline pieces and a staged Blob piece alike; the level
     meter moves with input. `speech-audio-route.test.js`, `voice-ui.test.mjs`.
-12. Auto-speak: a send from page A in spoken mode is spoken on page A when its turn starts, also
+12. Reading aloud: a send from page A in spoken mode is spoken on page A when its turn starts, also
     when the message was queued behind a running turn; page B, watching the same session, speaks
-    nothing; a send in text mode is not spoken (9.1). `voice-ui.test.mjs`, `voice-state.test.js`.
+    nothing; a send in text mode is not spoken, nor a queued one after leaving spoken mode; spoken
+    mode does not follow the page to another session nor back (9.1). `voice-ui.test.mjs`, `voice-state.test.js`.
 13. Launch claims: `startVoiceSession({ invocationId })` twice answers one session, the second
     `duplicate: true`; after 33 distinct ids the first is forgotten; the claim survives a restart
     (K11-5). `voice-session.test.js`, `voice-restart.test.js`.

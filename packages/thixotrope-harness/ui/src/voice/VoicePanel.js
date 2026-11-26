@@ -1,10 +1,12 @@
 // @ts-check
 /**
  * The Voice panel (`voice.panel` in `app.panel`; R5-50, R5-53, R5-55,
- * R5-56; owner question O-9): Spoken replies (On — autoplay / Off), the
- * voice, the sliders Speed, Expression, Phoneme variation and Sentence
- * pause, the Voice shortcut's preset and Talk (a new spoken session from
- * that preset; m11-interfaces.md 9.1). Opening it reads the shared
+ * R5-56; owner question O-9): the voice, the sliders Speed, Expression,
+ * Phoneme variation and Sentence pause, the Voice shortcut's preset and
+ * Talk (a new spoken session from that preset; m11-interfaces.md 9.1).
+ * There is no "Spoken replies" switch (owner decision): replies are read
+ * aloud in spoken mode and only there, so the panel only says so. Opening
+ * it reads the shared
  * preferences and the shortcut again; a change is used at once and written
  * after the debounce (`VoiceState.setPreference`).
  */
@@ -49,21 +51,7 @@ export const VoicePanel = ({ context }) => {
     view.speechIn
       ? null
       : h('p', { class: 'thix-voice-off' }, voiceUiTexts.speechInOff),
-    row(
-      voiceUiTexts.spokenReplies,
-      h(
-        'select',
-        {
-          class: 'thix-voice-autospeak',
-          disabled: !view.speechOut,
-          value: view.autoSpeak ? 'on' : 'off',
-          onChange: (/** @type {any} */ event) =>
-            voice.setAutoSpeak(event.currentTarget.value === 'on'),
-        },
-        h('option', { value: 'on' }, voiceUiTexts.spokenRepliesOn),
-        h('option', { value: 'off' }, voiceUiTexts.spokenRepliesOff),
-      ),
-    ),
+    h('p', { class: 'thix-voice-hint' }, voiceUiTexts.repliesInSpokenMode),
     row(
       voiceUiTexts.voice,
       h(

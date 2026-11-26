@@ -684,7 +684,7 @@ test('the connection reads configuration and preferences; settings follow R5-55 
   const view = state.view();
   t.true(view.speechIn);
   t.true(view.speechOut);
-  t.true(view.autoSpeak, 'auto-speak is on whenever speech out is wired');
+  t.false(view.spoken, 'a page starts in text mode');
   t.is(view.settings.speed, 1.5);
   t.is(view.settings.sentenceSilence, 0.3);
   t.deepEqual(
@@ -693,10 +693,11 @@ test('the connection reads configuration and preferences; settings follow R5-55 
   );
 });
 
-test("auto-speak: a started send of this page is spoken with the settings; another page's turn is not", async t => {
+test("spoken mode: a started send of this page is read with the settings; another page's turn is not; text mode reads nothing", async t => {
   const { controller, state, log, sockets, control, powers } = await setup();
   const session = control.session;
   await controller.selectSession('s1');
+  state.toggleMode();
   await controller.send('hello', { spoken: true });
   await flush();
   const speaks = callsNamed(log.calls, 'speak');
@@ -708,43 +709,63 @@ test("auto-speak: a started send of this page is spoken with the settings; anoth
   t.is(sockets.length, 1);
   t.is(sockets[0].token, TOKEN);
   t.is(sockets[0].url, 'ws://127.0.0.1:8920/audio');
-  t.true(state.view().autoSpeak);
-
-  // A typed send (no spoken marker) is not spoken (9.1).
-  control.play('s1');
-  await flush();
-  await controller.send('typed');
-  await flush();
-  t.is(callsNamed(log.calls, 'speak').length, 1);
 
   // A turn this page did not send (another page's submit) is not spoken.
+  control.play('s1');
+  await flush();
   await E(powers.composer).submit(session('s1'), 'from elsewhere', 'other1');
   await flush();
   t.is(callsNamed(log.calls, 'speak').length, 1);
+  control.play('s1');
+  await flush();
 
-  // Muted: nothing more is spoken, and the playback stops.
-  state.setAutoSpeak(false);
-  t.false(state.view().autoSpeak);
+  // Text mode: nothing more is read, not even a send its caller marked
+  // spoken (there is no other switch that reads replies).
+  state.toggleMode();
+  t.false(state.view().spoken);
+  await controller.send('typed');
+  await flush();
+  control.play('s1');
+  await flush();
+  await controller.send('marked by its caller', { spoken: true });
+  await flush();
+  t.is(callsNamed(log.calls, 'speak').length, 1);
+  t.is(callsNamed(log.calls, 'replay').length, 0);
+});
+
+test('leaving spoken mode stops the reply being read', async t => {
+  const { controller, state, sockets } = await setup();
+  await controller.selectSession('s1');
+  state.toggleMode();
+  await controller.send('hello', { spoken: true });
+  await flush();
+  t.is(sockets[0].playbacks.length, 1);
+  t.false(sockets[0].playbacks[0].stopped);
+  state.toggleMode();
   t.true(sockets[0].playbacks[0].stopped);
 });
 
-test('a typed interaction unlocks autoplay and the settings toggle unlocks it after mute', async t => {
-  const { state, player } = await setup();
+test('a typed interaction unlocks autoplay only in spoken mode', async t => {
+  const { controller, state, player } = await setup();
+  await controller.selectSession('s1');
   player.gesture();
-  t.is(player.unlocks, 1);
-  state.setAutoSpeak(false);
+  t.is(player.unlocks, 0, 'text mode reads nothing');
+  state.toggleMode();
+  t.is(player.unlocks, 1, 'the switch tap');
   player.gesture();
-  t.is(player.unlocks, 1);
-  state.setAutoSpeak(true);
+  t.is(player.unlocks, 2);
+  state.toggleMode();
+  player.gesture();
   t.is(player.unlocks, 2);
 });
 
-test('auto-speak: a queued send is spoken when its turn starts, after one receipt read', async t => {
-  const { controller, log, control } = await setup({
+test('spoken mode: a queued send is read when its turn starts, after one receipt read', async t => {
+  const { controller, state, log, control } = await setup({
     sessions: [{ key: 's1', running: 'earlier' }],
   });
   await controller.selectSession('s1');
   await flush();
+  state.toggleMode();
   await controller.send('queued one', { spoken: true });
   await flush();
   t.is(callsNamed(log.calls, 'speak').length, 0);
@@ -757,29 +778,72 @@ test('auto-speak: a queued send is spoken when its turn starts, after one receip
   t.is(speaks[0][2], controller.getState().view?.current?.turnId);
 });
 
-test('a muted page reads no receipt and no turn status for its sends (no extra crank)', async t => {
+test('a page in text mode reads no receipt and no turn status for its sends (no extra crank)', async t => {
   const { controller, state, log, control } = await setup({
     sessions: [{ key: 's1', running: 'earlier' }],
   });
   await controller.selectSession('s1');
-  state.setAutoSpeak(false);
-  t.false(state.view().autoSpeak);
-  await controller.send('queued while muted', { spoken: true });
+  t.false(state.view().spoken);
+  await controller.send('queued in text mode', { spoken: true });
   control.play('s1');
   await flush();
   control.play('s1');
-  await controller.send('started while muted', { spoken: true });
+  await controller.send('started in text mode', { spoken: true });
   await flush();
   t.is(control.callsOf('Session', 'getSubmissionReceipt').length, 0);
   t.is(control.callsOf('Turn', 'getStatus').length, 0);
   t.is(callsNamed(log.calls, 'speak').length, 0);
 });
 
-test('waiting submissions are bounded', async t => {
-  const { controller, control } = await setup({
+test('a spoken send queued before leaving spoken mode is not read when its turn starts', async t => {
+  const { controller, state, log, control } = await setup({
     sessions: [{ key: 's1', running: 'earlier' }],
   });
   await controller.selectSession('s1');
+  state.toggleMode();
+  await controller.send('queued in spoken mode');
+  await flush();
+  state.toggleMode();
+  control.play('s1');
+  await flush();
+  t.is(control.callsOf('Session', 'getSubmissionReceipt').length, 0);
+  t.is(callsNamed(log.calls, 'speak').length, 0);
+});
+
+test('spoken mode does not follow the page to another session, nor back (owner decision)', async t => {
+  const { controller, state, log, sockets, control } = await setup({
+    sessions: [{ key: 's1' }, { key: 's2' }],
+  });
+  await controller.selectSession('s1');
+  state.toggleMode();
+  await controller.send('hello');
+  await flush();
+  t.is(callsNamed(log.calls, 'speak').length, 1);
+  await controller.selectSession('s2');
+  await flush();
+  t.false(state.view().spoken, 'the other session opens in text mode');
+  t.true(sockets[0].playbacks[0].stopped, "s1's reply is no longer read");
+  await controller.send('in s2');
+  await flush();
+  const s2Submit = control.callsOf('Composer', 'submit').at(-1);
+  t.is(s2Submit?.length, 5, 'nothing is marked in s2');
+  control.play('s2');
+  await flush();
+  await controller.send('marked by its caller in s2', { spoken: true });
+  await flush();
+  t.is(callsNamed(log.calls, 'speak').length, 1, 'nothing is read in s2');
+  await controller.selectSession('s1');
+  await flush();
+  t.false(state.view().spoken, 's1 opens again in text mode');
+  t.is(callsNamed(log.calls, 'speak').length, 1);
+});
+
+test('waiting submissions are bounded', async t => {
+  const { controller, state, control } = await setup({
+    sessions: [{ key: 's1', running: 'earlier' }],
+  });
+  await controller.selectSession('s1');
+  state.toggleMode();
   for (let i = 0; i < WAITING_KEPT + 3; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     await controller.send(`queued ${i}`, { spoken: true });
@@ -952,11 +1016,11 @@ test('mic off discards the unsent dictation and its box; a failed capture says s
 test('barge-in during a busy turn stops playback and shows continuing in background (R5-46)', async t => {
   const { controller, state, sockets, blocks, player, control } = await setup();
   await controller.selectSession('s1');
+  state.toggleMode();
   await controller.send('tell me a story', { spoken: true });
   await flush();
   t.is(sockets[0].playbacks.length, 1);
   player.audible = true;
-  state.toggleMode();
   await flush();
   blocks(0.001, 1200);
   const stopsBefore = player.stops;
@@ -972,6 +1036,7 @@ test('barge-in during a busy turn stops playback and shows continuing in backgro
 test('a preference change is used at once, written once after the debounce, and restarts the playback (R5-50)', async t => {
   const { controller, state, log, sockets, advance, storage } = await setup();
   await controller.selectSession('s1');
+  state.toggleMode();
   await controller.send('hello', { spoken: true });
   await flush();
   state.setPreference('speed', 2);
@@ -1073,17 +1138,15 @@ test('Talk and a launch link need speech in and speech out, as the switch does (
   t.is(link.state.view().note, voiceUiTexts.speechOutOff);
 });
 
-test('a failed Talk puts back the view it left: text mode stays text, spoken stays spoken, auto-speak as chosen', async t => {
+test('a failed Talk puts back the view it left: text mode stays text, spoken stays spoken', async t => {
   const { controller, state, voiceState, captures, advance } = await setup();
   await controller.selectSession('s1');
-  state.setAutoSpeak(false);
   voiceState.failStart = Error('no voice preset');
   state.talk();
   t.true(state.view().micOn, 'opened inside the tap');
   await flush(20);
   t.false(state.view().micOn, 'text mode again');
   t.true(captures[0].stopped);
-  t.false(state.view().autoSpeak, 'the choice is kept');
   t.is(state.view().note, 'no voice preset');
   t.is(controller.getState().activeKey, 's1');
 
@@ -1100,7 +1163,6 @@ test('a failed Talk puts back the view it left: text mode stays text, spoken sta
   t.is(controller.getState().activeKey, 's1');
   t.true(state.view().spoken, 'still spoken mode in s1');
   t.is(state.view().note, voiceUiTexts.talkNotListed);
-  t.false(state.view().autoSpeak);
   await controller.send('still spoken');
   t.false(captures[1].stopped);
 });
@@ -1203,6 +1265,7 @@ test.serial(
 test('only automatic speech suppresses a reply that settled before live playback opened', async t => {
   const { controller, state, sockets } = await setup();
   await controller.selectSession('s1');
+  state.toggleMode();
   await controller.send('hello', { spoken: true });
   await flush();
   const abort = { type: 'abort', reason: speechTexts.turnNotLive };
@@ -1221,6 +1284,7 @@ test('only automatic speech suppresses a reply that settled before live playback
 test('a rejected playback open suppresses the automatic race and reports a manual failure', async t => {
   const { controller, state, sockets } = await setup();
   await controller.selectSession('s1');
+  state.toggleMode();
   await state.replay({ role: 'assistant', text: 'ready' });
   sockets[0].playback = () => {
     throw Error(speechTexts.turnNotLive);
@@ -1404,7 +1468,7 @@ test.serial(
         'nothing is marked',
       );
 
-      state.setAutoSpeak(true); // another note-free change in between
+      state.setPreference('speed', 1.5); // another note-free change in between
       render(bar(3), dom.root);
       await flush();
       t.is(
@@ -1446,7 +1510,13 @@ test.serial(
       );
       t.true(reason.textContent.includes(voiceUiTexts.speechInOff));
       render(h(VoicePanel, { context }), dom.root);
-      t.true(dom.document.querySelector('.thix-voice-autospeak').disabled);
+      t.is(
+        dom.document.querySelector('.thix-voice-autospeak'),
+        null,
+        'no "Spoken replies" switch: spoken mode reads replies',
+      );
+      t.false(dom.root.textContent.includes('Spoken replies'));
+      t.true(dom.root.textContent.includes(voiceUiTexts.repliesInSpokenMode));
       t.true(dom.document.querySelector('.thix-voice-talk').disabled);
       render(null, dom.root);
     } finally {

@@ -24,6 +24,12 @@
  * 18. The wake lock is requested while the mic is on and released after
  *     the mic is off and the turn and speech are over.
  *
+ * Owner decisions (speaking mode): a send typed in text mode is answered
+ * and nothing is read aloud; spoken mode does not follow the page to
+ * another session nor back to the first; the Voice settings have no
+ * "Spoken replies" switch and their fields are styled like the other
+ * sections (`THIX_VOICE_SCREENSHOT=<path>` saves a picture of the panel).
+ *
  * Gated by THIX_HARNESS_BROWSER=1 and a Chromium (`_harness.mjs`):
  *
  *   corepack yarn test:browser test/browser/voice-ui.test.mjs
@@ -334,8 +340,108 @@ const voiceStubs = () => {
       atBargeIn.length > 0 && sentenceLines().length > atBargeIn.length,
       'the second reply was spoken too',
     );
+
+    // Owner decision: replies are read only in spoken mode. A send typed
+    // in text mode is answered (its text is shown) and nothing is read.
+    const spokenSoFar = sentenceLines().length;
+    const typedPrompt = 'Typed in text mode';
+    await box.fill(typedPrompt);
+    await page.locator('.floot-compose .thix-send').click();
+    await waitFor(
+      async () => {
+        const history = await E(session).getHistoryPage();
+        const typedTurn = history.turns.find((/** @type {any} */ turn) =>
+          turn.records.some(
+            (/** @type {any} */ r) =>
+              r.kind === 'turn-started' && r.input === typedPrompt,
+          ),
+        );
+        return typedTurn?.records.some(
+          (/** @type {any} */ r) =>
+            r.kind === 'turn-settled' && r.status === 'completed',
+        );
+      },
+      30_000,
+      'the typed turn completed',
+    );
+    await waitFor(
+      async () =>
+        Boolean(
+          (await page.locator('.floot-messages').textContent())?.includes(
+            typedPrompt,
+          ),
+        ),
+      15_000,
+      'the typed send shown as text',
+    );
+    await page.waitForTimeout(1500);
+    t.is(sentenceLines().length, spokenSoFar, 'nothing read in text mode');
+
+    // Spoken mode does not follow the page to another session, nor back.
+    const other = await E(slice.factory).createSession(
+      harden({
+        title: 'voice other',
+        preset: slice.chatOnly,
+        backend: made.backend,
+        userInitiated: true,
+        at: Date.now(),
+      }),
+    );
+    const otherKey = (await E(other).getInfo()).key;
+    await mic.click();
+    t.is(await mic.getAttribute('aria-pressed'), 'true');
+    await page.locator(`.floot-session-item[data-key="${otherKey}"]`).click();
+    await page
+      .locator(`.floot-session-item.active[data-key="${otherKey}"]`)
+      .waitFor({ timeout: 10_000 });
+    await page.locator('.floot-compose .thix-voice-mode').waitFor();
+    t.is(
+      await page
+        .locator('.floot-compose .thix-voice-mode')
+        .getAttribute('aria-pressed'),
+      'false',
+      'another session opens in text mode',
+    );
+    t.is(await page.locator('.thix-voice-meter').count(), 0, 'mic off');
+    await page.locator(`.floot-session-item[data-key="${key}"]`).click();
+    await page
+      .locator(`.floot-session-item.active[data-key="${key}"]`)
+      .waitFor({ timeout: 10_000 });
+    await page.locator('.floot-compose .thix-voice-mode').waitFor();
+    t.is(
+      await page
+        .locator('.floot-compose .thix-voice-mode')
+        .getAttribute('aria-pressed'),
+      'false',
+      'the first session opens again in text mode',
+    );
+
+    // The Voice settings: no "Spoken replies" switch; styled fields.
+    await page.locator('button[aria-label="Settings"]').click();
+    await page.locator('button[data-section="voice.panel"]').click();
+    const voicePanel = page.locator('.thix-voice-panel');
+    await voicePanel.waitFor();
+    t.false(
+      Boolean((await voicePanel.textContent())?.includes('Spoken replies')),
+    );
+    t.is(await voicePanel.locator('.thix-voice-autospeak').count(), 0);
+    const selectStyle = await voicePanel
+      .locator('select.thix-voice-voice')
+      .evaluate((/** @type {Element} */ el) => {
+        const style = globalThis.getComputedStyle(el);
+        return { radius: style.borderTopLeftRadius, font: style.fontFamily };
+      });
+    const panelFont = await voicePanel.evaluate(
+      (/** @type {Element} */ el) => globalThis.getComputedStyle(el).fontFamily,
+    );
+    t.is(selectStyle.radius, '6px');
+    t.is(selectStyle.font, panelFont, "fields use the section's font");
+    if (process.env.THIX_VOICE_SCREENSHOT) {
+      await voicePanel.screenshot({ path: process.env.THIX_VOICE_SCREENSHOT });
+    }
+    await page.locator('button[aria-label="Settings"]').click(); // close
     // Two assistant messages in one turn must replay independently. Submit
-    // via the fixture operator so neither watching page auto-speaks this turn.
+    // via the fixture operator; neither watching page is in spoken mode.
     const { turn } = await slice.submit(session, replayPrompt);
     t.is((await E(turn).whenFinished()).state, 'completed');
     const replayTurn = pageB.locator('.thix-turn').filter({

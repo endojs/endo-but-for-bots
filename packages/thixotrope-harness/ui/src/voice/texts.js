@@ -20,9 +20,9 @@ export const voiceUiTexts = Object.freeze({
   continuingInBackground: 'continuing in background…',
   /** R5-56 settings. */
   panelLabel: 'Voice',
-  spokenReplies: 'Spoken replies',
-  spokenRepliesOn: 'On — autoplay',
-  spokenRepliesOff: 'Off',
+  /** Owner decision: replies are read aloud in spoken mode only. */
+  repliesInSpokenMode:
+    'Replies are read aloud in spoken mode, with the voice and speed below.',
   voice: 'Voice',
   speed: 'Speed',
   expression: 'Expression',

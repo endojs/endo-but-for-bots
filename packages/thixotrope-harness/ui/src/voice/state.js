@@ -7,9 +7,13 @@
  * its actions.
  *
  * Page-level parts live for the page: the player, the wake lock, the
- * microphone (capture, endpointer, pre-roll, spoken draft), auto-speak
- * (page memory, R5-55), the launch id already used, and the session view
- * in spoken mode (m11-interfaces.md 9.1). Connection parts are
+ * microphone (capture, endpointer, pre-roll, spoken draft), the launch id
+ * already used, and the session view in spoken mode (m11-interfaces.md
+ * 9.1). Spoken mode belongs to one session view and is never kept: leaving
+ * that view, or reloading the page, ends it, so every other session (and
+ * the same one when opened again) starts in text mode. Replies are read
+ * aloud only in spoken mode, for the session in it (owner decision: there
+ * is no separate "Spoken replies" switch). Connection parts are
  * rebuilt whenever the controller gives a new `FeatureContext` (every
  * attach): the `Speech` service and `Voice` presence, the configuration and
  * the server preferences, the audio port and its socket, the submission
@@ -282,7 +286,6 @@ harden(replayPiecesOf);
  * @property {number} level the last block's RMS
  * @property {number} floor
  * @property {number} threshold
- * @property {boolean} autoSpeak
  * @property {boolean} playing
  * @property {boolean} talking a Talk or launch is starting its session
  * @property {boolean} bargeIn R5-46: show "continuing in background…"
@@ -329,8 +332,6 @@ export const makeVoiceState = ({
   // ---------------------------------------------------------- page parts
 
   const player = makePlayer(() => onPlayerChange());
-  /** @type {boolean | undefined} R5-55: on whenever speech out is wired, until toggled */
-  let autoSpeakChoice;
   let note = '';
   let bargeIn = false;
   let talking = false;
@@ -408,10 +409,6 @@ export const makeVoiceState = ({
 
   const viewState = () => controller.getState();
   const busy = () => Boolean(viewState().view && viewState().view.busy);
-  const autoSpeak = () =>
-    autoSpeakChoice ??
-    Boolean(conn && conn.configuration && conn.configuration.speechOut);
-
   /** Speech in and out are both configured: spoken mode can run (9.1). */
   const speechBoth = () =>
     Boolean(
@@ -421,9 +418,17 @@ export const makeVoiceState = ({
       conn.configuration.speechOut,
     );
 
-  /** Whether this page's fresh turns are spoken now (R5-45). */
-  const speaks = () =>
-    autoSpeak() &&
+  /**
+   * Whether fresh turns of `sessionKey` are read aloud now (R5-45, 9.1):
+   * only while that session's view is in spoken mode and speech out is
+   * configured. Nothing else turns reading on.
+   *
+   * @param {string | undefined} sessionKey
+   */
+  const speaksIn = sessionKey =>
+    mic !== undefined &&
+    sessionKey !== undefined &&
+    spokenKey === sessionKey &&
     Boolean(conn && conn.configuration && conn.configuration.speechOut);
 
   const updateWake = () =>
@@ -591,13 +596,15 @@ export const makeVoiceState = ({
    * Replace the playback with a new stream (R5-44).
    *
    * @param {(c: Connection) => Promise<{ stream: number }>} open
-   * @param {{ turnId?: string, restart: () => void }} about
+   * @param {{ turnId?: string, wanted?: () => boolean, restart: () => void }} about
+   *   `wanted`: whether the playback is still wanted once the port is bound
    */
   const startPlayback = async (open, about) => {
     stopPlayback();
     const mine = playGeneration;
     const c = await ensurePort();
     if (!c || !c.socket || mine !== playGeneration) return;
+    if (about.wanted && !about.wanted()) return;
     const track = player.begin();
     /** @type {Playing} */
     const entry = {
@@ -631,16 +638,19 @@ export const makeVoiceState = ({
   };
 
   /**
-   * Speak a turn of this page (D-M11-20).
+   * Speak a turn of this page (D-M11-20), while its session is in spoken
+   * mode.
    *
+   * @param {string} sessionKey
    * @param {any} session
    * @param {string} turnId
    */
-  const speakTurn = (session, turnId) =>
+  const speakTurn = (sessionKey, session, turnId) =>
     startPlayback(c => E(c.port).speak(session, turnId, ttsOptions()), {
       turnId,
+      wanted: () => speaksIn(sessionKey),
       restart: () => {
-        speakTurn(session, turnId).catch(reportAutoSpeech);
+        speakTurn(sessionKey, session, turnId).catch(reportAutoSpeech);
       },
     });
 
@@ -650,9 +660,9 @@ export const makeVoiceState = ({
    * @param {string | undefined} turnId
    */
   const speakFresh = (sessionKey, session, turnId) => {
-    if (turnId === undefined || !speaks()) return;
+    if (turnId === undefined || !speaksIn(sessionKey)) return;
     if (viewState().activeKey !== sessionKey) return;
-    speakTurn(session, turnId).catch(reportAutoSpeech);
+    speakTurn(sessionKey, session, turnId).catch(reportAutoSpeech);
   };
 
   /** @param {Record<string, any>} receipt */
@@ -678,8 +688,16 @@ export const makeVoiceState = ({
       notify();
     }
     // Nothing is read for a send that will not be spoken (no crank, rule 9):
-    // only a send from spoken mode is read aloud (9.1).
-    if (conn !== c || !receipt || notice.spoken !== true || !speaks()) return;
+    // only a send from spoken mode is read aloud, while that session is
+    // still in spoken mode (9.1).
+    if (
+      conn !== c ||
+      !receipt ||
+      notice.spoken !== true ||
+      !speaksIn(sessionKey)
+    ) {
+      return;
+    }
     if (receipt.state === 'started') {
       turnIdOf(receipt).then(
         turnId => speakFresh(sessionKey, session, turnId),
@@ -700,7 +718,7 @@ export const makeVoiceState = ({
    */
   const onTurnStart = (sessionKey, turnId) => {
     const c = conn;
-    if (!c || !speaks()) return;
+    if (!c || !speaksIn(sessionKey)) return;
     for (const wait of c.waiting.filter(w => w.sessionKey === sessionKey)) {
       E(wait.session)
         .getSubmissionReceipt(wait.requestId)
@@ -832,11 +850,17 @@ export const makeVoiceState = ({
     notify();
   };
 
-  /** The mic off, and with it spoken mode (9.1). */
+  /**
+   * The mic off, and with it spoken mode (9.1): a reply being read stops,
+   * and sends waiting for their turn will not be read (replies are read
+   * only in spoken mode). A replay the user asked for is left playing.
+   */
   const micOff = () => {
     const m = mic;
     spokenKey = undefined;
     paused = false;
+    if (conn) conn.waiting.length = 0;
+    if (playing && playing.turnId !== undefined) stopPlayback();
     if (!m) return;
     mic = undefined;
     m.capture.stop();
@@ -926,8 +950,8 @@ export const makeVoiceState = ({
    * its warning (G-11).
    *
    * its warning (G-11). A failure (the call rejects, or the session is not
-   * listed in time) puts back what was before: the microphone, the view in
-   * spoken mode and the auto-speak choice. Answers whether the new session
+   * listed in time) puts back what was before: the microphone and the view
+   * in spoken mode. Answers whether the new session
    * is the one in view.
    *
    * @param {Connection} c
@@ -936,9 +960,8 @@ export const makeVoiceState = ({
    * @returns {Promise<boolean>}
    */
   const startSession = async (c, request, micWasOn) => {
-    const before = { autoSpeakChoice, spokenKey };
+    const before = { spokenKey };
     talking = true;
-    autoSpeakChoice = true;
     notify();
     let started = false;
     try {
@@ -953,13 +976,13 @@ export const makeVoiceState = ({
         // The view the mic listens in (the new session's) is in spoken
         // mode (9.1).
         if (mic) spokenKey = viewState().activeKey;
+        // A reply of the view left behind is no longer read.
+        if (playing && playing.turnId !== undefined) stopPlayback();
+        if (conn) conn.waiting.length = 0;
+      } else if (!micWasOn || viewState().activeKey !== before.spokenKey) {
+        micOff();
       } else {
-        autoSpeakChoice = before.autoSpeakChoice;
-        if (!micWasOn || viewState().activeKey !== before.spokenKey) {
-          micOff();
-        } else {
-          spokenKey = before.spokenKey;
-        }
+        spokenKey = before.spokenKey;
       }
       notify();
     }
@@ -1098,7 +1121,7 @@ export const makeVoiceState = ({
 
   // A typed send gets its receipt after the user gesture has ended.
   watchActivation(() => {
-    if (speaks()) player.unlock();
+    if (mic) player.unlock();
   });
 
   watchVisibility(hidden => {
@@ -1222,7 +1245,6 @@ export const makeVoiceState = ({
         micOn: mic !== undefined,
         spoken: mic !== undefined,
         ...meter,
-        autoSpeak: autoSpeak(),
         playing: player.playing(),
         talking,
         bargeIn,
@@ -1266,14 +1288,6 @@ export const makeVoiceState = ({
       if (key === undefined || !configuration || !speechBoth()) return;
       micOn();
       spokenKey = key;
-      notify();
-    },
-
-    /** @param {boolean} on "Spoken replies" (R5-56) */
-    setAutoSpeak(on) {
-      if (on) player.unlock();
-      autoSpeakChoice = Boolean(on);
-      if (!on) stopPlayback();
       notify();
     },
 
@@ -1347,7 +1361,8 @@ export const makeVoiceState = ({
     },
 
     /**
-     * Replay the selected assistant message, independently of auto-speak.
+     * Replay the selected assistant message: the user's own tap, in
+     * either mode (not a reply read automatically).
      * @param {import('../conversation/ToolGroup.js').ShownMessage} message
      */
     replay(message) {
