@@ -206,9 +206,18 @@ const readWrappingKey = async ({ keyFile, stateDir, readOnly = false }) => {
       { cause: error },
     );
   }
+  // A systemd credential (`readOnly`) is a root-owned file that systemd
+  // gives the service user through a POSIX ACL (`-r--r-----+`): the group
+  // bits are the ACL mask, not a group grant, and the directory is
+  // private to the unit. Only "others" is checked there.
+  const exposed = readOnly ? 0o007 : 0o077;
   // eslint-disable-next-line no-bitwise
-  if (!created && (info.mode & 0o077) !== 0)
-    throw Error('the secrets key file must not be readable by group or others');
+  if (!created && (info.mode & exposed) !== 0)
+    throw Error(
+      readOnly
+        ? 'the secrets key credential must not be readable by others'
+        : 'the secrets key file must not be readable by group or others',
+    );
   if (key.length !== KEY_BYTES)
     throw Error('the secrets key file must hold exactly 32 bytes');
   return key;

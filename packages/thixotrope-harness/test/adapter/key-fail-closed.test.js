@@ -211,6 +211,38 @@ test('a key under CREDENTIALS_DIRECTORY is read-only: read when present, refused
   });
 });
 
+test('a credential as systemd leaves it with an ACL (0440, root) is read; one readable by others is refused', async t => {
+  // systemd >= 256 puts credentials on tmpfs, root-owned with an ACL for the
+  // service user, so `stat` shows the ACL mask in the group bits
+  // (`-r--r-----+`; seen on Tokyo's forgejo.service).
+  const dirs = makeDirs();
+  t.teardown(dirs.done);
+  const creds = join(dirs.root, 'creds');
+  mkdirSync(creds);
+  const keyFile = join(creds, 'wrapping-key');
+  writeFileSync(keyFile, Buffer.alloc(32, 6), { mode: 0o440 });
+  chmodSync(keyFile, 0o440);
+  const env = { [SECRETS_KEY_VARIABLE]: keyFile, CREDENTIALS_DIRECTORY: creds };
+  const files = findSecretsFiles({ stateDir: dirs.stateDir, env });
+  t.true(files.keyReadOnly);
+  const key = await loadWrappingKey({
+    keyFile,
+    stateDir: dirs.stateDir,
+    readOnly: true,
+  });
+  t.deepEqual(key, Buffer.alloc(32, 6));
+  chmodSync(keyFile, 0o444);
+  await t.throwsAsync(
+    loadWrappingKey({ keyFile, stateDir: dirs.stateDir, readOnly: true }),
+    { message: /credential must not be readable by others/ },
+  );
+  // Outside a credentials directory the group bits still count.
+  chmodSync(keyFile, 0o440);
+  await t.throwsAsync(loadWrappingKey({ keyFile, stateDir: dirs.stateDir }), {
+    message: /must not be readable by group or others/,
+  });
+});
+
 test('initWrappingKey creates only a new key for a state with no sealed files', async t => {
   const dirs = makeDirs();
   t.teardown(dirs.done);

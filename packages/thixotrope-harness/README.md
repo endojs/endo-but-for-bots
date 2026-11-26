@@ -556,6 +556,8 @@ absent meanwhile.
 - Under systemd, load the key with `LoadCredential=wrapping-key:/path/to/key` and set
   `THIX_HARNESS_SECRETS_KEY=%d/wrapping-key`.
   A key under `$CREDENTIALS_DIRECTORY` is read-only: it is read, never created or written.
+  systemd gives it to the service user through an ACL (`-r--r-----+`, root-owned), so for a
+  credential only the "others" bits are checked.
   Create the key at the credential's source before the first start, with
   `node scripts/init-secrets-key.mjs KEYFILE [--state STATE]`: it refuses an existing key file,
   a credential path, and a state that already holds sealed files, and never prints the key.
