@@ -52,10 +52,10 @@ fn a_rejected_yield_operand_throws_at_the_yield() {
 }
 
 /// A `yield*` does not await what it yields: a sync delegate's rejected value
-/// rejects the delegation's `next`, not the body at the `yield*`. Resuming the
-/// body there sent the reason into the delegate's `throw` through an epilogue
-/// whose operand was already popped (`value-stack:underflow`), the test262
-/// `yield-promise-reject-next-yield-star-sync-iterator` family.
+/// belongs to the delegation, past the `yield*`'s own handler, so it
+/// completes the generator and rejects the request, the outcome XS reaches
+/// when no `try` encloses the `yield*` (the test262
+/// `yield-promise-reject-next-yield-star-sync-iterator` family).
 #[test]
 fn a_rejected_value_from_a_sync_yield_star_delegate_rejects_the_request() {
     for body in [

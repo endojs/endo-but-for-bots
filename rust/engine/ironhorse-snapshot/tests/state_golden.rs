@@ -102,8 +102,12 @@ fn crank(m: &mut Interp, source: &str) -> String {
 /// Execution charges a meter release moved on purpose, which the historical
 /// cost controls (`state_golden_meter_4.tsv`, `state_golden_format_16.tsv`)
 /// still hold at their old values: label, the controls' initial and final
-/// meter, and the current ones. `ironhorse-meter-8` charges the rename of each
-/// function a literal defines as a method, accessor or private method.
+/// meter, and the current ones. `ironhorse-meter-8` extends the rename charge
+/// (two built-in steps) to each anonymous function an object literal or class
+/// body defines under a key (a method or accessor, or a field or property
+/// whose value is an anonymous function or class expression); each row's move
+/// is that of its methods and accessors, the `private` row's that of its
+/// public method `inc`.
 const RELEASE_MOVED_COSTS: &[(&str, &str, &str, &str, &str)] = &[
     ("proxy", "3332800", "6137096", "3365568", "6169864"),
     ("accessor", "3351488", "5959152", "3417024", "6024688"),

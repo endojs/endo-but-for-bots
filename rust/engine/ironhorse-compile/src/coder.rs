@@ -1073,7 +1073,7 @@ thread_local! {
 /// - `delete o?.b` deletes the chain's member (XS deletes nothing);
 /// - `(eval)(s)` is a direct eval (XS calls it indirectly);
 /// - an array literal's spread and a rest element fill their array with
-///   CreateDataProperty (XS uses [[Set]], so an inherited setter runs).
+///   CreateDataProperty (XS uses `[[Set]]`, so an inherited setter runs).
 ///
 /// For differential harnesses only: the bytes it produces carry XS's bugs.
 pub fn with_xs_bytes<R>(f: impl FnOnce() -> R) -> R {

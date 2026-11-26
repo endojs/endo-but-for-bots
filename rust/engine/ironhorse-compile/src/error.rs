@@ -51,7 +51,7 @@ pub enum LexErrorKind {
     /// XS's `fxGetNextRegExp` reports the compiler's diagnostic as the whole
     /// message (`( invalid sequence`); the lexer keeps it apart
     /// ([`crate::Lexer::take_regexp_diagnostic`]) so this kind, carried by
-    /// every parse `Result`, stays the size of a `u32`.
+    /// every parse `Result`, adds no payload and the enum keeps its size.
     InvalidRegExpPattern,
     /// Regexp compilation refused computation; never a guest SyntaxError.
     RegExpBudgetExceeded,

@@ -940,24 +940,37 @@ impl Interp {
                 }
                 if self.async_generator_suspended_in_yield_star(code, gen) {
                     // A `yield*` does not await what it yields (ES2024
-                    // 14.4.14); this await stands in for the one
-                    // %AsyncFromSyncIteratorPrototype%.next makes on a sync
-                    // delegate's value, which has no wrapper here. Its
-                    // rejection belongs to the delegation's `next`, past the
-                    // `yield*`'s own handler, so it must not resume the body
-                    // through that handler into the delegate's `throw`: the
+                    // 15.5.5), but Ironhorse awaits it for every delegate. For
+                    // a sync delegate this await stands in for the unwrapping
+                    // an Async-from-Sync iterator's `next`, `throw` or
+                    // `return` applies to the value (ES2024 27.1.4.4);
+                    // Ironhorse does not wrap a sync delegate in one yet. The
+                    // rejection then belongs to the delegation step that
+                    // produced the value, past the `yield*`'s own handler,
+                    // and resuming the body through that handler would hand
+                    // it to the delegate's throw protocol. Instead the
                     // generator completes and the request rejects with the
                     // reason, as when the delegation throws and no `try`
-                    // encloses it.
+                    // encloses it. That still departs from ES2024 and XS,
+                    // where the rejection is thrown at the `yield*` and an
+                    // enclosing `try` catches it (dropping the frame runs no
+                    // `catch`, `finally` or disposal); XS's wrapper also calls
+                    // the delegate's `return` first, as ES2025's does. For an
+                    // async delegate the await, and so this outcome, departs
+                    // from XS and V8, which yield the value as it is. Both are
+                    // rows of the GAPS table in
+                    // `ironhorse-262/tests/xs_departures.rs`, and both can go
+                    // once an Async-from-Sync wrapper does the sync delegate's
+                    // unwrapping.
                     let data = self.async_generators.get_mut(&gen).unwrap();
                     data.state = AsyncGeneratorState::Completed;
                     data.frame = None;
                     return self.finish_async_generator_request(code, gen, value, true);
                 }
-                // AsyncGeneratorYield awaits the operand inside the body
-                // (`yield v` is `yield await v`, ES2024 27.6.3.8), so a
-                // rejection is thrown at the `yield`, where a `try` around it
-                // catches it; the request stays pending on the resumed body.
+                // Yield awaits a `yield` operand before AsyncGeneratorYield
+                // (ES2024 27.5.3.7), so a rejection is thrown at the `yield`,
+                // where a `try` around it catches it; the request stays
+                // pending on the resumed body.
                 return self.step_async_generator(code, gen, ResumeStatus::Throw, value, false);
             }
             let result = self.new_generator_result(value, false);

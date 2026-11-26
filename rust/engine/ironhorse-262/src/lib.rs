@@ -125,9 +125,9 @@ pub fn compile_failure_name(error: &ironhorse_compile::ParseError) -> &'static s
         // negative parse-phase case PASS, so a `_` arm defaulting to it would
         // credit the ratchet for whatever lex kind someone adds next --
         // reintroducing, silently, the bug this function exists to fix.
-        // `LexErrorKind` carries no `#[non_exhaustive]`, so naming all seventeen
-        // makes an eighteenth a compile error HERE and forces whoever adds it
-        // to classify it. Same discipline as `Refusal`'s `Display`.
+        // `LexErrorKind` carries no `#[non_exhaustive]`, so naming every
+        // variant makes a new one a compile error HERE and forces whoever adds
+        // it to classify it. Same discipline as `Refusal`'s `Display`.
         ParseErrorKind::Lex(lex) => match lex.kind {
             // Resource ceilings, not grammar. `RegExpBudgetExceeded`'s own doc
             // says it is "never a guest SyntaxError".
