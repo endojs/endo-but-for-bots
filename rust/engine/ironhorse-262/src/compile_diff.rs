@@ -472,7 +472,10 @@ fn case_source_line(contents: &str) -> Option<String> {
 // must be byte-identical to the oracle's `SYMB` payload — the same
 // guarantee the bytecode has, extended to the second half of the script.
 // This is the committed, repeatable gate proving it, over the same curated
-// corpus the bytecode gate uses.
+// corpus the bytecode gate uses. Like that gate it compiles in XS-byte mode:
+// at one deliberate departure the dual-run's own atom departs too
+// (`(eval)(s)` in a function declares `arguments`), which is harmless
+// because ironhorse links its own bytecode against its own atom by name.
 
 /// The symbols-atom differential tally: how many both-accept programs had a
 /// byte-identical SYMB atom, and every divergence with its triage detail.
@@ -524,8 +527,11 @@ pub fn symbols_diff_programs(programs: &[(String, String)]) -> SymbolsReport {
             }
         };
         let ironhorse = panic::catch_unwind(AssertUnwindSafe(|| {
-            // The eval-goal entry, matching the bytecode gate's framing.
-            ironhorse_compile::compile_atoms_with(source, false)
+            // The eval-goal entry in XS-byte mode, matching the bytecode
+            // gate's framing: `(eval)(s)` departs in the symbols too.
+            ironhorse_compile::with_xs_bytes(|| {
+                ironhorse_compile::compile_atoms_with(source, false)
+            })
         }));
         let ironhorse_syms = match ironhorse {
             Ok(Ok((_, syms))) => syms,
@@ -759,9 +765,9 @@ mod tests {
         // the whole curated corpus — the second half of the script, held to
         // the same bar as the bytecode. This is what lets the flipped
         // dual-run default stop borrowing `oracle.symbols`: ironhorse pairs its
-        // own bytecode with its own symbols. Any byte divergence here would
-        // mean the flipped default links intrinsics against a different
-        // id→name table than the oracle, so it fails the build.
+        // own bytecode with its own symbols. The atom is compared in XS-byte
+        // mode, so any byte divergence here is a symbols-atom finding outside
+        // the deliberate departures, and it fails the build.
         let programs = corpora_programs();
         assert!(
             !programs.is_empty(),

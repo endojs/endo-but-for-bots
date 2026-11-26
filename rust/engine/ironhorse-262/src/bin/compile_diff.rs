@@ -3,7 +3,8 @@
 //! curated corpora), where the XS oracle compiler accepts the file,
 //! asserts `ironhorse_compile::compile_with(src, false)` (the eval-goal
 //! entry — the goal the oracle shim compiles; see `compile_diff`'s module
-//! doc) == `xs_oracle::run(src).bytecode` byte for byte, and prints the honest
+//! doc), under `ironhorse_compile::with_xs_bytes`, ==
+//! `xs_oracle::run(src).bytecode` byte for byte, and prints the honest
 //! `total / identical / divergent / oracle-rejected / ironhorse-rejected`
 //! split with NAMED divergence classes and per-file identification.
 //!
@@ -30,8 +31,9 @@ use ironhorse_262::test262::locate_test262;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    // The curated no-arg run also proves the SYMB-atom identity the flipped
-    // default relies on (ironhorse emits its own symbols, not the oracle's).
+    // The curated no-arg run also checks the SYMB atom ironhorse emits (its
+    // own, not the oracle's) against the oracle's, in XS-byte mode like the
+    // bytecode gate.
     let mut symbols_report = None;
 
     let module_mode = args.first().map(String::as_str) == Some("--module");

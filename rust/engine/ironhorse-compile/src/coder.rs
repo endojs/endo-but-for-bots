@@ -3,7 +3,8 @@
 //! It is the last stratum of the stage-5 pipeline (lexer → parser →
 //! scoper → **coder**) and the first that produces the byte-identity
 //! evidence the stage bar is measured against: `compile(src)` must equal
-//! `xs_oracle::run(src).bytecode` byte for byte.
+//! `xs_oracle::run(src).bytecode` byte for byte, outside the deliberate
+//! departures [`with_xs_bytes`] lists (and under it, everywhere).
 //!
 //! **Scope of this child (5/7).** The emitter *framework* is ported in
 //! full and faithfully: the code-record list ([`Code`]), the `fxCoderAdd*`
@@ -1149,8 +1150,9 @@ fn root_declares_var_or_function(root: &crate::scoper::Scope) -> bool {
 /// ([`Goal::Script`]) to XS bytecode, or return the first parser/scoper
 /// early error. The returned bytes are the `codeBuffer` half of XS's
 /// `txScript`. For a sloppy program — and for any strict program without
-/// top-level `var`/function declarations — this is exactly what
-/// `xs_oracle::run(source).bytecode` returns; the byte-identity harnesses
+/// top-level `var`/function declarations — this is what
+/// `xs_oracle::run(source).bytecode` returns, except at the deliberate
+/// departures [`with_xs_bytes`] lists; the byte-identity harnesses
 /// compare the oracle against [`compile_with`], the eval-goal entry that
 /// matches the shim's framing on every accepted source.
 pub fn compile(source: &str) -> Result<Vec<u8>, crate::parser::ParseError> {
@@ -1171,8 +1173,9 @@ pub fn compile_atoms(source: &str) -> Result<(Vec<u8>, Vec<u8>), crate::parser::
 /// strict code does; a bare `"use strict"` prologue makes the program
 /// strict either way). This is the entry the runtime `eval`/`Function`
 /// source bridge drives, and the one byte-identical to
-/// `xs_oracle::run(source).bytecode` on every accepted source — the oracle
-/// shim parses with the `eval` builtin's flags.
+/// `xs_oracle::run(source).bytecode` on every accepted source under
+/// [`with_xs_bytes`] (without it, at its departures) — the oracle shim
+/// parses with the `eval` builtin's flags.
 pub fn compile_with(source: &str, strict: bool) -> Result<Vec<u8>, crate::parser::ParseError> {
     Ok(compile_atoms_goal(source, Goal::Eval, strict)?.0)
 }
@@ -1557,9 +1560,10 @@ fn node_of(item: &Item) -> &Node {
 
 /// Compile `source` as a **Module** goal to XS module bytecode, or return
 /// the first parser/scoper early error. The returned bytes are the
-/// `codeBuffer` half of XS's `txScript` for the Module goal — exactly what
-/// `xs_oracle::compile_module(source).bytecode` returns (the module
-/// counterpart of [`compile`]).
+/// `codeBuffer` half of XS's `txScript` for the Module goal — what
+/// `xs_oracle::compile_module(source).bytecode` returns outside the
+/// deliberate departures [`with_xs_bytes`] lists (the module counterpart of
+/// [`compile`]).
 pub fn compile_module(source: &str) -> Result<Vec<u8>, crate::parser::ParseError> {
     Ok(compile_module_atoms(source)?.0)
 }

@@ -1822,7 +1822,7 @@ fn evaluate_module_compile(
 
     let verdict = match ironhorse {
         Ok(Ok((bytes, symbols))) if oracle.compiled => {
-            if cfg.oracle && (bytes != oracle.bytecode || symbols != oracle.symbols) {
+            if cfg.oracle && !module_bytes_match_oracle(src, &oracle.bytecode, &oracle.symbols) {
                 Verdict::RunSkip("module:compiler-byte-divergence".into())
             } else {
                 let assembled =
@@ -2008,19 +2008,38 @@ fn module_dual_run(
     }
 }
 
-/// Compile the exact assembled module in both front ends, run supported
-/// single-file shapes in IronHorse, and only then invoke XS for the executable
-/// differential. Running IronHorse first avoids asking the one-file oracle
-/// fixture to resolve imports that this tranche deliberately does not claim.
+/// Whether Ironhorse's compiler reproduces the oracle's module bytes in its
+/// XS-byte mode. Its own compile departs from XS's bytes on purpose for the
+/// specification gaps [`ironhorse_compile::with_xs_bytes`] lists (spread and
+/// rest, `delete o?.b`, `(eval)(s)`), so the byte gate compares that mode's
+/// output, as `compile_diff` does, while the case runs Ironhorse's own bytes.
+fn module_bytes_match_oracle(source: &str, oracle_bytecode: &[u8], oracle_symbols: &[u8]) -> bool {
+    match panic::catch_unwind(AssertUnwindSafe(|| {
+        ironhorse_compile::with_xs_bytes(|| ironhorse_compile::compile_module_atoms(source))
+    })) {
+        Ok(Ok((bytecode, symbols))) => bytecode == oracle_bytecode && symbols == oracle_symbols,
+        _ => false,
+    }
+}
+
+/// Run the accepted module (compiling it in both front ends only when the
+/// caller has not), run supported single-file shapes in IronHorse, and only
+/// then invoke XS for the executable differential. Running IronHorse first
+/// avoids asking the one-file oracle fixture to resolve imports that this
+/// tranche deliberately does not claim.
 fn run_accepted_module(
     cfg: &Config,
     fm: &Frontmatter,
     source: &str,
     setup: &str,
-    // The `(bytecode, symbols)` the caller already compiled from a source
-    // byte-identical to `source`, and already byte-checked against the oracle.
-    // `Some` skips both compiles and the divergence gate, all three of which
-    // are known to reproduce the same answers on identical bytes.
+    // The `(bytecode, symbols)` the caller already compiled, Ironhorse's own
+    // bytes, from a source byte-identical to `source`, whose XS-byte compile
+    // the caller already checked against the oracle when the oracle gate is
+    // on. `Some` skips Ironhorse's
+    // compile, the oracle's compile and acceptance check, and the XS-byte
+    // gate, which give the same answers on the same source. The one caller
+    // always passes `Some` today: the harness runs as a separate setup
+    // Script, so the assembled body is the case source unchanged.
     precompiled: Option<(Vec<u8>, Vec<u8>)>,
 ) -> Verdict {
     let carried = precompiled.is_some();
@@ -2047,7 +2066,7 @@ fn run_accepted_module(
         if !oracle_compile.compiled {
             return Verdict::RunSkip("module:harness-oracle-rejected".into());
         }
-        if bytecode != oracle_compile.bytecode || symbols != oracle_compile.symbols {
+        if !module_bytes_match_oracle(source, &oracle_compile.bytecode, &oracle_compile.symbols) {
             return Verdict::RunSkip("module:harness-byte-divergence".into());
         }
     }
@@ -2800,6 +2819,34 @@ mod tests {
     fn accepted_single_file_module_executes_end_to_end() {
         let source = "/*---\nflags: [module, raw]\n---*/\nexport const value = 1;";
         let result = run_case(&Config::default(), Path::new("."), source);
+        assert_eq!(result.verdict, Verdict::Covered);
+    }
+
+    /// A module with an array spread, whose array Ironhorse fills with
+    /// CreateDataProperty where XS's bytes use [[Set]]: a deliberate
+    /// departure.
+    const SPREAD_MODULE_BODY: &str =
+        "export const value = [...[1]];\nif (value.length !== 1) throw new Error('spread');";
+
+    #[test]
+    fn raw_module_using_a_compiler_departure_runs() {
+        // The byte gate compares the XS-byte compile, so the case runs.
+        let source = format!("/*---\nflags: [module, raw]\n---*/\n{SPREAD_MODULE_BODY}");
+        let result = run_case(&Config::default(), Path::new("."), &source);
+        assert_eq!(result.verdict, Verdict::Covered);
+    }
+
+    #[test]
+    fn harnessed_module_using_a_compiler_departure_runs() {
+        let Some((_, harness)) = crate::test262::locate_test262() else {
+            eprintln!("test262 subset absent; skipping the harnessed module departure case");
+            return;
+        };
+        // The harness runs as a separate setup Script and the module body is
+        // the case source unchanged, so the case passes the same byte gate
+        // and then runs after the harness.
+        let source = format!("/*---\nflags: [module]\n---*/\n{SPREAD_MODULE_BODY}");
+        let result = run_case(&Config::default(), &harness, &source);
         assert_eq!(result.verdict, Verdict::Covered);
     }
 

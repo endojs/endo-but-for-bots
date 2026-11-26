@@ -1,5 +1,6 @@
 //! Byte-identity: `ironhorse_compile::compile_with(src, false)` must equal
-//! `xs_oracle::run(src).bytecode` byte for byte on a corpus of
+//! `xs_oracle::run(src).bytecode` byte for byte, in XS-byte mode
+//! (`ironhorse_compile::with_xs_bytes`), on a corpus of
 //! expression + simple-statement programs (stage-5 child 5/7 bar).
 //!
 //! XS's coder is the ground truth: node shapes, operand widths, branch
@@ -2596,7 +2597,8 @@ fn anonymous_function_member_target_no_name() {
 // ============================ module goal ============================
 //
 // The Module goal (stage-5 modules child): `ironhorse_compile::compile_module`
-// must equal `xs_oracle::compile_module(src).bytecode` byte for byte.
+// must equal `xs_oracle::compile_module(src).bytecode` byte for byte, in
+// XS-byte mode as above.
 // The oracle module entry parses as a Module and returns `codeBuffer`
 // WITHOUT running (a module cannot `fxRunScript` without a linker), so —
 // unlike the script fixtures above — a module fixture need not be
@@ -2617,7 +2619,8 @@ fn assert_identical_module(corpus: &[&str]) {
                 continue;
             }
         };
-        match compile_module(src) {
+        // XS's bytes at the deliberate departures, as `assert_identical`.
+        match ironhorse_compile::with_xs_bytes(|| compile_module(src)) {
             Ok(got) if got == want => {}
             Ok(got) => {
                 let wd = disasm(&want);

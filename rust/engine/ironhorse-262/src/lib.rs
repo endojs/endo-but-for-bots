@@ -350,8 +350,9 @@ pub enum Compiler {
     Oracle,
     /// The pure-Rust `ironhorse-compile` pipeline (lexer → parser → scoper →
     /// coder), now the **default**. Post stage 5 its bytes AND its symbols
-    /// atom equal the oracle's, so the seam no longer borrows the oracle's
-    /// SYMB payload; a compile fold (parser/scoper reject or a coder panic)
+    /// atom equal the oracle's outside the compiler's deliberate departures
+    /// (`ironhorse_compile::with_xs_bytes`), so the seam no longer borrows
+    /// the oracle's SYMB payload; a compile fold (parser/scoper reject or a coder panic)
     /// yields empty bytecode the runner treats as an ironhorse abort.
     #[default]
     Ironhorse,
@@ -380,7 +381,10 @@ fn compile_for(
             // borrows the oracle's `symbols`. Byte-identity of that atom
             // against the oracle is a committed gate
             // (`compile_diff::symbols_diff_programs`, exercised by
-            // `corpora_symbols_atom_byte_identity`).
+            // `corpora_symbols_atom_byte_identity`), in XS-byte mode: at one
+            // deliberate departure this atom departs too (`(eval)(s)` in a
+            // function declares `arguments`), harmlessly, since Ironhorse
+            // links its own bytecode against its own atom by name.
             let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 ironhorse_compile::compile_atoms(source)
             }));

@@ -2231,7 +2231,8 @@ pub fn decoder_is_panic_free(bytes: &[u8]) -> usize {
 //    (scoper, coder) and the differential target below lean on.
 //  - **Compile differential** ([`compile_differential_check`]): the same
 //    source through `ironhorse_compile::compile_with` (the eval-goal entry,
-//    the goal the oracle shim compiles) and the XS oracle compiler,
+//    the goal the oracle shim compiles, in XS-byte mode) and the XS oracle
+//    compiler,
 //    comparing accept/reject agreement and — on accepts — byte identity.
 //    An oracle process crash (`run` returns `None`) is a NAMED outcome
 //    ([`CompileFuzzOutcome::OracleUnavailable`]), not a harness abort.
@@ -2282,8 +2283,8 @@ pub enum CompileFuzzOutcome {
     ByteDivergence { detail: String },
     /// Both reject (accept/reject agreement in the reject direction).
     BothReject,
-    /// The oracle accepted but ironhorse rejected (a coder/parser fold) — a
-    /// finding for the accept/reject bar.
+    /// The oracle accepted but ironhorse rejected (a coder/parser fold) —
+    /// counted for the accept/reject bar, not a fuzz finding.
     IronhorseRejected { detail: String },
     /// ironhorse accepted but the oracle rejected — a finding.
     OracleRejected,
@@ -2297,7 +2298,7 @@ pub enum CompileFuzzOutcome {
 /// accept, byte identity. `Ok(outcome)` is always returned (never a panic
 /// escaping): a coder fold is caught and named `IronhorseRejected`, an oracle
 /// crash is named `OracleUnavailable`. The libFuzzer wrapper turns a
-/// `ByteDivergence` / `IronhorseRejected` / `OracleRejected` into the finding.
+/// `ByteDivergence` / `OracleRejected` into the finding.
 pub fn compile_differential_check(source: &str) -> CompileFuzzOutcome {
     let oracle = match xs_oracle::run(source) {
         Some(o) => o,
@@ -2312,9 +2313,11 @@ pub fn compile_differential_check(source: &str) -> CompileFuzzOutcome {
     // `eval` builtin's flags, so this is the entry its bytes are identical
     // to. ironhorse's Script goal (`compile`) knowingly hoists a strict
     // program's top-level `var`/function declarations to the global object
-    // (see `ironhorse_compile::Goal`), which is not a byte finding.
+    // (see `ironhorse_compile::Goal`), which is not a byte finding. XS-byte
+    // mode keeps the compiler's deliberate departures
+    // (`ironhorse_compile::with_xs_bytes`) from reading as findings.
     let ironhorse = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ironhorse_compile::compile_with(source, false)
+        ironhorse_compile::with_xs_bytes(|| ironhorse_compile::compile_with(source, false))
     }));
     let ironhorse_bytes: Option<Vec<u8>> = match &ironhorse {
         Ok(Ok(b)) => Some(b.clone()),
