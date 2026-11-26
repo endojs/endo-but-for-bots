@@ -356,6 +356,7 @@ fn worker_execs_node_with_lease() {
         .to_owned();
     fd_arg.parse::<u32>().unwrap();
     let mut expected = vec![
+        "arg --disable-sigusr1".to_owned(),
         "arg --disable-warning=ExperimentalWarning".to_owned(),
         format!("arg {}", shell.display()),
         format!("arg --lease-fd={fd_arg}"),
@@ -492,6 +493,6 @@ fn worker_falls_back_to_node_on_path() {
         };
         let (status, stdout, stderr) = run(&mut command);
         assert!(status.success(), "{stderr}");
-        assert_eq!(stdout, b"node --disable-warning=ExperimentalWarning\n");
+        assert_eq!(stdout, b"node --disable-sigusr1\n");
     }
 }

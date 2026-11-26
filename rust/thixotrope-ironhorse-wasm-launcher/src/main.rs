@@ -9,6 +9,12 @@
 //! is not part of the pinned runtime identity, so whoever controls the
 //! daemon's environment controls which Node runs the worker. `NODE_OPTIONS` is
 //! dropped so that the environment cannot add code to that Node by accident.
+//! For the same reason Node runs with `--disable-sigusr1` (Node 22.14.0 and
+//! later): without it, anyone who may signal the worker's pid can send
+//! SIGUSR1 and make Node start its inspector on 127.0.0.1:9229, a debugger
+//! into the worker's heap. With it, Node keeps SIGUSR1 blocked in every
+//! thread, so the signal stays pending and does nothing: no inspector
+//! starts and the worker keeps serving. (It ends the native worker.)
 #![forbid(unsafe_code)]
 #[cfg(not(unix))]
 compile_error!("thixotrope-ironhorse-wasm-launcher relies on flock(2) and exec(2); Unix only");
@@ -91,6 +97,8 @@ fn exec_worker(mut args: impl Iterator<Item = OsString>) -> Result<(), String> {
         // `--require`, `--import`, `--loader` or `--inspect` in NODE_OPTIONS
         // would load or expose code the pinned runtime identity never saw.
         .env_remove("NODE_OPTIONS")
+        // SIGUSR1 would otherwise start the inspector; see the crate docs.
+        .arg("--disable-sigusr1")
         .arg("--disable-warning=ExperimentalWarning")
         .arg(shell)
         .arg(format!("--lease-fd={}", lease.as_raw_fd()))
