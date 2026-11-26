@@ -271,6 +271,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironhorse-store-do"
+version = "0.0.2"
+dependencies = [
+ "ironhorse-snapshot",
+ "ironhorse-vm",
+]
+
+[[package]]
 name = "ironhorse-text"
 version = "0.0.2"
 

@@ -16,6 +16,7 @@ flowchart TD
     ironhorse_regexp["ironhorse-regexp"]
     ironhorse_runtime["ironhorse-runtime"]
     ironhorse_snapshot["ironhorse-snapshot"]
+    ironhorse_store_do["ironhorse-store-do"]
     ironhorse_text["ironhorse-text"]
     ironhorse_unicode["ironhorse-unicode"]
     ironhorse_vm["ironhorse-vm"]
@@ -45,6 +46,8 @@ flowchart TD
     ironhorse_snapshot -.->|"dev"| ironhorse_snapshot
     ironhorse_snapshot -->|"normal"| ironhorse_vm
     ironhorse_snapshot -.->|"dev"| ironhorse_vm
+    ironhorse_store_do -->|"normal"| ironhorse_snapshot
+    ironhorse_store_do -.->|"dev"| ironhorse_vm
     ironhorse_vm -.->|"dev"| ironhorse_compile
     ironhorse_vm -->|"normal"| ironhorse_meter
     ironhorse_vm -->|"normal"| ironhorse_regexp

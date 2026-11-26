@@ -18,6 +18,7 @@ members = [
     "ironhorse-regexp",
     "ironhorse-compile",
     "ironhorse-snapshot",
+    "ironhorse-store-do",
 ]
 
 [workspace.package]

@@ -1,0 +1,29 @@
+[package]
+name = "ironhorse-store-do"
+description = "A HeapStore over a Durable Object's SQLite, through a statement executor the host supplies (design: designs/thixotrope-wasm-worker.md § 4.3, § 5). No unsafe code and no C: the executor is a trait, and the host-import block that implements it stays in the wasm shell. #![forbid(unsafe_code)]."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "ironhorse_store_do"
+path = "src/lib.rs"
+
+[dependencies]
+ironhorse-snapshot = { path = "../ironhorse-snapshot" }
+
+[features]
+# `DoStore::with_section_chunk_bytes`, so a backend's tests can split the
+# small-state sections into many chunks cheaply. A store is read with the
+# chunk size of the handle reading it, and one written with another size
+# fails closed as corrupt, so the knob cannot silently misread a store; it is
+# still kept out of production builds.
+test-support = []
+
+[dev-dependencies]
+# The unit tests build a real manifest from a fresh machine's image.
+ironhorse-vm = { path = "../ironhorse-vm" }
