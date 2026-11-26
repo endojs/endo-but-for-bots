@@ -60,7 +60,7 @@ What stands in the way, in order of severity:
 | B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for a running string heap, plus one container while a snapshot of it is written (the writer streams now; it used to be about 6×), and up to 6.6× at a checkpoint of an array heap now that array items and side tables are charged against it; a cap that fails `memory.grow` makes programs trap or halt early with `HeapExhausted` where native completes or halts later, and Cloudflare documents replacing the whole isolate, but whether production fails `memory.grow` first is not known | engine / host | **hard under a 128 MB cap** |
 | B2 | Wasm exception-handling encoding: LLVM emits the legacy form by default, and Wasmtime accepts only the standard `exnref` form | toolchain / host | configuration |
 | B4 | Default-feature builds diverge between native and wasm in `Math` results and therefore in metering | engine features | configuration (use `consensus`) |
-| B5 | The worker binary depends on threads, `flock`, bundled C SQLite and POSIX files; `FileStore` does not work on WASI | worker / store | port work |
+| B5 | The native worker binary depends on threads, `flock`, bundled C SQLite and POSIX files, and `FileStore` does not work on WASI; a wasm worker module now exists beside it (`rust/thixotrope-ironhorse-wasm`, the shared core over `ironhorse-store-do`), and its hosts remain | worker / store | port work |
 | B6 | CI builds the engine for both wasm targets and runs the one WASI test script (`build-ironhorse-wasm`), and runs the native-against-wasm32 differential's fast shard (`cross-target-ironhorse`); the slow shard and engine test suites on wasm are not run | CI | process |
 
 [Browser-specific considerations](#browser-specific-considerations) follow the blockers.
@@ -151,7 +151,7 @@ The compile path also catches panics at each embedding site.
 `Halt::EngineInvariant("eval:compiler-invariant")`.
 The production worker does not use `ironhorse-runtime`; it wraps
 `compile_atoms_goal_with_meter` in its own `catch_unwind`
-(`thixotrope-ironhorse-worker/src/main.rs:121`).
+(`thixotrope-ironhorse-core/src/crank.rs:30`).
 `ironhorse-vm` and `ironhorse-regexp` have no `compile_error!` guard.
 They build under `panic=abort`, and their refusals would then abort instead of halting.
 
@@ -805,14 +805,15 @@ So for a whole-heap snapshot the worst case is the running footprint plus one co
 container is bounded by the ceilings: the chunk arena verbatim, 20 bytes per slot record, and
 the side tables' rows, which the chunk ceiling now bounds as well.
 
-The Thixotrope worker's per-crank `checkpoint_to_store` copies only the dirty chunk extents and
+The Thixotrope worker's `checkpoint_to_store`, which it runs after a fresh boot and at close
+rather than per crank, copies only the dirty chunk extents and
 slot pages, but it re-encodes each changed section, such as all arrays' items or all Maps'
 entries, whole (`ironhorse-snapshot/src/machine.rs`, the `small_updates` of
 `checkpoint_to_store_core`).
 On the string heap above, its batch fit in memory the crank had already freed, and linear memory
 grew to 787 MB only because the in-memory store kept its own copy.
-For arrays and Maps it costs as much as a whole-heap snapshot or more, on every crank that
-changes them: before the store copied anything, checkpointing 500,000 kept array items took
+For arrays and Maps it costs as much as a whole-heap snapshot or more, on every checkpoint
+after they change: before the store copied anything, checkpointing 500,000 kept array items took
 wasm32 from 40 MB to 122 MB, where writing their snapshot reached 92 MB, and 500,000 Map entries
 from 78 MB to 224 MB, where their snapshot reached 208 MB.
 The streaming writer does not change this path, and the same harness measured it afterwards
@@ -975,8 +976,8 @@ Beyond B1, it has these problems:
   WAL mode also relies on shared-memory locking that WASI preview 1 lacks
   (*inferred*, not built).
 - **`rustix::fs::flock`** is `cfg`-excluded on `target_os = "wasi"`.
-  The worker's kernel lease, `--lock-state` helper and shared `ACTIVE_LEASE_PATH` lease all
-  use it.
+  The worker's kernel lease, `--lock-state` helper and shared lease on `heaps/active.lock` all
+  use it (they now live in `rust/thixotrope-ironhorse-lease`).
 - **`std::thread::Builder::spawn`** with `stack_size(NATIVE_STACK_BYTES)` in `main`.
   `wasm32-wasip1` has no threads.
   The stack must come from the link (`-zstack-size`) and the host (B3) instead.
@@ -993,6 +994,19 @@ proposes with Durable Object SQLite.
 The daemon has no wasm host yet: `engine_for_spawn_request("wasm", …)` is rejected
 (`rust/endo/src/engine.rs`), and `endor.rs`'s module docs list `-e wasm` only as a future
 engine.
+
+### Status
+
+The native binary still has every problem above, but a wasm worker no longer depends on it
+([designs/thixotrope-wasm-worker.md](../../designs/thixotrope-wasm-worker.md)).
+The worker's host-neutral part is `rust/thixotrope-ironhorse-core`, which the native binary is now
+a shell over; the Durable Object store is `rust/engine/ironhorse-store-do`, which hands its
+statements to a host executor instead of linking SQLite; and `rust/thixotrope-ironhorse-wasm` is
+the worker as a `wasm32-wasip1` module over the two, built without threads and reading no file,
+so the C SQLite, `flock`, thread and file-path problems do not arise in it.
+The stack comes from the link and the host instead (B3).
+What remains is the host side: the Node shell of the local wasm engine, the Durable Object worker,
+and the daemon's `wasm` engine.
 
 ## B6: little wasm coverage in CI
 
@@ -1283,8 +1297,8 @@ documentation, not measured.
   They were a 7.65 MB SES boot heap and a 17.27 MB counter vat, and each resumed lazily and
   eagerly and ran `1+1` and the outbound drain.
   It had to pass the native profile string, because Thixotrope's runtime profile hashes the
-  worker executable (`packages/thixotrope/src/ironhorse-runtime.js:117-129`) and resume requires
-  an exact signature match (`ironhorse-snapshot/src/format.rs:437-438`).
+  worker executable (`packages/thixotrope/src/ironhorse/ironhorse-runtime.js:392-401`) and resume
+  requires an exact signature match (`ironhorse-snapshot/src/format.rs:437-438`).
   The engine's boot fingerprints already match between native and wasm builds, so moving heaps
   between builds needs a platform-neutral profile and the B7 fixes.
   See also the B7 decode hazards.
