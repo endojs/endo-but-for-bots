@@ -178,6 +178,18 @@ class Repository(unittest.TestCase):
         self.assertIn("@endo/thixotrope", result["packages"])
         self.assertFalse(result["jobs"]["test-ironhorse"])
 
+    def test_lease_and_wasm_launcher_select_the_worker_and_its_host(self):
+        for path in [
+            "rust/thixotrope-ironhorse-lease/src/lib.rs",
+            "rust/thixotrope-ironhorse-wasm-launcher/src/main.rs",
+            "rust/thixotrope-ironhorse-wasm-launcher/tests/launcher.rs",
+        ]:
+            with self.subTest(path=path):
+                result = changes.classify([path], [self.graph])
+                self.assertTrue(result["jobs"]["test-thixotrope-ironhorse"])
+                self.assertIn("@endo/thixotrope", result["packages"])
+                self.assertFalse(result["jobs"]["test-ironhorse"])
+
     def test_nonmanifest_bundle_inputs(self):
         self.assertTrue(self.selected("packages/lal/agent.js")["familiar-bundle"])
         self.assertTrue(self.selected("scripts/pack-all.mjs")["viable-release"])

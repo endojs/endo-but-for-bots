@@ -56,6 +56,10 @@ CORE = {
     "ironhorse-compile", "ironhorse-regexp", "ironhorse-store-sqlite",
     "ironhorse-store-do", "ironhorse-store-do-rusqlite",
 }
+# The binaries the Thixotrope host runs as an Ironhorse worker: the native
+# worker and the wasm engine's launcher. A change that reaches either one
+# (their shared core and lease crates included) runs the host's tests.
+IRONHORSE_WORKERS = {"thixotrope-ironhorse-worker", "thixotrope-ironhorse-wasm-launcher"}
 # The engine members rust/engine/scripts/build-wasm.py builds for wasm; its
 # test holds this set to the script's list.
 WASM_CRATES = {
@@ -243,7 +247,7 @@ def classify(paths, graphs, all_jobs=False):
         if root_rust_config or engine_config or "ironhorse-262" in graph.crates(core_affected):
             bridge.add("js:@endo/hardened262")
         if root_rust_config or engine_config or any(under(p, "rust/thixotrope-ironhorse-worker") or under(p, "rust/thixotrope-xs-worker")
-               for p in rust_paths) or "thixotrope-ironhorse-worker" in graph.crates(core_affected):
+               for p in rust_paths) or graph.crates(core_affected) & IRONHORSE_WORKERS:
             bridge.add("js:@endo/thixotrope")
         if root_rust_config or engine_config or "endo" in graph.crates(core_affected):
             bridge.add("js:@endo/daemon")
@@ -277,7 +281,7 @@ def classify(paths, graphs, all_jobs=False):
             for name, manifest in graph.js.items() if name in packages
         )
         jobs["build-xsnap"] |= bool(core_crates & {"endo", "xsnap"})
-        jobs["test-thixotrope-ironhorse"] |= "thixotrope-ironhorse-worker" in core_crates
+        jobs["test-thixotrope-ironhorse"] |= bool(core_crates & IRONHORSE_WORKERS)
         jobs["test-ironhorse"] |= bool(core_crates & CORE)
         jobs["test-ironhorse-calibration"] |= "ironhorse-vm" in core_crates
         jobs["test-ironhorse-oracle"] |= any(
