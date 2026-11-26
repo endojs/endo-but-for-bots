@@ -62,18 +62,26 @@ CORE = {
 # (their shared core and lease crates included) runs the host's tests.
 IRONHORSE_WORKERS = {"thixotrope-ironhorse-worker", "thixotrope-ironhorse-wasm-launcher"}
 # The inputs of the host's suite under the wasm engine, by path rather than
-# through the crate graph: every engine crate reaches the core, and running
-# this long job for every engine change is a cost not yet agreed. The engine
-# crate listed is the store the module is built over. Root and engine Cargo
-# configuration select it as a Rust job.
+# through the graphs. The whole of packages/thixotrope is one: the host's 13
+# files exercise all of its src/, its scripts build the bundles, and its
+# package.json holds the lanes' scripts. Outside it: the wasm crate (with
+# build.py), the launcher, the lease, the core, the store the module is built
+# over, the native worker the lane compares against, the module's build
+# recipe, the Node version and the root AVA config the lane extends. Root
+# and engine Cargo configuration select it as a Rust job.
+#
+# Deliberately left out, so this long job does not run for every change that
+# reaches it: the engine crates other than the store (every one reaches the
+# core through the crate graph), and the package's transitive JS dependencies
+# such as packages/ses (they reach both engines through the same bundle).
+# The native lane runs for both, and scheduled and dispatched runs select
+# every job.
 IRONHORSE_WASM_INPUTS = (
+    "packages/thixotrope",
     "rust/thixotrope-ironhorse-wasm", "rust/thixotrope-ironhorse-wasm-launcher",
     "rust/thixotrope-ironhorse-lease", "rust/thixotrope-ironhorse-core",
-    "rust/engine/ironhorse-store-do", "packages/thixotrope/src/ironhorse",
-    "packages/thixotrope/test/ironhorse", "packages/thixotrope/test/ironhorse-wasm",
-    "packages/thixotrope/ava.ironhorse.config.mjs",
-    "packages/thixotrope/ava.ironhorse-wasm.config.mjs",
-    "packages/thixotrope/ava.ironhorse-wasm-module.config.mjs",
+    "rust/thixotrope-ironhorse-worker", "rust/engine/ironhorse-store-do",
+    "rust/engine/scripts/build-wasm.py", ".node-version", "ava-endo-lockdown.config.mjs",
 )
 # The engine members rust/engine/scripts/build-wasm.py builds for wasm; its
 # test holds this set to the script's list.

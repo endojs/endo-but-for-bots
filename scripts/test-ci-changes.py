@@ -191,25 +191,36 @@ class Repository(unittest.TestCase):
                 self.assertFalse(result["jobs"]["test-ironhorse"])
 
     def test_wasm_engine_inputs_select_its_host_lane(self):
-        """The host's suite under the wasm engine runs for the module, the
-        launcher, the lease, the core, the store the module is built over, the
-        host's Ironhorse sources, both lanes' tests and configs, the build and
-        staging script, and the root and engine Cargo configuration."""
+        """The host's suite under the wasm engine runs for any change to the
+        package but prose, for the module (with its build script), the
+        launcher, the lease, the core, the store the module is built over,
+        the native worker it compares against, the module's build recipe, the
+        Node version, the root AVA config the lane extends, and the root and
+        engine Cargo configuration."""
         for path in [
             "rust/thixotrope-ironhorse-wasm/src/lib.rs",
             "rust/thixotrope-ironhorse-wasm/build.py",
             "rust/thixotrope-ironhorse-wasm-launcher/src/main.rs",
             "rust/thixotrope-ironhorse-lease/src/lib.rs",
             "rust/thixotrope-ironhorse-core/src/protocol.rs",
+            "rust/thixotrope-ironhorse-worker/src/main.rs",
             "rust/engine/ironhorse-store-do/src/store.rs",
+            "rust/engine/scripts/build-wasm.py",
             "packages/thixotrope/src/ironhorse/wasm/shell.mjs",
             "packages/thixotrope/src/ironhorse/wasm/host-abi.mjs",
             "packages/thixotrope/src/ironhorse/ironhorse-runtime.js",
+            "packages/thixotrope/src/platform/node/processes.js",
+            "packages/thixotrope/src/core/daemon.js",
+            "packages/thixotrope/src/index.js",
+            "packages/thixotrope/scripts/bundle-ironhorse-worker.mjs",
+            "packages/thixotrope/package.json",
             "packages/thixotrope/test/ironhorse/supervisor.js",
             "packages/thixotrope/test/ironhorse-wasm/shell.js",
             "packages/thixotrope/ava.ironhorse.config.mjs",
             "packages/thixotrope/ava.ironhorse-wasm.config.mjs",
             "packages/thixotrope/ava.ironhorse-wasm-module.config.mjs",
+            ".node-version",
+            "ava-endo-lockdown.config.mjs",
             "Cargo.toml",
             "Cargo.lock",
             "rust-toolchain.toml",
@@ -219,18 +230,23 @@ class Repository(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(self.selected(path)["test-thixotrope-ironhorse-wasm"])
 
-    def test_other_engine_crates_do_not_select_the_wasm_host_lane(self):
-        """Deliberately not every engine crate: each reaches the core through
-        the graph, but this long job is not run for every engine change."""
+    def test_other_engine_crates_and_js_dependencies_do_not_select_the_wasm_host_lane(self):
+        """Deliberately not every engine crate, nor the package's transitive
+        JS dependencies: each reaches both engines (the crates through the
+        core, the JS through the shared bundle), and the native lane runs
+        for them."""
         for path in [
             "rust/engine/ironhorse-vm/src/lib.rs",
             "rust/engine/ironhorse-snapshot/src/store.rs",
+            "packages/ses/src/lockdown.js",
+            "packages/thixotrope/README.md",
             "rust/thixotrope-ironhorse-wasm/README.md",
-            "packages/thixotrope/src/index.js",
         ]:
             with self.subTest(path=path):
                 self.assertFalse(self.selected(path)["test-thixotrope-ironhorse-wasm"])
-        self.assertTrue(self.selected("rust/engine/ironhorse-vm/src/lib.rs")["test-thixotrope-ironhorse"])
+        for path in ["rust/engine/ironhorse-vm/src/lib.rs", "packages/ses/src/lockdown.js"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["test-thixotrope-ironhorse"])
 
     def test_wasm_module_selects_both_host_lanes(self):
         """The module's native unit tests run in test-thixotrope-ironhorse's
