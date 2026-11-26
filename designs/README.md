@@ -558,7 +558,7 @@ LLM-agent stack).*
 | [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) | 2026-09-23 | 2026-09-24 | Proposed |
 | [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) | 2026-09-24 | 2026-09-24 | Proposed |
 | [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) | 2026-09-24 | 2026-09-24 | Reference |
-| [thixotrope-wasm-worker](thixotrope-wasm-worker.md) | 2026-10-14 | 2026-10-15 | Proposed |
+| [thixotrope-wasm-worker](thixotrope-wasm-worker.md) | 2026-10-14 | 2026-11-26 | In Progress |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | In Progress |
 | [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | 2026-04-23 | 2026-05-06 | **Complete** |
 | [syrup-frame](syrup-frame.md) | 2026-05-04 | 2026-05-06 | Deprecated |
@@ -651,6 +651,8 @@ The 2026-10-14 pass adds [thixotrope-wasm-worker](thixotrope-wasm-worker.md) (**
 The rebase of PR #1220 adds [thixotrope/host-managed-resources](../packages/thixotrope/designs/host-managed-resources.md) (Proposed), bringing Proposed to 31 and the indexed records to 250 after the totals above.
 
 The same PR adds [thixotrope/production-cost-model](../packages/thixotrope/designs/production-cost-model.md) (Proposed), bringing Proposed to 32 and the indexed records to 251.
+
+The 2026-11-26 update moves [thixotrope-wasm-worker](thixotrope-wasm-worker.md) from Proposed to **In Progress**: its Phases 1 and 2 landed as `rust/thixotrope-ironhorse-core` and `rust/engine/ironhorse-store-do` (with `rust/endo/ironhorse-store-do-rusqlite`), and Phase 4, the local wasm engine, is in progress with its native launcher landed. This moves one summary row between the two buckets; the totals above are not re-derived here. Phase 3 is deferred and Phases 0b and 5 stay blocked, so M4's projected duration and the timeline are unchanged.
 
 
 
@@ -875,7 +877,7 @@ flowchart TD
         oortho --> ocf
         ihengine --> ocf
         ocf --> ocfa
-        owasm[thixotrope-wasm-worker<br/><i>PROPOSED</i>]
+        owasm[thixotrope-wasm-worker<br/><i>IN PROGRESS</i>]
         ocf --> owasm
         ihengine --> owasm
         owasm --> ocfa
@@ -1284,7 +1286,7 @@ finalized.
 | thixotrope | In Progress | OCapN comms hub owned by Thixotrope; XS and Ironhorse SQLite workers; snapshot/journal recovery; persistent guest objects, answers, and listeners; local supervisor, application installation, observable inventory, and vat retention diagnostics. Layered durable acceptance and outbox recovery are implemented in protocol v2; the application admission API remains separate design work. Potential mechanisms are tracked separately in the package designs. |
 | thixotrope-on-cloudflare | Proposed | Run each Thixotrope worker as a hibernating SQLite-backed Durable Object, with Ironhorse compiled to wasm and the heap store on Durable Object SQLite. Gated on the engine work in `rust/engine/WASM-BLOCKERS.md` and `rust/engine/STACK-DEPTH-REFACTOR.md`; the [verification review](thixotrope-on-cloudflare-review.md) ranks the blockers. |
 | thixotrope-on-cloudflare-addendum-single-vat-hub | Proposed | Replaces the base design's architecture with single-vat hubs (vat and OCapN hub tables in one Durable Object) and a per-tenant control object for lifecycle and collection. |
-| thixotrope-wasm-worker | Proposed | The worker split into a host-neutral core and host shells, the heap store ported onto Durable Object SQLite over a host-import ABI, and the base design's Phase 0 measured in local workerd; the spike under `rust/engine/wasm-worker-spike/` passes the whole store acceptance suite inside a Durable Object. |
+| thixotrope-wasm-worker | In Progress | The worker split into a host-neutral core and host shells, the heap store ported onto Durable Object SQLite over a host-import ABI, and the base design's Phase 0 measured in local workerd; the spike under `rust/engine/wasm-worker-spike/` passes the whole store acceptance suite inside a Durable Object. Phase 1 (`rust/thixotrope-ironhorse-core`, the native worker rebuilt on it) and Phase 2 (`rust/engine/ironhorse-store-do`, tested against real SQLite through `rust/endo/ironhorse-store-do-rusqlite`) landed; Phase 4, the local wasm engine, is in progress, with its native launcher (`rust/thixotrope-ironhorse-wasm-launcher`) and the shared lease crate landed; Phase 3, the platform-neutral profile, is deferred; Phases 0b and 5 are blocked on deployment access and on the review's blockers 7–11. |
 | `thixotrope/message-delivery` | **Implemented** | Package-level implementation record for the durable message-delivery slice. |
 | `thixotrope/host-managed-resources` | Proposed | Package-level proposal: the installation registry out of the user's workspace, many workspaces per daemon with one default, the control socket kept in the host, typed resource descriptions. |
 | `thixotrope/production-cost-model` | Proposed | Package-level triage of an operator's five-day production report: no Ironhorse commit per crank, in-memory journal counts, a lease holder that survives SIGTERM, cadence snapshots and a `status` that answers while booting; the c-list growth is left to the engine's coming `WeakRef` support, with this package's requirements on it stated. Larger changes (a hub journal, background warming) are deferred, and settlement-time gc frames are rejected. |
@@ -2025,7 +2027,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | thixotrope | M | Not re-estimated | 4 | XS and Ironhorse engines, comms hub, supervisor, and application installation are implemented. Remaining delivery-contract work and package experiments need a new estimate; the earlier XS-adapter estimate is obsolete. |
 | thixotrope-on-cloudflare | — | not estimated; its Phase 0 is a go/no-go measurement | 4 | The stack prerequisites are costed in `rust/engine/STACK-DEPTH-REFACTOR.md`; the other engine prerequisites (`rust/engine/WASM-BLOCKERS.md` B1, B5, B7, B8) are not costed; the rest waits on Phase 0. |
 | thixotrope-on-cloudflare-addendum-single-vat-hub | — | not estimated | 4 | Phase 2 of the base design; its protocol findings in the review must be resolved first. |
-| thixotrope-wasm-worker | L | about 12 days for Phases 0b–4 (0b S, 1 M, 2 S–M, 3 M plus B7, 4 M, at the 2026-05-14 calibration's median actuals of 0.7 d for S, 3 d for M; 1, 2 and 4 can run in parallel), then Phase 5 at L (8.5 d actual) once the review's blockers 7–11 are resolved | 4 | The B5 plan: core crate, `ironhorse-store-do`, platform-neutral profile, local wasm engine; Phase 5 is the Addendum A protocols and waits on the review's blockers 7–11. |
+| thixotrope-wasm-worker | L | Phases 1 and 2 landed; about 4 days remain for 0b (S, blocked on deployment access) and 4 (M, in progress), at the 2026-05-14 calibration's median actuals of 0.7 d for S, 3 d for M; then Phase 3 at M plus B7 (deferred) and Phase 5 at L (8.5 d actual) once the review's blockers 7–11 are resolved | 4 | The B5 plan: core crate and `ironhorse-store-do` landed; the local wasm engine in progress, consuming both; the platform-neutral profile deferred; Phase 5 is the Addendum A protocols and waits on the review's blockers 7–11. |
 | daemon-agent-network-identity | S-M | 3 days | 4 | Network registration, locator construction |
 | ~~ocapn-noise-network~~ | L | — | 4 | ✅ Complete (PR #137 consolidates stacked PRs #111/#112/#113; merged 2026-05-08) |
 | ~~ocapn-iroh-netlayer~~ | M | — | 4 | ✅ Complete (implemented with the design: `@endo/ocapn-iroh`, mock-iroh CI tests plus `ENDO_IROH_INTEGRATION=1`-gated real-endpoint test) |

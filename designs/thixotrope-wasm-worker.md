@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-10-14 |
-| **Updated** | 2026-10-15 |
+| **Updated** | 2026-11-26 |
 | **Author** | Aaron Davis (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
 
 *A plan, with evidence from a spike, for running the Thixotrope worker on wasm: the worker split
 into a host-neutral core and host shells, the heap store ported onto Durable Object SQLite over a
@@ -21,6 +21,102 @@ in and re-runnable.
 Where the [verification review](thixotrope-on-cloudflare-review.md) already corrected the base
 design, this document follows the correction and cites it.
 
+## Status
+
+In Progress, as of 2026-11-26.
+Phases 1 and 2 have landed, Phase 4 is decided and in progress, Phase 3 is deferred, and Phases
+0b and 5 are blocked; §8 gives each phase's status.
+The body of this document describes the code as it stands, and the deviations below record
+where the code departs from the plan and why.
+
+Landed:
+
+- `rust/thixotrope-ironhorse-core` (Phase 1): the host-neutral worker, made of the crank
+  (`eval`, `deliver`, the post-crank collection and its finalizer cascade), `WorkerLimits`, the
+  NDJSON protocol, and `Worker<S: HeapStore>`, one machine bound to one heap store (§2, §3).
+  `rust/thixotrope-ironhorse-worker/src/main.rs` is now the native shell over it.
+- `rust/engine/ironhorse-store-do` (Phase 2): `DoStore<E: SqlExecutor>`, the Durable Object
+  `HeapStore`, and its `wire` value encoding (§4.3); and
+  `rust/endo/ironhorse-store-do-rusqlite`, a rusqlite executor that runs the engine's store
+  acceptance suite against `DoStore` on real SQLite.
+- `rust/thixotrope-ironhorse-lease` and `rust/thixotrope-ironhorse-wasm-launcher`, which the
+  plan did not have: the state directory's kernel leases as a crate both worker binaries share,
+  and the native front of the local wasm engine (§6.3).
+
+Not yet landed (Phase 4, §6.3): the wasm cdylib `rust/thixotrope-ironhorse-wasm`, the Node shell
+and the host-ABI module under `packages/thixotrope/src/ironhorse/wasm/`, and the runtime-identity
+change in `packages/thixotrope/src/ironhorse/ironhorse-runtime.js`.
+
+### Deviations from the plan as built
+
+- **The heap is committed after a fresh boot and at close, never per crank.**
+  The plan reasoned from a worker loop of eval then checkpoint; before Phase 1 began the
+  default branch dropped the per-crank checkpoint, because the host recovers a worker from an
+  immutable image plus journal replay (§2), so the checkpoint bought no durability and, once
+  every crank's collection marked every small-state section dirty, cost a re-encoding of every
+  section.
+  §2, §4.4, §5.2, §7.5 and §9 are read against this.
+- **The core holds the protocol, the limits, delivery and the collection.**
+  The plan's core had `eval` and the session calls only; by the time of the split the native
+  `main.rs` had grown the `deliver` request, the finalizer cascade, the limits argument and the
+  migration at open, and a second shell must produce the same bytes, so the protocol is a pure
+  function (`respond(&str) -> Step`) every shell drives.
+- **`Worker`, not `Session`, and a failed crank latches it dead.**
+  After a failed crank every later crank, checkpoint and close refuses, so nothing the failed
+  crank did can be committed by any shell, rather than each shell having to remember not to.
+- **A lazy store's failed row read is a host failure.**
+  A lazy machine faults rows in mid-crank and a failed read unwinds; the core catches it and
+  fails the crank as a host failure (`StoreFault`, restore in a fresh worker) so the unwind never
+  reaches a shell.
+- **Errors are typed and keep the store's error.**
+  `WorkerError` carries the `StoreError` of the step that failed, so a shell can classify it, and
+  its text is the native worker's old text, so the native worker's output did not change.
+- **The core depends on `serde_json`.**
+  The protocol and the limits argument are JSON, and the core parses both.
+- **The store takes a statement executor as a trait.**
+  §5.3 recommended it to keep the `unsafe` import block out of the engine workspace; it also let
+  the whole acceptance suite run natively on real SQLite through
+  `rust/endo/ironhorse-store-do-rusqlite`, which sits in the root workspace so that `rust/engine`
+  stays zero-C.
+- **`DoStore::open` never resets.**
+  The spike's `ih_store_open(id, reset)` could empty a store; the product's open stamps only a
+  database whose `ih_*` tables are absent or empty and refuses a populated unstamped one before
+  any write, so a production open cannot erase or adopt a heap, and the harness resets with
+  `DoStore::reset_for_harness`.
+- **Migration runs on the Durable Object store.**
+  `replace_for_migration` is implemented (§5.2 row 2), because the core runs `migrate_store`
+  before every resume, as the native worker does, and a backend that refused it could not
+  resume a heap written at an older store schema.
+- **A first-wins failure record.**
+  `DoStore::record_failure` keeps the first reason recorded, in a host transaction of its own
+  after the failed crank's rollback, so the cause of a quarantine outlives that rollback and is
+  not overwritten by what failed after it (§4.4).
+- **Every committing call plans its writes before the first one runs.**
+  Each refusal the store raises itself (the value cap, a framing it cannot store) then precedes
+  any write, so a refusal never depends on the host's rollback; and the plan borrows the row
+  bytes, so a commit's peak is the batch plus one row.
+- **Sections end in a chunk strictly shorter than a full one.**
+  The spike cut a section into 1,000,000-byte pieces; the product stores full chunks and then a
+  final shorter one (empty when the length is an exact multiple), so a lost chunk is detectable
+  wherever it was (§4.3).
+- **Integers are integers in Rust and doubles only on the wire.**
+  `Value::Integer(i64)` keeps the domain's integers exact, and the `wire` module maps them to the
+  doubles `sql.exec` binds, checked both ways, so an inexact value is refused rather than
+  rounded (§4.1).
+- **The local engine has a native launcher.**
+  Node resets inherited `SIG_IGN` dispositions, so the lock helper cannot be Node, and the shared
+  lease on `heaps/active.lock` must be held for the worker's whole life by the pid the host
+  spawned and later kills, so `thixotrope-ironhorse-wasm-worker` holds the lease and `exec`s
+  Node (§6.3).
+- **The wasm cdylib moved to Phase 4, with its own build.**
+  `rust/engine/scripts/build-wasm.py` builds only the engine workspace's library crates and the
+  core is in the root workspace, so the cdylib is built by a script of its own that imports the
+  recipe, and Phase 1 landed without it.
+- **The runtime identity keeps execution limits out and stays at `format: 2`.**
+  The native runtime deliberately keeps limits out of the profile so heaps reopen after a limit
+  change, and `format: 2` is already its current format, so the local engine only adds
+  `heapFormat` and `parts`, and §6.2's limits-in-the-profile question is left to Phase 3.
+
 ---
 
 ## 1. Summary
@@ -31,11 +127,15 @@ design, this document follows the correction and cites it.
   The engine's whole backend acceptance suite (`ironhorse_snapshot::store_suite`, all eight parts,
   the seven-way metamorphic runner included) passes against it inside a SQLite-backed Durable
   Object in local workerd, with the entire store stack running in wasm.
+  The product crate made from it, `rust/engine/ironhorse-store-do`, is larger (its `store.rs` is
+  837 lines) and passes the same suite natively on real SQLite.
 - **The worker's host dependencies are four, and all four sit in the shell.**
   `flock` leases, the big-stack thread, file paths and bundled SQLite are what
-  `rust/thixotrope-ironhorse-worker/src/main.rs` adds around the engine; the crank loop itself
-  (`Compiler`, `eval` and `crank_halted`, 179 lines) is copied into the spike verbatim and kept
-  in sync by hand until the core crate of §3 gives both shells one copy.
+  `rust/thixotrope-ironhorse-worker/src/main.rs` adds around the engine; the crank loop and the
+  protocol now live in the core crate of §3, `rust/thixotrope-ironhorse-core`, on which the
+  native worker is built.
+  The spike keeps its own earlier copy of `Compiler`, `eval` and `crank_halted`, taken before the
+  worker gained `deliver` and the post-crank collection, and nothing keeps that copy in sync.
 - **The engine's commit tokens are the embedder's to choose, and the worker must choose them.**
   When the spike began, the default commit-token source (`RandomTokens`,
   `ironhorse-snapshot/src/store.rs`) read the clock and the process id, which the standard
@@ -66,19 +166,32 @@ It names, for each, what the wasm worker plan depends on.
 
 ## 2. The worker today, and what is host-specific
 
-`rust/thixotrope-ironhorse-worker/src/main.rs` (490 lines at `863a9957f`, 360 before its tests)
-is one process around one Ironhorse machine and one SQLite heap.
+`rust/thixotrope-ironhorse-worker/src/main.rs` is one process around one Ironhorse machine and
+one SQLite heap.
+When this plan was written it was 490 lines (at `863a9957f`, 360 before its tests); by the time
+Phase 1 began it was 1,042, and it is now a 244-line shell (128 before its tests) over the core
+crate of §3, whose files the table names.
 Read from the inside out:
 
-| Layer | Lines | What it is | Host-neutral? |
+| Layer | Where | What it is | Host-neutral? |
 |---|---|---|---|
-| `Compiler` | 17–116 | The `SourceCompiler` the machine uses for `eval` and `Function`, mapping compiler refusals onto the VM's halt vocabulary, a host allocation failure included | yes |
-| `eval` | 118–180 | One crank: arm the meter, compile the script under the parse meter, link or relink, run, report the halt | yes |
-| `crank_halted` | 189–195 | The fatal text of a crank that did not complete, naming a host failure apart from the program's own halts so the host restores rather than records it | yes |
-| `open_heap` | 264–278 | Open or create the SQLite store, migrate an older schema, begin or resume the session | the store is host-specific; the session calls are not |
-| `run` | 280–338 | Parse arguments, take the shared lease, boot a fresh heap from files, then the NDJSON loop: `eval`, checkpoint, `result` or `fatal`, `close` | the protocol and the loop are neutral; the lease, the files and the pipes are not |
-| `lock_file`, `supervise_lock` | 199–255 | `flock` on the lease files; the `--lock-state` helper that holds the supervisor's exclusive lease | host-specific |
-| `main` | 340–360 | A thread with `NATIVE_STACK_BYTES` of stack, exit codes | host-specific |
+| `Compiler` | core, `src/compiler.rs` | The `SourceCompiler` the machine uses for `eval` and `Function`, mapping compiler refusals onto the VM's halt vocabulary, a host allocation failure included | yes |
+| `eval`, `deliver` | core, `src/crank.rs` | One crank: arm the meter, compile the script under the parse meter, link or relink, run, report the halt; then collect garbage and run the finalizer cascade, at most `FINALIZATION_ROUNDS` (64) sweep-and-notify rounds under one budget of their own. `deliver` (protocol feature `deliver-v1`) is that crank followed by `JSON.stringify(thixotropeTakeOutbound())` under a separate drain budget | yes |
+| `crank_halted` | core, `src/crank.rs` | The fatal text of a crank that did not complete, naming a host failure apart from the program's own halts so the host restores rather than records it | yes |
+| `WorkerLimits` | core, `src/limits.rs` | `crankBudget`, `bootstrapBudget`, `slotCeiling` and `chunkCeiling`, parsed and validated from one JSON argument; the ceilings are reapplied after every restore, since arena policy is not snapshot state | yes |
+| `respond`, `ready_line` | core, `src/protocol.rs` | The NDJSON protocol as a pure function from a request line to a `Step` (`Continue`, `Close` or `Die`) | yes |
+| `Worker` | core, `src/worker.rs` | One machine bound to one `HeapStore`: begin, or `migrate_store` then resume, boot, checkpoint, respond, close | yes |
+| `open_heap`, `close_heap` | `main.rs` | Open or create the SQLite store; a new file begins, an existing one is migrated and resumed eagerly; close commits and closes the file | the store is host-specific; the session calls are not |
+| `run` | `main.rs` | Parse the arguments (heap, profile, active-lease path, limits JSON, boot files), take the shared lease, boot a fresh heap from files and commit it once, then the NDJSON loop over stdio, and commit at close | the protocol and the loop are the core's; the lease, the files and the pipes are not |
+| `lock_file`, `supervise_lock` | `rust/thixotrope-ironhorse-lease` | `flock` on the lease files; the `--lock-state` helper that holds the supervisor's exclusive lease | host-specific |
+| `main` | `main.rs` | A thread with `NATIVE_STACK_BYTES` of stack, exit codes | host-specific |
+
+The loop does not checkpoint per crank.
+A crank's result is answered and nothing is committed: the heap is committed after a fresh boot
+and at close (`thixotrope-ironhorse-core/src/protocol.rs`).
+The host never resumes a worker from an incarnation's own file; it recovers one from an immutable
+image, a closed copy of `heap.sqlite` kept as `heaps/snapshots/<sha256>.sqlite`, plus journal
+replay (`packages/thixotrope/src/ironhorse/ironhorse-engine.js`).
 
 The four host dependencies B5 lists each map onto one Durable Object fact:
 
@@ -98,12 +211,13 @@ Everything in the table's second column is what the spike's host shell does or s
 ```
                          thixotrope-ironhorse-core  (Rust, builds for every target)
                          ┌──────────────────────────────────────────────┐
-                         │ Compiler, eval, session (begin, resume lazy  │
-                         │ or eager, checkpoint, stats), halt classes   │
+                         │ Compiler, crank (eval, deliver, sweep),      │
+                         │ limits, NDJSON protocol, Worker (begin,      │
+                         │ resume lazy or eager, checkpoint, close)     │
                          │ HeapStore consumer only; no I/O, no clock    │
                          └───────┬───────────────────────┬──────────────┘
                                  │                       │
-          native shell (today's main.rs)         wasm shell (cdylib exports)
+          native shell (main.rs)                 wasm shell (cdylib exports)
           ┌───────────────────────────┐          ┌───────────────────────────┐
           │ flock leases, thread,     │          │ extern "C-unwind" exports │
           │ paths, NDJSON on stdio,   │          │ status + message buffer,  │
@@ -114,25 +228,40 @@ Everything in the table's second column is what the spike's host shell does or s
                                               or Node with node:sqlite (local engine)
 ```
 
-Proposed crate layout:
+The crate layout, as built and as decided:
 
-- **`rust/thixotrope-ironhorse-core`** (library): `Compiler`, `eval`, and a `Session` type that
-  owns the `StoreSession`, the signature and the ceilings and exposes `begin`, `resume(lazy)`,
-  `eval(source, budget)`, `checkpoint`, `stats` and `drop`.
-  It depends on `ironhorse-vm`, `ironhorse-compile` and `ironhorse-snapshot` only.
-  The spike's `src/session.rs` is this crate minus the thread-local.
-- **`rust/thixotrope-ironhorse-worker`** (binary, native): today's `main.rs` with `eval` and
-  `Compiler` deleted in favour of the core crate.
-  Nothing else changes; its tests keep passing against `MemoryStore` and the SQLite store.
-- **`rust/thixotrope-ironhorse-wasm`** (cdylib, wasm): the spike's `src/lib.rs`, `host.rs` and
-  `store.rs`, built with the B1 recipe.
-  Exports take a store id, a profile string, ceilings and source text; every engine-running body
-  runs under `catch_unwind`; a result is a status and a message buffer the host copies out.
+- **`rust/thixotrope-ironhorse-core`** (library, landed): `Compiler`, the crank, `WorkerLimits`,
+  the protocol, and `Worker<S: HeapStore>`, which owns the `StoreSession`, the store, the
+  signature and the limits and exposes `begin`, `resume` (with `Resume::Eager` or
+  `Resume::Lazy`, after `migrate_store`), `boot`, `checkpoint`, `eval`, `deliver`,
+  `respond(&str) -> Step`, `close`, `into_store` and `is_dead`.
+  `WorkerLimits` is constructible only by `WorkerLimits::parse`, so every one is validated, and
+  `WorkerError` names the failed step and keeps its `StoreError`.
+  It depends on `ironhorse-vm` (with `consensus`), `ironhorse-compile`, `ironhorse-snapshot` and
+  `serde_json`, and its own tests run against `MemoryStore`.
+  It has grown well past the spike's `src/session.rs`, which has no protocol, limits, delivery or
+  collection.
+  A known conformance gap is recorded in its `src/compiler.rs`: there is no
+  `compile_eval_units`, so a direct `eval('super.x')` throws a catchable `SyntaxError` where the
+  specification gives the value.
+- **`rust/thixotrope-ironhorse-worker`** (binary, native, landed): `main.rs` with the crank, the
+  limits and the protocol deleted in favour of the core crate, and the leases in favour of
+  `rust/thixotrope-ironhorse-lease`; its own tests run against the SQLite store.
+- **`rust/thixotrope-ironhorse-wasm`** (cdylib, wasm, Phase 4, not yet landed): the core over
+  `DoStore`, with the spike's import block, the only `unsafe`, beside the exports of §4.2, and
+  built for `wasm32-wasip1` by its own script, which imports the B1 recipe from
+  `rust/engine/scripts/build-wasm.py`.
+  Every engine-running body runs under `catch_unwind`; a result is a status and a message buffer
+  the host copies out.
+- **`rust/thixotrope-ironhorse-lease`** and **`rust/thixotrope-ironhorse-wasm-launcher`**
+  (landed, not in the plan): the kernel leases both worker binaries honour, and the native front
+  of the local wasm engine (§6.3).
 
-The ABI between core and shell is the `Session` type on the Rust side.
+The ABI between core and shell is the `Worker` type on the Rust side.
 Between the wasm shell and its JS host it is §4.
 
-What replaces the kernel lease is not code: the object id is the lease.
+What replaces the kernel lease on a Durable Object is not code: the object id is the lease.
+The local wasm engine keeps the kernel leases, held by its launcher (§6.3).
 What the native lease protected against, an abandoned incarnation still writing, cannot happen
 when the platform guarantees one instance; what it cannot protect against, a host that reuses a
 poisoned instance, is the host contract of §4.4.
@@ -160,10 +289,14 @@ u32, error codes instead of throws, no reentrant `tx`).
 | `host_random` | `(dst_ptr, len)` | Host randomness (`crypto.getRandomValues`), for commit tokens |
 | `host_log` | `(ptr, len)` | A diagnostic line |
 
-Values both ways are one tag byte then a payload: null; an f64 (integers travel as doubles,
-exact within u32, which is what `sql.exec` binds and returns); a blob (u32 length, bytes); text
-(u32 length, UTF-8).
+Values both ways are one tag byte then a payload: null; an f64 (integers travel as doubles, which
+is what `sql.exec` binds and returns); a blob (u32 length, bytes); text (u32 length, UTF-8).
 A result is a u32 row count, then per row a u32 column count and that many values.
+In the spike every integer is a u32, exact as a double by construction.
+`ironhorse-store-do`'s `wire` module carries the same encoding with integers as
+`Value::Integer(i64)` on the Rust side, and checks the mapping both ways: an integer that no
+double represents exactly is refused on encode, and a double that is not an integer or lies
+outside the `i64` range is refused on decode.
 
 The module is built for `wasm32-wasip1`, so the standard library also imports six functions from
 `wasi_snapshot_preview1` (`random_get`, `clock_time_get`, `fd_write`, `environ_get`,
@@ -212,33 +345,93 @@ The panic hook records a panic's text before the unwind, and a store fault, whic
 raises with `resume_unwind` past the hook, is read from the payload itself, so an assertion of the
 suite, a store fault and an engine invariant all come back by name.
 
+The product cdylib, `rust/thixotrope-ironhorse-wasm` (Phase 4, decided and not yet landed), has a
+smaller table shaped to the worker rather than to the harness: `ih_abi_version`; the four buffer
+helpers; `ih_open(fresh, lazy, profile, limits)`, which begins a fresh machine or migrates and
+resumes the stored one (store id 1) and applies the limits; `ih_boot(name, source)` under the
+bootstrap budget; `ih_ready()`, whose message is the ready line and which commits a fresh heap
+after its boot; `ih_request(line)`, which answers 0 (a reply, continue), 1 (close requested, no
+reply), 2 (a caught unwind) or 3 (a fatal reply, then die); and `ih_close()`, which checkpoints
+and hands the store back.
+After a caught unwind the module poisons itself and refuses every later call.
+
 ### 4.3 The store: `DoStore`
 
+The spike's store is now the product crate `rust/engine/ironhorse-store-do`, as
+`DoStore<E: SqlExecutor>`; what differs from the spike is stated here.
 Six tables, every row keyed by a store id so that several stores share one database (the suite
-needs a fresh store per case; a production object holds one):
+needs a fresh store per case; a production object holds one; store id 0 holds the database's
+stamp and is refused):
 
 ```sql
-ih_meta        (store, key, value)             -- 'manifest', and the 'IRON' stamp under store 0
+ih_meta        (store, key, value)             -- 'manifest', 'failure'; the 'IRON' stamp under store 0
 ih_slot_pages  (store, page, bytes)
 ih_chunk_exts  (store, ext, bytes)
 ih_free_segs   (store, seg, bytes)
 ih_page_edges  (store, page, targets)          -- big-endian u32s, as the SQLite backend stores them
-ih_sections    (store, id, chunk, bytes, hash) -- small-state sections in 1,000,000-byte pieces,
+ih_sections    (store, id, chunk, bytes, hash) -- small-state sections in chunks,
                                                -- the whole payload's hash on chunk 0
 ```
 
-`commit_verified` reads the manifest, runs the shared verifier, then writes: upserts for the
-dirty pages, extents, free segments and edge summaries, deletes beyond the new geometry, the
-changed sections (all 34 on the first commit at schema 38, the batch's updates after), the
-manifest.
-It issues no `BEGIN`: the host runs every export that commits (begin, import, a crank with its
-checkpoint) inside one `transactionSync`, and a failed status makes it throw, which rolls the
-callback back (review correction 10).
-Every page, extent, segment and edge blob is checked against 2,000,000 bytes before it is bound,
-and the sections are chunked under it, because local workerd accepts 4 MiB and would not catch an
-over-cap row (review §6 findings).
+A section of `len` bytes is stored as `len / 1,000,000` full chunks followed by one final chunk
+strictly shorter than a full one, which is empty when `len` is an exact multiple (an empty payload
+is one empty chunk).
+A read therefore detects a lost chunk wherever it was: a gap in the chunk numbers, a chunk after a
+short one, or a section whose last chunk is full.
+The spike cut sections into 1,000,000-byte pieces with no such final chunk.
+
+`DoStore::open` creates the schema and writes the stamp only in a database whose `ih_*` tables
+are absent or empty; it refuses a foreign stamp, or a populated database with none, before any
+write, and it never resets a store (`DoStore::reset_for_harness` does, for harnesses).
+It learns which `ih_*` tables exist by name from `sqlite_master` and never counts that table's
+rows.
+
+`commit_verified` reads the manifest, runs the shared verifier, then plans every write before
+the first one runs: upserts for the dirty pages, extents, free segments and edge summaries,
+deletes beyond the new geometry, the changed sections (all 34 on the first commit at schema 38,
+the batch's updates after), the manifest.
+Planning first puts every refusal the store raises itself before any write, and the plan borrows
+the row bytes, so a commit's peak is the batch plus one row.
+It issues no `BEGIN`: the host runs every committing call inside one transaction of its own and
+rolls it back when the call fails (review correction 10; §4.4).
+In the spike's host that is one `transactionSync` per export that commits (begin, import, a crank
+with its checkpoint), which a failed status makes throw, rolling the callback back.
+Every blob and text value is checked against 2,000,000 bytes as it is planned, and refused as
+`StoreError::Unsupported`, and the sections are chunked under it, because local workerd accepts
+4 MiB and would not catch an over-cap row (review §6 findings).
+`replace_for_migration` is built the same way, so `migrate_store` runs on this backend, and
+`DoStore::record_failure` keeps a failure record beside the heap (§4.4).
 
 ### 4.4 The host contract (the JS side)
+
+What any host of `DoStore` must do is fixed by the crate
+(`rust/engine/ironhorse-store-do/src/lib.rs`, "The host contract"):
+
+1. Run exactly one statement per `SqlExecutor::exec`, binding the parameters positionally and
+   answering every row the statement produces with exactly its columns, in order; a statement
+   that writes answers no rows.
+2. Never re-enter the store from `exec`.
+3. Run each committing call (`commit_verified`, `replace_for_migration`, `DoStore::open` and
+   `DoStore::reset_for_harness`) inside one host transaction, and roll it back when the call
+   fails.
+   The crate issues no `BEGIN`, `COMMIT` or `SAVEPOINT`, which a Durable Object refuses.
+   Within a call every read and every refusal the store raises itself precede the first write,
+   so once writing starts only the executor can fail, and the atomicity of a call that fails
+   part-way is the host's transaction and nothing else.
+4. Write `DoStore::record_failure` in a transaction of its own after the failed one has rolled
+   back, so that the failure outlives the crank it describes.
+   The first record wins, and a reason over the value cap is cut to fit at a character boundary.
+
+The store also relies on one writer: a commit's read of the stored manifest and its writes are
+atomic only inside the host's transaction, which a Durable Object's single thread and input gates
+make exclusive.
+
+Which calls commit is the worker's choice, not the store's.
+The core commits the heap after a fresh boot and at close and never per crank (§2), so a crank
+in a host built on it runs no `commit_verified`; the local engine nonetheless wraps every export
+call in one `BEGIN IMMEDIATE` ... `COMMIT`, rolled back on any failure (§6.3).
+How often a Durable Object worker commits, and so what a crank costs it in rows, is for Phase 5
+to decide; nothing has been built for it.
 
 The spike's `host/worker.js` is the Durable Object the review's work item 4 describes, and the
 measurements ran under it:
@@ -249,8 +442,8 @@ measurements ran under it:
    The module exports no `_initialize`: rustc links no crt object into a `wasm32-wasip1` cdylib,
    so it is not a WASI reactor and has no constructors to run; the host would call one once before
    any other export if a build ever exported it.
-3. A crank is `transactionSync(() => { eval; checkpoint })`; a halt or a store error throws inside
-   the callback, so SQL rolls back.
+3. A crank is `transactionSync(() => { eval; checkpoint })`, the spike's choice rather than the
+   worker's (above); a halt or a store error throws inside the callback, so SQL rolls back.
    Begin, import and a standalone checkpoint commit the same way, and the durable write that
    workerd performs after the handler yields is waited for and timed (`ctx.storage.sync()`).
 4. After any exception from an export, trap or thrown error alike, after any status 2 (a caught
@@ -262,7 +455,8 @@ measurements ran under it:
    touch them again.
 
 What the spike does not implement from that list: the failure row written in a separate
-transaction after a halt (Addendum A §6.4 needs it for quarantine), and
+transaction after a halt (Addendum A §6.4 needs it for quarantine; `DoStore::record_failure` is
+now the store's half, and no host writes it yet), and
 `new_sqlite_classes` wiring for a deployed Worker (local workerd's config uses
 `enableSql = true` on the namespace instead).
 
@@ -279,13 +473,13 @@ Each row of §6.2 against `rust/endo/ironhorse-store-sqlite/src/lib.rs` as it is
 | Tables, composite keys, `WITHOUT ROWID`, `CREATE INDEX` | `meta`, `slot_pages`, `chunk_exts`, `small_state`, `page_edges`, `free_segs`, `side_tables`, `edge_pairs` (WITHOUT ROWID), `edge_pairs_by_page`; `small_sections` created by the first write | Carries over. `small_state` is written only for schemas before 28 and `side_tables` has no reader or writer: both are dead for a current-schema heap, and the port omits them. |
 | `ON CONFLICT … DO UPDATE`, `INSERT OR REPLACE` | every upsert in `commit_verified`, `write_small_state`, `rebuild_edge_pairs` | Carries over; the spike uses the same statements. |
 | `WITH RECURSIVE` CTEs | `reachable_pages_sql`, `reachable_within` | Legal, but they read TEMP tables (next rows). Not needed by the first port: the trait's dense defaults answer the collectors. |
-| Reading `sqlite_master` | the fresh-database gate counts tables | Would refuse an object that ever set an alarm, since `_cf_*` tables are listed (review §6). The spike stamps a `meta` row and never counts tables. |
+| Reading `sqlite_master` | the fresh-database gate counts tables | Would refuse an object that ever set an alarm, since `_cf_*` tables are listed (review §6). The spike stamps a `meta` row and never counts tables; `ironhorse-store-do` stamps one too and reads `sqlite_master` only to look up its own `ih_*` tables by name. |
 | Blob sizes | slot page ≤ 256 × 20 B, extent 64 KiB, free segment 16 KiB | Under the cap; the spike checks every blob against it anyway. |
-| Bound parameters ≤ 3 | at most 5 in the spike (`ih_sections` insert) | Under the limit of 100. |
+| Bound parameters ≤ 3 | at most 5 in the spike and in `ironhorse-store-do` (`ih_sections` insert) | Under the limit of 100. |
 | Pragmas and `busy_timeout` | `application_id` read and set; `locking_mode=EXCLUSIVE`, `journal_mode=WAL` and `synchronous=FULL` each read back and refused if the read-back disagrees, `wal_autocheckpoint` and `foreign_keys=ON` set without one; `busy_timeout` through the API | All dropped. The read-back verification is what would make the native backend refuse to open on a Durable Object; the stamp moves to `meta`. `foreign_keys` is allowlisted but the schema declares no foreign key. |
-| Transactions | `BEGIN IMMEDIATE; COMMIT;` at open to take the exclusive lock; `unchecked_transaction` in `rebuild_edge_pairs`; `transaction_with_behavior(Immediate)` in `commit_verified` and `replace_for_migration` | All absent in the port: the host's `transactionSync` is the transaction, and nothing in the commit path needs one of its own, since every read precedes every write. |
+| Transactions | `BEGIN IMMEDIATE; COMMIT;` at open to take the exclusive lock; `unchecked_transaction` in `rebuild_edge_pairs`; `transaction_with_behavior(Immediate)` in `commit_verified` and `replace_for_migration` | All absent in the port: the host's transaction (`transactionSync` on a Durable Object) is the transaction, and nothing in the commit path needs one of its own, since every read precedes every write. |
 | `CREATE TEMP TABLE` | `reach_roots`, `gen_targets`, `gen_within`, `gen_roots`; `TEMP TRIGGER`s in tests only | Absent in the port with the dense defaults. If the indexed queries are wanted later, the `json_each` form with `+e.target` (review §6) replaces them. |
-| Small-state section payloads | one row per section, whole payload | The 2 MB cap is real: on the demo counter vat the Functions section is 1,548,529 B and the Arrays section 1,388,992 B (`small_sections` of the exported heap, measured). The spike chunks every section at 1,000,000 B with the whole payload's hash on chunk 0. |
+| Small-state section payloads | one row per section, whole payload | The 2 MB cap is real: on the demo counter vat the Functions section is 1,548,529 B and the Arrays section 1,388,992 B (`small_sections` of the exported heap, measured). The spike chunks every section at 1,000,000 B with the whole payload's hash on chunk 0; `ironhorse-store-do` keeps the size and the hash and ends every section with a shorter chunk (§4.3). |
 | `rebuild_edge_pairs` on every open | only when the `edge_pairs_epoch` marker does not name the committed epoch (issue #1330) | Already conditional natively. The port has no `edge_pairs` at all until the CTE overrides are wanted. |
 | `close()` WAL fold | `Connection::close` | No counterpart; `export_to_container` is the portable image. |
 
@@ -293,10 +487,10 @@ Each row of §6.2 against `rust/endo/ironhorse-store-sqlite/src/lib.rs` as it is
 
 | § 6.3 item | Needed by the first port? | Size | Note |
 |---|---|---|---|
-| 1 Pragmas | yes | S | Done in the spike: no pragma, stamp in `meta`. |
-| 2 Transactions as `transactionSync` callbacks | yes, as "no transaction statements" | S | Done in the spike. `commit_verified` already orders reads before writes natively (`lib.rs:1106` on, its transaction at `:1117`), so nothing is restructured; `replace_for_migration` and the migration ladder stay native-only until a migration on the platform is wanted. |
+| 1 Pragmas | yes | S | Done in the spike and in `ironhorse-store-do`: no pragma, stamp in `meta`. |
+| 2 Transactions as `transactionSync` callbacks | yes, as "no transaction statements" | S | Done in the spike and in `ironhorse-store-do`. `commit_verified` already orders reads before writes natively (`lib.rs:1106` on, its transaction at `:1117`), so nothing is restructured. `ironhorse-store-do` also implements `replace_for_migration` with plain statements inside the host's transaction, so `migrate_store` runs on it, for store schemas from 28, the first sectioned one. |
 | 3 TEMP tables → `json_each` | no | — | Dense defaults. Revisit when a heap's edge set makes the dense reachability read (`page_edges` whole) the wake's cost. |
-| 4 Section size | yes | S | Done in the spike, by `(id, chunk)` with the hash on chunk 0. The review is right that chunking does not fix commit cost: a touched section is still re-encoded whole, so the Functions section (1.5 MB) is rewritten on every crank that defines a function. §7 measures it. |
+| 4 Section size | yes | S | Done in the spike, by `(id, chunk)` with the hash on chunk 0, and in `ironhorse-store-do` with a final chunk strictly shorter than the rest (§4.3). The review is right that chunking does not fix commit cost: a changed section is still re-encoded and rewritten whole, so the Functions section (1.5 MB) is rewritten by every commit since which a function was defined. Every crank's collection marks every section dirty, so each commit also re-encodes and hashes all of them to find the changed ones. §7 measures the spike's per-crank commits. |
 | 5 Edge-index rebuild | no | — | Already conditional natively; absent in the port. |
 | 6 Close and handoff | no | — | `export_to_container` exists; PITR is the platform's. |
 
@@ -307,6 +501,8 @@ Two ways to get `ironhorse-store-do`:
 - **A new crate on the `MemoryStore` pattern** (the spike): the eight required `HeapStore`
   methods plus `small_section_hashes`, which has a default, under 500 lines, no transaction
   statements, no index.
+  As built, with `replace_for_migration`, the failure record and the planned writes,
+  `ironhorse-store-do`'s `store.rs` is 837 lines.
 - **Refactor `ironhorse-store-sqlite` behind a SQL-execution trait** with two backends, rusqlite
   and the host imports: one implementation of the schema and the commit, the CTE overrides for
   free.
@@ -317,6 +513,10 @@ The spike's `DoStore` has no `unsafe` of its own but calls `host::exec`, whose
 `extern "C-unwind"` import block is `unsafe`; the crate therefore takes its statement executor as
 a trait (`exec(sql, params) -> rows`), and the import block, the only `unsafe`, stays in the wasm
 cdylib beside the exports.
+That is what was built: `rust/engine/ironhorse-store-do` defines `SqlExecutor` and
+`DoStore<E: SqlExecutor>`, and the trait also let a native executor,
+`rust/endo/ironhorse-store-do-rusqlite`, run the acceptance suite against the store on real
+SQLite from the root workspace.
 Reasons:
 
 1. The two backends want different schemas: the native one keeps `edge_pairs` and its marker, the
@@ -364,6 +564,9 @@ The CTE overrides can be ported later as `json_each` queries without changing th
   `build-ironhorse-wasm` job builds the
   engine's runtime crates for both wasm targets with it and runs the WASI snapshot tests, which
   is B6's gate.
+  The script builds the engine workspace's library crates only, `ironhorse-store-do` among them
+  since Phase 2; the worker core lives in the root workspace and is not among them, and the
+  Phase 4 cdylib is to be built by a script of its own that imports this recipe.
   The spike imports the recipe's flags and environment from that script, as
   `stack-lanes/build_probe.py` does, and builds its cdylib for `wasm32-wasip1`.
   A cold build of the module is two to three minutes with the standard library rebuilt; a warm
@@ -371,7 +574,8 @@ The CTE overrides can be ported later as `json_each` queries without changing th
 - **B7 and B8** (determinism and memory) are prerequisites for a shared heap format and for
   ceilings that mean anything under 128 MB; they do not block the port itself.
   Since the measurements, `llm` landed the declared admission widths and the decode hardening
-  (three of B7's four families are now closed), the consensus ceiling caps (`27fa0d8e6`:
+  (all four of B7's families of sites are now closed; its latent issues, among them ceilings
+  raised to exactly the consensus caps, remain), the consensus ceiling caps (`27fa0d8e6`:
   44,739,242 slots and 2^29 bytes of chunks, above which `set_slot_ceiling` and
   `set_chunk_ceiling` now refuse; `WASM-MEMORY.md` asks for 2^23 and 2^28, which has not landed),
   the memory model (`WASM-MEMORY.md`: 4 MiB of chunks and 262,144 slots for a 128 MB isolate) and
@@ -386,18 +590,20 @@ The CTE overrides can be ported later as `json_each` queries without changing th
 
 ### 6.2 A platform-neutral runtime profile
 
-Today `packages/thixotrope/src/ironhorse-runtime.js` hashes the worker executable into the
-profile (`identity.worker = sha256(binary)`), and `Signature::new(profile)` plus the engine's boot
-fingerprint is what resume checks (`ironhorse-snapshot/src/format.rs`, `is_compatible_with`).
+Today `packages/thixotrope/src/ironhorse/ironhorse-runtime.js` hashes the worker executable into
+the profile (`identity.worker = sha256(binary)`), and `Signature::new(profile)` plus the engine's
+boot fingerprint is what resume checks (`ironhorse-snapshot/src/format.rs`, `is_compatible_with`).
 A heap written by the native worker therefore refuses to resume under the wasm module, and the
 spike had to present the native profile string to import the demo vat (as the review's
 verification did, correction 4).
 
-Proposal, the review's work item 5 made concrete:
+Proposal, the review's work item 5 made concrete, for Phase 3 (deferred).
+The native identity is already `format: 2` (`{ format, hostProtocol, worker, bootstrap }`), so a
+platform-neutral one is `format: 3`:
 
 ```js
 const identity = {
-  format: 2,
+  format: 3,
   hostProtocol: 'sequenced-hub-outbox-v1',
   engine: { bootFingerprint, costTableVersion, storeSchema },   // from the engine, not the binary
   bootstrap: hashes,                                            // the boot files
@@ -414,38 +620,90 @@ const identity = {
   share heaps, once B7's divergence sites are closed.
 - The ceilings belong in the profile because they are part of execution acceptance (a program that
   halts at a ceiling on one host and completes on another is a divergence).
+  The native runtime decided the other way for its identity: execution limits are deliberately
+  kept out of it, so that the same heaps reopen after a limit change, and `runtime.json` records
+  them beside the identity, where `checkSavedManifest` refuses only a heap ceiling that decreases
+  (`ironhorse-runtime.js`; `heapCeilingNames` in `ironhorse-limits.js`).
+  Phase 3 has to reconcile the two before the budget and the ceilings go into a shared profile.
 - The snapshot signature needs no change: `Signature { host, boot }` already carries the boot
   fingerprint, and `host` becomes the hash of the identity above.
-  A `format: 2` profile refuses a `format: 1` state directory by the existing
-  "Incompatible Ironhorse runtime" path, which is the right outcome: those heaps are pinned to
+  A `format: 3` profile refuses a `format: 2` state directory by the existing version check of
+  `runtime.json` (`assertRecordVersion`), which is the right outcome: those heaps are pinned to
   the binary that wrote them.
+
+Until Phase 3, the local engine keeps `format: 2` and adds to the identity only what tells the
+engines apart (§6.3), so no heap moves between them.
 
 ### 6.3 A local wasm engine
 
 Thixotrope does not go through the Rust daemon's `engine_for_spawn_request`
 (`rust/endo/src/engine.rs`, which knows `separate`, `shared` and `node`); its `makeIronhorseEngine`
-(`packages/thixotrope/src/ironhorse-engine.js`) spawns `workerBinary` directly and speaks NDJSON
-to it.
+(`packages/thixotrope/src/ironhorse/ironhorse-engine.js`) spawns `workerBinary` directly and
+speaks NDJSON to it.
 So the cheapest local wasm engine is a second host shell for the same module: a Node script that
 loads the cdylib, implements the four imports over `node:sqlite` (built into Node 22) with the
-spike's schema, and speaks the worker's NDJSON protocol on stdio.
-`workerBinary` is spawned at two sites, and both keep their argument shapes if the shell is an
-executable script (`#!/usr/bin/env node`) that finds its module by an absolute path:
-`ironhorse-runtime.js` runs it as `--lock-state <state>` to hold the supervisor's lease, hashes
-the file into the profile and copies it to `runtime/<profile>/0`; `ironhorse-engine.js` runs the
-copy with the heap, the profile, the active lease and the boot files.
-What does change is the identity the runtime hashes, since a script's bytes do not cover the
-module (§6.2's `engine.bootFingerprint` is the answer), and the leases, since Node has no
-`flock`: the shell either takes them through a small native helper or leaves `--lock-state` to
-the native worker.
+`DoStore` schema, and speaks the worker's NDJSON protocol on stdio.
+`workerBinary` is spawned at two sites.
+`acquireIronhorseRuntime` (`packages/thixotrope/src/ironhorse/ironhorse-runtime.js`) runs it as
+the lock helper, `/bin/sh -c 'trap "" TERM INT HUP; exec "$0" "$@"' <binary> --lock-state <state>`,
+so that the helper ignores the termination signals a service manager sends the whole process
+group (ignored dispositions survive `exec`, and the binary forbids the unsafe code a handler would
+need); it then hashes the file into the profile and copies it to `runtime/<profile>/0`.
+`ironhorse-engine.js` runs the copy as
+`<copy> <heap.sqlite> <profile> <heaps/active.lock> <limits JSON> <boot files...>`, the limits
+being `crankBudget`, `bootstrapBudget`, `slotCeiling` and `chunkCeiling`
+(`ironhorse-limits.js`).
+
+The plan put a Node script at both sites.
+Two facts rule that out:
+
+- Node resets inherited `SIG_IGN` dispositions, so a lock helper running as Node would honour the
+  termination signals the shell wrapper set it to ignore.
+- The shared `flock` lease on `heaps/active.lock` must be held for the worker's whole life by the
+  process the host spawned and later kills, and Node has no `flock`.
+
+The local engine therefore has a native front, which has landed.
+`rust/thixotrope-ironhorse-wasm-launcher` builds the binary `thixotrope-ironhorse-wasm-worker`,
+which accepts exactly the native worker's two invocations, so the host chooses the engine by
+binary path alone (`THIXOTROPE_IRONHORSE_WORKER`) and `ironhorse-engine.js` does not change.
+With `--lock-state` it is the lock helper itself, on the same `rust/thixotrope-ironhorse-lease`
+code as the native worker, and its `locked` line names the heap format and the absolute paths of
+the three parts it expects beside itself:
+`{"op":"locked","heapFormat":"do-v1","parts":[…]}`, listing
+`thixotrope-ironhorse-wasm-shell.mjs`, `host-abi.mjs` and `thixotrope_ironhorse_wasm.wasm` in
+that order (the native worker prints `{"op":"locked"}`).
+As a worker it takes the shared lease, clears close-on-exec on it, and `exec`s `$THIXOTROPE_NODE`
+(by default `node`) with `--disable-warning=ExperimentalWarning` on the shell beside itself,
+passing `--lease-fd=<fd>` and the worker's own arguments, so the lease outlives the launcher's
+image and the pid the host kills is the pid running the worker.
+
+The rest of the local engine is decided and in progress, and has not landed:
+
+- `rust/thixotrope-ironhorse-wasm`, the cdylib of §3, with the export table of §4.2.
+- `packages/thixotrope/src/ironhorse/wasm/host-abi.mjs`: the host imports, the WASI shims, the
+  value encoding and the export wrapper, with no imports and no Node globals, so that the Node
+  shell and a future Durable Object host share it.
+- `packages/thixotrope/src/ironhorse/wasm/shell.mjs`, the Node shell: the imports over
+  `node:sqlite` on the heap file (`journal_mode=DELETE`, read back; `synchronous=FULL`; no WAL),
+  every export call inside `BEGIN IMMEDIATE` ... `COMMIT`, rolled back on a failed status, a
+  fatal reply or an exception, and the worker's NDJSON protocol on stdio.
+- The runtime identity in `ironhorse-runtime.js` gains `heapFormat` and `parts` (each part's
+  basename and SHA-256, sorted) only when the `locked` line carries them, so the native identity
+  and every existing native profile stay byte-identical and `format` stays 2.
+  Every part is copied privately into `runtime/<profile>/`, as the launcher and the boot files
+  are, and a state directory written by one engine is refused by the other: by its `heapFormat`
+  in `checkSavedManifest`, and by the shell refusing a heap file that is not fresh and has no
+  `ih_meta` table.
+
+This defers Phase 3: no profile is shared between the engines, and no heap moves between them.
 
 What it is for:
 
 - a determinism cross-check: the same vat driven natively and under wasm, with the B6 differential
   comparing results and computrons crank by crank;
-- the daemon's `-e wasm` (`endor.rs` lists it as a future engine): with the Node shell in place, a
-  `wasm` platform in `engine_for_spawn_request` is `Engine::Separate` with that command, since
-  `proc.rs` already spawns any command on fd 3/4;
+- the daemon's `-e wasm` (`endor.rs` lists it as a future engine; not part of Phase 4 as
+  decided): with the Node shell in place, a `wasm` platform in `engine_for_spawn_request` is
+  `Engine::Separate` with that command, since `proc.rs` already spawns any command on fd 3/4;
 - the `store-suite` under `node:sqlite` as a second host for the port's parity.
 
 It is not a substitute for workerd measurements (V8 tiers, isolate limits), only a cheaper
@@ -664,6 +922,14 @@ What the sweep shows, beyond the real heaps:
 
 ### 7.5 Reading the numbers
 
+These readings take the spike's worker loop as it was: every crank was followed by its
+checkpoint, and the spike's crank, its own copy of `eval`, does not collect garbage.
+The worker as it stands commits only after a fresh boot and at close, and collects after every
+crank, which marks every small-state section dirty (`Interp::collect_garbage`), so its next
+commit re-encodes and hashes every section to find the changed ones.
+Items 3, 4 and 6 below, and the per-crank checkpoints of §7.4, are what a worker that commits
+every crank would pay without that collection, not what today's worker pays per crank.
+
 Against the review's ranked measurements (its "What Phase 0 needs", 1–7):
 
 1. **Stack depth**: not measured here; the lanes of STACK-DEPTH-REFACTOR.md cover workerd, and
@@ -700,6 +966,9 @@ Against the review's ranked measurements (its "What Phase 0 needs", 1–7):
    The section re-encoding cost the review warns of does not show on the drain crank, which
    touches only the Meter section; a crank that defines a function rewrites the Functions
    section whole (1.5 MB on this vat, two chunk rows).
+   These are per-commit figures from the spike's per-crank commits; under the collection a
+   commit would also re-encode every section, although it writes only those whose digest
+   changed.
 7. **The value cap**: local workerd accepted everything; the backend asserts 2,000,000 B per
    value itself, and the vat's largest section (Functions, 1,548,529 B) rides under it in two
    chunks.
@@ -718,18 +987,19 @@ component, and Phase 5 is the rest of that Phase 2 with Addendum A's protocols; 
 hybrid placement are not this plan's.
 The review's prerequisites are folded in.
 
-| Phase | What | Size | Go/no-go |
-|---|---|---|---|
-| **0a Spike** (this document) | `DoStore`, the ABI, the host, the suite, local measurements | done | — |
-| **0b Deployed measurement** | The same harness on a Workers Paid account: production stack depth against the 25 recursion families, `memory.grow` behaviour at the cap, CPU per crank against computrons, the 2 MB cap's error text, cold wake with the object evicted for real | S (the harness exists; the Worker needs `new_sqlite_classes`, the module as a static import, and a route per measurement) | Decides blocker 1 (stack) and 2 (memory) for real |
-| **1 Core crate** | `thixotrope-ironhorse-core` out of `main.rs`; the native worker rebuilt on it; the wasm cdylib as a second shell, built by `scripts/build-wasm.py` under CI's `build-ironhorse-wasm` job | M | Both shells pass the worker's own tests and the suite |
-| **2 Store crate** | `ironhorse-store-do` in `rust/engine` from the spike's `DoStore`, with the suite as its test, the value cap, the stamp, and a failure row for quarantine | S–M | Suite green under local workerd and under the Node shell |
-| **3 Profile** | The platform-neutral profile (§6.2) in `ironhorse-runtime.js` and the native worker; a heap written natively resumes under wasm and back, gated by B7's differential | M (plus B7, costed elsewhere) | A counter vat round-trips native → wasm → native with identical results and computrons |
-| **4 Local wasm engine** | The Node shell over `node:sqlite`, `makeIronhorseEngine` pointed at it, the daemon's `wasm` platform | M | `test:ironhorse` passes under both engines |
-| **5 Durable Object worker** | The hub and delivery protocols of Addendum A, with the review's blockers 7–11 resolved; the ceiling profile and admission of B8 | L | Addendum A §12's tests plus the review's acceptance gates |
+| Phase | What | Size | Go/no-go | Status (2026-11-26) |
+|---|---|---|---|---|
+| **0a Spike** (this document) | `DoStore`, the ABI, the host, the suite, local measurements | done | — | Landed with this document, under `rust/engine/wasm-worker-spike/` |
+| **0b Deployed measurement** | The same harness on a Workers Paid account: production stack depth against the 25 recursion families, `memory.grow` behaviour at the cap, CPU per crank against computrons, the 2 MB cap's error text, cold wake with the object evicted for real | S (the harness exists; the Worker needs `new_sqlite_classes`, the module as a static import, and a route per measurement) | Decides blocker 1 (stack) and 2 (memory) for real | Blocked: no deployment access |
+| **1 Core crate** | `thixotrope-ironhorse-core` out of `main.rs`; the native worker rebuilt on it; the wasm cdylib as a second shell (moved to Phase 4, which builds it with a script of its own; `rust/engine/scripts/build-wasm.py` builds only engine-workspace crates) | M | Both shells pass the worker's own tests and the suite | Landed: `rust/thixotrope-ironhorse-core`, and `rust/thixotrope-ironhorse-worker` rebuilt on it; the native worker's and the core's tests run in CI's Ironhorse worker job; the wasm shell's gate is Phase 4's |
+| **2 Store crate** | `ironhorse-store-do` in `rust/engine` from the spike's `DoStore`, with the suite as its test, the value cap, the stamp, and a failure row for quarantine | S–M | Suite green under local workerd and under the Node shell | Landed: `rust/engine/ironhorse-store-do` and `rust/endo/ironhorse-store-do-rusqlite`; all eight suite parts green on real SQLite, in memory or on disk, and four of them again with 97-byte section chunks and four through the `wire` encoding with every number bound as REAL; not yet run under local workerd or the Node shell |
+| **3 Profile** | The platform-neutral profile (§6.2) in `ironhorse-runtime.js` and the native worker; a heap written natively resumes under wasm and back, gated by B7's differential | M (plus B7, costed elsewhere) | A counter vat round-trips native → wasm → native with identical results and computrons | Deferred: Phase 4 keeps the engines' heaps apart instead (§6.3) |
+| **4 Local wasm engine** | The Node shell over `node:sqlite` with its native launcher (§6.3), chosen by pointing `THIXOTROPE_IRONHORSE_WORKER` at the launcher; the daemon's `wasm` platform is not part of it | M | The 13 test files of `packages/thixotrope/test/ironhorse/` pass unchanged under both engines | Decided and in progress: `rust/thixotrope-ironhorse-lease` and `rust/thixotrope-ironhorse-wasm-launcher` landed; the cdylib, the Node shell, the host-ABI module and the identity change have not |
+| **5 Durable Object worker** | The hub and delivery protocols of Addendum A, with the review's blockers 7–11 resolved; the ceiling profile and admission of B8 | L | Addendum A §12's tests plus the review's acceptance gates | Blocked on the review's blockers 7–11 |
 
-Phases 1, 2 and 4 are independent of each other once the ABI is fixed, and none of them waits on
-the deployed measurement; Phase 3 waits on B7, Phase 5 on everything.
+Phases 1 and 2 are independent of each other; Phase 4 consumes both, since its cdylib is the core
+over `DoStore`.
+None of them waits on the deployed measurement; Phase 3 waits on B7, Phase 5 on everything.
 
 ---
 
@@ -740,11 +1010,11 @@ the deployed measurement; Phase 3 waits on B7, Phase 5 on everything.
 | The platform's host stack (review blocker 1) | Phases 1–3 of the stack refactor landed; the trapped-Proxy ceilings wait on B10 of `STACK-DEPTH-REFACTOR.md`. Only a deployed measurement shows production's stack. |
 | 128 MB per isolate, shared (blocker 2) | The spike's baseline is 7.1 MiB of linear memory with the 4 MiB shadow stack; §7 has the heaps' figures. `WASM-MEMORY.md` now gives the ceilings for a 128 MB isolate (4 MiB of chunks, 262,144 slots) on the declared admission widths, and the engine halts with `HostAllocationFailed` when the host allocator refuses; the Durable Object worker's ceiling profile (Phase 5) applies them. |
 | Lazy resume cost (blocker 3) | Measured in §7.3; the engine fixes the review lists decide "go" on latency. |
-| Instance reuse after a trap (blocker 4) | The host drops the instance after any exception; the failure row for quarantine is not in the spike. |
+| Instance reuse after a trap (blocker 4) | The spike's host drops the instance after any exception. The core latches a worker dead after a failed crank, the Phase 4 cdylib is to poison itself after a caught unwind, and `DoStore::record_failure` is the store's half of the failure row for quarantine, which no host writes yet. |
 | Unstable toolchain (blocker 5) | Accepted for now (WASM-BLOCKERS B1's status: option 1 adopted, the unstable feature accepted); the build is pinned to 1.91.1 with `RUSTC_BOOTSTRAP`, not a nightly channel (`scripts/build-wasm.py`). |
-| Heaps across builds (blocker 6) | §6.2's profile plus B7. |
-| Commit cost: a touched section is re-encoded whole | Measured in §7; the Functions section of a real vat is 1.5 MB, so a crank that defines a function rewrites it. Incremental section encoding is the fix; WASM-BLOCKERS B8 records this per-checkpoint re-encoding as what remains after the streaming writer. |
-| Rows written per crank (billing) | Measured in §7; every crank writes the manifest, the Meter section and the dirty pages' summaries at least. |
+| Heaps across builds (blocker 6) | §6.2's profile plus B7, deferred with Phase 3; until then each engine refuses a state directory the other wrote (§6.3). |
+| Commit cost: a touched section is re-encoded whole | Measured in §7 for per-crank commits; the Functions section of a real vat is 1.5 MB, so a commit after a function was defined rewrites it. The worker now commits only after boot and at close, but every crank's collection marks every section dirty, so each commit re-encodes and hashes all of them. Incremental section encoding is the fix; WASM-BLOCKERS B8 records this per-checkpoint re-encoding as what remains after the streaming writer. |
+| Rows written per commit (billing) | Measured in §7 for the spike's per-crank commits, which wrote the manifest, the Meter section and the dirty pages' summaries at least. The worker no longer commits per crank, so what a Durable Object pays in rows follows the commit cadence Phase 5 chooses (§4.4). |
 | `wasm32-unknown-unknown` entropy | Commit tokens must come from the host (§6.1), and since `935798807` the engine refuses its default source there, so a worker that forgets cannot pair a copy of a store; hash-map iteration order is fixed per build, which is good for determinism and bad for anything that needs randomness, so the engine must take all its entropy through an explicit source. |
 
 ---
