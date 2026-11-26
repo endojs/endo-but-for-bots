@@ -1024,6 +1024,17 @@ when the crank is answered, and the host recovers from its last snapshot plus it
 A fresh heap is opened, booted and made ready in one transaction, so a boot that fails leaves no
 heap file and the next start boots fresh.
 
+The worker differs from the native one in a few ways an operator can meet;
+`designs/thixotrope-wasm-worker.md` §6.3 has the full list.
+The heap file is not locked exclusively, so nothing else may open a live heap: a second worker
+on it is detected only when it closes, and a reader holding a transaction can make the close fail.
+The launcher runs Node with `--disable-sigusr1`, so that SIGUSR1 cannot start Node's inspector;
+the signal is then inert, where it ends the native worker.
+Node also resets signal dispositions it inherits as ignored, so a worker started with SIGHUP,
+SIGINT or SIGTERM ignored still dies of them.
+The supervisor is unaffected: it gives each incarnation its own directory and stops workers with
+SIGKILL.
+
 Two explicit lanes test it, each needing the staged engine, the bundles and the native worker:
 
 ```sh
