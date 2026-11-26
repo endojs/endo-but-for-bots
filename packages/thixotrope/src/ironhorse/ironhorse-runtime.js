@@ -60,6 +60,28 @@ const partNameProblem = name => {
 };
 
 /**
+ * On a case-insensitive filesystem two names that differ only in case are one
+ * private copy (and one `.tmp`), so one part's bytes could land under the
+ * other's name. Names match `partNamePattern`, so `toLowerCase` folds exactly.
+ * @param {string[]} names
+ * @returns {string | undefined} what is wrong, if anything
+ */
+const repeatedPartNameProblem = names => {
+  /** @type {Set<string>} */
+  const exact = new Set();
+  /** @type {Set<string>} */
+  const folded = new Set();
+  for (const name of names) {
+    if (exact.has(name)) return `part name ${q(name)} is repeated`;
+    if (folded.has(name.toLowerCase()))
+      return `part name ${q(name)} is repeated ignoring case`;
+    exact.add(name);
+    folded.add(name.toLowerCase());
+  }
+  return undefined;
+};
+
+/**
  * Read the engine description a worker's lock helper may add to its `locked`
  * line: a heap format and the absolute paths of files the worker loads from
  * beside its executable. Both are absent for the native worker. Fields this
@@ -80,18 +102,16 @@ const readLockedEngine = ({ isAbsolute, basename }, locked) => {
   if (formatProblem) throw invalid(formatProblem);
   if (!Array.isArray(parts) || parts.length < 1 || parts.length > maxParts)
     throw invalid(`parts must be an array of 1 to ${maxParts} paths`);
-  /** @type {Set<string>} */
-  const names = new Set();
   const read = parts.map(path => {
     if (typeof path !== 'string' || !isAbsolute(path))
       throw invalid(`part ${q(path)} must be an absolute path`);
     const name = basename(path);
     const nameProblem = partNameProblem(name);
     if (nameProblem) throw invalid(nameProblem);
-    if (names.has(name)) throw invalid(`part name ${q(name)} is repeated`);
-    names.add(name);
     return { path, name };
   });
+  const repeated = repeatedPartNameProblem(read.map(({ name }) => name));
+  if (repeated) throw invalid(repeated);
   return { heapFormat: /** @type {string} */ (heapFormat), parts: read };
 };
 
@@ -161,6 +181,8 @@ const checkSavedManifest = (saved, identity, executionLimits) => {
       if (nameProblem)
         throw Error(`Invalid Ironhorse runtime.json: ${nameProblem}`);
     }
+    const repeated = repeatedPartNameProblem(parts.map(([name]) => name));
+    if (repeated) throw Error(`Invalid Ironhorse runtime.json: ${repeated}`);
   }
   // Heaps of another format are unreadable whatever the code identity, so
   // that is reported first and on its own.

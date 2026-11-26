@@ -290,7 +290,12 @@ test('a malformed locked message is refused before anything is hashed', async t 
     [wasmLocked(['/p/0']), /part name "0" must not be all digits/],
     [wasmLocked(['/p/12']), /part name "12" must not be all digits/],
     [wasmLocked(['/p/x.tmp']), /part name "x.tmp" must not end in \.tmp/],
-    [wasmLocked(['/p/x', '/q/x']), /part name "x" is repeated/],
+    [wasmLocked(['/p/x', '/q/x']), /part name "x" is repeated in the locked/],
+    [wasmLocked(['/p/x', '/q/X']), /part name "X" is repeated ignoring case/],
+    [
+      wasmLocked(['/p/A.mjs', '/p/b.mjs', '/q/a.mjs']),
+      /part name "a\.mjs" is repeated ignoring case/,
+    ],
   ])) {
     const host = makeFakeHost({ locked: line, extraFiles: partFiles });
     // eslint-disable-next-line no-await-in-loop
@@ -317,6 +322,26 @@ test('malformed saved heap format or parts are invalid, not a type error', async
     [{ ...manifest, parts: [['a.mjs', 3]] }, /must be a \[name, digest\]/],
     [{ ...manifest, parts: [[1, 'd']] }, /part name 1 must be a file name/],
     [{ ...manifest, parts: [['0', 'd']] }, /must not be all digits/],
+    [
+      {
+        ...manifest,
+        parts: [
+          ['a.mjs', 'd'],
+          ['a.mjs', 'e'],
+        ],
+      },
+      /part name "a\.mjs" is repeated$/,
+    ],
+    [
+      {
+        ...manifest,
+        parts: [
+          ['A.mjs', 'd'],
+          ['a.mjs', 'd'],
+        ],
+      },
+      /part name "a\.mjs" is repeated ignoring case$/,
+    ],
   ])) {
     const text = JSON.stringify(saved);
     host.texts.set(manifestPath, text);
