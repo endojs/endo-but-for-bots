@@ -4880,15 +4880,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "thixotrope-ironhorse-worker"
+name = "thixotrope-ironhorse-core"
 version = "0.1.0"
 dependencies = [
  "ironhorse-compile",
+ "ironhorse-snapshot",
+ "ironhorse-vm",
+ "serde_json",
+]
+
+[[package]]
+name = "thixotrope-ironhorse-worker"
+version = "0.1.0"
+dependencies = [
  "ironhorse-snapshot",
  "ironhorse-store-sqlite",
  "ironhorse-vm",
  "rustix",
  "serde_json",
+ "thixotrope-ironhorse-core",
 ]
 
 [[package]]

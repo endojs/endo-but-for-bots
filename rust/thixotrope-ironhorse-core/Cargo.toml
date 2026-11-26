@@ -1,0 +1,15 @@
+[package]
+name = "thixotrope-ironhorse-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# The host-neutral part of the Thixotrope Ironhorse worker: the crank loop,
+# the worker limits, the session over any `HeapStore`, and the NDJSON
+# protocol. No filesystem, stdio, threads, clock or native store, so that
+# every shell builds on it unchanged.
+[dependencies]
+ironhorse-vm = { path = "../engine/ironhorse-vm", features = ["consensus"] }
+ironhorse-compile = { path = "../engine/ironhorse-compile" }
+ironhorse-snapshot = { path = "../engine/ironhorse-snapshot" }
+serde_json = "1"
