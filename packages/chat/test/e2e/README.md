@@ -39,6 +39,24 @@ Tests the Monaco editor integration:
 - Escape triggers escape event
 - Content changes trigger onChange
 
+### Formula Inspector (`formula-inspector.spec.ts`)
+
+Tests the Value modal's Formula back face, daemon-free:
+
+- `F` and the header gear flip between the faces; Escape and Backspace
+- Keypair back face suppresses the private key
+- Reduced motion disables the card-flip rotation
+- The retention-paths table: count badge, pet-store edge, target segment,
+  the unretained empty state, and the bounded-height scroll for many paths
+
+It runs against `harness/formula-inspector.html`, which mounts the real
+`valueComponent` under the app's lockdown and stylesheet against a synthetic
+EndoHost. The spec loads its fixture (inventory names, formula records, and
+retention-path snapshots) through `window.__testHarness.setFixture`, and
+`window.__testHarness.calls` records the host calls. Run it with `yarn test:e2e:harness`
+(`playwright.harness.config.ts`), which starts a bare Vite server and no
+daemon.
+
 ## Setup
 
 ```bash

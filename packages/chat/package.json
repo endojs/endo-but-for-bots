@@ -39,6 +39,7 @@
     "test": "ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:e2e": "playwright test",
+    "test:e2e:harness": "playwright test --config playwright.harness.config.ts",
     "test:monaco-lockdown": "node test/monaco-lockdown/run.mjs",
     "test:xs": "exit 0",
     "setup-lal": "endo run --UNCONFINED setup-lal.js --powers @agent",
