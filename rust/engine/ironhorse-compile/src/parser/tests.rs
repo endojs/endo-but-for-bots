@@ -996,20 +996,15 @@ fn cover_initialized_name_as_expression_is_error() {
 /// A construct this compiler has not ported reports as `Unsupported`, which
 /// is a different thing from a spec early error and must stay different.
 #[test]
-fn a_deferred_static_block_fold_reports_unsupported() {
-    let err = crate::coder::compile("class C { static { let x = 1; } }")
-        .expect_err("the fold is not compiled");
+fn an_unported_construct_reports_unsupported() {
+    let err = crate::coder::compile_module("import value from 'm' with { type: 'json' };")
+        .expect_err("import attributes are not compiled");
     assert_eq!(
         err.kind,
         crate::parser::ParseErrorKind::Unsupported,
-        "a deferred fold is a coverage gap, not an early error"
+        "an unported construct is a coverage gap, not an early error"
     );
-    assert!(
-        err.message
-            .contains("static block with lexical declarations"),
-        "{}",
-        err.message
-    );
+    assert!(err.message.contains("import attributes"), "{}", err.message);
 }
 
 /// The neighbours must keep compiling: a fold that swallowed valid input
@@ -1022,6 +1017,7 @@ fn the_converted_folds_do_not_widen() {
         "var { a = 1 } = {};",
         "class D { f = 1; }",
         "class E { static { 1; } }",
+        "class F { static { let x = 1; } }",
     ] {
         assert!(crate::coder::compile(source).is_ok(), "{source}");
     }

@@ -392,8 +392,12 @@ fn small_state_stays_small_with_a_large_free_list() {
         // name/message keys, and the names of the standard globals every link
         // binds (with the members their constructors read) add only fixed boot
         // state. Keep a tight constant ceiling while allowing those
-        // constant-sized rows and the 32-byte cost-table digest in METR.
-        small_len < 1646 + native_name_bytes,
+        // constant-sized rows, the 32-byte cost-table digest in METR and the
+        // release name beside it (1646 bytes when it was `ironhorse-meter-9`).
+        small_len
+            < 1646 - "ironhorse-meter-9".len()
+                + ironhorse_vm::COST_TABLE_VERSION.len()
+                + native_name_bytes,
         "small state is O(1) in heap size, got {small_len} bytes for \
          {} free entries",
         manifest.free_len

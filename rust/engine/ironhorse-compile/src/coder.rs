@@ -584,10 +584,11 @@ impl<'a, 'm> Coder<'a, 'm> {
 
     /// Record the first code-time error with an explicit kind.
     ///
-    /// The kind is the whole point of routing a fold through here rather
+    /// The kind is the whole point of routing an error through here rather
     /// than through `panic!`. A spec early error is `Syntax` and the guest
     /// sees a catchable `SyntaxError`; a construct this compiler has not
-    /// ported is `Unsupported` and is an honest coverage gap. A `panic!`
+    /// ported would be `Unsupported`, an honest coverage gap (the coder has
+    /// none left: the last, the static-block fold, now compiles). A `panic!`
     /// collapses both into "the compiler died", which the harness then has
     /// to guess about — and guessed `Unsupported`, so an invariant
     /// violation read as unported coverage (architecture finding F063).
@@ -606,10 +607,11 @@ impl<'a, 'm> Coder<'a, 'm> {
     /// after an error would need all eighty-odd sites guarded and kept
     /// guarded; stopping needs nothing kept.
     ///
-    /// It also means a fold that returns early — `code_field_init_function`
-    /// abandons its scope/program/break/continue restores — cannot leave a
-    /// clobbered coder for the rest of the program to code against, because
-    /// there is no rest.
+    /// It also means an error reported inside a construct that saves and
+    /// restores coder state — `code_field_init_function`'s
+    /// scope/program/break/continue restores, say — cannot leave a clobbered
+    /// coder for the rest of the program to code against, because there is
+    /// no rest.
     fn report_kind(&mut self, line: u32, kind: crate::parser::ParseErrorKind, message: &str) -> ! {
         // First error wins, as XS reports only the first. Reaching here twice
         // takes a caught unwind in between, which only `compile_parser` does.
@@ -3543,30 +3545,17 @@ impl Coder<'_, '_> {
         // computed-key / private-brand / private-value member closures AND
         // outer bindings a field value captures — drive the frame
         // `RESERVE`/`RETRIEVE` (`scopeCount == scopeMaximum` = closures + peak
-        // value-temporary depth) and the closure-slot access indices.
-        // A field-init function scope holds only member-access / value
-        // use-closure aliases; a real (non-alias) declare means a
-        // `static { … }` block hoisted a lexical declaration into it (its
-        // own frame reservation + block coding is the remaining class-tail
-        // fold). Keep it a loud, named fold rather than a mis-emit.
-        if self.tree.scopes[fi]
-            .declares
-            .iter()
-            .any(|d| d.flags & crate::scoper::dflags::USE_CLOSURE == 0)
-        {
-            // A deliberate fold, not an invariant violation: this compiler
-            // has not ported a static block's own frame reservation. Reported
-            // as `Unsupported` so it reads as the coverage gap it is, rather
-            // than as a compiler that died (F063).
-            // The fold is per-class, so the first field's line is the
-            // closest source position available here.
-            let line = fields.first().map_or(0, |f| f.line);
-            self.report_kind(
-                line,
-                crate::parser::ParseErrorKind::Unsupported,
-                "static block with lexical declarations deferred",
-            );
-        }
+        // value-temporary depth, which counts each `static { … }` block's
+        // declarations) and the closure-slot access indices. The scope holds
+        // only those use-closure aliases: a static block declares in its own
+        // block scope.
+        debug_assert!(
+            self.tree.scopes[fi]
+                .declares
+                .iter()
+                .all(|d| d.flags & crate::scoper::dflags::USE_CLOSURE != 0),
+            "a field-init function scope declares only closure aliases"
+        );
         let reserve = *self
             .tree
             .scope_counts
@@ -3581,7 +3570,7 @@ impl Coder<'_, '_> {
         // operands (a get/set pair shares one brand slot via the scoper's
         // use-closure dedup).
         for field in fields {
-            // Static blocks bind their body directly, with no member alias.
+            // A static block has its own scope and no member alias.
             let slots = if field.token == Token::Body {
                 crate::scoper::MemberAccess::default()
             } else {
@@ -3604,7 +3593,8 @@ impl Coder<'_, '_> {
         // by the hoist-time poison walk, so it
         // publishes its (empty) parameter set into a `with` environment —
         // the strict-mode `undefined; with; pop` eval prelude. A field-init
-        // scope declares only closure aliases, so this is the sole effect.
+        // scope declares only closure aliases, so this and the
+        // `FUNCTION_ENVIRONMENT` store below are the flag's only effects.
         self.scope_coding_params(fi);
         self.return_target = Some(self.create_target());
         for (field, plan) in fields.iter().zip(plans.iter()) {
@@ -3616,11 +3606,15 @@ impl Coder<'_, '_> {
         self.place_target(0, target);
 
         // Store the captured closures into the new function's environment,
-        // running in the enclosing class frame (`fxScopeCodeStore`). At eval
-        // scope the environment is a `FUNCTION_ENVIRONMENT`; otherwise a
-        // captured field function needs a plain `ENVIRONMENT`.
+        // running in the enclosing class frame (`fxScopeCodeStore`). As in
+        // `fxFunctionNodeCode`, a field function whose initializers hold a
+        // direct `eval` (`mxEvalFlag` on its scope), or one coded at eval
+        // scope (the coder's `evalFlag`; a field function is strict, so that
+        // is still the enclosing one), gets a `FUNCTION_ENVIRONMENT`;
+        // otherwise a captured field function needs a plain `ENVIRONMENT`.
+        let scope_eval = self.tree.scopes[fi].flags & crate::scoper::SCOPE_EVAL != 0;
         let has_captures = self.tree.scopes[fi].closure_count != 0;
-        if saved_eval {
+        if scope_eval || saved_eval {
             self.add_byte(1, XS_CODE_FUNCTION_ENVIRONMENT);
             self.scope_code_store(fi);
             self.add_byte(-1, XS_CODE_POP);
@@ -3647,10 +3641,11 @@ impl Coder<'_, '_> {
     #[inline(never)]
     fn code_field(&mut self, p: &Node, plan: &FieldPlan) {
         use crate::ast::flags as f;
-        // A `static { … }` block runs its statements directly (no
-        // `this`/property install), with `this` bound to the constructor.
+        // A `static { … }` block is a `Body` (`fxBodyNodeCode`): its own
+        // block scope around its statements, with no `this`/property install
+        // (`this` is the constructor the field function runs on).
         if p.token == Token::Body {
-            self.code(&p.children[0]);
+            self.code_node(p);
             return;
         }
         self.add_byte(1, XS_CODE_THIS);

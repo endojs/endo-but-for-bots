@@ -122,28 +122,29 @@ fn walk(item: &Item, tree: &ScopeTree, evidence: &mut Evidence) {
         }
         Token::Class => {
             class_receipts(node, tree, evidence);
-            // Static blocks are Body nodes, but all three passes visit their
-            // statements directly in the synthetic field function. They do
-            // not get an ordinary Body scope or a member-alias receipt.
-            for (index, child) in node.children.iter().enumerate() {
-                if index == 2 {
-                    let Item::List(members) = child else {
-                        panic!("class members")
-                    };
-                    for member in members {
-                        let member_node = node_of(member);
-                        if member_node.token == Token::Body {
-                            evidence.static_blocks += 1;
-                            walk(&member_node.children[0], tree, evidence);
-                        } else {
-                            walk(member, tree, evidence);
-                        }
-                    }
-                } else {
-                    walk(child, tree, evidence);
+            // A static block is a Body with its own block scope, opened
+            // inside the synthetic static field function (XS's
+            // `constructorInit`). It has no member-alias receipt.
+            let Item::List(members) = &node.children[2] else {
+                panic!("class members")
+            };
+            for member in members {
+                let member_node = node_of(member);
+                if member_node.token == Token::Body {
+                    let &(block, secondary) = tree
+                        .node_scopes
+                        .get(&node_id(member_node))
+                        .expect("static block scope");
+                    assert!(secondary.is_none());
+                    assert_eq!(tree.scopes[block].token, Token::Block);
+                    assert_eq!(
+                        tree.scopes[block].parent,
+                        tree.class_field_init_static.get(&node_id(node)).copied(),
+                        "a static block opens inside the static field function"
+                    );
+                    evidence.static_blocks += 1;
                 }
             }
-            return;
         }
         _ => {}
     }
@@ -400,15 +401,24 @@ fn find_node(item: &Item, token: Token) -> Option<&Node> {
 
 #[test]
 fn scope_receipt_checker_rejects_damaged_trees() {
-    let source = "let key; class C { [key]=1; #x; get #p(){return this.#x;} set #p(v){} static #m(){} } try{}catch(e){e;} unknown;";
+    let source = "let key; class C { [key]=1; #x; get #p(){return this.#x;} set #p(v){} static #m(){} static {let s;} } try{}catch(e){e;} unknown;";
     let (root, tree) = scoped(source, Goal::Script, false);
     walk(&root, &tree, &mut Evidence::default());
     let class_id = node_id(find_node(&root, Token::Class).unwrap());
     let catch_id = node_id(find_node(&root, Token::Catch).unwrap());
     let private_id = node_id(find_node(&root, Token::PrivateMember).unwrap());
     let computed_id = node_id(find_node(&root, Token::PropertyAt).unwrap());
+    let Item::List(members) = &find_node(&root, Token::Class).unwrap().children[2] else {
+        panic!("class members")
+    };
+    let static_block_id = members
+        .iter()
+        .map(node_of)
+        .find(|member| member.token == Token::Body)
+        .map(node_id)
+        .unwrap();
     let init = tree.class_instance_init.get(&class_id).copied().unwrap();
-    for damage in 0..13 {
+    for damage in 0..14 {
         let mut broken = tree.clone();
         match damage {
             0 => broken.resolutions = Default::default(),
@@ -443,6 +453,12 @@ fn scope_receipt_checker_rejects_damaged_trees() {
             12 => {
                 let fi = *broken.class_field_init_inst.get(&class_id).unwrap();
                 broken.scopes[fi].parent = None;
+            }
+            13 => {
+                let (block, _) = *broken.node_scopes.get(&static_block_id).unwrap();
+                let ci = *broken.class_field_init_static.get(&class_id).unwrap();
+                assert_eq!(broken.scopes[block].parent, Some(ci));
+                broken.scopes[block].parent = broken.scopes[ci].parent;
             }
             _ => unreachable!(),
         }

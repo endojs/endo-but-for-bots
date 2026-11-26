@@ -207,6 +207,16 @@ fn migrate_refuses_incompatible_signature_without_touching_bytes() {
 /// write, so the lock proves the refusal lands BEFORE any mutation.
 struct ForeignCostTableStore(FileStore);
 
+/// The current cost-table version with its last digit changed: the same
+/// length, so the small state keeps its framing, and never the current one.
+/// (Setting that digit to `0` instead stopped differing at
+/// `ironhorse-meter-10`.)
+fn foreign_cost_table_version() -> String {
+    let mut version = ironhorse_vm::COST_TABLE_VERSION.as_bytes().to_vec();
+    *version.last_mut().expect("a non-empty version") ^= 1;
+    String::from_utf8(version).expect("an ASCII version")
+}
+
 impl HeapStore for ForeignCostTableStore {
     fn manifest(&self) -> Result<ironhorse_snapshot::store::StoreManifest, StoreError> {
         self.0.manifest()
@@ -218,7 +228,7 @@ impl HeapStore for ForeignCostTableStore {
             .windows(needle.len())
             .position(|w| w == needle)
             .expect("the fixture's meter section carries the current cost-table version");
-        bytes[at + needle.len() - 1] = b'0';
+        bytes[at..at + needle.len()].copy_from_slice(foreign_cost_table_version().as_bytes());
         Ok(bytes)
     }
     fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
@@ -262,7 +272,7 @@ fn migrate_refuses_a_foreign_cost_table_before_any_restamp() {
     match migrate_store(&mut store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::CostTableMismatch { expected, found })) => {
             assert_eq!(expected, ironhorse_vm::COST_TABLE_VERSION);
-            assert_eq!(found, "ironhorse-meter-0");
+            assert_eq!(found, foreign_cost_table_version());
         }
         other => panic!("expected CostTableMismatch, got {other:?}"),
     }
