@@ -1560,21 +1560,29 @@ creation at 5.61 s cold and 1.09 s with one spare ready. The first spare took
 4.67 s to prepare. [Creation measurements](../JOURNAL.md#j-12599-2026-11-21-time-from-new-session-to-an-editable-chat)
 
 From the harness package, with the [workspace dependencies and pinned worker installed](../README.md#build-what-the-tests-run),
-build the browser assets and start the supervisor on a short, fresh local state path.
-This example uses `/tmp/thix-uat` and loopback port 7831.
+build the browser assets and start the supervisor on a short, fresh, durable state path.
+This example keeps the state in `~/.local/state/thix-uat`, the Secrets wrapping key outside
+it in `~/.config/thixotrope-harness/thix-uat.key`, and serves on loopback port 7831.
+Do not use `/tmp`: a reboot or temp cleaner deletes the state, and `serve.mjs` refuses a new
+state there.
+Every command below needs the same `THIX_HARNESS_SECRETS_KEY`.
+The first start creates the key; back it up (see the README,
+[where state and the key live](../README.md#where-state-and-the-key-live-and-backups)).
 
 ```sh
+export THIX_HARNESS_SECRETS_KEY="$HOME/.config/thixotrope-harness/thix-uat.key"
+state="$HOME/.local/state/thix-uat"
 corepack yarn build:ui
-node scripts/serve.mjs /tmp/thix-uat
+node scripts/serve.mjs "$state"
 ```
 
-In a second terminal in the same package, provision the running state and obtain the
-operator's private sign-in link. Open that link in the tester's browser.
+In a second terminal in the same package, with the same two variables, provision the running
+state and obtain the operator's private sign-in link. Open that link in the tester's browser.
 
 ```sh
-node --import ./scripts/_init.mjs scripts/provision.mjs /tmp/thix-uat
-node scripts/gateway.mjs serve /tmp/thix-uat --port 7831
-node scripts/gateway.mjs url /tmp/thix-uat
+node --import ./scripts/_init.mjs scripts/provision.mjs "$state"
+node scripts/gateway.mjs serve "$state" --port 7831
+node scripts/gateway.mjs url "$state"
 ```
 
 The provisioning command preloads SES for the standalone CLI (J-12579). The gateway

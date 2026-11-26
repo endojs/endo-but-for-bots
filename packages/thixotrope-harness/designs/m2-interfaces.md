@@ -1029,10 +1029,13 @@ nothing beyond the torn tail is lost. At most `limits.secretsMax` = 1,024 Secret
 (`SecretsAdmin.create` counts creates in flight; past it `CREATE_FAILED`). The wrapping key is a
 32-byte file **outside the state directory**: the path in the adapter's
 environment variable `THIX_HARNESS_SECRETS_KEY` (absolute; `scripts/serve.mjs` passes it
-through, W2.3), created 0600 if absent; without it, `~/.config/thixotrope-harness/secrets-<first 16
-hex of sha256(state path)>.key`. A missing key file is created whole or not at all (temp file
-0600, fsync, link into place, directory fsync), and concurrent first loads in one process share one
-read (J-9486). Tests set it to a file under `H/tmp/` and delete it with their
+through, W2.3); without it, `~/.config/thixotrope-harness/secrets-<first 16
+hex of sha256(state path)>.key`. A missing key file is created (0600) only on the state's first
+run, while none of `secrets.enc`, `secrets-audit.log` and `gateway/signin.enc` exists, or by an
+explicit `initWrappingKey`; otherwise a missing or unreadable key is a refusal naming the path, and
+a key under systemd's `$CREDENTIALS_DIRECTORY` is never written (Tokyo plan 4.2). A created key is
+whole or not at all (temp file 0600, fsync, link into place, directory fsync), and concurrent
+first loads in one process share one read (J-9486). Tests set it to a file under `H/tmp/` and delete it with their
 state; no test reads a real key file.
 
 ### 9.2 Objects and flows

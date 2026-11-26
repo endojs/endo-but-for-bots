@@ -85,7 +85,8 @@ first use. Allow ten minutes for the first `thix-selfdev-prepare` shell call
 (`timeoutMs: 600000`). Reopen the session to resume an edit. Ask for `git diff HEAD` to
 review tracked changes, and stage new files before requesting the diff.
 For integration debugging, set `THIX_HARNESS_TMP=/tmp/thix`. For a manually
-started supervisor, create a state directory under that path. This private
+started supervisor, create a state directory under that path and pass `--allow-tmp-state` to
+`scripts/serve.mjs`. This private
 Linux filesystem supports Unix sockets and executable workers. Its contents
 last for the lifetime of the container. Source and edits stay on `/workspace`.
 
@@ -109,6 +110,17 @@ project_ref=$(git rev-parse HEAD)
 project_image=$(./oci/selfdev/build.sh "$project_ref")
 node scripts/project-preset.mjs "$state" --repo ../.. --ref "$project_ref" --image "$project_image" \
   --backend claude-pool --model claude-fable-5-2 --effort medium
+```
+
+With rootless Podman (Linux), build as the user the harness runs as, because image stores are
+per user, and give both scripts `--runtime podman`.
+The pin is then `localhost/thix-selfdev@sha256:<digest>`.
+`oci/selfdev/smoke.sh --runtime podman "$project_image"` checks the image with the real adapter.
+
+```sh
+project_image=$(./oci/selfdev/build.sh --runtime podman "$project_ref")
+node scripts/project-preset.mjs "$state" --runtime podman --repo ../.. --ref "$project_ref" \
+  --image "$project_image"
 ```
 
 A new preset defaults to the single `claude-pool` backend with
@@ -486,8 +498,20 @@ intercepts `deliver` must also intercept `deliverBatch` (J-9126).
 
 ```sh
 node scripts/serve.mjs STATE [--crank-budget N] [--max-delivery-attempts N] \
-  [--idle-sleep-ms N] [--snapshot-every N]
+  [--idle-sleep-ms N] [--snapshot-every N] [--allow-tmp-state]
+node scripts/preflight.mjs STATE
 ```
+
+`serve.mjs` refuses to start a new (absent or empty) state under `/tmp` or `/private/tmp` unless
+`--allow-tmp-state` marks it as a disposable test state; an existing one there is served with a
+warning.
+`preflight.mjs` changes nothing.
+It checks that `workspace.json` and `heaps/runtime.json` are present, that the worker binary and
+the boot bundles have the digests `runtime.json` pins, that every bundle `installations.json`
+records is in `bundles/`, and that the wrapping key is present and opens every sealed file.
+For the sealed files it prints only `ok` or `fail`.
+It warns when the state or the key is under `/tmp`.
+Run it with the service's environment; it exits 1 when a check fails.
 
 The wrapper runs the supervisor in a child process whose environment is only an allowlist plus
 `THIXOTROPE_CRANK_BUDGET` (default 50 M), `THIXOTROPE_MAX_DELIVERY_ATTEMPTS` (default 5,
@@ -500,7 +524,9 @@ of 32,768 refuses an import chunk of short turns; J-10125, J-10126). The allowli
 `THIXOTROPE_GC_CRANK_INTERVAL`; CC-022, CC-023: fixed per state directory, a change needs fresh
 state) and the hub store (`THIXOTROPE_HUB_STORE`, `log` by default or `file`; CC-025: a log
 directory keeps `hub-image.json` plus `hub-log.jsonl`, `hub.json` is a marker, and the migration is
-one way). Templates key on any of these that is set, and every perf row names `gcPolicy` and
+one way), the Secrets key path (`THIX_HARNESS_SECRETS_KEY`), and for rootless Podman and systemd
+`XDG_RUNTIME_DIR`, `CONTAINERS_CONF` and `CREDENTIALS_DIRECTORY` (the reasons, and what stays
+out, are beside `ENV_ALLOWLIST`). Templates key on any of these that is set, and every perf row names `gcPolicy` and
 `hubStore`. To bisect against the old behaviour, run fresh state with
 `THIXOTROPE_GC_POLICY=every-crank` or `THIXOTROPE_HUB_STORE=file`. It refuses
 to lower the crank budget unless the last shutdown was clean
@@ -508,6 +534,38 @@ to lower the crank budget unless the last shutdown was clean
 SIGKILL. Stop with SIGINT or SIGTERM. If one vat crashes on every replay, the supervisor waits
 for it to be retried out before it serves (36-69 s at the default bound): the control socket is
 absent meanwhile.
+
+## Where state and the key live, and backups
+
+- The state is the directory given to `serve.mjs`.
+  It holds the heaps, journals and bundles, `workspace.json`, `installations.json`,
+  `heaps/runtime.json`, the session workspaces and the sealed files
+  `agent-host/secrets.enc`, `agent-host/secrets-audit.log` and `agent-host/gateway/signin.enc`.
+  Keep it on a durable disk, never under `/tmp`.
+  Its control socket path, `STATE/control.sock`, must stay under about 100 bytes.
+- The Secrets wrapping key is one 32-byte file outside the state, named by
+  `THIX_HARNESS_SECRETS_KEY` (absolute).
+  Unset, it defaults to `~/.config/thixotrope-harness/secrets-<hash of the state path>.key`.
+  Moving the state then changes the default, so a service always sets the variable.
+  The file must be mode 0600 or stricter and outside the state.
+- The key is created only on a state's first start, while none of the sealed files exists.
+  Once any exists, a missing or unreadable key is a refusal that names the path.
+  The harness then never writes a new key, because a new key cannot open the old files.
+  Restore the key from its backup; or, to give up the old Secrets, move the sealed files aside
+  before the next start.
+- Under systemd, load the key with `LoadCredential=wrapping-key:/path/to/key` and set
+  `THIX_HARNESS_SECRETS_KEY=%d/wrapping-key`.
+  A key under `$CREDENTIALS_DIRECTORY` is read-only: it is read, never created or written.
+  Create the key at the credential's source before the first start.
+- Backups: copy the key off the machine once, right after the first start (or its creation),
+  into a password manager or other offline store.
+  The key is the only way to open the sealed files.
+  Keep it apart from state backups, so that no single copy holds both.
+  Back up the state only while it is stopped: stop the supervisor cleanly
+  (`harness-serve.json` then says `clean`), archive the directory, then start it again.
+  Never copy a running state.
+  A restore needs the state, its key, and the same worker binary and boot bundles
+  (`heaps/runtime.json` pins their digests); `preflight.mjs` checks all three before a start.
 
 ## Other scripts
 
