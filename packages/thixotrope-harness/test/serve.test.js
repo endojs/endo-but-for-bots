@@ -516,3 +516,27 @@ integration(
     t.deepEqual(processesUnder(state), []);
   },
 );
+
+test('rootless Podman and systemd credential paths pass; bus, XDG data and config overrides do not', t => {
+  const env = {
+    XDG_RUNTIME_DIR: '/run/thixotrope',
+    CONTAINERS_CONF: '/nix/store/x-containers.conf',
+    CREDENTIALS_DIRECTORY: '/run/credentials/thixotrope.service',
+    XDG_CONFIG_HOME: '/elsewhere/config',
+    XDG_DATA_HOME: '/elsewhere/data',
+    DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/999/bus',
+    CONTAINERS_STORAGE_CONF: '/elsewhere/storage.conf',
+    INVOCATION_ID: '0123',
+  };
+  const out = allowlistEnvironment(env, { crankBudget: 1n });
+  t.is(out.XDG_RUNTIME_DIR, '/run/thixotrope');
+  t.is(out.CONTAINERS_CONF, '/nix/store/x-containers.conf');
+  t.is(out.CREDENTIALS_DIRECTORY, '/run/credentials/thixotrope.service');
+  t.deepEqual(unexpectedEnvironment(env), [
+    'CONTAINERS_STORAGE_CONF',
+    'DBUS_SESSION_BUS_ADDRESS',
+    'INVOCATION_ID',
+    'XDG_CONFIG_HOME',
+    'XDG_DATA_HOME',
+  ]);
+});

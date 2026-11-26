@@ -78,6 +78,29 @@ export const ENV_ALLOWLIST = Object.freeze([
   'LC_ALL',
   'LC_CTYPE',
   'TERM',
+  // Rootless Podman (the environments adapter's `podman` runtime; Tokyo
+  // plan 2.1, 2.4). Each is a path, not a secret; the adapter hands only
+  // its own `cliEnvNames` to the podman process, never to a container.
+  // - XDG_RUNTIME_DIR: podman's per-user runtime directory (libpod state,
+  //   the pause process, conmon sockets). A system service with no login
+  //   session or linger has no /run/user/<uid>; the unit names one
+  //   (RuntimeDirectory=) and podman must see it or it guesses a temp dir.
+  'XDG_RUNTIME_DIR',
+  // - CONTAINERS_CONF: a containers.conf outside $HOME (on NixOS a store
+  //   file with cgroup_manager = "cgroupfs" and events_logger = "file").
+  'CONTAINERS_CONF',
+  // Not passed: XDG_CONFIG_HOME and XDG_DATA_HOME (podman's defaults follow
+  // HOME, which the unit sets: ~/.config/containers and the graph root
+  // ~/.local/share/containers), CONTAINERS_STORAGE_CONF and
+  // CONTAINERS_REGISTRIES_CONF (the adapter does not hand them to podman;
+  // the files under ~/.config/containers serve), and
+  // DBUS_SESSION_BUS_ADDRESS (needed only by cgroup_manager = "systemd",
+  // which a service user without linger cannot use).
+  //
+  // systemd's LoadCredential= directory (a path): a Secrets wrapping key
+  // under it is read-only, never created or written (secrets/wrapping-key.js
+  // isCredentialPath). Only the wrapping key is loaded there.
+  'CREDENTIALS_DIRECTORY',
   // Thixotrope's own settings (pkg README, limits section; supervisor.js).
   'THIXOTROPE_IRONHORSE_WORKER',
   'THIXOTROPE_BOOTSTRAP_BUDGET',
