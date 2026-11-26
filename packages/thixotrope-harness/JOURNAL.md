@@ -20035,3 +20035,54 @@ context. The same suite exercises the 1 MiB staged reply and scrollback through
 turns, retry after an interrupted read, and switching sessions during a read.
 The unit and adapter suites passed 1,945 tests with eight gated skips. Package
 typechecking, ESLint and the duplicate-code gate passed.
+
+### J-13019 2026-11-25 Chat history paging and Ironhorse heap image proposals
+
+The M3 proposal builds on the `s23/t4` regression. It specifies how one bubble
+can span history pages, when to fetch visible text, and how a second window
+or reconnect resumes reading without driving a turn. The proposed comparison
+measures page requests, repeated bytes and time until the visible reply is complete.
+[Chat history streaming](designs/chat-history-streaming.md)
+
+The M2 investigation traces the SQLite heap from native checkpoint through
+immutable image publication and wake. The existing store uses WAL. J-13006
+observed disk exhaustion during the host copy, and J-9462 timed the entire
+snapshot. The proposal calls for measuring the copy separately and comparing
+a filesystem clone, an online backup, and immutable page generations against
+the same recovery and disk-space checks. Both designs await implementation
+and measurement. [Ironhorse checkpoint copies](designs/ironhorse-performance.md#reducing-heap-database-copies-at-checkpoint-and-restore)
+
+### J-13020 2026-11-25 Adversarial review of history paging and heap image publication
+
+Each proposal had its own Astra reviewer. Each reviewer challenged the first
+draft, found remaining issues in a second read, and passed the third draft.
+The reviews covered the design and its acceptance criteria. Implementation and
+new performance or crash measurements remain open.
+
+For history, a tool result’s display position can change when an earlier call
+finishes later. Retries therefore use original append identity and an exclusive
+read boundary, including for a late resolution and derived turn state. The
+review confirmed that the transcript stores only attachment labels.
+The acceptance cases now check that history grants no attachment objects, and
+measure source and renderer allocation as well as bytes queued for the browser.
+[Reviewed history proposal](designs/chat-history-streaming.md)
+
+For heap images, a failed sync after metadata rename leaves a cut that can be
+read back but could disappear on power loss. The proposal preserves both images
+and the journal suffix until a durability barrier succeeds. It also tests
+equal digests held by different workers and the next delivery to a daemon that
+experienced a recoverable I/O failure. The existing SQLite store holds an
+exclusive connection, so the first online-backup experiment pauses the writer.
+[Reviewed checkpoint proposal](designs/ironhorse-performance.md#reducing-heap-database-copies-at-checkpoint-and-restore)
+
+### J-13021 2026-11-25 Forward follow while reading older chat
+
+The history review found a gap in the proposed forward reader. A resolution
+can append to an old sealed turn without generating a live event. A viewer
+waiting for another token or turn-end event could miss the change indefinitely.
+The revised design waits on the durable append position, catches up over a
+finite range, and retains the original older cursor and viewport anchor.
+An Astra reviewer checked the revised design against a commit racing the wait,
+disconnect during catch-up, and an older page arriving after a resolution.
+The two-window browser scenario remains an implementation acceptance case.
+[Forward follow and scrollback](designs/chat-history-streaming.md#following-new-records-and-scrolling-back)

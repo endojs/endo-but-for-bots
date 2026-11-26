@@ -590,6 +590,9 @@ section). Every acceptance item passes except one ratio of 15 at 1,000 turns; re
   Re-measured on the combination (K2, J-10077..J-10086): `archive.stall.at200` p99 1,239 ms
   (1.24 x, inside the 1.25 x rule; was 1,397 ms), `checkpoint.stall` on imported sessions
   965 / 975 / 1,011 ms at 200 / 1,000 / 5,000 turns (was 1,050 / 951 / 1,025).
+  The reviewed November 25 proposal compares moving the closed file on sleep with cloning it
+  for a continuing worker. Adoption requires a measured space or latency gain and recovery
+  from failure between metadata rename and directory sync. [Checkpoint copy investigation](ironhorse-performance.md#reducing-heap-database-copies-at-checkpoint-and-restore)
 - **closed** (was fail, acceptance 15 at 1,000 turns, `archive.flat.hubRow.at1000`): read at a
   quiescent point (`quiescentHubRow` in `perf/_long-session.mjs`) the ratio is 1.01 x at 1,000
   and 0.95 x at 5,000 (K2); the 1.39 x reading had caught an answer owed (J-9496).
@@ -1087,6 +1090,12 @@ full transcript when a history page abbreviates a settled turn. Chromium on
 the pinned worker matched all four sampled replies to the stored text, both
 on opening the session and after reload.
 [Live transcript checks](../JOURNAL.md#j-13018-2026-11-24-complete-replies-after-settlement-and-reload)
+
+The reviewed November 25 proposal gives each viewer an older cursor for stable scrollback
+and a separate position for following new committed records. A retry reproduces the
+original page even after a turn enters the archive. New replies follow the viewport
+only while the reader is at the bottom. Pinned-worker comparisons remain open.
+[Chat history design and acceptance cases](chat-history-streaming.md)
 
 ---
 
