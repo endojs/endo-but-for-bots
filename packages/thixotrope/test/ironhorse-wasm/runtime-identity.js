@@ -29,8 +29,10 @@ const repoPath = fileURLToPath(new URL('../../../../', import.meta.url));
 const launcherBinary =
   process.env.THIXOTROPE_IRONHORSE_WASM_WORKER ??
   join(repoPath, 'target/release/thixotrope-ironhorse-wasm-worker');
+// The wasm lane points THIXOTROPE_IRONHORSE_WORKER at the launcher, so the
+// native worker has a variable of its own here.
 const nativeBinary =
-  process.env.THIXOTROPE_IRONHORSE_WORKER ??
+  process.env.THIXOTROPE_IRONHORSE_NATIVE_WORKER ??
   join(repoPath, 'target/release/thixotrope-ironhorse-worker');
 // Fail at module load, never turn missing CI artifacts into skipped tests.
 await Promise.all([launcherBinary, nativeBinary].map(path => access(path)));

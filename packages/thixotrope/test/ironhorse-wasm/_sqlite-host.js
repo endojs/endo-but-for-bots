@@ -5,7 +5,8 @@
 // transaction (`BEGIN IMMEDIATE`, then `COMMIT` only when `commits` from
 // `host-abi.mjs` permits it, else `ROLLBACK`); a fresh worker's opening is
 // one transaction from the fresh open through ready, as the ABI requires.
-// Nothing here depends on the test runner.
+// The database is opened, and statements run, by the shell's own opener and
+// executor. Nothing here depends on the test runner.
 import { getRandomValues } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
@@ -17,8 +18,11 @@ import {
   makeHostImports,
   makeWasiImports,
 } from '../../src/ironhorse/wasm/host-abi.mjs';
+import {
+  makeExecutor,
+  openHeapDatabase,
+} from '../../src/ironhorse/wasm/shell.mjs';
 
-/** @import { StatementSync } from 'node:sqlite' */
 /** @import { OpenOptions } from '../../src/ironhorse/wasm/host-abi.mjs' */
 
 /** Where `rust/thixotrope-ironhorse-wasm/build.py` leaves the module. */
@@ -41,10 +45,8 @@ export const compileModule = path =>
  * @param {string} path
  */
 export const openDatabase = path => {
-  const db = new DatabaseSync(path);
-  db.exec('PRAGMA journal_mode=DELETE');
-  /** @type {Map<string, StatementSync>} */
-  const statements = new Map();
+  const db = openHeapDatabase(DatabaseSync, path);
+  const execute = makeExecutor(db);
   /** Counts every statement run, for fault injection. */
   let executed = 0;
   /** @type {((sql: string, count: number) => void) | undefined} */
@@ -56,13 +58,7 @@ export const openDatabase = path => {
   const exec = (sql, params) => {
     executed += 1;
     if (fault) fault(sql, executed);
-    let statement = statements.get(sql);
-    if (statement === undefined) {
-      statement = db.prepare(sql);
-      statement.setReturnArrays(true);
-      statements.set(sql, statement);
-    }
-    return /** @type {any} */ (statement.all(.../** @type {any[]} */ (params)));
+    return execute(sql, params);
   };
   return {
     db,
