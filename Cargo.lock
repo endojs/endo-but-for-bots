@@ -4897,6 +4897,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "thixotrope-ironhorse-wasm-launcher"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "serde_json",
+ "thixotrope-ironhorse-lease",
+]
+
+[[package]]
 name = "thixotrope-ironhorse-worker"
 version = "0.1.0"
 dependencies = [
