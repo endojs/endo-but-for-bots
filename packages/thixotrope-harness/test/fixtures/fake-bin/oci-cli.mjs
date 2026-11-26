@@ -117,7 +117,11 @@ const parse = (words, flags) => {
   let at = 0;
   while (at < words.length && words[at].startsWith('-')) {
     const flag = words[at];
-    if (flags.valued.has(flag)) {
+    const equals = flag.indexOf('=');
+    if (equals > 0 && flags.valued.has(flag.slice(0, equals))) {
+      options.push([flag.slice(0, equals), flag.slice(equals + 1)]);
+      at += 1;
+    } else if (flags.valued.has(flag)) {
       options.push([flag, words[at + 1]]);
       at += 2;
     } else if (flags.bare.has(flag)) {

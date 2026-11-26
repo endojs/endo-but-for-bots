@@ -10,7 +10,7 @@
  * dropped, a read-only root with a tmpfs `/tmp`, no new privileges, no
  * network, process, memory and CPU limits, no log driver, `/workspace` and
  * `/home/node` the session's directories, and exactly A.3's environment
- * variables. The image is a digest pin and is never pulled (`--pull never`;
+ * variables. The image is a digest pin and is never pulled (`--pull=never`;
  * R8-41). Podman maps the container's uid 1000 to the daemon's user
  * (`--userns keep-id:uid=1000,gid=1000`), so the files a command writes
  * belong to the daemon's user on the host (`[real-runtime: podman]`).
@@ -98,6 +98,15 @@ const cliEnvNames = harden([
 const controlBytes = 65_536;
 /** The longest a control call may take before its CLI process is killed. */
 const defaultControlTimeoutMs = 120_000;
+/**
+ * The longest rootless Podman's `run` may take. The first container of an
+ * image under `--userns keep-id` can make containers/storage copy and chown
+ * the image's layers for that ID mapping (no idmapped overlay mounts for an
+ * unprivileged user): minutes for the 3 GB self-development image on two
+ * vCPUs, once per image. Killing it at the control bound would fail every
+ * first command until an operator pre-warms the image by hand.
+ */
+const defaultPodmanStartTimeoutMs = 900_000;
 /** Names one `rm` of a sweep removes at once. */
 const sweepBatch = 32;
 /** The largest delay a Node timer takes. */
@@ -132,10 +141,18 @@ harden(isOciError);
 /** The CLI's messages for an engine it cannot reach. */
 const unreachablePattern =
   /cannot connect|failed to connect|unable to connect|is the docker daemon running|connection refused/i;
-/** The CLI's messages for an image absent locally under `--pull never`. */
+/** The CLI's messages for an image absent locally under `--pull=never`. */
 const imageMissingPattern =
   /unable to find image|image not known|no such image|failed to resolve image/i;
 const nameInUsePattern = /already in use/i;
+/**
+ * The OCI runtime could not apply `--memory`, `--cpus` or `--pids-limit`:
+ * rootless engines need those cgroup controllers delegated to the user
+ * (crun: "the requested cgroup controller `pids` is not available", or a
+ * failed write to `memory.max`).
+ */
+const limitsPattern =
+  /cgroup controller|(?:memory|pids|cpu)\.max|cgroup.*(?:permission denied|read-only file system)/i;
 const noContainerPattern =
   /no such container|no such object|no container with/i;
 /** `exec` into a container that is gone or stopped (the CLI's own error). */
@@ -258,17 +275,25 @@ const checkedName = name => {
  * @param {CliExec} [options.exec] starts one CLI process (default: spawn
  *   `binary` from `PATH`)
  * @param {number} [options.controlTimeoutMs] the bound of one control call
+ * @param {number} [options.startTimeoutMs] the bound of one `run` (default:
+ *   `defaultPodmanStartTimeoutMs` for podman, `controlTimeoutMs` for docker)
  * @returns {Runtime}
  */
 export const makeOciRuntime = ({
   binary,
   exec = makeCliExec({ file: binary }),
   controlTimeoutMs = defaultControlTimeoutMs,
+  startTimeoutMs = undefined,
 }) => {
   if (binary !== 'podman' && binary !== 'docker') {
     throw TypeError('makeOciRuntime: binary must be podman or docker');
   }
   const podman = binary === 'podman';
+  const runTimeoutMs =
+    startTimeoutMs ??
+    (podman
+      ? Math.max(controlTimeoutMs, defaultPodmanStartTimeoutMs)
+      : controlTimeoutMs);
   let commands = 0;
 
   /**
@@ -289,13 +314,14 @@ export const makeOciRuntime = ({
   /**
    * One control call, bounded in output and time.
    * @param {string[]} args
+   * @param {number} [timeoutMs]
    * @returns {Promise<CliResult>}
    */
-  const control = async args => {
+  const control = async (args, timeoutMs = controlTimeoutMs) => {
     let timer;
     try {
       const call = exec(args, { streamBytes: controlBytes });
-      timer = setTimeout(call.kill, controlTimeoutMs);
+      timer = setTimeout(call.kill, timeoutMs);
       return await call.done;
     } catch (error) {
       throw spawnFailure(error);
@@ -315,6 +341,13 @@ export const makeOciRuntime = ({
       return publicError(
         environmentTextOf.runtimeFailed(
           `the ${binary} engine is not reachable`,
+        ),
+      );
+    }
+    if (limitsPattern.test(stderr)) {
+      return publicError(
+        environmentTextOf.runtimeFailed(
+          `the ${binary} engine cannot apply the memory, CPU or process limits (cgroup controllers not delegated)`,
         ),
       );
     }
@@ -355,8 +388,10 @@ export const makeOciRuntime = ({
     return [
       'run',
       '--detach',
-      '--pull',
-      'never',
+      // One word: podman's and docker's flag parsers then agree whatever
+      // their default for a bare `--pull` (podman build takes `--pull` alone
+      // and would read a separate `never` as the next argument).
+      '--pull=never',
       '--name',
       checkedName(env.name),
       '--label',
@@ -411,7 +446,7 @@ export const makeOciRuntime = ({
     const args = runArgs(env);
     for (let attempt = 0; ; attempt += 1) {
       // eslint-disable-next-line no-await-in-loop -- at most two runs, in order
-      const result = await control(args);
+      const result = await control(args, runTimeoutMs);
       if (result.exitCode === 0) return;
       const stderr = textOf(result.stderr);
       if (imageMissingPattern.test(stderr)) {

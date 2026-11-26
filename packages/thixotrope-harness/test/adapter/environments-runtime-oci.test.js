@@ -17,11 +17,19 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { env as processEnv, execPath, kill as processKill } from 'node:process';
+import {
+  env as processEnv,
+  execPath,
+  getgid,
+  getuid,
+  kill as processKill,
+} from 'node:process';
+import { clearTimeout, setTimeout } from 'node:timers';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -183,8 +191,7 @@ const readdirNames = dir => {
 const expectedRun = (binary, env, limits = {}) => [
   'run',
   '--detach',
-  '--pull',
-  'never',
+  '--pull=never',
   '--name',
   env.name,
   '--label',
@@ -676,6 +683,99 @@ test('checkImagePin leaves the fake runtime its own check', async t => {
   t.deepEqual(seen, [undefined]);
 });
 
+for (const binary of /** @type {const} */ (['podman', 'docker'])) {
+  test(`${binary}: a run refused for undelegated cgroup controllers says so, with no CLI text`, async t => {
+    const { runtime, envOf, engine } = setUp(t, binary);
+    for (const stderr of [
+      'Error: OCI runtime error: crun: the requested cgroup controller `pids` is not available\n',
+      'Error: OCI runtime error: crun: opening file `memory.max` for writing: No such file or directory\n',
+    ]) {
+      writeFileSync(
+        join(engine, 'script.json'),
+        JSON.stringify([{ when: ['run'], exitCode: 126, stderr }]),
+      );
+      // eslint-disable-next-line no-await-in-loop -- in order
+      await t.throwsAsync(runtime.start(envOf('e1')), {
+        message: environmentTextOf.runtimeFailed(
+          `the ${binary} engine cannot apply the memory, CPU or process limits (cgroup controllers not delegated)`,
+        ),
+      });
+    }
+  });
+}
+
+/**
+ * A CLI whose `run` answers after `runMs` and every other call at once,
+ * recording which calls were killed.
+ * @param {number} runMs
+ */
+const slowRunExec = runMs => {
+  /** @type {string[]} */
+  const killed = [];
+  /** @type {import('../../resources/environments/impl/runtime-oci.js').CliExec} */
+  const exec = args => {
+    /** @type {(value: any) => void} */
+    let settle = () => {};
+    const done = new Promise(resolve => {
+      settle = resolve;
+    });
+    const ok = harden({
+      stdout: new Uint8Array(),
+      stderr: new Uint8Array(),
+      stdoutCut: false,
+      stderrCut: false,
+      exitCode: 0,
+      signal: null,
+    });
+    const timer = setTimeout(() => settle(ok), args[0] === 'run' ? runMs : 0);
+    return harden({
+      done: /** @type {Promise<any>} */ (done),
+      kill: () => {
+        clearTimeout(timer);
+        killed.push(args[0]);
+        settle({ ...ok, exitCode: null, signal: 'SIGKILL' });
+      },
+    });
+  };
+  return { exec, killed };
+};
+
+test('podman: the first run of an image gets the start bound, not the control bound (keep-id layer copy)', async t => {
+  const { envOf } = setUp(t, 'podman');
+  const slow = slowRunExec(150);
+  const podman = makeOciRuntime({
+    binary: 'podman',
+    exec: slow.exec,
+    controlTimeoutMs: 50,
+    startTimeoutMs: 1000,
+  });
+  await podman.start(envOf('e1'));
+  t.deepEqual(slow.killed, []);
+  // Without its own bound, podman's start still outlasts the control bound.
+  const defaults = slowRunExec(150);
+  await makeOciRuntime({
+    binary: 'podman',
+    exec: defaults.exec,
+    controlTimeoutMs: 50,
+  }).start(envOf('e2'));
+  t.deepEqual(defaults.killed, []);
+  // Docker's run keeps the control bound.
+  const docker = slowRunExec(150);
+  await t.throwsAsync(
+    makeOciRuntime({
+      binary: 'docker',
+      exec: docker.exec,
+      controlTimeoutMs: 50,
+    }).start(envOf('e3')),
+    {
+      message: environmentTextOf.runtimeFailed(
+        'docker run failed (signal SIGKILL)',
+      ),
+    },
+  );
+  t.deepEqual(docker.killed, ['run']);
+});
+
 test('makeOciRuntime takes podman or docker only', t => {
   t.throws(() => makeOciRuntime({ binary: /** @type {any} */ ('runc') }), {
     message: /podman or docker/,
@@ -860,3 +960,26 @@ realTest('[real-runtime] timeout, stop and sweep', async t => {
   await runtime.start(envOf('e2'));
   t.deepEqual(await runtime.sweep(realTag), { stopped: 2 });
 });
+
+(real === 'podman' ? test.serial : test.skip)(
+  '[real-runtime: podman] keep-id: what a command writes belongs to this user on the host',
+  async t => {
+    const { runtime, envOf } = realSetUp(t);
+    const env = envOf('e1');
+    await runtime.start(env);
+    const written = await runtime.exec(
+      env,
+      ['sh', '-c', 'touch /workspace/owned /home/node/owned && id -u'],
+      execOptions,
+    );
+    t.is(written.exitCode, 0);
+    t.is(decode(written.stdout), '1000\n');
+    for (const file of [
+      join(env.workspace, 'owned'),
+      join(env.home, 'owned'),
+    ]) {
+      t.is(statSync(file).uid, getuid?.(), file);
+      t.is(statSync(file).gid, getgid?.(), file);
+    }
+  },
+);

@@ -763,7 +763,7 @@ podman adds `--userns keep-id` (the container's uid 1000 owns files as the daemo
 `exec <name> setsid sh -lc 'echo $$ > /tmp/thix-<op>.pid; exec "$@"' sh <argv...>`; a timeout sends
 SIGTERM to the command's process group inside the container (`exec <name> kill -TERM -<pgid>`),
 SIGKILL after `killGraceMs`; other commands keep running. The image is never pulled: `check` uses
-`image exists` (podman) or `image inspect` (docker) and the pin form; `run` passes `--pull never`.
+`image exists` (podman) or `image inspect` (docker) and the pin form; `run` passes `--pull=never`.
 Environment variables are exactly A.3's list (no host variable, no credential, R3-45).
 
 Operator `status()` repeats the local engine and image check. Concurrent
