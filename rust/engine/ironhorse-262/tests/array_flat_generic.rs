@@ -105,20 +105,34 @@ fn function_metadata_matches_ecmascript() {
     );
 }
 
+/// A dense `flatMap` costs exactly what XS charges, raw: alone, and after a
+/// prelude that names its result's indices, which changes nothing in XS (it
+/// defines each element by index) and so must change nothing here. The
+/// prelude's own cost differs between the engines, so the second form
+/// compares what the `flatMap` adds to it.
 #[test]
 fn flat_map_retains_calibrated_dense_metering() {
+    let raw = |source: &str| {
+        let run = dual_run(source).expect("pinned XS oracle is available");
+        assert!(run.observables_agree(), "{source}");
+        (
+            i128::from(run.oracle_meter_raw),
+            i128::from(run.ironhorse_meter_raw),
+        )
+    };
+    let prelude = "Object.getOwnPropertyDescriptors([1, 2, 3, 4, 5, 6]); ";
+    let (prelude_xs, prelude_ironhorse) = raw(&format!("{prelude}0"));
     for source in [
         "[5].flatMap(function(x){return [x,x,x]}).length",
         "[1,2,3].flatMap(function(x){return [x,x]}).length",
     ] {
-        let run = dual_run(source).expect("pinned XS oracle is available");
-        assert!(
-            run.observables_agree(),
-            "{source}: oracle={} ({}) ironhorse={} ({})",
-            run.oracle_computrons,
-            run.oracle_meter_raw,
-            run.ironhorse_computrons,
-            run.ironhorse_meter_raw,
+        let (xs, ironhorse) = raw(source);
+        assert_eq!(ironhorse, xs, "{source}: raw meter");
+        let (xs, ironhorse) = raw(&format!("{prelude}{source}"));
+        assert_eq!(
+            ironhorse - prelude_ironhorse,
+            xs - prelude_xs,
+            "{source} after naming its indices: raw meter it adds",
         );
     }
 }

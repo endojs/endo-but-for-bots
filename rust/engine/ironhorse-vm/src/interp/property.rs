@@ -217,6 +217,7 @@ impl Interp {
         match key {
             ReadKey::Id(id) => self.mop_get(code, inst, id, receiver),
             ReadKey::Index(index) => self.uninterned_index_get(code, inst, index, receiver),
+            ReadKey::WideIndex(index) => self.wide_index_get(code, inst, index, receiver),
         }
     }
 
@@ -230,6 +231,7 @@ impl Interp {
         match key {
             ReadKey::Id(id) => self.mop_has_with_recursions(code, inst, id),
             ReadKey::Index(index) => self.uninterned_index_has(code, inst, index),
+            ReadKey::WideIndex(index) => self.wide_index_has(code, inst, index),
         }
     }
 
@@ -243,6 +245,7 @@ impl Interp {
         match key {
             ReadKey::Id(id) => self.mop_get_own_property(code, inst, id),
             ReadKey::Index(index) => self.uninterned_index_own_descriptor(code, inst, index),
+            ReadKey::WideIndex(index) => self.wide_index_own_descriptor(code, inst, index),
         }
     }
 
@@ -271,7 +274,15 @@ impl Interp {
     ) -> Result<bool, Step> {
         let index = match key {
             ReadKey::Id(id) => return self.mop_define_own_property(code, inst, id, desc),
-            ReadKey::Index(index) => index,
+            ReadKey::Index(index) if index < u32::MAX => index,
+            // 2^32 - 1 is no array index, so no array item or index store
+            // holds it: like every wider integer key, it is a name.
+            ReadKey::Index(index) => {
+                return self.define_integer_key_by_name(code, inst, u64::from(index), desc)
+            }
+            ReadKey::WideIndex(index) => {
+                return self.define_integer_key_by_name(code, inst, index.get(), desc)
+            }
         };
         if !self.proxies.contains_key(&inst) {
             if let Some(&ta) = self.typed_arrays.get(&inst) {
@@ -328,6 +339,28 @@ impl Interp {
         self.mop_define_own_property(code, inst, id, desc)
     }
 
+    /// `[[DefineOwnProperty]]` of an integer key that is no array index
+    /// (2^32 - 1 or above). A TypedArray answers it without a name (and
+    /// refuses it: it is out of range); anywhere else the define CREATES the
+    /// named property, so the name is minted.
+    fn define_integer_key_by_name(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u64,
+        desc: OrdinaryDescriptor,
+    ) -> Result<bool, Step> {
+        if !self.proxies.contains_key(&inst) {
+            if let Some(&ta) = self.typed_arrays.get(&inst) {
+                return self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+                    vm.ta_index_define(code, ta, index as f64, desc)
+                });
+            }
+        }
+        let id = self.intern_key_unmetered(index.to_string())?;
+        self.mop_define_own_property(code, inst, id, desc)
+    }
+
     /// `[[Delete]]` dispatched on a [`ReadKey`].
     pub(super) fn mop_delete_read(
         &mut self,
@@ -338,6 +371,7 @@ impl Interp {
         match key {
             ReadKey::Id(id) => self.mop_delete(code, inst, id),
             ReadKey::Index(index) => self.uninterned_index_delete(code, inst, index),
+            ReadKey::WideIndex(index) => self.wide_index_delete(code, inst, index),
         }
     }
 
@@ -1509,6 +1543,7 @@ impl Interp {
         let id = match key {
             ReadKey::Id(id) => id,
             ReadKey::Index(index) => return self.uninterned_index_get(code, inst, index, receiver),
+            ReadKey::WideIndex(index) => return self.wide_index_get(code, inst, index, receiver),
         };
         // An exotic-array / function target's `length` / integer-index / `name`
         // / `prototype` own values live in side tables, not the slot chain (they
@@ -1654,6 +1689,11 @@ impl Interp {
             ReadKey::Index(index) => {
                 return self
                     .uninterned_index_get(code, inst, index, receiver)
+                    .map(GetLeg::Value)
+            }
+            ReadKey::WideIndex(index) => {
+                return self
+                    .wide_index_get(code, inst, index, receiver)
                     .map(GetLeg::Value)
             }
         };

@@ -797,6 +797,7 @@ mod tests {
             "meter_host",
             "cost",
             "step_limit",
+            "bounded_native_raw",
             "n_dispatched",
         ];
         const BOOT_DERIVED: &[&str] = &[

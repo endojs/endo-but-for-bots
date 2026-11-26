@@ -167,6 +167,23 @@ impl Interp {
                     ProxyStep::Forward(target) => target,
                 };
                 vm.forwarding_hop(held)?;
+                // The trap lookup was a `[[Get]]` on the handler, which can run
+                // guest code that names this index and defines it on the
+                // target; only the named key still finds what it defined.
+                // `forwarding_hop` charged the target's unit, so its body runs
+                // unframed, as the id-keyed forward's does.
+                if let ReadKey::Id(id) = vm.refresh_read_key(ReadKey::Index(index)) {
+                    return vm.mop_get_with_proxy_metering_inner(
+                        code,
+                        target,
+                        ReadKey::Id(id),
+                        receiver,
+                        0,
+                        false,
+                        false,
+                        false,
+                    );
+                }
                 match vm.uninterned_index_get_levels(code, target, index, receiver)? {
                     IndexLevels::Answered(value) => return Ok(value),
                     IndexLevels::Proxy(next) => proxy = next,
@@ -407,11 +424,18 @@ impl Interp {
         self.with_forwarding_walk(|vm, held| {
             let mut proxy = proxy;
             loop {
-                let target = match vm.uninterned_index_proxy_has_step(code, proxy, index)? {
-                    ProxyStep::Done(found) => return Ok(found),
-                    ProxyStep::Forward(target) => target,
-                };
+                let target =
+                    match vm.uninterned_proxy_has_step(code, proxy, ReadKey::Index(index))? {
+                        ProxyStep::Done(found) => return Ok(found),
+                        ProxyStep::Forward(target) => target,
+                    };
                 vm.forwarding_hop(held)?;
+                // The trap lookup was a `[[Get]]` on the handler, which can run
+                // guest code that names this index and defines it on the
+                // target; only the named key still finds what it defined.
+                if let ReadKey::Id(id) = vm.refresh_read_key(ReadKey::Index(index)) {
+                    return Ok(vm.mop_has_with_recursions_inner(code, target, id)?.0);
+                }
                 match vm.uninterned_index_has_levels(code, target, index)? {
                     HasLevels::Answered(found, _) => return Ok(found),
                     HasLevels::Proxy(next, _) => proxy = next,
@@ -420,43 +444,44 @@ impl Interp {
         })
     }
 
-    /// One layer of [`Self::uninterned_index_proxy_has`].
-    fn uninterned_index_proxy_has_step(
+    /// One layer of [`Self::uninterned_index_proxy_has`] or
+    /// [`Self::wide_index_proxy_has`], for a `ReadKey::Index` or a
+    /// `ReadKey::WideIndex` key.
+    fn uninterned_proxy_has_step(
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
-        index: u32,
+        key: ReadKey,
     ) -> Result<ProxyStep<bool>, Step> {
         let (target, handler) = self.proxy_target_handler(proxy, "has")?;
         match self.proxy_trap(code, handler, "has")? {
             Some(trap) => self
-                .uninterned_index_proxy_has_trapped(code, target, handler, trap, index)
+                .uninterned_proxy_has_trapped(code, target, handler, trap, key)
                 .map(ProxyStep::Done),
             None => Ok(ProxyStep::Forward(target)),
         }
     }
 
-    /// The trap call and invariant checks of
-    /// [`Self::uninterned_index_proxy_has`].
+    /// The trap call and invariant checks of [`Self::uninterned_proxy_has_step`].
     #[inline(never)]
-    fn uninterned_index_proxy_has_trapped(
+    fn uninterned_proxy_has_trapped(
         &mut self,
         code: &[u8],
         target: crate::value::SlotIndex,
         handler: crate::value::SlotIndex,
         trap: Slot,
-        index: u32,
+        key: ReadKey,
     ) -> Result<bool, Step> {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
-        let key = self.read_key_slot(ReadKey::Index(index))?;
-        let result = self.invoke_value(code, trap, handler_slot, &[target_slot, key])?;
+        let key_slot = self.read_key_slot(key)?;
+        let result = self.invoke_value(code, trap, handler_slot, &[target_slot, key_slot])?;
         let boolean = self.truthy(&result);
         if !boolean {
             // The trap may have NAMED this index, promoting it to an ordinary
             // slot the index arm cannot see; refresh or the invariant check is
             // silently skipped.
-            let key_id = self.refresh_read_key(ReadKey::Index(index));
+            let key_id = self.refresh_read_key(key);
             if let Some(d) = self.mop_get_own_property_read(code, target, key_id)? {
                 if d.configurable == Some(false) {
                     return Err(self.catchable_type_error_msg(
@@ -485,7 +510,12 @@ impl Interp {
         self.forwarding_loop(
             proxy,
             |vm, proxy| vm.proxy_get_own_property_step(code, proxy, ReadKey::Index(index)),
-            |vm, target| vm.uninterned_index_own_descriptor(code, target, index),
+            // The trap lookups may have named this index (see
+            // `uninterned_index_proxy_get`).
+            |vm, target| match vm.refresh_read_key(ReadKey::Index(index)) {
+                ReadKey::Id(id) => vm.mop_get_own_property(code, target, id),
+                _ => vm.uninterned_index_own_descriptor(code, target, index),
+            },
         )
     }
 
@@ -500,7 +530,241 @@ impl Interp {
         self.forwarding_loop(
             proxy,
             |vm, proxy| vm.proxy_delete_step(code, proxy, ReadKey::Index(index)),
-            |vm, target| vm.uninterned_index_delete(code, target, index),
+            |vm, target| match vm.refresh_read_key(ReadKey::Index(index)) {
+                ReadKey::Id(id) => vm.mop_delete(code, target, id),
+                _ => vm.uninterned_index_delete(code, target, index),
+            },
         )
+    }
+
+    /// `[[Get]]` of a [`ReadKey::WideIndex`]: an integer index above
+    /// `u32::MAX` whose canonical name the key table has never held.
+    ///
+    /// No array item, index store or String unit lives that high, and no
+    /// ordinary property exists under a name that was never interned, so only
+    /// two receivers can answer. A TypedArray answers every canonical numeric
+    /// key itself and never continues up the chain (ECMA-262 10.4.5.4); its
+    /// length is far below this index, so the answer is `undefined`. A Proxy's
+    /// trap is handed the key as a string. Every other level falls through to
+    /// its prototype, and the end of the chain is `undefined`, minting
+    /// nothing.
+    pub(in crate::interp) fn wide_index_get(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: WideIndex,
+        receiver: Slot,
+    ) -> Result<Slot, Step> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            match vm.wide_index_get_levels(inst, index) {
+                IndexLevels::Answered(value) => Ok(value),
+                IndexLevels::Proxy(proxy) => vm.wide_index_proxy_get(code, proxy, index, receiver),
+            }
+        })
+    }
+
+    /// The ordinary levels of [`Self::wide_index_get`] from `inst`. The Array
+    /// Iterator's residual context never names a wide index: its cursor stays
+    /// within `u32`.
+    fn wide_index_get_levels(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        index: WideIndex,
+    ) -> IndexLevels {
+        let mut cur = inst;
+        while !cur.is_null() {
+            if self.proxies.contains_key(&cur) {
+                return IndexLevels::Proxy(cur);
+            }
+            if let Some(&ta) = self.typed_arrays.get(&cur) {
+                return IndexLevels::Answered(self.ta_indexed_element_get(ta, index.get() as f64));
+            }
+            cur = self.instance_prototype(cur);
+        }
+        IndexLevels::Answered(Slot::undefined())
+    }
+
+    /// The Proxy arm of [`Self::wide_index_get`], the forwarding loop of
+    /// [`Self::uninterned_index_proxy_get`] for a wide index.
+    #[inline(never)]
+    fn wide_index_proxy_get(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        index: WideIndex,
+        receiver: Slot,
+    ) -> Result<Slot, Step> {
+        self.with_forwarding_walk(|vm, held| {
+            let mut proxy = proxy;
+            loop {
+                let target = match vm.proxy_get_step(
+                    code,
+                    proxy,
+                    ReadKey::WideIndex(index),
+                    receiver,
+                    GetMetering::default(),
+                )? {
+                    ProxyStep::Done(value) => return Ok(value),
+                    ProxyStep::Forward(target) => target,
+                };
+                vm.forwarding_hop(held)?;
+                // As in `uninterned_index_proxy_get`: the trap lookup may have
+                // named this index.
+                if let ReadKey::Id(id) = vm.refresh_read_key(ReadKey::WideIndex(index)) {
+                    return vm.mop_get_with_proxy_metering_inner(
+                        code,
+                        target,
+                        ReadKey::Id(id),
+                        receiver,
+                        0,
+                        false,
+                        false,
+                        false,
+                    );
+                }
+                match vm.wide_index_get_levels(target, index) {
+                    IndexLevels::Answered(value) => return Ok(value),
+                    IndexLevels::Proxy(next) => proxy = next,
+                }
+            }
+        })
+    }
+
+    /// `[[HasProperty]]` of a [`ReadKey::WideIndex`], with the
+    /// `fxOrdinaryHasProperty` frame count of [`Self::uninterned_index_has`].
+    pub(in crate::interp) fn wide_index_has(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: WideIndex,
+    ) -> Result<(bool, u64), Step> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            match vm.wide_index_has_levels(inst, index) {
+                HasLevels::Answered(found, frames) => Ok((found, frames)),
+                HasLevels::Proxy(proxy, frames) => {
+                    Ok((vm.wide_index_proxy_has(code, proxy, index)?, frames))
+                }
+            }
+        })
+    }
+
+    /// The ordinary levels of [`Self::wide_index_has`] from `inst`.
+    fn wide_index_has_levels(&self, inst: crate::value::SlotIndex, index: WideIndex) -> HasLevels {
+        let mut current = inst;
+        let mut frames = 0u64;
+        loop {
+            if self.proxies.contains_key(&current) {
+                return HasLevels::Proxy(current, frames);
+            }
+            if let Some(&ta) = self.typed_arrays.get(&current) {
+                let found = self.ta_valid_index(ta, index.get() as f64).is_some();
+                return HasLevels::Answered(found, frames);
+            }
+            frames += 1;
+            let prototype = self.instance_prototype(current);
+            if prototype.is_null() {
+                return HasLevels::Answered(false, frames);
+            }
+            current = prototype;
+        }
+    }
+
+    /// The Proxy arm of [`Self::wide_index_has`].
+    #[inline(never)]
+    fn wide_index_proxy_has(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        index: WideIndex,
+    ) -> Result<bool, Step> {
+        self.with_forwarding_walk(|vm, held| {
+            let mut proxy = proxy;
+            loop {
+                let target =
+                    match vm.uninterned_proxy_has_step(code, proxy, ReadKey::WideIndex(index))? {
+                        ProxyStep::Done(found) => return Ok(found),
+                        ProxyStep::Forward(target) => target,
+                    };
+                vm.forwarding_hop(held)?;
+                if let ReadKey::Id(id) = vm.refresh_read_key(ReadKey::WideIndex(index)) {
+                    return Ok(vm.mop_has_with_recursions_inner(code, target, id)?.0);
+                }
+                match vm.wide_index_has_levels(target, index) {
+                    HasLevels::Answered(found, _) => return Ok(found),
+                    HasLevels::Proxy(next, _) => proxy = next,
+                }
+            }
+        })
+    }
+
+    /// Whether `o` has an OWN property at a [`ReadKey::WideIndex`]: only a
+    /// Proxy or a TypedArray can say yes.
+    pub(in crate::interp) fn wide_index_own_present(
+        &mut self,
+        code: &[u8],
+        o: crate::value::SlotIndex,
+        index: WideIndex,
+    ) -> Result<bool, Step> {
+        if self.proxies.contains_key(&o) {
+            return Ok(self.wide_index_own_descriptor(code, o, index)?.is_some());
+        }
+        if let Some(&ta) = self.typed_arrays.get(&o) {
+            return Ok(self.ta_valid_index(ta, index.get() as f64).is_some());
+        }
+        Ok(false)
+    }
+
+    /// `[[GetOwnProperty]]` of a [`ReadKey::WideIndex`].
+    pub(in crate::interp) fn wide_index_own_descriptor(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: WideIndex,
+    ) -> Result<Option<OrdinaryDescriptor>, Step> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            if vm.proxies.contains_key(&inst) {
+                return vm.forwarding_loop(
+                    inst,
+                    |vm, proxy| {
+                        vm.proxy_get_own_property_step(code, proxy, ReadKey::WideIndex(index))
+                    },
+                    |vm, target| match vm.refresh_read_key(ReadKey::WideIndex(index)) {
+                        ReadKey::Id(id) => vm.mop_get_own_property(code, target, id),
+                        _ => vm.wide_index_own_descriptor(code, target, index),
+                    },
+                );
+            }
+            if let Some(&ta) = vm.typed_arrays.get(&inst) {
+                return Ok(vm.ta_index_own_descriptor(ta, index.get() as f64));
+            }
+            Ok(None)
+        })
+    }
+
+    /// `[[Delete]]` of a [`ReadKey::WideIndex`]: an absent property is a
+    /// vacuous `true`, and only a Proxy can answer otherwise.
+    pub(in crate::interp) fn wide_index_delete(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: WideIndex,
+    ) -> Result<bool, Step> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            if vm.proxies.contains_key(&inst) {
+                return vm.forwarding_loop(
+                    inst,
+                    |vm, proxy| vm.proxy_delete_step(code, proxy, ReadKey::WideIndex(index)),
+                    |vm, target| match vm.refresh_read_key(ReadKey::WideIndex(index)) {
+                        ReadKey::Id(id) => vm.mop_delete(code, target, id),
+                        _ => vm.wide_index_delete(code, target, index),
+                    },
+                );
+            }
+            if let Some(&ta) = vm.typed_arrays.get(&inst) {
+                // The integer-indexed exotic `[[Delete]]` (10.4.5.7).
+                return Ok(vm.ta_valid_index(ta, index.get() as f64).is_none());
+            }
+            Ok(true)
+        })
     }
 }

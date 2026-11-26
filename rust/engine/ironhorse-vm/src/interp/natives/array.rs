@@ -1058,7 +1058,7 @@ impl Interp {
             // The same non-minting read as the synchronous twin
             // (`arraylike_index`): `Array.fromAsync({length: 70000})` interned
             // one name per element and poisoned the machine.
-            let key = self.array_index_read_key(k)?;
+            let key = self.array_index_read_key(k);
             let kvalue = {
                 let g =
                     self.native_try(|machine| machine.mop_get_read(code, inst, key, array_like));
@@ -1184,7 +1184,7 @@ impl Interp {
         if self.from_async[id].target_is_array {
             self.array_set_dense(target, k as u32, v);
         } else {
-            let key = self.array_index_read_key(k)?;
+            let key = self.array_index_read_key(k);
             let desc = OrdinaryDescriptor {
                 value: Some(v),
                 writable: Some(true),
@@ -2058,21 +2058,25 @@ impl Interp {
         self.intern_key(&name)
     }
 
-    /// The [`ReadKey`] for integer element index `k`, minting nothing.
+    /// The [`ReadKey`] for integer element index `k`, minting nothing: `k`
+    /// resolves to a name only if the key table already holds one.
     ///
-    /// An index above `u32::MAX` is not an array index at all — it is an
-    /// ordinary string name that happens to look numeric, and
-    /// [`ReadKey::Index`] cannot hold it — so that one is interned, as XS
-    /// interns it too (`fxAt` takes its name branch there). Every real element
-    /// index resolves to a name only if one already exists.
-    pub(in crate::interp) fn array_index_read_key(&mut self, k: u64) -> Result<ReadKey, Step> {
-        Ok(match u32::try_from(k) {
+    /// An index above `u32::MAX` is not an array index, but it is still a
+    /// canonical numeric key, so it becomes a [`ReadKey::WideIndex`] rather
+    /// than a name. XS interns that name (`fxAt` takes its name branch
+    /// there), so a walk over a Proxy past `u32::MAX` used to spend one key
+    /// id per step and meet the key space's ceiling after about 64k steps.
+    pub(in crate::interp) fn array_index_read_key(&self, k: u64) -> ReadKey {
+        match u32::try_from(k) {
             Ok(index) => match self.index_read_key_id(index) {
                 Some(id) => ReadKey::Id(id),
                 None => ReadKey::Index(index),
             },
-            Err(_) => ReadKey::Id(self.intern_key(k.to_string())?),
-        })
+            Err(_) => match self.wide_index_read_key_id(k) {
+                Some(id) => ReadKey::Id(id),
+                None => ReadKey::WideIndex(WideIndex::new(k)),
+            },
+        }
     }
 
     /// `ToObject(this)` for a generic Array prototype method. Unlike the
@@ -2232,23 +2236,19 @@ impl Interp {
     /// caller (`find`/`findIndex`/`findLast`/`includes`/`at` reach `get` with
     /// no preceding `has`) would re-arm that on its own.
     ///
-    /// An array index's name is only ever LOOKED UP here, never minted. That
-    /// matters most for a chain carrying a Proxy, where every index is
-    /// "answerable" because an absent one can still invoke an observable
-    /// trap: the trap does have to be called, but `read_key_slot` spells its
-    /// key from the index the way `fxKeyAt` does, so calling it costs no id.
-    /// Above 2^32 - 1 the key is an ordinary name, which
-    /// [`Self::array_index_read_key`] interns as XS does, so a Proxy walk
-    /// there spends one id per step and meets the key space's guest ceiling
-    /// after about 64k steps.
+    /// A name is only ever LOOKED UP here, never minted. That matters most
+    /// for a chain carrying a Proxy, where every index is "answerable"
+    /// because an absent one can still invoke an observable trap: the trap
+    /// does have to be called, but `read_key_slot` spells its key from the
+    /// index the way `fxKeyAt` does, so calling it costs no id, below
+    /// `u32::MAX` or above it.
     pub(in crate::interp) fn array_generic_index_read_key(
         &mut self,
         o: crate::value::SlotIndex,
         k: u64,
-    ) -> Result<Option<ReadKey>, Step> {
+    ) -> Option<ReadKey> {
         self.array_generic_index_answerable(o, k)
             .then(|| self.array_index_read_key(k))
-            .transpose()
     }
 
     /// Whether resolving index `k` on `o`'s chain genuinely needs the MOP
@@ -2312,7 +2312,7 @@ impl Interp {
         o: crate::value::SlotIndex,
         k: u64,
     ) -> Result<bool, Step> {
-        match self.array_generic_index_read_key(o, k)? {
+        match self.array_generic_index_read_key(o, k) {
             Some(key) => Ok(self.mop_has_read_with_recursions(code, o, key)?.0),
             None => Ok(false),
         }
@@ -2327,7 +2327,7 @@ impl Interp {
         o: crate::value::SlotIndex,
         k: u64,
     ) -> Result<Slot, Step> {
-        match self.array_generic_index_read_key(o, k)? {
+        match self.array_generic_index_read_key(o, k) {
             Some(key) => {
                 let recv = Slot::of(Kind::Reference, Payload::Reference(o));
                 self.mop_get_read(code, o, key, recv)
@@ -2350,7 +2350,7 @@ impl Interp {
         // by lookup, never minted: a Proxy anywhere on the chain makes every
         // index answerable, so minting here meant `Array.from(new Proxy(a,
         // {}))` spent one id per element and poisoned the machine.
-        let Some(key) = self.array_generic_index_read_key(o, k)? else {
+        let Some(key) = self.array_generic_index_read_key(o, k) else {
             return Ok(Slot::undefined());
         };
         let recv = Slot::of(Kind::Reference, Payload::Reference(o));
@@ -3193,31 +3193,28 @@ impl Interp {
         index: u64,
         value: Slot,
     ) -> Result<(), Step> {
-        // The id is minted here, before the compact arm that does not read it,
-        // because the 256 raw units per element `intern_key` charges are what
-        // `flat_map_retains_calibrated_dense_metering` measured against the
-        // oracle. That pin is why this site was NOT converted alongside
-        // `array_from_define`: there the equivalent claim was checked against
-        // XS and found false (`fx_Array_from_aux` defines through
-        // `mxDefineIndex`, i.e. `(XS_NO_ID, index)`, and interns nothing), but
-        // which XS routine this path mirrors — and so where its 256 units
-        // really come from — has not been established. Do not copy the
-        // `array_from_define` reasoning here without measuring first: the two
-        // comments describe different XS code.
-        //
-        // Consequence, unfixed: this mints one name per element, so
-        // `bigArrayOfArrays.flatMap(x => x)` still walks the `u16` id space
-        // into the saturation guard. `concat` and `slice` do not route
-        // through here and already match the oracle exactly at 70,000
-        // elements.
-        let id = self.array_generic_index_id(index)?;
+        // One slot per element defined, whatever names the program holds. It
+        // is calibrated where XS was measured: with it dense `flatMap` is
+        // raw-exact against XS, its index names interned or not (and 256 raw
+        // short per element without it), and RegExp @@split matches XS's
+        // `fxNewSlot` per item. Elsewhere it keeps a fresh program's cost
+        // where it was. It used to come from interning the index's name
+        // here, which charged only a name the key table did not yet hold and
+        // spent a key id per element, so a 70,000-element result exhausted
+        // the key space. (The generic `splice` still names each index it
+        // reads, and so still pays that name's slot as well.)
+        self.meter.tick_slot_alloc();
         // A compact Array index is strictly below 2^32 - 1. The string
         // "4294967295" and every wider safe-integer key are ordinary
         // properties, including on an Array result; an ordinary custom-species
         // result supports them throughout concat's full safe-integer domain.
         if self.arrays.contains_key(&target) && index < u64::from(u32::MAX) {
             let index = index as u32;
-            let ordinary = self.ordinary_get_own_descriptor(target, id);
+            // An index has an ordinary own property only under a name the key
+            // table holds, so an index it has never named has none.
+            let ordinary = self
+                .index_read_key_id(index)
+                .and_then(|id| self.ordinary_get_own_descriptor(target, id));
             let compact = self.arrays[&target].items().get(&index).copied();
             let compact_is_default = compact.is_some_and(|item| {
                 item.flag & (XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG) == 0
@@ -3238,7 +3235,13 @@ impl Interp {
             configurable: Some(true),
             ..OrdinaryDescriptor::default()
         };
-        if self.mop_define_own_property(code, target, id, descriptor)? {
+        // Defined by index, as XS's `mxDefineIndex` defines it: an Array,
+        // ordinary or TypedArray result holds the element without a name. A
+        // result that holds it under one (a Proxy, whose trap is handed the
+        // key, or an exotic object such as a Map or a primitive wrapper), or
+        // an index of 2^32 - 1 or more, still mints it.
+        let key = self.array_index_read_key(index);
+        if self.mop_define_own_property_read(code, target, key, descriptor)? {
             Ok(())
         } else {
             // XS mxDefineIndex passes XS_NO_ID (0) to fxDefineAll.
@@ -3362,6 +3365,13 @@ impl Interp {
         let mut outer: Vec<FlatSource> = Vec::new();
         loop {
             while cur.source_index < cur.source_len {
+                // A descent reaches no meter check point, so a bounded run
+                // counts each step here: a nest whose levels repeat one array
+                // (`a = [a, a]`) doubles the visit per level and appends
+                // nothing.
+                if self.step_limit != u64::MAX {
+                    self.charge_bounded_native_work(0)?;
+                }
                 let present = match self.array_generic_next_present_index(
                     cur.source,
                     cur.source_index,
@@ -4665,6 +4675,13 @@ impl Interp {
         let mut open: Vec<(crate::value::SlotIndex, u32, u32, u32)> = vec![(src, len, 0, depth)];
         while let Some(top) = open.last_mut() {
             let (src, len, index, depth) = *top;
+            // Neither a hole nor a descent reaches a meter check point, so a
+            // bounded run counts each step here: a nest whose levels repeat
+            // one array (`a = [a, a]`) doubles the visit per level and
+            // appends nothing.
+            if self.step_limit != u64::MAX {
+                self.charge_bounded_native_work(0)?;
+            }
             if index >= len {
                 open.pop();
                 continue;

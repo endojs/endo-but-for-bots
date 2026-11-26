@@ -6875,6 +6875,9 @@ impl Interp {
                     // nothing.
                     let descriptor = match self.to_read_key(code, arg1)? {
                         ReadKey::Index(index) => self.ta_index_own_descriptor(ta, f64::from(index)),
+                        ReadKey::WideIndex(index) => {
+                            self.ta_index_own_descriptor(ta, index.get() as f64)
+                        }
                         ReadKey::Id(id) => match self.ta_numeric_index_at(id, 0) {
                             Some(n) => self.ta_index_own_descriptor(ta, n),
                             None => self.ordinary_get_own_descriptor(inst, id),
@@ -6946,6 +6949,12 @@ impl Interp {
                                 Slot::undefined()
                             }
                         },
+                        // No index store reaches past `u32::MAX`, and no slot
+                        // holds a name the table never interned: an own miss.
+                        ReadKey::WideIndex(_) => {
+                            self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
+                            Slot::undefined()
+                        }
                         ReadKey::Id(id) if self.index_prop_descriptor_by_id(inst, id).is_some() => {
                             let descriptor = self
                                 .index_prop_descriptor_by_id(inst, id)

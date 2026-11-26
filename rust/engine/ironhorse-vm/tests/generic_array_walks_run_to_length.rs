@@ -4,12 +4,13 @@
 //! `map` and `filter` after 2^16 indices of a receiver probed one by one (a
 //! Proxy, TypedArray or String wrapper), the read-only methods after 2^24,
 //! and `reduce`/`reduceRight` at any `length` above 2^32 - 1. Each answer here
-//! is V8's and XS's except two, both accounted for in
-//! `ironhorse-262/tests/xs_departures.rs`: the fold just below 2^53, where XS
-//! folds nothing (a `DEPARTURES` row), and the Proxy fold that meets the key
-//! ceiling (a `GAPS` row records that ceiling with `findLast`).
-//! `ironhorse-262/tests/former_halts.rs` runs the others against the XS
-//! oracle.
+//! is V8's. XS gives the same answers, except where `DEPARTURES` in
+//! `ironhorse-262/tests/xs_departures.rs` records otherwise: it folds nothing
+//! above 2^32 - 1 over a Proxy or just below 2^53, and starts `findLast` and
+//! `findLastIndex` at 2^32 - 2 rather than just below 2^53. It also aborts on
+//! the Proxy walks that name 100,000 keys above 2^32 - 1, since it interns
+//! each one. `ironhorse-262/tests/former_halts.rs` runs the others against
+//! the XS oracle.
 //!
 //! A 2^24 + 1 step walk takes seconds in an optimized build and up to minutes
 //! in an unoptimized one, so those run in the release lane only.
@@ -56,19 +57,45 @@ fn reduce_folds_a_length_past_two_to_the_thirty_two() {
     }
 }
 
-/// A Proxy is handed each index it is asked about as a key, and above
-/// 2^32 - 1 that key is an ordinary name the engine must hold. A fold from
-/// just below 2^53 names one per step, so after about 64k steps it meets the
-/// key space's guest ceiling and throws a catchable RangeError, after which
-/// every new name in the program throws too, as for any program naming that
-/// many keys (`lastIndexOf` and `findLast*` already did here). The fold used
-/// to decline such a length outright. The `GAPS` row in `xs_departures.rs`
-/// records the same ceiling with `findLast`, where XS answers as specified.
+/// A Proxy is handed each index it is asked about as a key. Above 2^32 - 1
+/// that key is no array index, but the walk still mints no name for it: it
+/// used to intern one per step, meet the key space's guest ceiling after
+/// about 64k steps, and leave every later new name in the program throwing.
+/// Each walk here makes 100,000 probes before its trap stops it. A trap that
+/// passes the key on through `ToPropertyKey` (`Reflect.has(t, k)`, `t[k]`)
+/// still names it, as any read keyed by that string does, and as XS does.
 #[test]
-fn a_proxy_fold_past_two_to_the_thirty_two_meets_the_key_ceiling() {
+fn a_proxy_walk_past_two_to_the_thirty_two_mints_no_key() {
+    let has = "has(t, k) { if (++n === 100000) throw 'stop ' + k; return false }";
+    let get = "get(t, k) { if (k === 'length') return t.length; if (++n === 100000) throw 'stop ' + String(k) }";
+    for (walk, expected) in [
+        (format!("Array.prototype.reduceRight.call(new Proxy({{ length: 2 ** 53 - 1 }}, {{ {has} }}), function (a) {{ return a }}, 0)"), "stop 9007199254640991"),
+        (format!("Array.prototype.lastIndexOf.call(new Proxy({{ length: 2 ** 53 - 1 }}, {{ {has} }}), 1)"), "stop 9007199254640991"),
+        (format!("Array.prototype.indexOf.call(new Proxy({{ length: 2 ** 53 - 1 }}, {{ {has} }}), 1, 2 ** 32)"), "stop 4295067295"),
+        (format!("Array.prototype.findLastIndex.call(new Proxy({{ length: 2 ** 53 - 1 }}, {{ {get} }}), function () {{ return false }})"), "stop 9007199254640991"),
+        (format!("Array.prototype.includes.call(new Proxy({{ length: 2 ** 53 - 1 }}, {{ {get} }}), 1, 2 ** 32)"), "stop 4295067295"),
+    ] {
+        assert_result(
+            &format!("var n = 0; var r; try {{ {walk} }} catch (e) {{ r = String(e) }} var o = {{}}; o['fresh' + 'Name'] = 1; r + ':' + Object.keys(o).join()"),
+            &format!("{expected}:freshName"),
+        );
+    }
+}
+
+/// 2^32 - 1 is no array index, so an allocating walk that reaches it defines
+/// an ordinary named property there, on an ordinary result as on an Array.
+/// Defined by index instead, it went to the index store, where `ownKeys`
+/// listed it but no read, `in` or `Object.keys` found it.
+#[test]
+fn a_result_element_at_two_to_the_thirty_two_minus_one_is_named() {
     assert_result(
-        "var n = 0; try { Array.prototype.reduceRight.call(new Proxy({ length: 2 ** 53 - 1 }, { has(t, k) { if (++n === 70000) throw 'stop ' + k; return false } }), function (a) { return a }, 0) } catch (e) { e.constructor.name + ' after ' + (n > 60000 && n < 70000) }",
-        "RangeError after true",
+        "var a = []; a.constructor = { [Symbol.species]: function () { return { a: 1 } } }; \
+         var s = { length: 2 ** 32 - 1 }; s[Symbol.isConcatSpreadable] = true; \
+         var r = a.concat(s, 'x'); var k = String(2 ** 32 - 1); \
+         [r.length, Reflect.ownKeys(r).join(), r[k], k in r, Object.keys(r).join(), \
+          JSON.stringify(Object.getOwnPropertyDescriptor(r, k))].join('|')",
+        "4294967296|a,4294967295,length|x|true|a,4294967295,length|\
+         {\"value\":\"x\",\"writable\":true,\"enumerable\":true,\"configurable\":true}",
     );
 }
 

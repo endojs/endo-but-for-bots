@@ -579,8 +579,18 @@ impl Interp {
                 Some(id) => ReadKey::Id(id),
                 None => ReadKey::Index(index),
             },
+            ReadKey::WideIndex(index) => match self.wide_index_read_key_id(index.get()) {
+                Some(id) => ReadKey::Id(id),
+                None => key,
+            },
             key => key,
         }
+    }
+
+    /// The id of an integer index's name above `u32::MAX`, if the key table
+    /// holds one: [`Self::index_read_key_id`] past the array-index range.
+    pub(in crate::interp) fn wide_index_read_key_id(&self, index: u64) -> Option<u16> {
+        self.symbol_ids.get(index.to_string()).copied()
     }
 
     /// A [`ReadKey`] in a form guest code cannot change: an index stays an
@@ -589,6 +599,10 @@ impl Interp {
     /// (which form READS the property now), so a key that must still match
     /// after guest code runs is compared in this form and refreshed to read.
     pub(in crate::interp) fn stable_read_key(&self, key: ReadKey) -> ReadKey {
+        // A wide index's name stays an `Id`: the one caller, the JSON reviver
+        // walk, applies this only to an Object's keys, never to an Array's
+        // indices, and spelling every name to find out would cost a string
+        // per key.
         match key {
             ReadKey::Id(id) => self.key_id_index(id).map_or(key, ReadKey::Index),
             key => key,
@@ -601,6 +615,8 @@ impl Interp {
     pub(in crate::interp) fn read_key_is_index(&self, key: ReadKey) -> bool {
         match key {
             ReadKey::Index(_) => true,
+            // Above the array-index range, as `string_to_index` reads a name.
+            ReadKey::WideIndex(_) => false,
             ReadKey::Id(id) => self
                 .scalar_key_text(id)
                 .is_some_and(|name| string_to_index(&name).is_some()),
@@ -619,6 +635,7 @@ impl Interp {
         Ok(match key {
             ReadKey::Id(id) => id,
             ReadKey::Index(index) => self.intern_key_unmetered(index.to_string())?,
+            ReadKey::WideIndex(index) => self.intern_key_unmetered(index.get().to_string())?,
         })
     }
 
@@ -685,6 +702,10 @@ impl Interp {
             ReadKey::Id(id) => self.property_key_slot(id),
             ReadKey::Index(index) => {
                 let offset = self.alloc_str_text_metered(index.to_string().as_bytes())?;
+                Ok(Slot::of(Kind::String, Payload::String(offset)))
+            }
+            ReadKey::WideIndex(index) => {
+                let offset = self.alloc_str_text_metered(index.get().to_string().as_bytes())?;
                 Ok(Slot::of(Kind::String, Payload::String(offset)))
             }
         }

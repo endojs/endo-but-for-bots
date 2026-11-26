@@ -1804,6 +1804,11 @@ impl Interp {
         match *key {
             ReadKey::Id(id) => self.set_own_unmetered(inst, id, v),
             ReadKey::Index(index) => self.index_prop_set(inst, index, v),
+            // Defensive: a member key is never wide.
+            ReadKey::WideIndex(_) => {
+                let id = self.read_key_intern(*key)?;
+                self.set_own_unmetered(inst, id, v)
+            }
         }
         if track_source {
             // Positions by key, not a linear scan: JSON allows a repeated
@@ -2044,7 +2049,7 @@ impl Interp {
                 // `JSON.parse(json, function (k, v) { return v })` — an
                 // identity reviver, the most common one there is — poisoned
                 // the machine.
-                *key = self.array_index_read_key(index)?;
+                *key = self.array_index_read_key(index);
                 let child = match frame.source {
                     Some(JsonSource::Array(children)) => {
                         usize::try_from(index).ok().and_then(|i| children.get(i))

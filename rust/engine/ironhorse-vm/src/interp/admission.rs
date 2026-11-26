@@ -88,10 +88,37 @@ impl Interp {
             None => self.meter.charge_and_check(raw, &mut |_| true),
         };
         if check == MeterCheck::Abort {
-            Err(Step::Host(Halt::MeterAbort))
-        } else {
-            Ok(())
+            return Err(Step::Host(Halt::MeterAbort));
         }
+        if self.step_limit != u64::MAX {
+            self.charge_bounded_native_work(raw)?;
+        }
+        Ok(())
+    }
+
+    /// A bounded run's built-in work, counted at the check points where a
+    /// meter host would see it. A built-in's loop dispatches nothing, so the
+    /// dispatch loop's two guards cannot stop it; they are applied here
+    /// instead. The work may charge what `step_limit` dispatches would
+    /// ([`CODE_METERING`](crate::meter::CODE_METERING) each), and the run
+    /// halts with [`Halt::StepLimit`] past that or at the bounded live-slot
+    /// ceiling, as the dispatch loop does.
+    ///
+    /// Each check point counts as at least one built-in step
+    /// ([`BUILTIN_METERING`](crate::meter::BUILTIN_METERING)), since some
+    /// loops charge a single raw unit per step of work. A built-in that
+    /// prepays its work halts here when the prepayment exceeds what remains,
+    /// before it validates the request, as an armed host would refuse it.
+    pub(super) fn charge_bounded_native_work(&mut self, raw: u64) -> Result<(), Step> {
+        self.bounded_native_raw = self
+            .bounded_native_raw
+            .saturating_add(raw.max(crate::meter::BUILTIN_METERING));
+        if self.bounded_native_raw >= self.step_limit.saturating_mul(crate::meter::CODE_METERING)
+            || self.slots.live_count() >= BOUNDED_RUN_SLOT_CEILING
+        {
+            return Err(Step::Host(Halt::StepLimit(self.n_dispatched)));
+        }
+        Ok(())
     }
 
     pub(super) fn charge_builtin_work(&mut self, count: u64) -> Result<(), Step> {

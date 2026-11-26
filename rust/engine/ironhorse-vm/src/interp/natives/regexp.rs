@@ -330,16 +330,29 @@ impl Interp {
             u64::MAX
         };
         let mut charged = 0;
+        // The refusal itself, kept: a bounded run's `StepLimit` must not
+        // become the compiler's `BudgetExceeded`, which reads as the host's
+        // `MeterAbort`.
+        let mut refused = None;
         let outcome = {
             let mut check = |raw| {
                 let delta = raw - charged;
                 charged = raw;
-                self.charge_and_check(delta).is_ok()
+                match self.charge_and_check(delta) {
+                    Ok(()) => true,
+                    Err(step) => {
+                        refused = Some(step);
+                        false
+                    }
+                }
             };
             ironhorse_regexp::compile_units_checked(&pattern, &flags, budget, Some(&mut check))
         };
         if outcome.work_meter_raw > charged {
             self.charge_and_check(outcome.work_meter_raw - charged)?;
+        }
+        if let Some(step) = refused {
+            return Err(step);
         }
         let program = match outcome.result {
             Err(ironhorse_regexp::CompileError::BudgetExceeded) => {
@@ -527,18 +540,31 @@ impl Interp {
         let budget = (u64::MAX - self.meter.raw()) / ironhorse_regexp::XS_REGEXP_METERING;
         let meter = &mut self.meter;
         let mut host = self.meter_host.as_mut();
+        // A bounded run counts the match's work as it counts any built-in's
+        // (`charge_bounded_native_work`): a refusal here ends the match, and
+        // the charge after it halts the run with `StepLimit`.
+        let native_budget = (self.step_limit != u64::MAX)
+            .then(|| self.step_limit.saturating_mul(crate::meter::CODE_METERING));
+        let native = &mut self.bounded_native_raw;
         let mut charged: u64 = 0;
         let outcome = {
             let mut check = |raw: u64| -> bool {
                 let delta = raw - charged;
                 charged = raw;
-                match host.as_mut() {
+                let accepted = match host.as_mut() {
                     Some(h) => meter.charge_and_check(delta, h) == MeterCheck::Continue,
                     None if !meter.is_armed() => {
                         meter.tick_raw(delta);
                         true
                     }
                     None => false,
+                };
+                match native_budget {
+                    Some(limit) if accepted => {
+                        *native = native.saturating_add(delta.max(crate::meter::BUILTIN_METERING));
+                        *native < limit
+                    }
+                    _ => accepted,
                 }
             };
             ironhorse_regexp::match_regexp_budgeted(
@@ -653,8 +679,10 @@ impl Interp {
             let Payload::Reference(result_inst) = result.value else {
                 unreachable!("RegExpExec returns an object or null")
             };
-            let zero_id = self.array_generic_index_id(0)?;
-            let whole = self.mop_get(code, result_inst, zero_id, result)?;
+            // Read by index, as XS's `mxGetIndex` reads it: naming the index
+            // would charge a slot on top of the one the define below charges.
+            let zero = self.array_index_read_key(0);
+            let whole = self.mop_get_read(code, result_inst, zero, result)?;
             let match_string = self.to_string_slot(code, whole)?;
             self.array_generic_create_data_property(code, matches, count, match_string)?;
             count = count.saturating_add(1);
@@ -820,8 +848,9 @@ impl Interp {
             let capture_count = self.to_length_value(code, result_length)?.saturating_sub(1);
             for capture_index in 1..=capture_count {
                 self.meter.tick_raw(REGEXP_SPLIT_PER_CAPTURE_METERING);
-                let capture_id = self.array_generic_index_id(capture_index)?;
-                let capture = self.mop_get(code, result_inst, capture_id, result)?;
+                // Read by index, as in `regexp_match`.
+                let capture_key = self.array_index_read_key(capture_index);
+                let capture = self.mop_get_read(code, result_inst, capture_key, result)?;
                 self.array_generic_create_data_property(code, array, count, capture)?;
                 count += 1;
                 if count == limit {

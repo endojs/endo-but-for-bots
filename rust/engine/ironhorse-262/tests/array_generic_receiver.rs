@@ -319,3 +319,63 @@ fn length_is_coerced_via_to_length() {
          Array.prototype.forEach.call(o, function () {}); order.join(',')",
     );
 }
+
+/// A walk over a Proxy past 2^32 - 1 mints no name per probed index: it used
+/// to meet the key space's guest ceiling after about 64k steps and throw a
+/// RangeError where XS and V8 run the trap to its 70,000th call. (Formerly a
+/// `GAPS` row in `xs_departures.rs`.) XS starts this walk at 2^32 - 2, a row
+/// of `DEPARTURES`, so the program compares how far it ran, not which keys.
+#[test]
+fn a_proxy_walk_past_two_to_the_thirty_two_mints_no_key() {
+    agrees(
+        "var n = 0; try { Array.prototype.findLast.call(new Proxy({ length: 2 ** 53 - 1 }, \
+         { get(t, k) { if (k === 'length') return t.length; if (++n === 70000) throw 'stop ' + String(k) } }), \
+         function () { return false }) } catch (e) { e.constructor.name + ' after ' + (n > 60000 && n < 70000) }",
+    );
+}
+
+/// An allocating method defines each element of its Array result by index,
+/// as XS's `mxDefineIndex` does, minting no name for it. Each element used to
+/// intern its index's name, so a 70,000-element result over a Proxy, whose
+/// reads name nothing, met the key space's guest ceiling and threw, and
+/// every later new name in the program threw too.
+#[test]
+fn an_allocating_walk_mints_no_key_per_element() {
+    for walk in [
+        "Array.prototype.map.call(p, function (v) { return v })",
+        "Array.prototype.filter.call(p, function () { return true })",
+        "Array.prototype.flat.call(p)",
+        "(p[Symbol.isConcatSpreadable] = true, [].concat(p))",
+        "Array.prototype.toReversed.call(p)",
+    ] {
+        agrees(&format!(
+            "var a = []; for (var i = 0; i < 70000; i++) a.push(i); var p = new Proxy(a, {{}}); var r; \
+             try {{ r = {walk}.length }} catch (e) {{ r = String(e) }} \
+             var o = {{}}; o['fresh' + 'Name'] = 1; r + ':' + Object.keys(o)"
+        ));
+    }
+}
+
+/// A Proxy's trap lookup is a `[[Get]]` on its handler, which can run guest
+/// code that names the probed index and defines it on the target. The walk
+/// then reads the target by that name: by index it would miss a property the
+/// target holds, and skip the Proxy invariant checks against it. Below
+/// 2^32 - 1 this missed an accessor (a data property lands in the index
+/// store); above it, any property.
+#[test]
+fn a_trap_lookup_that_names_the_probed_index_is_seen() {
+    for program in [
+        "var t = {length: 2**32+3}; var c = 0; var h = { get has() { c++; if (c === 2) t[String(2**32+1)] = 'x'; return undefined } }; String(Array.prototype.indexOf.call(new Proxy(t, h), 'x', 2**32)) + ':' + c",
+        "var t = {length: 2**32+3}; var n = 0; var h = new Proxy({}, { get(_, trap) { if (trap === 'get') { n++; if (n === 2) t[String(2**32+2)] = 'meta'; } } }); String(Array.prototype.at.call(new Proxy(t, h), -1))",
+        "var t = {length: 2**32+3}; var n = 0; var h = new Proxy({}, { get(_, trap) { if (trap === 'has') { n++; if (n === 1) t[String(2**32+2)] = 'meta'; if (n > 5) throw 'walked past'; } } }); try { String(Array.prototype.lastIndexOf.call(new Proxy(t, h), 'meta')) } catch (e) { String(e) }",
+        "var T = {}; var c = 0; var mh = new Proxy({}, { get(_, trap) { if (trap === 'getOwnPropertyDescriptor' && ++c === 2) Object.defineProperty(T, String(2**32+1), {value: 1, writable: false, configurable: false}); } }); var P2 = new Proxy(T, mh); var P1 = new Proxy(P2, { get(t, k) { return k === 'length' ? 2**32+3 : 2 } }); try { String(Array.prototype.includes.call(P1, 3, 2**32+1)) + c } catch (e) { e.constructor.name + c }",
+        "var T = {}; var c = 0; var mh = new Proxy({}, { get(_, trap) { if (trap === 'getOwnPropertyDescriptor' && ++c === 2) Object.defineProperty(T, String(2**32+1), {value: 1, writable: false, configurable: false}); } }); var P2 = new Proxy(T, mh); var P1 = new Proxy(P2, { get(t, k) { return k === 'length' ? 2**32+3 : undefined }, has(t, k) { return false } }); try { String(Array.prototype.lastIndexOf.call(P1, 3, 2**32+1)) + c } catch (e) { e.constructor.name + c }",
+        "var t = {length: 8}; var n = 0; var h = { get get() { if (++n === 2) Object.defineProperty(t, String(5), { get() { return 'x' } }); return undefined } }; String(Array.prototype.at.call(new Proxy(t, h), 5))",
+        "var t = {length: 8}; var c = 0; var p2 = new Proxy(t, { get getOwnPropertyDescriptor() { if (++c === 2) Object.defineProperty(t, 5, { set() {}, configurable: false }); return undefined } }); var p1 = new Proxy(p2, { get(tt, k) { return k === 'length' ? 8 : 2 } }); try { String(Array.prototype.includes.call(p1, 2, 5)) + c } catch (e) { e.constructor.name + c }",
+        // An Array Iterator's read over a Proxy, by its own forward.
+        "var T = {length: 3}; T[Symbol.iterator] = Array.prototype.values; var armed = 0; var h = { get get() { if (armed && --armed === 0) Object.defineProperty(T, String(1), { get() { return 'x' }, configurable: true }); return undefined } }; var P = new Proxy(T, h); var it = P[Symbol.iterator](); it.next(); armed = 2; String(it.next().value)",
+        "var T = {length: 8}; var armed = false; var mh = new Proxy({}, { get(_, trap) { if (trap === 'get' && armed) { armed = false; Object.defineProperty(T, String(5), { get() { return 'x' }, configurable: true }); } return undefined; } }); var P2 = new Proxy(T, mh); var P1 = new Proxy(P2, { get(t, k, r) { if (k === String(5)) armed = true; return Reflect.get(t, k, r) } }); var r = []; for (var v of Array.prototype.values.call(P1)) r.push(v); String(r[5])",
+    ] {
+        agrees(program);
+    }
+}

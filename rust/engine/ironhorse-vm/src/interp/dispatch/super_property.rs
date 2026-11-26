@@ -56,12 +56,7 @@ impl Interp {
             let error = self.internal_error("TypeError", "get super: base is null".into());
             return Err(self.raise_js(error));
         }
-        let value = (match read_key {
-            ReadKey::Id(id) => self.mop_get(code, super_ref.next, id, receiver),
-            ReadKey::Index(index) => {
-                self.uninterned_index_get(code, super_ref.next, index, receiver)
-            }
-        })?;
+        let value = self.mop_get_read(code, super_ref.next, read_key, receiver)?;
         self.push(value);
         Ok(())
     }
