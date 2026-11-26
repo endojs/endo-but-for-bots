@@ -23,6 +23,9 @@ let nodePath;
 let endoCliPath;
 
 /** @type {string} */
+let daemonControlPath;
+
+/** @type {string} */
 let chatDistPath;
 
 /** @type {string} */
@@ -41,6 +44,7 @@ if (isPackaged) {
   );
   nodePath = path.join(appRoot, nodeBinary);
   endoCliPath = path.join(appRoot, 'bundles', 'endo-cli.mjs');
+  daemonControlPath = path.join(appRoot, 'bundles', 'daemon-control.cjs');
   chatDistPath = path.join(appRoot, 'dist', 'chat', 'index.html');
   endoDaemonPath = path.join(appRoot, 'bundles', 'endo-daemon.mjs');
   workerSubprocessPath = path.join(appRoot, 'bundles', 'worker-node.mjs');
@@ -49,6 +53,10 @@ if (isPackaged) {
   const repoRoot = path.resolve(dirname, '../../..');
   nodePath = 'node';
   endoCliPath = path.join(repoRoot, 'packages/cli/bin/endo.cjs');
+  daemonControlPath = path.join(
+    repoRoot,
+    'packages/familiar/daemon-control.js',
+  );
   chatDistPath = path.join(repoRoot, 'packages/chat/dist/index.html');
   endoDaemonPath = path.join(repoRoot, 'packages/daemon/src/manager-node.js');
   workerSubprocessPath = path.join(
@@ -62,6 +70,7 @@ if (isPackaged) {
 const resourcePaths = {
   nodePath,
   endoCliPath,
+  daemonControlPath,
   chatDistPath,
   endoDaemonPath,
   workerSubprocessPath,

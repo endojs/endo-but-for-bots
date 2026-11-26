@@ -6,6 +6,12 @@
   },
   "references": [
     {
+      "path": "../daemon/tsconfig.composite.json"
+    },
+    {
+      "path": "../init/tsconfig.composite.json"
+    },
+    {
       "path": "../where/tsconfig.composite.json"
     }
   ]
