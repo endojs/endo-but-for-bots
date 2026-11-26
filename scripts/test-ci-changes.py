@@ -172,6 +172,12 @@ class Repository(unittest.TestCase):
         self.assertTrue(selected["test-thixotrope-ironhorse"])
         self.assertTrue(selected["build-xsnap"])
 
+    def test_worker_core_selects_the_worker_and_its_host(self):
+        result = changes.classify(["rust/thixotrope-ironhorse-core/src/protocol.rs"], [self.graph])
+        self.assertTrue(result["jobs"]["test-thixotrope-ironhorse"])
+        self.assertIn("@endo/thixotrope", result["packages"])
+        self.assertFalse(result["jobs"]["test-ironhorse"])
+
     def test_nonmanifest_bundle_inputs(self):
         self.assertTrue(self.selected("packages/lal/agent.js")["familiar-bundle"])
         self.assertTrue(self.selected("scripts/pack-all.mjs")["viable-release"])
