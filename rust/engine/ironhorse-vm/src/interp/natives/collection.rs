@@ -1227,7 +1227,8 @@ impl Interp {
     /// a union of every iterator method's arms (`native_method_iterator`):
     /// each level of a chain of lazy helpers (`it.take(5)`, `it.map(f)`,
     /// nested) re-enters through it, so a level carries this frame and the
-    /// thin dispatcher's.
+    /// thin dispatcher's, and a `flatMap` or `Iterator.concat` level its step's
+    /// too.
     #[inline(never)]
     pub(in crate::interp) fn iterator_helper_next(
         &mut self,
@@ -1381,7 +1382,8 @@ impl Interp {
     /// each level's underlying step, not through this call, so the boundary's
     /// temporaries stay out of the frame every level of a chain holds
     /// ([`Self::iterator_helper_next`]). A nest that re-enters through the
-    /// callback carries both frames.
+    /// callback carries this frame as well, and through a `flatMap` callback
+    /// the `flatMap` step's too.
     #[inline(never)]
     fn helper_call_callback(
         &mut self,
@@ -1416,9 +1418,10 @@ impl Interp {
     /// outer record in the spec's closure.
     ///
     /// Out of line, so the inner-iterator machinery stays out of the frame
-    /// every level of a chain of `take`, `drop`, `map` or `filter` helpers
-    /// holds ([`Self::iterator_helper_next`]). A chain of `flatMap` helpers
-    /// re-enters through this step, so it carries both frames.
+    /// every level of a chain of `take`, `drop`, `map`, `filter` or
+    /// `Iterator.concat` helpers holds ([`Self::iterator_helper_next`]). A
+    /// chain of `flatMap` helpers re-enters through this step, so it carries
+    /// both frames.
     #[inline(never)]
     fn iterator_helper_flat_map_step(
         &mut self,
@@ -1566,10 +1569,12 @@ impl Interp {
     /// `next`, or from the result propagates without a close, as the
     /// specification's `?` does; the caller latches the helper done.
     ///
-    /// Out of line for the reason `iterator_helper_flat_map_step` is: a
-    /// `take`, `drop`, `map` or `filter` chain re-enters through
-    /// `iterator_helper_next` once per level and never through this step, so
-    /// inlined it would grow the frame every level of those chains carries.
+    /// Out of line, like [`Self::iterator_helper_flat_map_step`]: a `take`,
+    /// `drop`, `map`, `filter` or `flatMap` chain re-enters through
+    /// [`Self::iterator_helper_next`] once per level and never through this
+    /// step, so inlined it would grow the frame every level of those chains
+    /// carries. A chain of `Iterator.concat` helpers re-enters through this
+    /// step, so it carries both frames.
     #[inline(never)]
     fn iterator_concat_step(
         &mut self,

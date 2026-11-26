@@ -3449,9 +3449,9 @@ fn temporal_set_time_args(
 fn native_unsupported_name(native: Native) -> &'static str {
     match native {
         // Modeled, not unsupported, so it gets no label. Every caller of this
-        // function is either the `_` fallthrough in `call_native_inner` --
+        // function is either the `_` fallthrough in `native_ctor_core` --
         // which `Native::LockedDownConstructor`'s own arm answers before -- or
-        // a `Native::Number`/`Native::String` coercion arm, where `native` is
+        // a `Native::Number`/`Native::Object` coercion arm, where `native` is
         // already that variant. A label here would be worse than dead: this
         // registry is the set of executions the differential instruments are
         // excused from judging (`src/halt_labels.rs`), so registering one
@@ -3463,7 +3463,7 @@ fn native_unsupported_name(native: Native) -> &'static str {
         // as a new label.
         Native::LockedDownConstructor => unreachable!(),
         // Modeled too, and for the same reason it gets no label: `Compartment`
-        // has its own arms in `call_native_inner` for both the construct and
+        // has its own arms in `native_ctor_core` for both the construct and
         // the bare-call (a `TypeError`) paths, so the `_` fallthrough that
         // reaches this registry is unreachable for it. The `unreachable!`
         // carries no message, as above.

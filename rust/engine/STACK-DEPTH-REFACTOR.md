@@ -1368,36 +1368,57 @@ stacks as well.
   `benches/baseline.json:65`, `"maximum_ratio": 1.25`).
 - **Test impact:** `tests/allocation_admission_audit.rs:82`, `:385` and `:614` `include_str!`
   this file, so new files join their rosters.
-- **Follow-up (after Phase 3):** three re-entrant arms still sat in a family function, so a
-  nest through them carried the union of every arm's frame.
-  Each now has a function of its own that the thin dispatcher calls (frames from objdump on
-  the release rlib):
-  - `eval` (`native_eval`, 112 B), out of `native_ctor_core` (1,824 B);
-  - `%IteratorHelperPrototype%.next` (`iterator_helper_next`, 688 B) and the async generator
-    methods (`native_async_generator_method`, 256 B), out of `native_method_iterator` (1,648 B).
-    The `flatMap` step and the helpers' callback call are out of line of the first: a `take`,
-    `drop`, `map` or `filter` chain re-enters through each level's underlying step, never
-    through either.
-    A `flatMap` chain re-enters through its step, so it carries that frame as well; a nest that
-    re-enters through a callback carries the callback call's.
+- **Follow-up (after Phase 3):** five of the re-entrant arms, in three groups, still sat in
+  family functions, so a nest through them carried the union of every arm's frame.
+  The thin dispatchers now call each group's own function (frames from objdump on the release
+  rlib, before → after):
+  - `eval`, in `native_eval` (112 B), out of `native_ctor_core` (1,680 → 1,648 B);
+  - `%IteratorHelperPrototype%.next`, in `iterator_helper_next` (704 B), and the async
+    generator methods' `next`, `return` and `throw`, in `native_async_generator_method`
+    (256 B, with `enqueue_async_generator`, a 208 B frame of its own before, inlined into it),
+    out of `native_method_iterator` (1,376 → 1,120 B).
 
-  A level natively, the slope between two depths painted with the stack-lanes probe: `take` and
-  `iter-map` 3,712 → 2,720 B (232 → 170 B per budget unit), `asyncgen` 5,456 → 3,840 B,
-  `eval-direct` 6,480 → 4,720 B, `eval-indirect` 7,008 → 5,248 B, a `flatMap` chain 3,712 →
-  3,488 B, and a nest through a `map` callback 5,248 → 4,272 B.
-  The stack-height marks, against the baseline recorded at the parent: `take`-126 and
-  `iter-map`-126 473,463 → 348,023 B (−26.5%), `asyncgen`-62 346,735 → 244,959 B (−29.4%),
-  `eval-direct`-42 278,727 → 204,839 B (−26.5%), `eval-indirect`-42 300,727 → 226,839 B
-  (−24.6%), the two U3 `eval` nests 26% less, and `proxy-forin-getprototypeof-trap`-61
-  389,211 → 359,963 B (−7.5%), since `native_method_iterator`, which its for-in walk passes,
-  fell to 1,168 B.
-  Against the parent measured on the same host no mark rose and no outcome moved;
-  `stack-lanes/differential/a1-hot-arms.js` reaches every moved arm.
-  The stack-height corpus has no `drop`, `filter` or `flatMap` chain, so those frames are not
-  gated.
-  The dispatchers themselves are the next margin: `call_native_method_inner` is 912 B because
-  it inlines the `Object` statics' Proxy pre-check (`object_static_proxy`), and every
-  native-method nest carries it once per level.
+  The helper `next`'s inner work is kept out of line of `iterator_helper_next`: the `flatMap`
+  step (800 → 736 B), the `Iterator.concat` step (`iterator_concat_step`, 576 B) and, new, the
+  `map`, `filter` and `flatMap` callback call (`helper_call_callback`, 176 B).
+  A `take`, `drop`, `map` or `filter` chain re-enters through each level's underlying step,
+  never through any of them.
+  A `flatMap` or `Iterator.concat` chain re-enters through its own step, so it carries that
+  frame as well; a nest that re-enters through a callback carries the callback call's, and
+  through a `flatMap` callback the step's too.
+  The change was rebased onto `Iterator.concat` (#1464) before it landed, and LLVM then inlined
+  the concat step into the new `iterator_helper_next` until it too was marked
+  `#[inline(never)]`; the figures here are for the tree as landed.
+
+  Per level natively, the slope between depths 10 and 40 painted with the stack-lanes probe,
+  parent → landed: `take` and `iter-map` 3,440 → 2,736 B (215 → 171 B per budget unit),
+  `asyncgen` 4,784 → 3,440 B (150 → 108), `eval-direct` and `eval-indirect` 6,064 → 4,448 B
+  (126 → 93), a `flatMap` chain 4,240 → 3,488 B, an `Iterator.concat` chain 4,016 → 3,312 B, a
+  nest through a `map` callback 4,576 → 3,888 B and one through a `flatMap` callback
+  5,216 → 4,640 B.
+  Each slope falls by more than the frames do: the dispatchers push less of the family
+  functions' stack arguments, 32 B a level less for `take`, 48 for `eval` and 16 for
+  `asyncgen`, whose level also sheds `enqueue_async_generator`'s 208 B.
+  The stack-height marks, against the record the parent carries: `take-126` and
+  `iter-map-126` 438,887 → 349,927 B (−20.3%), `asyncgen-62` 304,623 → 219,951 B (−27.8%),
+  `eval-direct-42` 262,039 → 194,167 B and `eval-indirect-42` 261,863 → 193,991 B (−25.9%),
+  `u3-eval-nest-tagged-2038` and `u3-eval-nest-callchain-2044` 25.6% less, and
+  `proxy-forin-getprototypeof-trap-61` 350,107 → 334,491 B (−4.5%), since its for-in walk
+  passes the smaller `native_method_iterator`.
+  No outcome moved, and only `eval-deep.compile` (which does not run the VM) and
+  `u2-tojson-regexp-512` rose, both by 24 B, within the run-to-run variance the baseline's
+  slack absorbs.
+  The stack-height corpus has no `drop`, `filter`, `flatMap` or `Iterator.concat` chain and no
+  nest through a helper callback, so those chains and nests are not gated there;
+  `stack-lanes/differential/a1-hot-arms.js` runs each to its native ceiling and one past it.
+  Two margins remain.
+  `IteratorHelperReturn` still sits in `native_method_iterator`, so a `take` chain closed by
+  `return()` costs 3,424 → 3,168 B a level (214 → 198 B per unit), more than its `next`: a
+  126-deep chain closed that way peaks at 401,527 B on the probe, which the corpus does not
+  gate.
+  And the dispatchers themselves: `call_native_method_inner` is 912 B because it inlines the
+  `Object` statics' Proxy pre-check (`object_static_proxy`), and every native-method nest
+  carries it once per level.
 
 **A2. Split `dispatch_at_inner` into outlined opcode handlers.**
 
@@ -2721,6 +2742,8 @@ exceptions (§1.7), not re-measured here.
 The plan's lane C gate at ≤ 200 B was not added: lane C is still trend only and paints only
 the shadow-stack and native slopes, so whether to gate, and on which host tiers, is still to
 decide.
+The A1 follow-up (§4.3) later took `take` and `iter-map` to 171 B per unit natively, from
+215 B at its parent, under 200 B.
 
 ### Phase 4: decisions
 
