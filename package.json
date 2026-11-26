@@ -15,6 +15,7 @@
     "@endo/eslint-plugin": "workspace:^",
     "@endo/marshal": "workspace:^",
     "@endo/nat": "workspace:^",
+    "@endo/parcel": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@jessie.js/eslint-plugin": "^0.4.2",
     "@lavamoat/allow-scripts": "^3.4.3",

@@ -225,6 +225,9 @@
       "path": "packages/panic/tsconfig.composite.json"
     },
     {
+      "path": "packages/parcel/tsconfig.composite.json"
+    },
+    {
       "path": "packages/parser-pipeline/tsconfig.composite.json"
     },
     {
