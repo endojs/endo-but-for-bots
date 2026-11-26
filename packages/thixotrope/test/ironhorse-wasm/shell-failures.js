@@ -1,15 +1,25 @@
 // @ts-check
 // How the wasm engine's Node shell fails, and what it leaves on disk when it
-// does: a boot that fails, a heap file that is not this engine's, and a
-// worker killed before or during a crank.
+// does: a boot that fails or is killed, a heap file that is not this
+// engine's, a module that does not compile, a heap path that cannot be
+// created, and a worker killed before or during a crank.
 import test from '@endo/ses-ava/test.js';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { readdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import {
+  copyFile,
+  mkdir,
+  readFile,
+  readdir,
+  writeFile,
+} from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
+import { openHeapDatabase } from '../../src/ironhorse/wasm/shell.mjs';
+
 import {
+  BOOT_PATHS,
   NATIVE_WORKER,
   READY,
   WASM_WORKER,
@@ -209,3 +219,136 @@ test.serial('answered cranks are not durable until close', async t => {
   t.is(resumed.code, 0, resumed.stderr);
   t.deepEqual(resumed.lines, [READY, result('1')]);
 });
+
+test.serial(
+  'a fresh worker killed during its boot never resumes an unbooted heap',
+  async t => {
+    // The fresh open, every boot file and ready are one transaction. A
+    // worker killed anywhere inside it must not leave a heap that a later
+    // start serves: today such a file is refused (exit 1), and a start
+    // after the commit finds a booted machine. Committing the open on its
+    // own would leave the bare machine, which a restart would answer ready
+    // over without `thixotropeDispatch`.
+    t.timeout(600_000);
+    const dir = await tempDir(t);
+    const slow = join(dir, 'slow-boot.js');
+    await writeFile(
+      slow,
+      'var slowSum = 0; for (var i = 0; i < 2000000; i++) slowSum += i; globalThis.slowBooted = true;',
+    );
+    const boots = [...BOOT_PATHS, slow];
+    const probe = line({
+      source: "typeof slowBooted + ' ' + typeof thixotropeDispatch",
+    });
+    /** @type {Record<string, number>} */
+    const outcomes = { absent: 0, refused: 0, booted: 0 };
+    // From before the database exists, through the SES boot and the slow
+    // file, to around the commit and after ready.
+    for (const ms of [100, 400, 900, 1500, 2200, 3000, 3800, 4600, 6000]) {
+      const heap = join(dir, `heap-${ms}.sqlite`);
+      const worker = startWorker(t, WASM_WORKER, {
+        heap,
+        lease: join(dir, 'lease'),
+        boots,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await delay(ms);
+      worker.child.kill('SIGKILL');
+      // eslint-disable-next-line no-await-in-loop
+      await worker.exited;
+      const restart = existsSync(heap)
+        ? // eslint-disable-next-line no-await-in-loop
+          await runWorker(t, WASM_WORKER, dir, heap, [probe], { boots })
+        : undefined;
+      if (restart === undefined) {
+        outcomes.absent += 1;
+      } else if (restart.lines.length === 0) {
+        outcomes.refused += 1;
+        t.is(restart.code, 1, `${ms} ms`);
+        t.regex(restart.stderr, /^worker failed: [^\n]+\n$/, `${ms} ms`);
+      } else {
+        outcomes.booted += 1;
+        t.deepEqual(
+          restart.lines,
+          [READY, result('boolean function')],
+          `${ms} ms: a ready line only over a booted machine`,
+        );
+      }
+    }
+    t.log(outcomes);
+    t.true(outcomes.refused > 0, 'some kill fell inside the boot');
+  },
+);
+
+test.serial(
+  'a module that does not compile is one failure line and no heap',
+  async t => {
+    t.timeout(60_000);
+    const dir = await tempDir(t);
+    const stage = join(dir, 'stage');
+    await mkdir(stage);
+    const staged = dirname(WASM_WORKER);
+    for (const name of [
+      basename(WASM_WORKER),
+      'thixotrope-ironhorse-wasm-shell.mjs',
+      'host-abi.mjs',
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await copyFile(join(staged, name), join(stage, name));
+    }
+    const wasm = await readFile(join(staged, 'thixotrope_ironhorse_wasm.wasm'));
+    await writeFile(
+      join(stage, 'thixotrope_ironhorse_wasm.wasm'),
+      wasm.subarray(0, Math.trunc(wasm.length / 2)),
+    );
+    const heap = join(dir, 'heap.sqlite');
+    const run = await runWorker(
+      t,
+      join(stage, basename(WASM_WORKER)),
+      dir,
+      heap,
+      [line({ source: '1' })],
+    );
+    t.is(run.code, 1);
+    t.deepEqual(run.lines, []);
+    t.regex(
+      run.stderr,
+      /^worker failed: Node v\S+ cannot compile the worker module \(it needs WebAssembly exception handling with exnref\): [^\n]+\n$/,
+    );
+    t.false(existsSync(heap));
+  },
+);
+
+test.serial(
+  'a heap path that cannot be created is one failure line',
+  async t => {
+    t.timeout(60_000);
+    const dir = await tempDir(t);
+    // The parent is a regular file, so both the open and the removal of
+    // the unbooted heap fail (ENOTDIR).
+    await writeFile(join(dir, 'file'), '');
+    const run = await runWorker(
+      t,
+      WASM_WORKER,
+      dir,
+      join(dir, 'file', 'heap.sqlite'),
+      [],
+    );
+    t.is(run.code, 1);
+    t.deepEqual(run.lines, []);
+    t.regex(run.stderr, /^worker failed: [^\n]+\n$/);
+    t.notRegex(run.stderr, /\n {4}at /, 'no stack trace');
+  },
+);
+
+test.serial(
+  'a heap is opened in rollback-journal mode, fully synced',
+  async t => {
+    const dir = await tempDir(t);
+    const db = openHeapDatabase(DatabaseSync, join(dir, 'heap.sqlite'));
+    t.teardown(() => db.close());
+    t.is(db.prepare('PRAGMA journal_mode').get()?.journal_mode, 'delete');
+    // FULL is 2.
+    t.is(db.prepare('PRAGMA synchronous').get()?.synchronous, 2);
+  },
+);

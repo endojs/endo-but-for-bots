@@ -1,8 +1,8 @@
 // @ts-check
 // The wasm engine's Node shell end to end through the staged launcher,
 // without the Thixotrope host: the protocol against the native worker's, the
-// pipes it must survive, and the lease it must keep holding once the
-// launcher has become Node.
+// pipes it must survive, the lease it must keep holding once the
+// launcher has become Node, and the signal that must not open an inspector.
 import test from '@endo/ses-ava/test.js';
 import { execFileSync } from 'node:child_process';
 import {
@@ -12,6 +12,8 @@ import {
   openSync,
   readFileSync,
   readSync,
+  readdirSync,
+  readlinkSync,
   statSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -29,6 +31,8 @@ import {
   startWorker,
   tempDir,
 } from './_shell-harness.js';
+
+/** @import { ExecutionContext } from 'ava' */
 
 /** @param {number} ms */
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -272,4 +276,186 @@ test.serial('the Node worker holds the shared lease until it dies', async t => {
   t.is(signal, 'SIGKILL');
   t.true(flockSucceeds(lease, '--exclusive'), 'exclusive once it is gone');
   t.true(existsSync(join(dir, 'heap.sqlite')));
+});
+
+/** @param {string} binary */
+const engineName = binary => (binary === WASM_WORKER ? 'wasm' : 'native');
+
+/**
+ * Run a worker over these raw input bytes, then end its input.
+ *
+ * @param {ExecutionContext} t
+ * @param {string} binary
+ * @param {string} dir
+ * @param {Uint8Array} input
+ */
+const runBytes = async (t, binary, dir, input) => {
+  const worker = startWorker(t, binary, {
+    heap: join(dir, `${engineName(binary)}.sqlite`),
+    lease: join(dir, 'lease'),
+  });
+  worker.child.stdin?.end(input);
+  const { code } = await worker.exited;
+  return { stdout: worker.stdout(), code, stderr: worker.stderr() };
+};
+
+/**
+ * The local TCP ports a process listens on, from its socket descriptors and
+ * `/proc/net/tcp{,6}` (Linux).
+ *
+ * @param {number} pid
+ */
+const listeningPorts = pid => {
+  const inodes = new Set();
+  for (const fd of readdirSync(`/proc/${pid}/fd`)) {
+    try {
+      const target = readlinkSync(`/proc/${pid}/fd/${fd}`);
+      const match = /^socket:\[(\d+)\]$/.exec(target);
+      if (match) inodes.add(match[1]);
+    } catch {
+      // The descriptor closed while it was being listed.
+    }
+  }
+  const ports = [];
+  // A kernel without IPv6 has no tcp6 table.
+  for (const table of ['/proc/net/tcp', '/proc/net/tcp6'].filter(existsSync)) {
+    for (const row of readFileSync(table, 'utf8').split('\n').slice(1)) {
+      const fields = row.trim().split(/\s+/);
+      // st 0A is LISTEN; field 9 is the socket's inode.
+      if (fields[3] === '0A' && inodes.has(fields[9])) {
+        ports.push(Number.parseInt(fields[1].split(':')[1], 16));
+      }
+    }
+  }
+  return ports;
+};
+
+/**
+ * Whether a signal is pending for the whole process (`ShdPnd`).
+ *
+ * @param {number} pid
+ * @param {number} signal its number
+ */
+const signalPending = (pid, signal) => {
+  const status = readFileSync(`/proc/${pid}/status`, 'utf8');
+  const mask = BigInt(`0x${/^ShdPnd:\s*([0-9a-f]+)$/m.exec(status)?.[1]}`);
+  // eslint-disable-next-line no-bitwise -- a signal mask is a bit set
+  return ((mask >> BigInt(signal - 1)) & 1n) === 1n;
+};
+
+test.serial(
+  'SIGUSR1 opens no inspector: the native worker dies, the Node worker keeps serving',
+  async t => {
+    // Without `--disable-sigusr1` Node answers SIGUSR1 by starting its
+    // inspector on 127.0.0.1:9229, a debugger into the heap. With it, Node
+    // keeps the signal blocked in every thread, so it stays pending.
+    t.timeout(120_000);
+    const dir = await tempDir(t);
+    const native = startWorker(t, NATIVE_WORKER, {
+      heap: join(dir, 'native.sqlite'),
+      lease: join(dir, 'lease'),
+    });
+    await native.waitForLines(1);
+    native.child.kill('SIGUSR1');
+    t.like(await native.exited, { code: null, signal: 'SIGUSR1' });
+
+    const worker = startWorker(t, WASM_WORKER, {
+      heap: join(dir, 'wasm.sqlite'),
+      lease: join(dir, 'lease'),
+    });
+    await worker.waitForLines(1);
+    worker.child.kill('SIGUSR1');
+    await delay(2000);
+    t.is(worker.child.exitCode, null, 'still running');
+    if (platform === 'linux') {
+      t.deepEqual(listeningPorts(worker.pid), [], 'it listens on no port');
+      t.true(signalPending(worker.pid, 10), 'SIGUSR1 is held pending');
+    }
+    worker.child.stdin?.end(`${line({ source: '6 * 7' })}\n`);
+    t.like(await worker.exited, { code: 0 });
+    t.deepEqual(worker.lines, [READY, result('42')]);
+    t.notRegex(worker.stderr(), /Debugger|inspector/i);
+  },
+);
+
+test.serial(
+  'a crank past its budget writes the native fatal line and keeps the last commit',
+  async t => {
+    t.timeout(180_000);
+    const dir = await tempDir(t);
+    const fatal = line({ source: 'for (;;) {}', budget: '100000' });
+    /** @type {Record<string, Awaited<ReturnType<typeof runWorker>>>} */
+    const runs = {};
+    for (const binary of [WASM_WORKER, NATIVE_WORKER]) {
+      const heap = join(dir, `${engineName(binary)}.sqlite`);
+      // eslint-disable-next-line no-await-in-loop
+      const first = await runWorker(t, binary, dir, heap, [
+        line({ source: 'globalThis.kept = 1' }),
+      ]);
+      t.is(first.code, 0, first.stderr);
+      // eslint-disable-next-line no-await-in-loop
+      runs[engineName(binary)] = await runWorker(t, binary, dir, heap, [
+        line({ source: 'kept = 2' }),
+        fatal,
+        line({ source: "'never answered'" }),
+      ]);
+    }
+    const { wasm, native } = runs;
+    t.is(wasm.code, 1);
+    t.is(native.code, 1);
+    t.deepEqual(wasm.lines, native.lines, 'byte for byte the native lines');
+    t.is(wasm.lines.length, 3);
+    const last = /** @type {string} */ (wasm.lines.at(-1));
+    t.is(JSON.parse(last).op, 'fatal');
+    t.is(wasm.stderr, `worker failed: ${JSON.parse(last).message}\n`);
+    const after = await runWorker(
+      t,
+      WASM_WORKER,
+      dir,
+      join(dir, 'wasm.sqlite'),
+      [line({ source: 'kept' })],
+    );
+    t.deepEqual(after.lines, [READY, result('1')], 'the last commit');
+  },
+);
+
+test.serial(
+  'a request that is not UTF-8 fails the worker, as natively',
+  async t => {
+    t.timeout(120_000);
+    const dir = await tempDir(t);
+    const encoder = new TextEncoder();
+    const input = new Uint8Array([
+      ...encoder.encode(`{"source":"'`),
+      0xff,
+      0xfe,
+      ...encoder.encode(`'"}\n{"source":"1"}\n`),
+    ]);
+    const wasm = await runBytes(t, WASM_WORKER, dir, input);
+    const native = await runBytes(t, NATIVE_WORKER, dir, input);
+    t.is(wasm.code, 1);
+    t.is(native.code, 1);
+    t.is(wasm.stdout, READY, 'nothing after the ready line');
+    t.is(wasm.stdout, native.stdout);
+    t.is(wasm.stderr, 'worker failed: stream did not contain valid UTF-8\n');
+  },
+);
+
+test.serial('CRLF-terminated requests are answered as natively', async t => {
+  t.timeout(120_000);
+  const dir = await tempDir(t);
+  // JSON ignores a trailing `\r`, but an empty line does not: the native
+  // worker answers it as an empty request (column 0), not as `\r` (column 1).
+  const input = new TextEncoder().encode(
+    `${line({ source: "'crlf'" })}\r\n\r\n${line({ source: '2' })}\r\n${line({ source: '3' })}\r`,
+  );
+  const wasm = await runBytes(t, WASM_WORKER, dir, input);
+  const native = await runBytes(t, NATIVE_WORKER, dir, input);
+  t.is(wasm.code, 0, wasm.stderr);
+  t.is(native.code, 0, native.stderr);
+  t.is(wasm.stdout, native.stdout);
+  const lines = wasm.stdout.split(/(?<=\n)/);
+  t.deepEqual(lines.slice(0, 2), [READY, result('crlf')]);
+  t.regex(lines[2], /line 1 column 0"/);
+  t.is(lines[3], result('2'));
 });
