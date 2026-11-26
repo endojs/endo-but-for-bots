@@ -4897,6 +4897,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "thixotrope-ironhorse-wasm"
+version = "0.1.0"
+dependencies = [
+ "ironhorse-snapshot",
+ "ironhorse-store-do",
+ "ironhorse-store-do-rusqlite",
+ "ironhorse-vm",
+ "thixotrope-ironhorse-core",
+]
+
+[[package]]
 name = "thixotrope-ironhorse-wasm-launcher"
 version = "0.1.0"
 dependencies = [

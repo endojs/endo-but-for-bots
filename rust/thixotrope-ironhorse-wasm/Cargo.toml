@@ -1,0 +1,23 @@
+[package]
+name = "thixotrope-ironhorse-wasm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# The Thixotrope Ironhorse worker as a WebAssembly module: the core's worker
+# over the Durable Object store, driven through the export ABI documented in
+# src/lib.rs. Built for wasm32-wasip1 by build.py; the rlib lets a harness
+# crate link the same code natively.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+thixotrope-ironhorse-core = { path = "../thixotrope-ironhorse-core" }
+ironhorse-snapshot = { path = "../engine/ironhorse-snapshot" }
+ironhorse-store-do = { path = "../engine/ironhorse-store-do" }
+
+[dev-dependencies]
+# The native tests drive the instance over real SQLite, with the host's
+# transaction around each call, as the JS host does.
+ironhorse-store-do-rusqlite = { path = "../endo/ironhorse-store-do-rusqlite" }
+ironhorse-vm = { path = "../engine/ironhorse-vm", features = ["consensus"] }
