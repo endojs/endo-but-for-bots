@@ -14,7 +14,7 @@ out.push(t(function () { eval('var kept = 2'); return typeof kept; }));
 out.push(t(function () { 'use strict'; return eval('undeclared1 = 1'); }));
 out.push(t(function () { 'use strict'; return (0, eval)('undeclared2 = 2'); }));
 out.push(t(function () { return (0, eval)('"use strict"; undeclared3 = 3'); }));
-out.push(t(function () { return [eval(42), eval({ a: 1 }), eval(), eval(undefined), eval(null), eval(true), eval('1;', 'ignored')]; }));
+out.push(t(function () { var o = { a: 1 }; return [eval(42), eval(o) === o, typeof eval(), typeof eval(undefined), eval(null) === null, eval(true), eval('1;', 'ignored')]; }));
 out.push(t(function () { var o = new String('1 + 1'); return eval(o) === o; }));
 out.push(t(function () { return new eval('1'); }));
 out.push(t(function () { return new eval(); }));
@@ -49,14 +49,16 @@ try { sx(12); } catch (e) { r.push(e.name); }
 r.join(' ')
 // ---
 // A1 follow-up: `%IteratorHelperPrototype%.next` dispatched out of line on its own, with the
-// `flatMap` step and the `map`/`filter`/`flatMap` callback call out of line of it. Every kind
-// of helper, every way a step ends, and the receivers it refuses.
-function s(v) { try { return typeof v === 'object' && v !== null ? Object.prototype.toString.call(v) + JSON.stringify(v) : typeof v + ':' + String(v); } catch (e) { return '?'; } }
+// `flatMap` and `Iterator.concat` steps and the `map`/`filter`/`flatMap` callback call out of
+// line of it. Every lazy kind but `Iterator.concat` (the next program), every way a step ends,
+// and the receivers it refuses.
+function s(v) { try { return v && typeof v === 'object' && 'done' in v ? show(v) : typeof v === 'object' && v !== null ? Object.prototype.toString.call(v) + JSON.stringify(v) : typeof v + ':' + String(v); } catch (e) { return '?'; } }
 function t(f) { try { return s(f()); } catch (e) { return 'E:' + (e && e.name) + ':' + (e && e.message); } }
 var out = [];
 var log = [];
 function src(n) { var i = 0; return { __proto__: Iterator.prototype, next: function () { log.push('n' + i); return i < n ? { value: i++, done: false } : { value: 'end', done: true }; }, return: function () { log.push('ret'); return {}; } }; }
-function drain(it) { var a = []; for (var k = 0; k < 20; k++) { var r = it.next(); a.push(r.done ? 'done' : r.value); if (r.done) break; } return a.join(','); }
+function drain(it) { var a = []; for (var k = 0; k < 20; k++) { var r = it.next(); a.push(r.done ? ('value' in r ? 'done=' + String(r.value) : 'done') : r.value); if (r.done) break; } return a.join(','); }
+function show(v) { if (v instanceof Error) return v.name + ':' + v.message; if (v && typeof v === 'object' && 'done' in v) return '{' + ('value' in v ? 'value:' + (typeof v.value === 'string' ? JSON.stringify(v.value) : String(v.value)) + ',' : '') + 'done:' + v.done + '}'; return typeof v + ':' + String(v); }
 out.push(t(function () { log = []; return [drain(src(5).take(3)), log.join()]; }));
 out.push(t(function () { log = []; return [drain(src(5).take(0)), log.join()]; }));
 out.push(t(function () { log = []; return [drain(src(2).take(Infinity)), log.join()]; }));
@@ -70,30 +72,53 @@ out.push(t(function () { return drain(src(3).flatMap(function (v) { return 'ab';
 out.push(t(function () { return drain(src(3).flatMap(function (v) { return new String('ab'); })); }));
 out.push(t(function () { return drain(src(3).flatMap(function (v) { return { next: function () { return { done: true }; } }; })); }));
 out.push(t(function () { log = []; var it = src(5).map(function (v) { if (v === 2) throw new RangeError('map ' + v); return v; }); return [drain(it), log.join()]; }));
-out.push(t(function () { log = []; var it = src(5).map(function (v) { if (v === 2) throw new RangeError('map ' + v); return v; }); it.next(); it.next(); try { it.next(); } catch (e) { log.push(e.message); } return [JSON.stringify(it.next()), log.join()]; }));
+out.push(t(function () { log = []; var it = src(5).map(function (v) { if (v === 2) throw new RangeError('map ' + v); return v; }); it.next(); it.next(); try { it.next(); } catch (e) { log.push(e.message); } return [show(it.next()), log.join()]; }));
 out.push(t(function () { log = []; var it = src(5).filter(function (v) { if (v === 1) throw new EvalError('filter'); return true; }); it.next(); try { it.next(); } catch (e) { log.push(e.name); } return log.join(); }));
 out.push(t(function () { log = []; var it = src(5).flatMap(function (v) { if (v === 1) throw new SyntaxError('flat'); return [v]; }); it.next(); try { it.next(); } catch (e) { log.push(e.name); } return log.join(); }));
 out.push(t(function () { log = []; var inner = { __proto__: Iterator.prototype, next: function () { throw new URIError('inner'); }, return: function () { log.push('iret'); return {}; } }; var it = src(5).flatMap(function () { return inner; }); try { it.next(); } catch (e) { log.push(e.name); } return log.join(); }));
-out.push(t(function () { var bad = { __proto__: Iterator.prototype, next: function () { throw new TypeError('under'); }, return: function () { log.push('never'); } }; log = []; var it = bad.take(2); try { it.next(); } catch (e) { log.push(e.message); } return [JSON.stringify(it.next()), log.join()]; }));
+out.push(t(function () { var bad = { __proto__: Iterator.prototype, next: function () { throw new TypeError('under'); }, return: function () { log.push('never'); } }; log = []; var it = bad.take(2); try { it.next(); } catch (e) { log.push(e.message); } return [show(it.next()), log.join()]; }));
 out.push(t(function () { var prim = { __proto__: Iterator.prototype, next: function () { return 7; } }; return prim.map(function (v) { return v; }).next(); }));
 out.push(t(function () { var g = { __proto__: Iterator.prototype, next: function () { return { get done() { throw new RangeError('done getter'); } }; } }; return g.drop(0).next(); }));
 out.push(t(function () { var g = { __proto__: Iterator.prototype, next: function () { return { done: false, get value() { throw new RangeError('value getter'); } }; } }; return g.filter(function () { return true; }).next(); }));
 out.push(t(function () { var g = { __proto__: Iterator.prototype, next: 5 }; return g.take(1).next(); }));
 out.push(t(function () { var it; it = src(5).map(function (v) { return it.next(); }); return it.next(); }));
 out.push(t(function () { var it; it = src(5).filter(function (v) { try { it.next(); } catch (e) { return e.message; } }); return it.next(); }));
-out.push(t(function () { var it = src(1).map(function (v) { return v; }); return [JSON.stringify(it.next()), JSON.stringify(it.next()), JSON.stringify(it.next())]; }));
-out.push(t(function () { var it = src(3).take(2); it.return(); return JSON.stringify(it.next()); }));
+out.push(t(function () { var it = src(1).map(function (v) { return v; }); return [show(it.next()), show(it.next()), show(it.next())]; }));
+out.push(t(function () { var it = src(3).take(2); it.return(); return show(it.next()); }));
 var next = Object.getPrototypeOf(src(1).take(1)).next;
 out.push(t(function () { return next.call({}); }));
 out.push(t(function () { return next.call(5); }));
 out.push(t(function () { return next.call([1].values()); }));
 out.push(t(function () { return next.call(new Proxy(src(1).take(1), {})); }));
-out.push(t(function () { return [next.call(src(2).take(1)).value, Reflect.apply(next, src(2).drop(1), []).value, next.bind(src(2).map(function (v) { return -v; }))().value]; }));
+out.push(t(function () { return [next.call(src(2).take(1)).value, Reflect.apply(next, src(2).drop(1), []).value, next.bind(src(2).map(function (v) { return 10 - v; }))().value]; }));
 out.push(t(function () { return new next(); }));
 out.push(t(function () { return [[1, 2, 3].values().take(2).map(function (v) { return v * v; }).toArray(), [1, 2, 3, 4].values().drop(1).filter(function (v) { return v % 2; }).toArray()]; }));
 out.push(t(function () { return Array.from(new Set([1, 2]).values().flatMap(function (v) { return new Map([[v, -v]]).entries(); })); }));
 out.push(t(function () { function* gen() { yield 1; yield 2; yield 3; } return [...gen().map(function (v) { return v + 1; }).take(2)]; }));
 out.push(t(function () { return Iterator.from({ next: function () { return { value: 1, done: false }; } }).take(3).toArray(); }));
+out.join('\n')
+// ---
+// `Iterator.concat`, whose step (`iterator_concat_step`) is out of line of the helper's `next`:
+// mixed items, none, the values it refuses, an opening that returns a primitive or throws,
+// re-entry, an inner `next` that throws, `return` mid-flight, and composition.
+function s(v) { try { return typeof v === 'object' && v !== null ? Object.prototype.toString.call(v) + JSON.stringify(v) : typeof v + ':' + String(v); } catch (e) { return '?'; } }
+function t(f) { try { return s(f()); } catch (e) { return 'E:' + (e && e.name) + ':' + (e && e.message); } }
+var out = [];
+var log = [];
+function src(n, tag) { var i = 0; return { __proto__: Iterator.prototype, next: function () { log.push(tag + i); return i < n ? { value: tag + i++, done: false } : { value: 'end', done: true }; }, return: function () { log.push(tag + 'ret'); return {}; } }; }
+function item(it, tag) { return { [Symbol.iterator]: function () { log.push('open' + tag); return it; } }; }
+function show(v) { if (v instanceof Error) return v.name + ':' + v.message; if (v && typeof v === 'object' && 'done' in v) return '{' + ('value' in v ? 'value:' + (typeof v.value === 'string' ? JSON.stringify(v.value) : String(v.value)) + ',' : '') + 'done:' + v.done + '}'; return typeof v + ':' + String(v); }
+function drain(it) { var a = []; for (var k = 0; k < 20; k++) { var r = it.next(); a.push(r.done ? ('value' in r ? 'done=' + String(r.value) : 'done') : r.value); if (r.done) break; } return a.join(','); }
+out.push(t(function () { log = []; return [drain(Iterator.concat(item(src(2, 'a'), 'A'), [10, 11], new Set([12]), item(src(1, 'b'), 'B'))), log.join()]; }));
+out.push(t(function () { return drain(Iterator.concat()); }));
+out.push(t(function () { return Iterator.concat(1); }));
+out.push(t(function () { return Iterator.concat({}); }));
+out.push(t(function () { log = []; var it = Iterator.concat(item(src(3, 'a'), 'A'), item(src(3, 'b'), 'B')); it.next(); var r = it.return(); return [show(r), show(it.next()), log.join()]; }));
+out.push(t(function () { return Iterator.concat({ [Symbol.iterator]: function () { return 5; } }).next(); }));
+out.push(t(function () { return Iterator.concat({ [Symbol.iterator]: function () { throw new RangeError('open'); } }).next(); }));
+out.push(t(function () { var it; it = Iterator.concat({ [Symbol.iterator]: function () { return it; } }); return it.next(); }));
+out.push(t(function () { log = []; var g = { __proto__: Iterator.prototype, next: function () { throw new URIError('inner'); }, return: function () { log.push('never'); } }; var it = Iterator.concat(item(g, 'G')); try { it.next(); } catch (e) { log.push(e.name); } return [show(it.next()), log.join()]; }));
+out.push(t(function () { return Iterator.concat([1, 2], [3]).map(function (v) { return v * 2; }).take(2).toArray(); }));
 out.join('\n')
 // ---
 // Helper chains through every lazy kind up to the native ceiling, each level re-entering
@@ -106,6 +131,7 @@ var kinds = [
   ['flatMap', function (it) { return it.flatMap(function (v) { return [v]; }); }],
   ['take', function (it) { return it.take(5); }],
   ['map', function (it) { return it.map(function (v) { return v; }); }],
+  ['concat', function (it) { return Iterator.concat(it); }],
 ];
 var depths = [1, 2, 63, 125, 126];
 for (var k = 0; k < kinds.length; k++) {
@@ -123,11 +149,38 @@ var it = [1, 2, 3].values(); for (var i = 0; i < 127; i++) it = it.filter(functi
 // ---
 var it = [1, 2, 3].values(); for (var i = 0; i < 127; i++) it = it.flatMap(function (v) { return [v]; }); it.next().value
 // ---
+var it = [1, 2, 3].values(); for (var i = 0; i < 127; i++) it = Iterator.concat(it); it.next().value
+// ---
+// A nest through a helper's callback rather than its underlying step: each level's `map`,
+// `filter` or `flatMap` callback re-enters through the next level, so every level carries the
+// callback call's frame (`helper_call_callback`), up to the native ceiling.
+var r = [];
+var kinds = [
+  ['map', function (f, n) { [0].values().map(function () { f(n - 1); }).next(); }],
+  ['filter', function (f, n) { [0].values().filter(function () { f(n - 1); return true; }).next(); }],
+  ['flatMap', function (f, n) { [0].values().flatMap(function () { f(n - 1); return [n]; }).next(); }],
+];
+for (var k = 0; k < kinds.length; k++) {
+  var seen = 0;
+  var f = function (n) { seen++; if (n > 0) kinds[k][1](f, n); return 0; };
+  var depths = [1, 2, 31, 62, 63];
+  for (var j = 0; j < depths.length; j++) { seen = 0; f(depths[j]); r.push(kinds[k][0] + depths[j] + ':' + seen); }
+}
+r.join(' ')
+// ---
+// One level past the callback nests' ceiling.
+function f(n) { if (n > 0) [0].values().map(function () { f(n - 1); }).next(); return 0; } f(64)
+// ---
+function f(n) { if (n > 0) [0].values().filter(function () { f(n - 1); return true; }).next(); return 0; } f(64)
+// ---
+function f(n) { if (n > 0) [0].values().flatMap(function () { f(n - 1); return [1]; }).next(); return 0; } f(64)
+// ---
 // A1 follow-up: `%AsyncGeneratorPrototype%.next`, `return` and `throw` dispatched out of line
 // on their own. Every request kind against a suspended-start, suspended-yield, executing and
-// completed generator, queued requests, and the receivers they reject.
+// completed generator, requests queued behind another, and the receivers they reject.
 var r = [];
-function rec(tag) { return function (v) { r.push(tag + ':' + (v && typeof v === 'object' && 'done' in v ? JSON.stringify(v) : String(v && v.message || v))); }; }
+function show(v) { if (v instanceof Error) return v.name + ':' + v.message; if (v && typeof v === 'object' && 'done' in v) return '{' + ('value' in v ? 'value:' + (typeof v.value === 'string' ? JSON.stringify(v.value) : String(v.value)) + ',' : '') + 'done:' + v.done + '}'; return typeof v + ':' + String(v); }
+function rec(tag) { return function (v) { r.push(tag + ':' + show(v)); }; }
 async function* ag(a) { try { var b = yield a; r.push('got:' + b); var c = yield await b + 1; return c * 2; } finally { r.push('finally:' + a); } }
 var g1 = ag(1);
 g1.next('ignored').then(rec('g1n1'));
@@ -137,9 +190,13 @@ g1.next().then(rec('g1n4'));
 var g2 = ag(2);
 g2.return(3).then(rec('g2r'));
 g2.next().then(rec('g2n'));
+g2.return(9).then(rec('g2r-queued'));
+g2.throw(new Error('late')).then(rec('g2t-queued'), rec('g2t-queued-rej'));
 var g3 = ag(3);
 g3.throw(new Error('early')).then(rec('g3t'), rec('g3t-rej'));
 g3.next().then(rec('g3n'));
+g3.throw(new Error('later')).then(rec('g3t-done'), rec('g3t-done-rej'));
+g3.return(8).then(rec('g3r-done'));
 var g4 = ag(4);
 g4.next().then(rec('g4n'));
 g4.throw(new RangeError('mid')).then(rec('g4t'), rec('g4t-rej'));
@@ -153,29 +210,59 @@ g6.next().then(rec('g6n'));
 g6.throw('x1').then(rec('g6t1'));
 g6.throw('x2').then(rec('g6t2'));
 g6.return('stop').then(rec('g6r'));
-async function* selfish() { r.push('self:' + typeof g7.next().then); yield 1; }
+async function* selfish() { r.push('self:' + typeof g7.next().then); g7.return('r-exec').then(rec('g7r'), rec('g7r-rej')); g7.throw(new Error('t-exec')).then(rec('g7t'), rec('g7t-rej')); yield 1; }
 var g7 = selfish();
 g7.next().then(rec('g7n'));
 var proto = Object.getPrototypeOf(ag.prototype);
 proto.next.call({}).then(rec('brand-n'), rec('brand-n-rej'));
 proto.return.call(5).then(rec('brand-r'), rec('brand-r-rej'));
-proto.throw.call(ag(0)[Symbol.asyncIterator]).then(rec('brand-t'), rec('brand-t-rej'));
+proto.throw.call(ag).then(rec('brand-t'), rec('brand-t-rej'));
 proto.next.call((function* () {})()).then(rec('brand-sync'), rec('brand-sync-rej'));
 try { new proto.next(); } catch (e) { r.push('new:' + e.name); }
 Reflect.apply(proto.next, ag(8), [1]).then(rec('reflect'));
 proto.next.bind(ag(9))().then(rec('bound'));
 (async function () { var acc = []; for await (var v of ag(10)) acc.push(v); r.push('forawait:' + acc.join()); })();
-(async function () { var it = ag(11); var a = await it.next(); var b = await it.return('early'); r.push('awaited:' + JSON.stringify([a, b])); })();
+(async function () { var it = ag(11); var a = await it.next(); var b = await it.return('early'); r.push('awaited:' + show(a) + ',' + show(b)); })();
+(async function () { var it = ag(12); await it.next(); it.throw(new RangeError('at-yield')).then(rec('g12t'), rec('g12t-rej')); r.push('sent:12'); })();
 r
 // ---
 // Async generators nested through `next`, each level's body calling the next level's, up to
-// the native ceiling, and chains of `return` and `throw` requests beside them.
+// the native ceiling, and beside them a chain of `return` requests, each sent while the
+// generator it closes is still running its `next`, so they queue and run one level at a time.
 var r = [];
+function show(v) { if (v instanceof Error) return v.name + ':' + v.message; if (v && typeof v === 'object' && 'done' in v) return '{' + ('value' in v ? 'value:' + (typeof v.value === 'string' ? JSON.stringify(v.value) : String(v.value)) + ',' : '') + 'done:' + v.done + '}'; return typeof v + ':' + String(v); }
 function nest(depth) { async function* g(n) { if (n > 0) g(n - 1).next(); yield n; } return g(depth).next(); }
-async function* closer(n) { try { yield n; } finally { if (n > 0) { var it = closer(n - 1); it.next(); it.return(n).then(function (v) { r.push('cl' + JSON.stringify(v)); }); } } }
-async function* thrower(n) { try { yield n; } catch (e) { if (n > 0) { var it = thrower(n - 1); it.next(); it.throw(e + n).then(function (v) { r.push('th' + JSON.stringify(v)); }); } } }
+async function* closer(n) { try { yield n; } finally { if (n > 0) { var it = closer(n - 1); it.next(); it.return(n).then(function (v) { r.push('cl' + show(v)); }); } } }
 var depths = [1, 2, 31, 61, 62];
-for (var j = 0; j < depths.length; j++) nest(depths[j]).then(function (v) { r.push('n' + JSON.stringify(v)); });
-var c = closer(40); c.next(); c.return('x').then(function (v) { r.push('c' + JSON.stringify(v)); });
-var h = thrower(40); h.next(); h.throw('y').then(function (v) { r.push('t' + JSON.stringify(v)); });
+for (var j = 0; j < depths.length; j++) nest(depths[j]).then(function (v) { r.push('n' + show(v)); });
+var c = closer(40); c.next(); c.return('x').then(function (v) { r.push('c' + show(v)); });
 r
+// ---
+// Async generators nested through `throw`: every generator is made and advanced to its `yield`
+// first, then a throw into the outermost is caught there and thrown into the next one down,
+// each level resuming the next inside its own handler, up to the native ceiling.
+var r = [];
+var gens = [];
+function show(v) { if (v instanceof Error) return v.name + ':' + v.message; if (v && typeof v === 'object' && 'done' in v) return '{' + ('value' in v ? 'value:' + (typeof v.value === 'string' ? JSON.stringify(v.value) : String(v.value)) + ',' : '') + 'done:' + v.done + '}'; return typeof v + ':' + String(v); }
+async function* t(n) { try { yield n; } catch (e) { r.push(n); if (n > 0) gens[n - 1].throw(e + n).then(function (v) { r.push('t' + n + show(v)); }); } }
+for (var k = 0; k < 63; k++) gens.push(t(k));
+Promise.all(gens.map(function (g) { return g.next(); })).then(function () { gens[62].throw('x').then(function (v) { r.push('top' + show(v)); }); });
+r
+// ---
+// The same shape through `return`: every generator made and advanced first, then a return into
+// the outermost runs its `finally`, which returns into the next one down. A `return` awaits its
+// value before it resumes the body, so even then the chain runs one level at a time.
+var r = [];
+var gens = [];
+function show(v) { if (v instanceof Error) return v.name + ':' + v.message; if (v && typeof v === 'object' && 'done' in v) return '{' + ('value' in v ? 'value:' + (typeof v.value === 'string' ? JSON.stringify(v.value) : String(v.value)) + ',' : '') + 'done:' + v.done + '}'; return typeof v + ':' + String(v); }
+async function* t(n) { try { yield n; } finally { r.push(n); if (n > 0) gens[n - 1].return(n).then(function (v) { r.push('t' + n + show(v)); }); } }
+for (var k = 0; k < 63; k++) gens.push(t(k));
+Promise.all(gens.map(function (g) { return g.next(); })).then(function () { gens[62].return('x').then(function (v) { r.push('top' + show(v)); }); });
+r
+// ---
+// One level past the `throw` nest's ceiling.
+var gens = [];
+async function* t(n) { try { yield n; } catch (e) { if (n > 0) gens[n - 1].throw(e); } }
+for (var k = 0; k < 64; k++) gens.push(t(k));
+Promise.all(gens.map(function (g) { return g.next(); })).then(function () { gens[63].throw('x'); });
+gens.length
