@@ -1,27 +1,34 @@
-//! The wasm Thixotrope worker spike: the engine's store seam over a Durable
-//! Object's SQLite, driven through `extern "C-unwind"` exports that never let
-//! an unwind cross into JavaScript. See README.md and
-//! `designs/thixotrope-wasm-worker.md`.
+//! The workerd harness for the product crates: `ironhorse_store_do::DoStore`
+//! over the Durable Object's SQLite and `thixotrope_ironhorse_core::Worker`
+//! over that store, driven through `extern "C-unwind"` exports that never
+//! let an unwind cross into JavaScript, beside the engine's store acceptance
+//! suite. See README.md.
 //!
 //! Every export that runs the engine returns a status from under
 //! `catch_unwind`: 0 ok, 1 a reported error, 2 a caught unwind (an assertion
-//! of the acceptance suite, a store fault, an engine invariant). The text or
-//! bytes that go with it are pending in a message buffer the host reads with
-//! `ih_message_len` and `ih_message_copy`; those two and the buffer
-//! allocator pair, `ih_alloc` and `ih_free`, have no path that unwinds.
+//! of the acceptance suite, a store fault, an engine invariant), and from
+//! `ih_session_request` also 3, a crank that failed (the message is the
+//! core's `fatal` line and the worker is dead), and 4, `close` was requested
+//! (no message). The text or bytes that go with a status are pending in a
+//! message buffer the host reads with `ih_message_len` and
+//! `ih_message_copy`; those two and the buffer allocator pair, `ih_alloc`
+//! and `ih_free`, have no path that unwinds. Its imports are the product
+//! module's `env` block (`host.rs`).
+//!
+//! Every pointer an export takes or answers is a `u32` address in the
+//! module's linear memory, as in the product module's ABI: on wasm32 an
+//! address is a `u32` and `usize` is 32 bits, so the casts are exact.
 
 mod host;
 mod session;
-mod store;
+mod suite;
 
 use std::cell::RefCell;
+use std::ptr::{with_exposed_provenance, with_exposed_provenance_mut};
 use std::sync::Once;
 
 use ironhorse_snapshot::machine::store_fault_of;
-use ironhorse_snapshot::store_suite;
-
-use session::Ceilings;
-use store::DoStore;
+use thixotrope_ironhorse_core::Step;
 
 thread_local! {
     static MESSAGE: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -29,6 +36,9 @@ thread_local! {
 }
 
 static HOOK: Once = Once::new();
+
+const STATUS_FATAL: i32 = 3;
+const STATUS_CLOSE: i32 = 4;
 
 fn install_panic_hook() {
     HOOK.call_once(|| {
@@ -44,15 +54,15 @@ fn set_message(bytes: Vec<u8>) {
     MESSAGE.with(|message| *message.borrow_mut() = bytes);
 }
 
-/// Run a body under `catch_unwind`, mapping its outcome to a status and the
-/// pending message.
-fn guarded(body: impl FnOnce() -> Result<Vec<u8>, String>) -> i32 {
+/// Run a body under `catch_unwind`; its `Ok` is a status of its own choosing
+/// with the pending message.
+fn guarded_status(body: impl FnOnce() -> Result<(i32, Vec<u8>), String>) -> i32 {
     install_panic_hook();
     LAST_PANIC.with(|last| *last.borrow_mut() = None);
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
-        Ok(Ok(bytes)) => {
+        Ok(Ok((status, bytes))) => {
             set_message(bytes);
-            0
+            status
         }
         Ok(Err(text)) => {
             set_message(text.into_bytes());
@@ -73,20 +83,36 @@ fn guarded(body: impl FnOnce() -> Result<Vec<u8>, String>) -> i32 {
     }
 }
 
-/// A buffer the host filled. A null pointer with a length is the host's
-/// bug (`ih_alloc` answered null and the host went on), refused rather than
-/// read from address zero.
-unsafe fn slice<'a>(ptr: *const u8, len: u32) -> Result<&'a [u8], String> {
+/// Run a body under `catch_unwind`, mapping its outcome to a status and the
+/// pending message.
+fn guarded(body: impl FnOnce() -> Result<Vec<u8>, String>) -> i32 {
+    guarded_status(|| body().map(|bytes| (0, bytes)))
+}
+
+/// The buffer at `ptr` of `len` bytes, which the host filled. A null pointer
+/// with a length is the host's bug (`ih_alloc` answered null and the host
+/// went on), refused rather than read from address zero.
+///
+/// # Safety
+///
+/// Unless `len` is zero or `ptr` is null, `ptr..ptr + len` is a buffer that
+/// `ih_alloc` answered and the host filled, which nothing writes or frees
+/// until the export that received it returns.
+unsafe fn slice<'a>(ptr: u32, len: u32) -> Result<&'a [u8], String> {
     if len == 0 {
         Ok(&[])
-    } else if ptr.is_null() {
+    } else if ptr == 0 {
         Err("null argument buffer".to_string())
     } else {
+        let ptr = with_exposed_provenance::<u8>(ptr as usize);
         Ok(std::slice::from_raw_parts(ptr, len as usize))
     }
 }
 
-unsafe fn text<'a>(ptr: *const u8, len: u32) -> Result<&'a str, String> {
+/// # Safety
+///
+/// As [`slice`].
+unsafe fn text<'a>(ptr: u32, len: u32) -> Result<&'a str, String> {
     std::str::from_utf8(slice(ptr, len)?).map_err(|_| "argument is not UTF-8".to_string())
 }
 
@@ -94,20 +120,21 @@ unsafe fn text<'a>(ptr: *const u8, len: u32) -> Result<&'a str, String> {
 /// when the allocator refuses (linear memory cannot grow), which the host
 /// checks before writing; the exports refuse a null buffer themselves.
 #[no_mangle]
-pub extern "C-unwind" fn ih_alloc(len: u32) -> *mut u8 {
+pub extern "C-unwind" fn ih_alloc(len: u32) -> u32 {
     match std::alloc::Layout::from_size_align(len.max(1) as usize, 1) {
-        Ok(layout) => unsafe { std::alloc::alloc(layout) },
-        Err(_) => std::ptr::null_mut(),
+        Ok(layout) => unsafe { std::alloc::alloc(layout) }.expose_provenance() as u32,
+        Err(_) => 0,
     }
 }
 
+/// Frees what `ih_alloc(len)` answered, once, with the same `len`.
 #[no_mangle]
-pub extern "C-unwind" fn ih_free(ptr: *mut u8, len: u32) {
-    if ptr.is_null() {
+pub extern "C-unwind" fn ih_free(ptr: u32, len: u32) {
+    if ptr == 0 {
         return;
     }
     if let Ok(layout) = std::alloc::Layout::from_size_align(len.max(1) as usize, 1) {
-        unsafe { std::alloc::dealloc(ptr, layout) }
+        unsafe { std::alloc::dealloc(with_exposed_provenance_mut(ptr as usize), layout) }
     }
 }
 
@@ -117,58 +144,40 @@ pub extern "C-unwind" fn ih_message_len() -> u32 {
 }
 
 #[no_mangle]
-pub extern "C-unwind" fn ih_message_copy(dst: *mut u8, cap: u32) -> u32 {
-    if dst.is_null() {
+pub extern "C-unwind" fn ih_message_copy(dst: u32, cap: u32) -> u32 {
+    if dst == 0 {
         return 0;
     }
     MESSAGE.with(|message| {
         let message = message.borrow();
         let n = message.len().min(cap as usize);
+        // The host contract: `dst..dst + cap` is a buffer `ih_alloc`
+        // answered, which nothing else references during this call.
+        let dst = with_exposed_provenance_mut::<u8>(dst as usize);
         unsafe { std::ptr::copy_nonoverlapping(message.as_ptr(), dst, n) };
         n as u32
     })
 }
 
-/// Create the schema and stamp the database; with `reset`, empty store `id`.
+/// `DoStore::open` on store `id`: create the schema and stamp the database
+/// if needed; with `reset`, also empty the store (`reset_for_harness`).
 #[no_mangle]
 pub extern "C-unwind" fn ih_store_open(id: u32, reset: u32) -> i32 {
     guarded(|| {
-        DoStore::open(id, reset != 0).map_err(|e| format!("open: {e:?}"))?;
+        if reset != 0 {
+            session::open_clean(id)?;
+        } else {
+            session::open_store(id)?;
+        }
         Ok(Vec::new())
     })
 }
 
 /// Run one part of the backend acceptance suite against fresh stores.
 #[no_mangle]
-pub extern "C-unwind" fn ih_run_suite(name_ptr: *const u8, name_len: u32) -> i32 {
+pub extern "C-unwind" fn ih_run_suite(name_ptr: u32, name_len: u32) -> i32 {
     guarded(|| {
-        let name = unsafe { text(name_ptr, name_len)? };
-        match name {
-            "sparse" => store_suite::sparse_section_acceptance(DoStore::fresh),
-            "metamorphic" => store_suite::metamorphic_suite(DoStore::fresh),
-            "boundary" => store_suite::boundary_collection_twins(DoStore::fresh),
-            "lazy" => store_suite::lazy_working_set_bound(DoStore::fresh),
-            "checkpoint" => store_suite::checkpoint_acceptance(&mut DoStore::fresh()),
-            "resume" => store_suite::resume_equals_uninterrupted(&mut DoStore::fresh()),
-            // Reopen: a new handle on the same id, through the stamp check.
-            "commit" => {
-                store_suite::commit_contract(DoStore::fresh(), |store| {
-                    DoStore::open(store.id(), false).expect("the store reopens")
-                });
-            }
-            "edits" => {
-                store_suite::consistent_edits_resume(
-                    DoStore::fresh(),
-                    |store, kind, index, _old, new| {
-                        store
-                            .edit_row(kind, index, new)
-                            .expect("the row is rewritten");
-                        store
-                    },
-                );
-            }
-            other => return Err(format!("unknown suite part: {other}")),
-        }
+        suite::run(unsafe { text(name_ptr, name_len)? })?;
         Ok(Vec::new())
     })
 }
@@ -177,16 +186,15 @@ pub extern "C-unwind" fn ih_run_suite(name_ptr: *const u8, name_len: u32) -> i32
 #[no_mangle]
 pub extern "C-unwind" fn ih_import(
     id: u32,
-    bytes_ptr: *const u8,
+    bytes_ptr: u32,
     bytes_len: u32,
-    profile_ptr: *const u8,
+    profile_ptr: u32,
     profile_len: u32,
 ) -> i32 {
     guarded(|| {
         let bytes = unsafe { slice(bytes_ptr, bytes_len)? };
         let profile = unsafe { text(profile_ptr, profile_len)? };
-        let mut store = DoStore::open(id, true).map_err(|e| format!("open: {e:?}"))?;
-        session::import(&mut store, bytes, profile)?;
+        session::import(id, bytes, profile)?;
         Ok(Vec::new())
     })
 }
@@ -194,82 +202,86 @@ pub extern "C-unwind" fn ih_import(
 /// The canonical container of store `id`, as the pending message.
 #[no_mangle]
 pub extern "C-unwind" fn ih_export(id: u32) -> i32 {
-    guarded(|| {
-        let store = DoStore::open(id, false).map_err(|e| format!("open: {e:?}"))?;
-        session::export(&store)
-    })
+    guarded(|| session::export(id))
 }
 
-/// Bind a fresh machine to store `id`, emptied first: the harness always
-/// wants a clean store, so the engine's `NotEmpty` guard, which keeps a
-/// begin from discarding a heap, is bypassed here. A production begin must
-/// not inherit the reset.
+/// `Worker::begin` on store `id`, emptied first (the harness always wants a
+/// clean store; a production open never resets). `limits` is the core's
+/// worker-limits JSON.
 #[no_mangle]
 pub extern "C-unwind" fn ih_session_begin(
     id: u32,
-    profile_ptr: *const u8,
+    profile_ptr: u32,
     profile_len: u32,
-    slot_ceiling: u32,
-    chunk_ceiling: u32,
+    limits_ptr: u32,
+    limits_len: u32,
 ) -> i32 {
     guarded(|| {
         let profile = unsafe { text(profile_ptr, profile_len)? };
-        let store = DoStore::open(id, true).map_err(|e| format!("open: {e:?}"))?;
-        session::begin(
-            store,
-            profile,
-            &Ceilings {
-                slots: slot_ceiling,
-                chunk_bytes: chunk_ceiling as usize,
-            },
-        )?;
+        let limits = unsafe { text(limits_ptr, limits_len)? };
+        session::begin(id, profile, limits)?;
         Ok(Vec::new())
     })
 }
 
-/// Wake the machine stored in `id`, lazily or eagerly.
+/// `Worker::resume` on store `id`, lazily or eagerly.
 #[no_mangle]
 pub extern "C-unwind" fn ih_session_resume(
     id: u32,
     lazy: u32,
-    profile_ptr: *const u8,
+    profile_ptr: u32,
     profile_len: u32,
-    slot_ceiling: u32,
-    chunk_ceiling: u32,
+    limits_ptr: u32,
+    limits_len: u32,
 ) -> i32 {
     guarded(|| {
         let profile = unsafe { text(profile_ptr, profile_len)? };
-        let store = DoStore::open(id, false).map_err(|e| format!("open: {e:?}"))?;
-        session::resume(
-            store,
-            lazy != 0,
-            profile,
-            &Ceilings {
-                slots: slot_ceiling,
-                chunk_bytes: chunk_ceiling as usize,
-            },
-        )?;
+        let limits = unsafe { text(limits_ptr, limits_len)? };
+        session::resume(id, lazy != 0, profile, limits)?;
         Ok(Vec::new())
     })
 }
 
-/// One crank: compile, link, run; the completion value is the message. A
-/// halt is an error whose text names it, as the worker's `fatal` reply does.
-/// The budget is the worker's `u64` of computrons (a wasm `i64`, a JS
-/// `BigInt`); zero asks for the default.
+/// `Worker::boot`: one boot source, uncommitted.
 #[no_mangle]
-pub extern "C-unwind" fn ih_session_eval(src_ptr: *const u8, src_len: u32, budget: u64) -> i32 {
+pub extern "C-unwind" fn ih_session_boot(
+    name_ptr: u32,
+    name_len: u32,
+    src_ptr: u32,
+    src_len: u32,
+) -> i32 {
     guarded(|| {
+        let name = unsafe { text(name_ptr, name_len)? };
         let source = unsafe { text(src_ptr, src_len)? };
-        let budget = if budget == 0 { 10_000_000 } else { budget };
-        session::eval_crank(source, budget).map(String::into_bytes)
+        session::boot(name, source)?;
+        Ok(Vec::new())
     })
 }
 
-/// Commit the crank's dirty rows; the message is the new epoch.
+/// `Worker::respond`: one request line, without its terminator. Status 0
+/// with the reply line, 3 with the fatal line, or 4 for `close`.
+#[no_mangle]
+pub extern "C-unwind" fn ih_session_request(line_ptr: u32, line_len: u32) -> i32 {
+    guarded_status(|| {
+        let line = unsafe { text(line_ptr, line_len)? };
+        Ok(match session::request(line)? {
+            Step::Continue(reply) => (0, reply.into_bytes()),
+            Step::Die { line, .. } => (STATUS_FATAL, line.into_bytes()),
+            Step::Close => (STATUS_CLOSE, Vec::new()),
+        })
+    })
+}
+
+/// `Worker::checkpoint`; the message is the new epoch.
 #[no_mangle]
 pub extern "C-unwind" fn ih_session_checkpoint() -> i32 {
     guarded(|| session::checkpoint().map(|epoch| epoch.to_string().into_bytes()))
+}
+
+/// Commit and close the worker; the message is the epoch committed.
+#[no_mangle]
+pub extern "C-unwind" fn ih_session_close() -> i32 {
+    guarded(|| session::close().map(|epoch| epoch.to_string().into_bytes()))
 }
 
 #[no_mangle]
@@ -277,7 +289,8 @@ pub extern "C-unwind" fn ih_session_stats() -> i32 {
     guarded(|| session::stats().map(String::into_bytes))
 }
 
+/// Drop the worker uncommitted; the message is whether there was one.
 #[no_mangle]
 pub extern "C-unwind" fn ih_session_drop() -> i32 {
-    guarded(|| Ok(session::drop_session().to_string().into_bytes()))
+    guarded(|| Ok(session::drop_worker().to_string().into_bytes()))
 }

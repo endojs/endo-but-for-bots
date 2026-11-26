@@ -1,8 +1,9 @@
-// The spike's Durable Object host: the engine module bundled with the Worker,
-// instantiated lazily inside each handler, a `sql.exec` shim that returns
-// error codes instead of throwing through wasm, every crank inside one
-// `transactionSync`, and the instance dropped after any exception (the
-// verification review's work item 4). Routes answer JSON with the export's
+// The harness's Durable Object host: the harness module (the product
+// `DoStore` and `Worker` behind the harness's exports) bundled with the
+// Worker, instantiated lazily inside each handler, a `sql.exec` shim that
+// answers failures as the product ABI's negative codes instead of throwing
+// through wasm, every committing call inside one `transactionSync`, and the
+// instance dropped after any exception. Routes answer JSON with the export's
 // status, its message, wall-clock time, SQL row counters and linear memory.
 import { DurableObject } from "cloudflare:workers";
 import engine from "spike.wasm";
@@ -11,7 +12,8 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
 
-// The host side of the ABI in src/host.rs: tagged values both ways.
+// The host side of the product module's `env` imports (src/host.rs), over
+// `ironhorse_store_do::wire`'s tagged values both ways.
 class Host {
   constructor(sql) {
     this.sql = sql;
@@ -120,8 +122,10 @@ class Host {
           this.pending = this.encodeRows(rows);
           return this.pending.length;
         } catch (error) {
+          // The product ABI's failure answer: `-1 - m`, with the `m` bytes of
+          // the error's text pending in place of rows.
           this.pending = encoder.encode(String(error && error.message ? error.message : error));
-          return -1;
+          return -1 - this.pending.length;
         }
       },
       host_take: (dst, cap) => {
@@ -228,6 +232,18 @@ function wasi(host) {
   });
 }
 
+// The product host's default limits (makeIronhorseLimits), which are the
+// engine's default ceilings.
+const DEFAULT_LIMITS = JSON.stringify({
+  crankBudget: "10000000",
+  bootstrapBudget: "1000000000",
+  slotCeiling: 1000000,
+  chunkCeiling: 268435456,
+});
+
+// `ih_session_request`'s answer to a `close` request.
+const STATUS_CLOSE = 4;
+
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -291,18 +307,18 @@ export class Spike extends DurableObject {
     return ptr;
   }
 
-  // Run an export that commits inside one transaction: a failed status
-  // throws so SQL rolls back the partial batch, and the instance is dropped,
-  // as after a trap. The result is returned either way, with the durable
+  // Run an export inside one transaction: a status outside `commits` throws
+  // so SQL rolls back the partial batch, and the instance is dropped, as
+  // after a trap. The result is returned either way, with the durable
   // write's time: `transactionSync` only stages the rows, and workerd
   // writes them to storage after the handler yields (the output gate), so
   // the export's own `ms` excludes it and `syncMs` measures it.
-  async committed(tx, f) {
+  async committed(tx, f, commits = [0]) {
     let result = null;
     try {
       tx(() => {
         result = f();
-        if (result.status !== 0) throw new RolledBack();
+        if (!commits.includes(result.status)) throw new RolledBack();
       });
     } catch (error) {
       if (!(error instanceof RolledBack)) throw error;
@@ -372,11 +388,28 @@ export class Spike extends DurableObject {
     }
   }
 
+  // Call an export with two texts copied into guest memory, placed among
+  // the other arguments by `args(ptrA, lenA, ptrB, lenB)`.
+  withTexts(name, a, b, args) {
+    const first = encoder.encode(a);
+    const second = encoder.encode(b);
+    const firstPtr = this.put(first);
+    const secondPtr = this.put(second);
+    try {
+      return this.call(name, ...args(firstPtr, first.length, secondPtr, second.length));
+    } finally {
+      if (this.instance) {
+        this.instance.exports.ih_free(firstPtr, first.length);
+        this.instance.exports.ih_free(secondPtr, second.length);
+      }
+    }
+  }
+
   async fetch(request) {
     const url = new URL(request.url);
     const q = (name, fallback) => url.searchParams.get(name) ?? fallback;
-    // Every other numeric parameter is a wasm u32 (a store id, a ceiling, a
-    // flag): a decimal integer within u32, or the caller's error.
+    // Every numeric parameter is a wasm u32 (a store id, a flag): a decimal
+    // integer within u32, or the caller's error.
     const u32 = (name, fallback) => {
       const text = q(name, String(fallback));
       if (!/^\d{1,10}$/.test(text) || Number(text) > 0xffffffff) {
@@ -384,16 +417,8 @@ export class Spike extends DurableObject {
       }
       return Number(text);
     };
-    // A computron budget is the worker's u64: a wasm i64, a JS BigInt. Only
-    // a decimal integer within u64 is accepted; a malformed one is the
-    // caller's error, not a reason to drop a healthy instance.
-    const budget = () => {
-      const text = q("budget", "10000000");
-      if (!/^\d{1,20}$/.test(text)) throw new BadRequest(`budget must be a decimal integer, not ${JSON.stringify(text)}`);
-      const value = BigInt(text);
-      if (value > 0xffffffffffffffffn) throw new BadRequest(`budget ${text} exceeds u64`);
-      return value;
-    };
+    // The core's worker-limits JSON, which the module validates itself.
+    const limits = () => q("limits", DEFAULT_LIMITS);
     const tx = (f) => (q("tx", "1") === "0" ? f() : this.ctx.storage.transactionSync(f));
     try {
       switch (url.pathname) {
@@ -450,40 +475,65 @@ export class Spike extends DurableObject {
           return json(
             await this.committed(tx, () =>
               this.text(
-                this.withText("ih_session_begin", q("profile", "spike"), (ptr, len) => [
+                this.withTexts("ih_session_begin", q("profile", "spike"), limits(), (p, pl, l, ll) => [
                   u32("store", 1),
-                  ptr,
-                  len,
-                  u32("slots", 0),
-                  u32("chunk", 0),
+                  p,
+                  pl,
+                  l,
+                  ll,
                 ]),
               ),
             ),
           );
         }
         case "/session/resume": {
+          // A lazy resume reads the stored rows it needs and writes nothing;
+          // the transaction is the product host's, one per call.
           await this.ensureInstance();
-          const t0 = now();
-          const result = this.text(
-            this.withText("ih_session_resume", q("profile", "spike"), (ptr, len) => [
-              u32("store", 1),
-              u32("lazy", 1),
-              ptr,
-              len,
-              u32("slots", 0),
-              u32("chunk", 0),
-            ]),
-          );
-          return json({ ...result, totalMs: now() - t0, instantiateMs: this.instantiateMs });
+          return json({
+            ...(await this.committed(tx, () =>
+              this.text(
+                this.withTexts("ih_session_resume", q("profile", "spike"), limits(), (p, pl, l, ll) => [
+                  u32("store", 1),
+                  u32("lazy", 1),
+                  p,
+                  pl,
+                  l,
+                  ll,
+                ]),
+              ),
+            )),
+            instantiateMs: this.instantiateMs,
+          });
         }
-        case "/session/eval": {
+        case "/session/boot": {
           const source = await request.text();
           await this.ensureInstance();
-          return json(this.text(this.withText("ih_session_eval", source, (ptr, len) => [ptr, len, budget()])));
+          return json(
+            await this.committed(tx, () =>
+              this.text(
+                this.withTexts("ih_session_boot", q("name", "boot"), source, (n, nl, s, sl) => [n, nl, s, sl]),
+              ),
+            ),
+          );
+        }
+        case "/session/request": {
+          // One request line. It commits nothing (the core commits at
+          // close); a lazy worker's crank reads rows. Status 3 (fatal) rolls
+          // the transaction back and drops the instance; 4 is `close`.
+          const line = await request.text();
+          await this.ensureInstance();
+          return json(
+            await this.committed(tx, () => this.text(this.withText("ih_session_request", line)), [0, STATUS_CLOSE]),
+          );
         }
         case "/session/checkpoint": {
           await this.ensureInstance();
           return json(await this.committed(tx, () => this.text(this.call("ih_session_checkpoint"))));
+        }
+        case "/session/close": {
+          await this.ensureInstance();
+          return json(await this.committed(tx, () => this.text(this.call("ih_session_close"))));
         }
         case "/session/stats": {
           await this.ensureInstance();
@@ -493,41 +543,6 @@ export class Spike extends DurableObject {
         case "/session/drop": {
           await this.ensureInstance();
           return json(this.text(this.call("ih_session_drop")));
-        }
-        case "/crank": {
-          // The production shape: one crank, its checkpoint, one transaction.
-          // A halt or a store failure throws inside the callback so SQL rolls
-          // back; the instance is then dropped, as the contract requires.
-          // `totalMs` spans the transaction and the durable write (`syncMs`).
-          const source = await request.text();
-          const crankBudget = budget();
-          await this.ensureInstance();
-          const t0 = now();
-          let evalResult = null;
-          let checkpointResult = null;
-          try {
-            tx(() => {
-              evalResult = this.text(this.withText("ih_session_eval", source, (ptr, len) => [ptr, len, crankBudget]));
-              if (evalResult.status !== 0) throw new Error(`eval: ${evalResult.message}`);
-              checkpointResult = this.text(this.call("ih_session_checkpoint"));
-              if (checkpointResult.status !== 0) throw new Error(`checkpoint: ${checkpointResult.message}`);
-            });
-          } catch (error) {
-            this.dropInstance();
-            return json(
-              {
-                ok: false,
-                error: error.message,
-                detail: error.detail ?? null,
-                eval: evalResult,
-                checkpoint: checkpointResult,
-                totalMs: now() - t0,
-              },
-              500,
-            );
-          }
-          const syncMs = await this.sync();
-          return json({ ok: true, eval: evalResult, checkpoint: checkpointResult, syncMs, totalMs: now() - t0 });
         }
         default:
           return json({ error: `no route ${url.pathname}` }, 404);
