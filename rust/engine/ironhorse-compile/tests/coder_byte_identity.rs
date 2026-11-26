@@ -2955,6 +2955,34 @@ fn module_default_and_reexport() {
     ]);
 }
 
+// A direct `eval` in a class's field function at Module scope, where the
+// coder's `evalFlag` is clear. `fxFunctionNodeCode` still stores the field
+// function's environment as a `FUNCTION_ENVIRONMENT`, because the `eval`
+// sets `mxEvalFlag` on its scope, whether or not it captures anything.
+#[test]
+fn module_field_function_eval_environment() {
+    assert_identical_module(&[
+        // A static block that declares, with and without a capture.
+        "const m = 5; let r; class A { static { let y = 1; r = eval('m + y'); } }",
+        "class A { static { let y = 1; eval('y') } }",
+        "class A { static { var v = 1; function f() { return v } eval('f()') } }",
+        "let r; class A { static { r = eval('1') } }",
+        "export class A { static { let y = 1; A.z = eval('y') } }",
+        // Static and instance field initializers.
+        "class A { static x = eval('1') }",
+        "class A { x = eval('1') }",
+        "const m = 2; class A { static x = eval('m'); y = eval('m') }",
+        // `fxScopeEval` flags every enclosing scope, so an `eval` inside a
+        // function nested in an initializer flags the field function too.
+        "class C { y = function () { eval('1'); }; }",
+        "class C { static { let f = function () { return eval('1'); }; } }",
+        // Without an `eval`, a field function that captures nothing stores
+        // no environment, and one that captures stores a plain one.
+        "class A { static { let y = 1; A.z = y } }",
+        "const m = 2; class A { static { let y = m; A.z = y } }",
+    ]);
+}
+
 // Arrow **receiver capture under direct `eval`** — the fix5 arrow scope-slot
 // fold. `fxScopeCodeRetrieve`/`fxScopeCodeStore` emit
 // `RETRIEVE_TARGET`/`RETRIEVE_THIS` (into the body) and `STORE_ARROW` (in the

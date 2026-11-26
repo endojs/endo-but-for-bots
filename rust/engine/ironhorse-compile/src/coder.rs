@@ -3593,7 +3593,8 @@ impl Coder<'_, '_> {
         // by the hoist-time poison walk, so it
         // publishes its (empty) parameter set into a `with` environment —
         // the strict-mode `undefined; with; pop` eval prelude. A field-init
-        // scope declares only closure aliases, so this is the sole effect.
+        // scope declares only closure aliases, so this and the
+        // `FUNCTION_ENVIRONMENT` store below are the flag's only effects.
         self.scope_coding_params(fi);
         self.return_target = Some(self.create_target());
         for (field, plan) in fields.iter().zip(plans.iter()) {
@@ -3605,11 +3606,15 @@ impl Coder<'_, '_> {
         self.place_target(0, target);
 
         // Store the captured closures into the new function's environment,
-        // running in the enclosing class frame (`fxScopeCodeStore`). At eval
-        // scope the environment is a `FUNCTION_ENVIRONMENT`; otherwise a
-        // captured field function needs a plain `ENVIRONMENT`.
+        // running in the enclosing class frame (`fxScopeCodeStore`). As in
+        // `fxFunctionNodeCode`, a field function whose initializers hold a
+        // direct `eval` (`mxEvalFlag` on its scope), or one coded at eval
+        // scope (the coder's `evalFlag`; a field function is strict, so that
+        // is still the enclosing one), gets a `FUNCTION_ENVIRONMENT`;
+        // otherwise a captured field function needs a plain `ENVIRONMENT`.
+        let scope_eval = self.tree.scopes[fi].flags & crate::scoper::SCOPE_EVAL != 0;
         let has_captures = self.tree.scopes[fi].closure_count != 0;
-        if saved_eval {
+        if scope_eval || saved_eval {
             self.add_byte(1, XS_CODE_FUNCTION_ENVIRONMENT);
             self.scope_code_store(fi);
             self.add_byte(-1, XS_CODE_POP);
