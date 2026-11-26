@@ -1,6 +1,7 @@
 import { parseArgs } from 'util';
 import { fileURLToPath, pathToFileURL } from 'url';
 import {
+  existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -460,6 +461,127 @@ export const readResultBaseline = baselineDirectory => {
 };
 
 /**
+ * The directory of outcomes that differ on one Node.js major version. The
+ * `sesNode` agent runs on the Node.js that drives this harness, so a few
+ * intrinsic shapes follow the host engine: Node 26 gives
+ * `Function.prototype.caller` its own get/set accessors instead of
+ * %ThrowTypeError%. The `baseline/` directory records the outcomes on the
+ * `.node-version` Node.js; an overlay records only the tuples that differ on
+ * another major, in the same scenario/outcome layout.
+ *
+ * @param {string} baselineDirectory
+ * @param {number} nodeMajor
+ */
+export const baselineOverlayDirectory = (baselineDirectory, nodeMajor) =>
+  join(dirname(baselineDirectory), 'baseline-overlays', `node${nodeMajor}`);
+
+/**
+ * @param {string} baselineDirectory
+ * @param {number} nodeMajor
+ */
+export const readBaselineOverlay = (baselineDirectory, nodeMajor) => {
+  const directory = baselineOverlayDirectory(baselineDirectory, nodeMajor);
+  return existsSync(directory) ? readResultBaseline(directory) : undefined;
+};
+
+const cloneReport = report => ({
+  version: 1,
+  scenarios: Object.fromEntries(
+    Object.entries(report.scenarios ?? {}).map(([scenario, outcomes]) => [
+      scenario,
+      Object.fromEntries(
+        resultStatuses.map(status => [status, [...(outcomes[status] ?? [])]]),
+      ),
+    ]),
+  ),
+});
+
+/**
+ * Move every file the overlay names into the overlay's outcome for that
+ * scenario, removing it from the scenario's other outcomes.
+ *
+ * @param {object} baseline
+ * @param {object} overlay
+ */
+export const applyBaselineOverlay = (baseline, overlay) => {
+  const result = cloneReport(baseline);
+  for (const [scenario, outcomes] of Object.entries(overlay.scenarios ?? {})) {
+    for (const [status, files] of Object.entries(outcomes)) {
+      for (const file of files) {
+        result.scenarios[scenario] ??= { skipped: [], failed: [], passed: [] };
+        const target = result.scenarios[scenario];
+        for (const other of resultStatuses) {
+          target[other] = target[other].filter(entry => entry !== file);
+        }
+        target[status] = [...target[status], file].sort();
+      }
+    }
+  }
+  return result;
+};
+
+/**
+ * Restore the version-neutral outcome of every overlaid file, so that
+ * updating the baseline on an overlaid Node.js major does not fold that
+ * major's outcomes into `baseline/`. Files absent from the previous baseline
+ * keep their observed outcome.
+ *
+ * @param {object} report
+ * @param {object} overlay
+ * @param {object} previousBaseline
+ */
+export const unapplyBaselineOverlay = (report, overlay, previousBaseline) => {
+  /** @type {Record<string, Record<string, string>>} */
+  const previousStatus = {};
+  for (const [scenario, outcomes] of Object.entries(
+    previousBaseline.scenarios ?? {},
+  )) {
+    for (const [status, files] of Object.entries(outcomes)) {
+      for (const file of files) {
+        previousStatus[scenario] ??= {};
+        previousStatus[scenario][file] = status;
+      }
+    }
+  }
+  /** @type {Record<string, Record<string, string[]>>} */
+  const restore = {};
+  for (const [scenario, outcomes] of Object.entries(overlay.scenarios ?? {})) {
+    for (const files of Object.values(outcomes)) {
+      for (const file of files) {
+        const status = previousStatus[scenario]?.[file];
+        if (status !== undefined) {
+          restore[scenario] ??= {};
+          restore[scenario][status] ??= [];
+          restore[scenario][status].push(file);
+        }
+      }
+    }
+  }
+  return applyBaselineOverlay(report, { version: 1, scenarios: restore });
+};
+
+/**
+ * Keep only the scenarios that the selected agents produce, so a run
+ * restricted with `--agent` compares against its own slice of the baseline.
+ * The `zeroCoverage` inventory names files that every selected agent
+ * excludes, so it is comparable only when every agent ran.
+ *
+ * @param {object} report
+ * @param {string[]} agents
+ * @param {boolean} includeZeroCoverage
+ */
+export const selectBaselineAgents = (report, agents, includeZeroCoverage) => ({
+  version: 1,
+  scenarios: Object.fromEntries(
+    Object.entries(report.scenarios ?? {}).filter(([scenario]) =>
+      scenario === 'zeroCoverage'
+        ? includeZeroCoverage
+        : agents.includes(scenario.split('/')[0]),
+    ),
+  ),
+});
+
+/**
  * Name every changed baseline entry. A leading minus is an expected outcome
  * that disappeared; a leading plus is a newly observed outcome.
  *
@@ -526,6 +648,7 @@ const main = async () => {
   ];
   const tests = scenariosForTests(stream, agents, conditions);
 
+  const nodeMajor = Number(process.versions.node.split('.')[0]);
   const resultArtifactRequested =
     baselinePath !== undefined ||
     reportPath !== undefined ||
@@ -562,11 +685,36 @@ const main = async () => {
       writeFileSync(reportPath, reportText(report));
     }
     if (updateBaselinePath !== undefined) {
-      writeResultBaseline(updateBaselinePath, report);
+      const overlay = readBaselineOverlay(updateBaselinePath, nodeMajor);
+      writeResultBaseline(
+        updateBaselinePath,
+        overlay === undefined || !existsSync(updateBaselinePath)
+          ? report
+          : unapplyBaselineOverlay(
+              report,
+              overlay,
+              readResultBaseline(updateBaselinePath),
+            ),
+      );
     }
     if (baselinePath !== undefined) {
-      const baseline = readResultBaseline(baselinePath);
-      const differences = diffResultReports(baseline, report);
+      const overlay = readBaselineOverlay(baselinePath, nodeMajor);
+      const baseline = selectBaselineAgents(
+        overlay === undefined
+          ? readResultBaseline(baselinePath)
+          : applyBaselineOverlay(readResultBaseline(baselinePath), overlay),
+        agents,
+        agentArguments === undefined,
+      );
+      if (overlay !== undefined) {
+        console.error(
+          `Applied the Node.js ${nodeMajor} overlay ${baselineOverlayDirectory(baselinePath, nodeMajor)}.`,
+        );
+      }
+      const differences = diffResultReports(
+        baseline,
+        selectBaselineAgents(report, agents, agentArguments === undefined),
+      );
       if (differences.length > 0) {
         console.error(
           `Result baseline changed (${differences.length} entries):`,
