@@ -22,6 +22,8 @@ import {
   tempDir,
 } from './_shell-harness.js';
 
+/** @import { ExecutionContext } from 'ava' */
+
 /** @param {number} ms */
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -136,7 +138,7 @@ test.serial(
  * Start a worker over `heap`, wait for ready, send `request`, and SIGKILL it
  * once `settle` resolves.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @param {string} dir
  * @param {string} heap
  * @param {string} request
