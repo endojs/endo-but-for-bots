@@ -24,8 +24,8 @@ design, this document follows the correction and cites it.
 ## Status
 
 In Progress, as of 2026-11-26.
-Phases 1 and 2 have landed, most of Phase 4 has landed and the rest is in progress, Phase 3 is
-deferred, and Phases 0b and 5 are blocked; §8 gives each phase's status.
+Phases 1, 2 and 4 have landed, Phase 3 is deferred, and Phases 0b and 5 are blocked; §8 gives
+each phase's status.
 The body of this document describes the code as it stands, and the deviations below record
 where the code departs from the plan and why.
 
@@ -53,11 +53,11 @@ Landed:
   of one engine is refused by the other (§6.3).
 - `rust/engine/wasm-worker-spike/` is now a workerd harness for the product crates and the
   product module rather than a prototype with private copies; §7.6 has its measurements.
-
-In progress, not yet landed (Phase 4, §6.3): the Node shell
-`packages/thixotrope/src/ironhorse/wasm/shell.mjs`, the staging of the launcher and its parts in
-one directory, the lane that runs the host's Ironhorse tests under the wasm engine, and CI for
-the module.
+- The rest of Phase 4 (§6.3): the Node shell `packages/thixotrope/src/ironhorse/wasm/shell.mjs`,
+  staging with `python3 rust/thixotrope-ironhorse-wasm/build.py --stage`, the lane
+  `test:ironhorse:wasm` that runs the host's Ironhorse tests under the wasm engine, the CI job
+  `test-thixotrope-ironhorse-wasm`, and a section of `packages/thixotrope/README.md` on the
+  engine.
 
 ### Deviations from the plan as built
 
@@ -139,6 +139,14 @@ the module.
   The module cannot catch a trap or a foreign exception, so the host must treat either as a
   poisoned instance; `host_random` therefore answers a status, and a failed fill fails the commit
   that needed the token as an ordinary error rather than throwing across a wasm frame.
+- **The module's build is reproducible across locations.**
+  The module's SHA-256 is part of the pinned runtime identity, and its bytes first carried the
+  checkout's path through panic locations, so `build.py` builds with Cargo's `trim-paths = "all"`
+  and fails if the checkout's root, `CARGO_HOME` or the toolchain's sysroot occurs in the module.
+- **The launcher passes `--disable-sigusr1` to Node.**
+  Without it a SIGUSR1 to the worker's pid makes Node start its inspector on 127.0.0.1:9229, a
+  debugger into the heap; with it the signal stays pending and the worker keeps serving, where the
+  native worker dies of it, and the host only ever sends SIGKILL.
 - **The spike became a harness for the product crates.**
   Its private store and crank loop were replaced by `DoStore` and the core's `Worker`, and a
   second mode serves the product module through the real `host-abi.mjs`, so that the workerd
@@ -493,8 +501,9 @@ The product module adds the host's side of that ("The host's transaction" in
   has advanced past what the database holds.
 
 The harness's product mode follows these rules inside a Durable Object
-(`rust/engine/wasm-worker-spike/host/product.js`), and the Node lane does over `node:sqlite`
-(`packages/thixotrope/test/ironhorse-wasm/_sqlite-host.js`).
+(`rust/engine/wasm-worker-spike/host/product.js`), and the Node shell
+(`packages/thixotrope/src/ironhorse/wasm/shell.mjs`) and the module lane's host
+(`packages/thixotrope/test/ironhorse-wasm/_sqlite-host.js`) do over `node:sqlite`.
 How often a Durable Object worker commits, and so what a crank costs it in rows, is for Phase 5
 to decide; nothing beyond the module has been built for it.
 
@@ -740,7 +749,8 @@ the three parts it expects beside itself:
 `thixotrope-ironhorse-wasm-shell.mjs`, `host-abi.mjs` and `thixotrope_ironhorse_wasm.wasm` in
 that order (the native worker prints `{"op":"locked"}`).
 As a worker it takes the shared lease, clears close-on-exec on it, and `exec`s `$THIXOTROPE_NODE`
-(by default `node`) with `--disable-warning=ExperimentalWarning` on the shell beside itself,
+(by default `node`) with `--disable-sigusr1` and `--disable-warning=ExperimentalWarning` on the
+shell beside itself,
 passing `--lease-fd=<fd>` and the worker's own arguments, so the lease outlives the launcher's
 image and the pid the host kills is the pid running the worker.
 It drops `NODE_OPTIONS` from Node's environment, and its documentation states the trust
@@ -766,18 +776,72 @@ Landed with it:
   on a case-insensitive filesystem; a state directory written by one engine is refused by the
   other by its `heapFormat` in `checkSavedManifest`, before any code identity is compared; and a
   part that differs from `runtime.json` is refused by name.
+- `packages/thixotrope/src/ironhorse/wasm/shell.mjs`, the Node shell.
+  It opens the heap file with `node:sqlite`'s `DatabaseSync` in `journal_mode=DELETE`, read back
+  and required, with `synchronous=FULL`, and runs every export call inside `BEGIN IMMEDIATE` and
+  then `COMMIT` or `ROLLBACK` as `commits` decides, with a fresh open, its boots and ready as one
+  transaction (§4.4); a failed fresh boot removes the heap file.
+  Before it opens an existing file it reads the SQLite header, refusing a file that is not SQLite
+  or is in WAL mode (a native heap), and then requires the `IRON` stamp.
+  It refuses a lease descriptor that is not open on the lease file, reads and writes fd 0 and
+  fd 1 synchronously, backing off on `EAGAIN`, and ends every failure in exactly one
+  `worker failed: <text>` line and exit status 1.
+  It needs Node 22.16.0 or later (`MIN_NODE_VERSION`): `node:sqlite` is unflagged from 22.13.0,
+  `StatementSync#setReturnArrays` exists from 22.16.0 and `--disable-sigusr1` from 22.14.0.
+  It has run on Node 22.23.5 and 24.22.3 only; that 22.16.0 to 22.23.4 accept the module's exnref
+  encoding is inferred from their identical V8 version, and a compile failure is reported as such
+  at startup.
+- Staging: `python3 rust/thixotrope-ironhorse-wasm/build.py --stage [DIR]` builds the module and
+  the launcher and installs the four files side by side in DIR (by default
+  `target/thixotrope-ironhorse-wasm/`): `thixotrope-ironhorse-wasm-worker`,
+  `thixotrope-ironhorse-wasm-shell.mjs`, `host-abi.mjs` and `thixotrope_ironhorse_wasm.wasm`.
+- The lane `test:ironhorse:wasm` (`packages/thixotrope/ava.ironhorse-wasm.config.mjs`) runs the
+  13 files of `packages/thixotrope/test/ironhorse/`, unmodified, with
+  `THIXOTROPE_IRONHORSE_WORKER` pointing at the staged launcher, and then
+  `test/ironhorse-wasm/runtime-identity.js`, `shell.js`, `shell-failures.js`,
+  `engine-mismatch.js` and `node-version.js`.
+  `THIXOTROPE_IRONHORSE_WASM_WORKER` and `THIXOTROPE_IRONHORSE_NATIVE_WORKER` override the
+  lanes' launcher and native worker.
+  CI's job `test-thixotrope-ironhorse-wasm` stages the engine and runs this lane and the module
+  lane, on the Node of the repository's `.node-version` (`lts/*`).
+- Phase 4's exit criterion is met on the implementer's run: the 13 files pass under both engines,
+  55 tests each.
+  One of them changed, in its time budget only: the supervisor test that installs the counter
+  example through the CLI went from 60 s to 120 s, since it took about 47 s native and 70 s under
+  wasm on four shared cores.
+  On that machine the wasm lane took about 40 minutes against 28 for the native lane, and the
+  per-file sums ran from 1.3 to 1.7 times native.
 
-In progress, not yet landed:
+Known differences from the native worker, found by an independent review and left as is:
 
-- `packages/thixotrope/src/ironhorse/wasm/shell.mjs`, the Node shell: the imports over
-  `node:sqlite` on the heap file (`journal_mode=DELETE`, read back; `synchronous=FULL`; no WAL),
-  the transactions of §4.4, the worker's NDJSON protocol on stdio, and a refusal of a heap file
-  that is not fresh and has no `ih_meta` table.
-- Staging the launcher, the shell, `host-abi.mjs` and the module in one directory, as the
-  launcher expects its parts.
-- A lane that runs the host's Ironhorse tests (`packages/thixotrope/test/ironhorse/`) with
-  `THIXOTROPE_IRONHORSE_WORKER` pointing at the staged launcher, and CI for the module and that
-  lane.
+- Node resets inherited ignored signal dispositions (except SIGPIPE and SIGXFSZ), so a wasm
+  worker started with SIGHUP, SIGINT or SIGTERM ignored dies of them where the native worker
+  survives; the host stops workers with SIGKILL, which neither can ignore.
+- The wasm heap is not locked exclusively.
+  A second worker opened on a live heap is detected only at close (`checkpoint: EpochMismatch`,
+  the heap staying the first closer's and consistent), and an outside reader holding a read
+  transaction makes the close fail with "database is locked", where the native worker refuses
+  the second opener at open; the host gives each incarnation its own directory, so neither
+  arises there.
+- A worker SIGKILLed during a fresh boot leaves a file a later start refuses rather than serves,
+  and does not boot fresh again; the host discards the incarnation directory.
+  The native worker in the same situation restarts as ready over a machine that never booted, a
+  native defect recorded here and not fixed.
+- An unrelated rollback-journal SQLite database with a hot journal beside it is rolled back by
+  SQLite itself before the shell refuses it; every other foreign file is refused untouched, where
+  the native worker converts any file it opens to WAL.
+- Two shells started fresh on one path between the existence check and the open can delete each
+  other's unbooted heap; the host never starts two workers on one heap path.
+- Staging replaces the four files one at a time, not as a set, so stage while no host is
+  acquiring the directory.
+- Not executed: Node releases before 22.23.5 or newer than 24.22.3 (`lts/*` moves), the CI job on
+  a real hosted runner, a read-only heap or directory, a full disk, and a module panic (status 2)
+  through the shell process.
+
+The review also measured, under both engines where it applies: 15 SIGKILLs during the close's
+commit, 3 of which left a hot journal, each reopened as exactly the machine before or after the
+close; a 64 MiB request line gives the same fatal line under both engines; and resuming a 27 MB
+heap takes about 0.5 s under wasm against 0.2 s natively.
 
 This defers Phase 3: no profile is shared between the engines, and no heap moves between them.
 
@@ -1169,7 +1233,7 @@ The review's prerequisites are folded in.
 | **1 Core crate** | `thixotrope-ironhorse-core` out of `main.rs`; the native worker rebuilt on it; the wasm cdylib as a second shell (moved to Phase 4, which builds it with a script of its own; `rust/engine/scripts/build-wasm.py` builds only engine-workspace crates) | M | Both shells pass the worker's own tests and the suite | Landed: `rust/thixotrope-ironhorse-core`, and `rust/thixotrope-ironhorse-worker` rebuilt on it; the native worker's and the core's tests run in CI's Ironhorse worker job; the wasm shell's gate is Phase 4's |
 | **2 Store crate** | `ironhorse-store-do` in `rust/engine` from the spike's `DoStore`, with the suite as its test, the value cap, the stamp, and a failure row for quarantine | S–M | Suite green under local workerd and under the Node shell | Landed: `rust/engine/ironhorse-store-do` and `rust/endo/ironhorse-store-do-rusqlite`; all eight suite parts green on real SQLite, in memory or on disk, and four of them again with 97-byte section chunks and four through the `wire` encoding with every number bound as REAL; all eight green under local workerd (§7.6); not run under a Node shell |
 | **3 Profile** | The platform-neutral profile (§6.2) in `ironhorse-runtime.js` and the native worker; a heap written natively resumes under wasm and back, gated by B7's differential | M (plus B7, costed elsewhere) | A counter vat round-trips native → wasm → native with identical results and computrons | Deferred: Phase 4 keeps the engines' heaps apart instead (§6.3) |
-| **4 Local wasm engine** | The Node shell over `node:sqlite` with its native launcher (§6.3), chosen by pointing `THIXOTROPE_IRONHORSE_WORKER` at the launcher; the daemon's `wasm` platform is not part of it | M | The 13 test files of `packages/thixotrope/test/ironhorse/` pass unchanged under both engines | Mostly landed, the rest in progress: `rust/thixotrope-ironhorse-lease`, `rust/thixotrope-ironhorse-wasm-launcher`, the module `rust/thixotrope-ironhorse-wasm`, `packages/thixotrope/src/ironhorse/wasm/host-abi.mjs` with its Node lane, and the identity change in `ironhorse-runtime.js` landed; the Node shell, the staging, the lane that runs the 13 files under the wasm engine, and CI have not |
+| **4 Local wasm engine** | The Node shell over `node:sqlite` with its native launcher (§6.3), chosen by pointing `THIXOTROPE_IRONHORSE_WORKER` at the launcher; the daemon's `wasm` platform is not part of it | M | The 13 test files of `packages/thixotrope/test/ironhorse/` pass unchanged under both engines | Landed: `rust/thixotrope-ironhorse-lease`, `rust/thixotrope-ironhorse-wasm-launcher`, the module `rust/thixotrope-ironhorse-wasm` with `build.py --stage`, `packages/thixotrope/src/ironhorse/wasm/host-abi.mjs` and `shell.mjs`, the identity change in `ironhorse-runtime.js`, the lanes `test:ironhorse:wasm-module` and `test:ironhorse:wasm`, and the CI job `test-thixotrope-ironhorse-wasm`; the gate is met on the implementer's run (55 tests per engine, §6.3) |
 | **5 Durable Object worker** | The hub and delivery protocols of Addendum A, with the review's blockers 7–11 resolved; the ceiling profile and admission of B8 | L | Addendum A §12's tests plus the review's acceptance gates | Blocked on the review's blockers 7–11 |
 
 Phases 1 and 2 are independent of each other; Phase 4 consumes both, since its cdylib is the core
@@ -1190,10 +1254,11 @@ None of them waits on the deployed measurement; Phase 3 waits on B7, Phase 5 on 
 | Heaps across builds (blocker 6) | §6.2's profile plus B7, deferred with Phase 3; until then each engine refuses a state directory the other wrote (§6.3). |
 | Commit cost: a touched section is re-encoded whole | Measured in §7 for per-crank commits; the Functions section of a real vat is 1.5 MB, so a commit after a function was defined rewrites it. The worker now commits only after boot and at close, but every crank's collection marks every section dirty, so each commit re-encodes and hashes all of them. Incremental section encoding is the fix; WASM-BLOCKERS B8 records this per-checkpoint re-encoding as what remains after the streaming writer. |
 | Rows written per commit (billing) | Measured in §7 for the spike's per-crank commits, which wrote the manifest, the Meter section and the dirty pages' summaries at least. The worker no longer commits per crank, so what a Durable Object pays in rows follows the commit cadence Phase 5 chooses (§4.4); §7.6 has the product's commits at boot (2,993 rows for the fresh opening) and at close (4 rows after one request on a woken heap). |
-| Module size against the platform's script-size limit | The module is 9,818,085 B uncompressed and 3,948,604 B at gzip level 9 (§7.6). Local workerd enforces no script-size limit, and the repository's Cloudflare designs state none, so whether the module fits a deployed Worker is an open question for Phase 5, not a result. |
+| Module size against the platform's script-size limit | The module measured in §7.6 was 9,818,085 B uncompressed and 3,948,604 B at gzip level 9; the reproducible build is 9,814,373 B uncompressed. Local workerd enforces no script-size limit, and the repository's Cloudflare designs state none, so whether the module fits a deployed Worker is an open question for Phase 5, not a result. |
 | Linear memory against the 128 MB isolate | 90,046,464 B (85.9 MiB) after the SES boot, 25.3 MiB after an eager wake and 17.1 MiB after a lazy one (§7.6), against the 128 MB per isolate, wasm memory included, of the base design's limits table and the review's blocker 2. Local workerd enforces no memory limit, so this too is an open question for Phase 5. |
-| The module's bytes depend on the checkout's path | The built module embeds the absolute path of the checkout it was built in, so two builds of one commit in two directories differ; the module's SHA-256 is one of the parts in the pinned runtime identity (§6.3), so a state directory is tied to one build. Open: a path-independent build is planned. |
-| Node is outside the pinned identity | The launcher runs whichever Node `THIXOTROPE_NODE` or `PATH` names and drops `NODE_OPTIONS` (§6.3); putting Node and V8 in the identity waits for Phase 3. |
+| The module's bytes and the build's location | Resolved for the module: `build.py` builds with `trim-paths = "all"` and fails if the checkout's root, `CARGO_HOME` or the toolchain's sysroot occurs in the module, and builds from three checkout locations, another `CARGO_HOME` and a relocated toolchain gave one SHA-256 (`7c8488167b9f35af76770c2c85d317ab05caa7b46edd0ac4826696415ff206e0`, 9,814,373 B). Residual: a `CARGO_TARGET_DIR` outside the checkout is not covered, and the launcher, a native binary also pinned in the identity, is not reproducible in this sense. |
+| Node is outside the pinned identity | The launcher runs whichever Node `THIXOTROPE_NODE` or `PATH` names, drops `NODE_OPTIONS` and passes `--disable-sigusr1` (§6.3); putting Node and V8 in the identity waits for Phase 3. |
+| Which changes run the wasm lane in CI | `test-thixotrope-ironhorse-wasm` is selected (`IRONHORSE_WASM_INPUTS` in `scripts/ci-changes.py`) by any non-Markdown path under `packages/thixotrope/`, the module, launcher, lease, core and native worker crates, `rust/engine/ironhorse-store-do`, `rust/engine/scripts/build-wasm.py`, `.node-version`, the root `ava-endo-lockdown.config.mjs`, and the root and engine Cargo configuration. Other engine crates and the package's transitive JavaScript dependencies do not select it, since the native lane runs for them and scheduled and dispatched runs select every job; whether that saving is worth a regression the native lane cannot see is an open cost decision. |
 | `wasm32-unknown-unknown` entropy | Commit tokens must come from the host (§6.1), and since `935798807` the engine refuses its default source there, so a worker that forgets cannot pair a copy of a store; hash-map iteration order is fixed per build, which is good for determinism and bad for anything that needs randomness, so the engine must take all its entropy through an explicit source. |
 
 ---

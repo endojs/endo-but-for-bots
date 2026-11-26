@@ -60,7 +60,7 @@ What stands in the way, in order of severity:
 | B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for a running string heap, plus one container while a snapshot of it is written (the writer streams now; it used to be about 6×), and up to 6.6× at a checkpoint of an array heap now that array items and side tables are charged against it; a cap that fails `memory.grow` makes programs trap or halt early with `HeapExhausted` where native completes or halts later, and Cloudflare documents replacing the whole isolate, but whether production fails `memory.grow` first is not known | engine / host | **hard under a 128 MB cap** |
 | B2 | Wasm exception-handling encoding: LLVM emits the legacy form by default, and Wasmtime accepts only the standard `exnref` form | toolchain / host | configuration |
 | B4 | Default-feature builds diverge between native and wasm in `Math` results and therefore in metering | engine features | configuration (use `consensus`) |
-| B5 | The native worker binary depends on threads, `flock`, bundled C SQLite and POSIX files, and `FileStore` does not work on WASI; a wasm worker module now exists beside it (`rust/thixotrope-ironhorse-wasm`, the shared core over `ironhorse-store-do`), and its hosts remain | worker / store | port work |
+| B5 | The native worker binary depends on threads, `flock`, bundled C SQLite and POSIX files, and `FileStore` does not work on WASI; a wasm worker module now exists beside it (`rust/thixotrope-ironhorse-wasm`, the shared core over `ironhorse-store-do`) and runs locally under Node; its Durable Object host remains | worker / store | port work |
 | B6 | CI builds the engine for both wasm targets and runs the one WASI test script (`build-ironhorse-wasm`), and runs the native-against-wasm32 differential's fast shard (`cross-target-ironhorse`); the slow shard and engine test suites on wasm are not run | CI | process |
 
 [Browser-specific considerations](#browser-specific-considerations) follow the blockers.
@@ -1005,7 +1005,8 @@ statements to a host executor instead of linking SQLite; and `rust/thixotrope-ir
 the worker as a `wasm32-wasip1` module over the two, built without threads and reading no file,
 so the C SQLite, `flock`, thread and file-path problems do not arise in it.
 The stack comes from the link and the host instead (B3).
-What remains is the host side: the Node shell of the local wasm engine, the Durable Object worker,
+The local wasm engine's Node shell has landed too
+(`packages/thixotrope/src/ironhorse/wasm/shell.mjs`); what remains is the Durable Object worker
 and the daemon's `wasm` engine.
 
 ## B6: little wasm coverage in CI
