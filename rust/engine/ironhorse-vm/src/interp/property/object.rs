@@ -65,8 +65,10 @@ impl Interp {
 
     /// `? Get(O, ToString(i))` for the array-like seam, index-safe.
     ///
-    /// The name is minted only when some chain level can actually answer the
-    /// index — the shared probe's contract. `Array.from({length: 70000})`
+    /// No name is minted: an index no chain level can answer reads
+    /// `undefined` without one, and one that some level can answer is read by
+    /// index, or by its name when the key table already holds it — the shared
+    /// probe's contract. `Array.from({length: 70000})`
     /// reads 70,000 indices that no level answers; interning each one walked
     /// the `u16` id space into the saturation guard that poisons the machine,
     /// which made a one-line call a denial of service on the engine.
@@ -77,7 +79,7 @@ impl Interp {
         i: u64,
         receiver: Slot,
     ) -> Result<Slot, Step> {
-        match self.array_generic_index_read_key(inst, i)? {
+        match self.array_generic_index_read_key(inst, i) {
             Some(key) => self.mop_get_read(code, inst, key, receiver),
             None => Ok(Slot::undefined()),
         }
@@ -339,6 +341,7 @@ impl Interp {
             Payload::Reference(o) if this.kind == Kind::Reference => match key {
                 ReadKey::Id(id) => self.object_own_property_present(code, o, id)?,
                 ReadKey::Index(index) => self.uninterned_index_own_present(code, o, index)?,
+                ReadKey::WideIndex(index) => self.wide_index_own_present(code, o, index)?,
             },
             // A String primitive's boxed wrapper exposes its canonical integer
             // indices `[0, length)` and `length` as own properties (the
@@ -352,6 +355,8 @@ impl Interp {
                         self.string_exotic_has_own(len, name.as_deref(), index)
                     }
                     ReadKey::Index(index) => self.string_exotic_has_own(len, None, Some(index)),
+                    // Past every String's length, and not `length`.
+                    ReadKey::WideIndex(_) => false,
                 }
             }
             // Every other primitive (Number/Boolean/Symbol/BigInt) boxes to a

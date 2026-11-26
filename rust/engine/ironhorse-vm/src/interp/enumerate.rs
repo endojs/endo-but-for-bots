@@ -82,6 +82,9 @@ impl Interp {
                     Some(index) => (crate::value::XS_NO_ID, index),
                     None => (id, 0),
                 },
+                // `to_read_key` interns a name above `u32::MAX`, so this arm is
+                // only defensive: enumeration hands a name on, and mints one.
+                ReadKey::WideIndex(index) => (self.read_key_intern(ReadKey::WideIndex(index))?, 0),
             });
         }
         Ok(keys)

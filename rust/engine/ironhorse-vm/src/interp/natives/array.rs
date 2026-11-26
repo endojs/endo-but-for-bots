@@ -1058,7 +1058,7 @@ impl Interp {
             // The same non-minting read as the synchronous twin
             // (`arraylike_index`): `Array.fromAsync({length: 70000})` interned
             // one name per element and poisoned the machine.
-            let key = self.array_index_read_key(k)?;
+            let key = self.array_index_read_key(k);
             let kvalue = {
                 let g =
                     self.native_try(|machine| machine.mop_get_read(code, inst, key, array_like));
@@ -1184,7 +1184,7 @@ impl Interp {
         if self.from_async[id].target_is_array {
             self.array_set_dense(target, k as u32, v);
         } else {
-            let key = self.array_index_read_key(k)?;
+            let key = self.array_index_read_key(k);
             let desc = OrdinaryDescriptor {
                 value: Some(v),
                 writable: Some(true),
@@ -2058,21 +2058,25 @@ impl Interp {
         self.intern_key(&name)
     }
 
-    /// The [`ReadKey`] for integer element index `k`, minting nothing.
+    /// The [`ReadKey`] for integer element index `k`, minting nothing: `k`
+    /// resolves to a name only if the key table already holds one.
     ///
-    /// An index above `u32::MAX` is not an array index at all — it is an
-    /// ordinary string name that happens to look numeric, and
-    /// [`ReadKey::Index`] cannot hold it — so that one is interned, as XS
-    /// interns it too (`fxAt` takes its name branch there). Every real element
-    /// index resolves to a name only if one already exists.
-    pub(in crate::interp) fn array_index_read_key(&mut self, k: u64) -> Result<ReadKey, Step> {
-        Ok(match u32::try_from(k) {
+    /// An index above `u32::MAX` is not an array index, but it is still a
+    /// canonical numeric key, so it becomes a [`ReadKey::WideIndex`] rather
+    /// than a name. XS interns that name (`fxAt` takes its name branch
+    /// there), so a walk over a Proxy past `u32::MAX` used to spend one key
+    /// id per step and meet the key space's ceiling after about 64k steps.
+    pub(in crate::interp) fn array_index_read_key(&self, k: u64) -> ReadKey {
+        match u32::try_from(k) {
             Ok(index) => match self.index_read_key_id(index) {
                 Some(id) => ReadKey::Id(id),
                 None => ReadKey::Index(index),
             },
-            Err(_) => ReadKey::Id(self.intern_key(k.to_string())?),
-        })
+            Err(_) => match self.wide_index_read_key_id(k) {
+                Some(id) => ReadKey::Id(id),
+                None => ReadKey::WideIndex(WideIndex::new(k)),
+            },
+        }
     }
 
     /// `ToObject(this)` for a generic Array prototype method. Unlike the
@@ -2232,23 +2236,19 @@ impl Interp {
     /// caller (`find`/`findIndex`/`findLast`/`includes`/`at` reach `get` with
     /// no preceding `has`) would re-arm that on its own.
     ///
-    /// An array index's name is only ever LOOKED UP here, never minted. That
-    /// matters most for a chain carrying a Proxy, where every index is
-    /// "answerable" because an absent one can still invoke an observable
-    /// trap: the trap does have to be called, but `read_key_slot` spells its
-    /// key from the index the way `fxKeyAt` does, so calling it costs no id.
-    /// Above 2^32 - 1 the key is an ordinary name, which
-    /// [`Self::array_index_read_key`] interns as XS does, so a Proxy walk
-    /// there spends one id per step and meets the key space's guest ceiling
-    /// after about 64k steps.
+    /// A name is only ever LOOKED UP here, never minted. That matters most
+    /// for a chain carrying a Proxy, where every index is "answerable"
+    /// because an absent one can still invoke an observable trap: the trap
+    /// does have to be called, but `read_key_slot` spells its key from the
+    /// index the way `fxKeyAt` does, so calling it costs no id, below
+    /// `u32::MAX` or above it.
     pub(in crate::interp) fn array_generic_index_read_key(
         &mut self,
         o: crate::value::SlotIndex,
         k: u64,
-    ) -> Result<Option<ReadKey>, Step> {
+    ) -> Option<ReadKey> {
         self.array_generic_index_answerable(o, k)
             .then(|| self.array_index_read_key(k))
-            .transpose()
     }
 
     /// Whether resolving index `k` on `o`'s chain genuinely needs the MOP
@@ -2312,7 +2312,7 @@ impl Interp {
         o: crate::value::SlotIndex,
         k: u64,
     ) -> Result<bool, Step> {
-        match self.array_generic_index_read_key(o, k)? {
+        match self.array_generic_index_read_key(o, k) {
             Some(key) => Ok(self.mop_has_read_with_recursions(code, o, key)?.0),
             None => Ok(false),
         }
@@ -2327,7 +2327,7 @@ impl Interp {
         o: crate::value::SlotIndex,
         k: u64,
     ) -> Result<Slot, Step> {
-        match self.array_generic_index_read_key(o, k)? {
+        match self.array_generic_index_read_key(o, k) {
             Some(key) => {
                 let recv = Slot::of(Kind::Reference, Payload::Reference(o));
                 self.mop_get_read(code, o, key, recv)
@@ -2350,7 +2350,7 @@ impl Interp {
         // by lookup, never minted: a Proxy anywhere on the chain makes every
         // index answerable, so minting here meant `Array.from(new Proxy(a,
         // {}))` spent one id per element and poisoned the machine.
-        let Some(key) = self.array_generic_index_read_key(o, k)? else {
+        let Some(key) = self.array_generic_index_read_key(o, k) else {
             return Ok(Slot::undefined());
         };
         let recv = Slot::of(Kind::Reference, Payload::Reference(o));

@@ -827,6 +827,13 @@ struct ArrayIteratorProxyGetContext {
 /// handed the key as a string ([`Interp::read_key_slot`]) spelled from the
 /// index, the way `fxKeyAt` spells one.
 ///
+/// An integer index above `u32::MAX` is not an array index, so no array
+/// item, index store or String unit holds it, but it is still a canonical
+/// numeric key: a TypedArray answers it, and a Proxy trap is handed it.
+/// Until the key table holds its name it stays a [`ReadKey::WideIndex`], so
+/// a generic Array walk over a Proxy far past `u32::MAX` mints nothing per
+/// step either.
+///
 /// Two `ReadKey`s compare equal iff they name the same property, but only
 /// once both have been through [`Interp::refresh_read_key`] — an
 /// `Index` whose name has since been interned denotes the same property as
@@ -837,6 +844,27 @@ struct ArrayIteratorProxyGetContext {
 enum ReadKey {
     Id(u16),
     Index(u32),
+    WideIndex(WideIndex),
+}
+
+/// An integer index above `u32::MAX` (and at most 2^53 - 1, since every
+/// caller derives it from `ToLength`), packed into seven bytes so that
+/// [`ReadKey`] keeps its declared eight-byte width: scratch admissions are
+/// charged that width, and the charge is consensus state (`admission.rs`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+struct WideIndex([u8; 7]);
+
+impl WideIndex {
+    fn new(index: u64) -> Self {
+        debug_assert!(index > u64::from(u32::MAX) && index < 1 << 56);
+        let [a, b, c, d, e, f, g, _] = index.to_le_bytes();
+        Self([a, b, c, d, e, f, g])
+    }
+
+    fn get(self) -> u64 {
+        let [a, b, c, d, e, f, g] = self.0;
+        u64::from_le_bytes([a, b, c, d, e, f, g, 0])
+    }
 }
 
 #[derive(Clone, Debug)]

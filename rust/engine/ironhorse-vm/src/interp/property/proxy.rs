@@ -401,8 +401,9 @@ impl Interp {
     }
 
     /// One layer of `[[GetOwnProperty]]` for either spelling of the key, for
-    /// the forwarding loops of [`Self::proxy_get_own_property`] and
-    /// [`Self::uninterned_index_proxy_own_descriptor`].
+    /// the forwarding loops of [`Self::proxy_get_own_property`],
+    /// [`Self::uninterned_index_proxy_own_descriptor`] and
+    /// [`Self::wide_index_own_descriptor`].
     pub(in crate::interp) fn proxy_get_own_property_step(
         &mut self,
         code: &[u8],
@@ -419,8 +420,9 @@ impl Interp {
     }
 
     /// The `getOwnPropertyDescriptor` trap call and its invariant checks,
-    /// shared by the id-keyed path and by
-    /// [`Self::uninterned_index_proxy_own_descriptor`]. The trap is passed in
+    /// shared by the id-keyed path and by the index-keyed ones,
+    /// [`Self::uninterned_index_proxy_own_descriptor`] and
+    /// [`Self::wide_index_own_descriptor`]. The trap is passed in
     /// ALREADY RESOLVED: looking it up a second time would re-run a handler's
     /// accessor and double-meter the lookup.
     #[inline(never)]
@@ -686,6 +688,11 @@ impl Interp {
         // forwarded metering for the rest of the walk.
         metering.forwarded_target |= metering.proxy_trap != 0;
         if !self.proxies.contains_key(&target) {
+            // The trap lookup was a `[[Get]]` on the handler, which can run
+            // guest code that names an index key and defines it on the
+            // target; refresh, or the target is searched by index and misses
+            // it.
+            let key = self.refresh_read_key(key);
             return self.mop_get_with_proxy_metering(
                 code,
                 target,
@@ -726,6 +733,8 @@ impl Interp {
                 };
                 metering.forwarded_target |= metering.proxy_trap != 0;
                 if !vm.proxies.contains_key(&target) {
+                    // As in `proxy_get_with_metering`.
+                    let key = vm.refresh_read_key(key);
                     return vm.mop_get_with_proxy_metering(
                         code,
                         target,
@@ -807,8 +816,8 @@ impl Interp {
 
     /// The `get` trap call of `[[Get]]` (ECMA-262 10.5.8 steps 7-10) and its
     /// non-configurable-target invariant checks, shared by the id-keyed read
-    /// and by the index-keyed read of [`Self::uninterned_index_get`], whose key
-    /// has no id.
+    /// and by the index-keyed reads of [`Self::uninterned_index_get`] and
+    /// [`Self::wide_index_get`], whose keys have no id.
     #[allow(clippy::too_many_arguments)]
     #[inline(never)]
     pub(in crate::interp) fn proxy_get_trapped(
@@ -1006,8 +1015,9 @@ impl Interp {
     }
 
     /// One layer of `[[Delete]]` for either spelling of the key, for the
-    /// forwarding loops of [`Self::proxy_delete`] and
-    /// [`Self::uninterned_index_proxy_delete`].
+    /// forwarding loops of [`Self::proxy_delete`],
+    /// [`Self::uninterned_index_proxy_delete`] and
+    /// [`Self::wide_index_delete`].
     pub(in crate::interp) fn proxy_delete_step(
         &mut self,
         code: &[u8],
@@ -1024,7 +1034,9 @@ impl Interp {
     }
 
     /// The `deleteProperty` trap call and its invariant checks, shared by the
-    /// id-keyed path and by [`Self::uninterned_index_proxy_delete`]. The trap
+    /// id-keyed path and by the index-keyed ones,
+    /// [`Self::uninterned_index_proxy_delete`] and
+    /// [`Self::wide_index_delete`]. The trap
     /// arrives ALREADY RESOLVED, for the same reason as
     /// [`Self::proxy_get_own_property_trapped`].
     #[inline(never)]

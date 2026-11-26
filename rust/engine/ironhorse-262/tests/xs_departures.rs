@@ -408,6 +408,13 @@ const DEPARTURES: &[Row] = &[
         why: "as above, for reduce over a Proxy, which has no resident index storage, so XS reads its length as 0",
     },
     Row {
+        program: "var r; try { Array.prototype.findLastIndex.call({ length: 2 ** 53 - 1, get [2 ** 53 - 2]() { throw 'top' }, get [2 ** 32 - 2]() { throw 'wrapped' } }, Boolean) } catch (e) { r = e } r",
+        ironhorse: "top",
+        xs: "wrapped",
+        v8: "top",
+        why: "findLastIndex and findLast start at LengthOfArrayLike - 1, here 2^53 - 2 (ES2024 23.1.3.12); XS's fxFindThisItem reads each element through mxGetIndex((txIndex)index), which wraps an index above 2^32 - 1 modulo 2^32, so XS reads 2^32 - 2 first and passes the callback the unwrapped index",
+    },
+    Row {
         program: "['abcdef'.substr(1, Infinity), 'abcdef'.substr(1, 2147483647), 'abcdef'.substr(0, Infinity), 'abcdef'.substr(1, 4294967297)].join()",
         ironhorse: "bcdef,bcdef,abcdef,bcdef",
         xs: ",,,b",
@@ -736,13 +743,6 @@ const GAPS: &[Row] = &[
         xs: "new: proxy is not a constructor",
         v8: "r.proxy is not a constructor",
         why: "a Proxy keeps [[Construct]] from its target through revocation; Ironhorse drops the target on revocation and throws the revocation error",
-    },
-    Row {
-        program: "var n = 0; try { Array.prototype.findLast.call(new Proxy({ length: 2 ** 53 - 1 }, { get(t, k) { if (k === 'length') return t.length; if (++n === 70000) throw 'stop ' + String(k) } }), function () { return false }) } catch (e) { e.constructor.name + ' after ' + (n > 60000 && n < 70000) }",
-        ironhorse: "RangeError after true",
-        xs: "String after false",
-        v8: "String after false",
-        why: "a Proxy is handed each probed index as a key, and above 2^32 - 1 Ironhorse interns that key as a name, so the walk meets the key space's guest ceiling after about 64k steps and throws, and every later new name in the program throws too; findLastIndex, lastIndexOf and reduceRight over such a Proxy meet it the same way (XS answers reduceRight without walking, the departure above)",
     },
     Row {
         program: "var log = []; var src = {next: function () { return {done: false, value: 1}; }, return: function () { try { it.return(); log.push('no throw'); } catch (e) { log.push(e.name); } return {}; }}; Object.setPrototypeOf(src, Iterator.prototype); var it = src.map(function (x) { return x; }); it.next(); it.return(); log.join()",

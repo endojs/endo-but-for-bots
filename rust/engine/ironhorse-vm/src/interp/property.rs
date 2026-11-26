@@ -217,6 +217,7 @@ impl Interp {
         match key {
             ReadKey::Id(id) => self.mop_get(code, inst, id, receiver),
             ReadKey::Index(index) => self.uninterned_index_get(code, inst, index, receiver),
+            ReadKey::WideIndex(index) => self.wide_index_get(code, inst, index, receiver),
         }
     }
 
@@ -230,6 +231,7 @@ impl Interp {
         match key {
             ReadKey::Id(id) => self.mop_has_with_recursions(code, inst, id),
             ReadKey::Index(index) => self.uninterned_index_has(code, inst, index),
+            ReadKey::WideIndex(index) => self.wide_index_has(code, inst, index),
         }
     }
 
@@ -243,6 +245,7 @@ impl Interp {
         match key {
             ReadKey::Id(id) => self.mop_get_own_property(code, inst, id),
             ReadKey::Index(index) => self.uninterned_index_own_descriptor(code, inst, index),
+            ReadKey::WideIndex(index) => self.wide_index_own_descriptor(code, inst, index),
         }
     }
 
@@ -272,6 +275,20 @@ impl Interp {
         let index = match key {
             ReadKey::Id(id) => return self.mop_define_own_property(code, inst, id, desc),
             ReadKey::Index(index) => index,
+            ReadKey::WideIndex(index) => {
+                // A TypedArray answers a canonical numeric key without a name
+                // (and refuses this one: it is out of range). Anywhere else the
+                // define CREATES the named property, so the name is minted.
+                if !self.proxies.contains_key(&inst) {
+                    if let Some(&ta) = self.typed_arrays.get(&inst) {
+                        return self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+                            vm.ta_index_define(code, ta, index.get() as f64, desc)
+                        });
+                    }
+                }
+                let id = self.intern_key_unmetered(index.get().to_string())?;
+                return self.mop_define_own_property(code, inst, id, desc);
+            }
         };
         if !self.proxies.contains_key(&inst) {
             if let Some(&ta) = self.typed_arrays.get(&inst) {
@@ -338,6 +355,7 @@ impl Interp {
         match key {
             ReadKey::Id(id) => self.mop_delete(code, inst, id),
             ReadKey::Index(index) => self.uninterned_index_delete(code, inst, index),
+            ReadKey::WideIndex(index) => self.wide_index_delete(code, inst, index),
         }
     }
 
@@ -1509,6 +1527,7 @@ impl Interp {
         let id = match key {
             ReadKey::Id(id) => id,
             ReadKey::Index(index) => return self.uninterned_index_get(code, inst, index, receiver),
+            ReadKey::WideIndex(index) => return self.wide_index_get(code, inst, index, receiver),
         };
         // An exotic-array / function target's `length` / integer-index / `name`
         // / `prototype` own values live in side tables, not the slot chain (they
@@ -1654,6 +1673,11 @@ impl Interp {
             ReadKey::Index(index) => {
                 return self
                     .uninterned_index_get(code, inst, index, receiver)
+                    .map(GetLeg::Value)
+            }
+            ReadKey::WideIndex(index) => {
+                return self
+                    .wide_index_get(code, inst, index, receiver)
                     .map(GetLeg::Value)
             }
         };
