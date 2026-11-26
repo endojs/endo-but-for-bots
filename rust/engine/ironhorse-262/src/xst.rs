@@ -5101,8 +5101,7 @@ mod tests {
     #[test]
     fn the_oracle_reports_its_own_done_after_the_checkpoint() {
         let run = |body: &str| {
-            let setup = format!("{ASYNC_PRELUDE}");
-            let runs = crate::dual_run_scripts(&[&setup, body], Some(ASYNC_SIGNAL_NAME))
+            let runs = crate::dual_run_scripts(&[ASYNC_PRELUDE, body], Some(ASYNC_SIGNAL_NAME))
                 .expect("oracle machine available");
             let last = runs.last().unwrap();
             (last.oracle_signal.clone(), last.ironhorse_signal.clone())
