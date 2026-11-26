@@ -43,6 +43,24 @@ export const signInFile = stateDir =>
   join(resolve(stateDir), 'agent-host', 'gateway', 'signin.enc');
 harden(signInFile);
 
+/**
+ * Whether `key` opens the bytes of a `signin.enc` (scripts/preflight.mjs):
+ * a yes or no, never the secret; the plain text is wiped.
+ * @param {Buffer} key
+ * @param {Buffer} raw
+ */
+export const signInFileOpens = (key, raw) => {
+  try {
+    const plain = decrypt(key, raw, SIGNIN_AAD);
+    const whole = plain.length === SECRET_BYTES;
+    plain.fill(0);
+    return whole;
+  } catch {
+    return false;
+  }
+};
+harden(signInFileOpens);
+
 /** @param {string} hex */
 const digestOf = hex => createHash('sha256').update(hex, 'utf8').digest();
 

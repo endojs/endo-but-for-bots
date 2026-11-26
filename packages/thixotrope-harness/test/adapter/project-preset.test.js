@@ -96,6 +96,18 @@ test('all published defaults upgrade to the current one; an operator edit is kep
   t.is(projectInstructions(current), current);
   t.is(instructionsKind(current), 'current');
   t.is(instructionsKind(undefined), 'absent');
+  // The default before serve.mjs refused a new /tmp state upgrades.
+  t.regex(
+    current,
+    /that same Linux scratch mount and pass --allow-tmp-state to scripts\/serve\.mjs\.$/,
+  );
+  const beforeTmpRefusal = current.replace(
+    ' and pass --allow-tmp-state to scripts/serve.mjs.',
+    '.',
+  );
+  t.not(beforeTmpRefusal, current);
+  t.is(instructionsKind(beforeTmpRefusal), 'earlier');
+  t.is(projectInstructions(beforeTmpRefusal), current);
   const operational = `${workflow} For the first thix-selfdev-prepare command, set the shell tool's timeoutMs to 600000 (10 minutes) for the cold build. For nested integration tests set THIX_HARNESS_TMP=/tmp/thix. For a separate supervisor create a short private state directory on that same Linux scratch mount.`;
   t.is(
     projectInstructions(operational),

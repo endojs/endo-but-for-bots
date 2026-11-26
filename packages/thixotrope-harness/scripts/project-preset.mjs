@@ -42,11 +42,15 @@ const projectWorkflow = [
   ...workflowLines,
   'Reproduce the issue with a focused test, edit the checkout, rerun the test and commit.',
 ].join(' ');
-const scratchInstructions =
+const scratchInstructionsV1 =
   'For nested integration tests set THIX_HARNESS_TMP=/tmp/thix. For a separate supervisor create a short private state directory on that same Linux scratch mount.';
+// serve.mjs refuses a new state under /tmp without --allow-tmp-state.
+const scratchInstructions =
+  'For nested integration tests set THIX_HARNESS_TMP=/tmp/thix. For a separate supervisor create a short private state directory on that same Linux scratch mount and pass --allow-tmp-state to scripts/serve.mjs.';
 const coldBuild =
   "For the first thix-selfdev-prepare command, set the shell tool's timeoutMs to 600000 (10 minutes) for the cold build.";
 const operational = `${projectWorkflow} ${coldBuild} ${scratchInstructions}`;
+const operationalV2 = `${projectWorkflow} ${coldBuild} ${scratchInstructionsV1}`;
 /** The model a project manager session delegates implementation to. */
 export const implementerModel = 'claude-opus-5-5';
 /**
@@ -94,7 +98,7 @@ const workflowV1 = [
   ...workflowLines,
   'Reproduce the issue with a focused test, edit the checkout and rerun the test. Return git diff HEAD for review.',
 ].join(' ');
-const operationalV1 = `${workflowV1} ${coldBuild} ${scratchInstructions}`;
+const operationalV1 = `${workflowV1} ${coldBuild} ${scratchInstructionsV1}`;
 // Published by 603845d2a (the first delegating default).
 const delegationV1 = [
   'Roles. If your task came from a parent session through askSubagent, you are its implementer: do the work yourself in your own /workspace checkout as described below, commit it, and answer with the commit hashes, git diff HEAD, the commands you ran with their results, and what you could not do. Do not spawn subagents of your own unless the brief asks for it or the work truly needs it.',
@@ -105,12 +109,15 @@ const earlierInstructions = harden([
   ...[
     'Use a separate short /tmp state path for nested supervisors.',
     'For a nested supervisor use a short private state directory under /home/node, where its staged Linux worker can execute.',
-    scratchInstructions,
+    scratchInstructionsV1,
   ].map(suffix => `${workflowV1} ${suffix}`),
   operationalV1,
   `${delegationV1} ${operationalV1}`,
   // Round 3: the exec-scope drop box.
-  `${rolesV2} ${handBackV2} ${operational}`,
+  `${rolesV2} ${handBackV2} ${operationalV2}`,
+  // Round 4: the hand-back through the parent shell, before serve.mjs
+  // refused a new /tmp state without --allow-tmp-state.
+  `${roles} ${handBack} ${operationalV2}`,
 ]);
 
 /**

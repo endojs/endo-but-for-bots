@@ -2,7 +2,16 @@
 import test from '@endo/ses-ava/test.js';
 
 import { execFile, execFileSync, spawn } from 'node:child_process';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 
 import { limits } from '../config/defaults.js';
@@ -14,7 +23,10 @@ import {
   SERVE_RECORD,
   allowlistEnvironment,
   checkCrankBudget,
+  checkStateLocation,
   crankBudgetFloor,
+  isNewState,
+  isUnderTmp,
   parseMaxDeliveryAttempts,
   parseServeArgs,
   readServeRecord,
@@ -539,4 +551,66 @@ test('rootless Podman and systemd credential paths pass; bus, XDG data and confi
     'XDG_CONFIG_HOME',
     'XDG_DATA_HOME',
   ]);
+});
+
+test('a new state under /tmp is refused unless --allow-tmp-state; an existing one is served with a warning', async t => {
+  const fresh = `/tmp/thix-serve-test-${randomBytes(6).toString('hex')}`;
+  t.true(await isUnderTmp(fresh));
+  t.true(await isUnderTmp(`/private${fresh}`));
+  t.false(await isUnderTmp('/tmpfoo/state'));
+  t.false(await isUnderTmp(harnessRoot));
+  t.true(await isNewState(fresh));
+  await t.throwsAsync(
+    checkStateLocation({ statePath: fresh, crankBudget: 1n }),
+    {
+      message:
+        /Refusing to start a new state under a temporary directory .*--allow-tmp-state/,
+    },
+  );
+  /** @type {string[]} */
+  const warnings = [];
+  await checkStateLocation(
+    { statePath: fresh, crankBudget: 1n, allowTmpState: true },
+    line => warnings.push(line),
+  );
+  t.deepEqual(warnings, []);
+  t.true(parseServeArgs([fresh, '--allow-tmp-state'], {}).allowTmpState);
+  t.false('allowTmpState' in parseServeArgs([fresh], {}));
+
+  const existing = await mkdtemp('/tmp/thix-serve-test-');
+  t.teardown(() => rm(existing, { recursive: true, force: true }));
+  t.true(await isNewState(existing), 'an empty directory is new');
+  await writeFile(path.join(existing, 'workspace.json'), '{}\n');
+  t.false(await isNewState(existing));
+  await checkStateLocation({ statePath: existing, crankBudget: 1n }, line =>
+    warnings.push(line),
+  );
+  t.is(warnings.length, 1);
+  t.regex(warnings[0], /is under a temporary directory/);
+
+  // A durable path is never questioned.
+  await checkStateLocation(
+    { statePath: path.join(harnessRoot, 'tmp', 'x'), crankBudget: 1n },
+    line => warnings.push(line),
+  );
+  t.is(warnings.length, 1);
+});
+
+test('the CLI refuses a new /tmp state before creating anything', async t => {
+  const fresh = `/tmp/thix-serve-test-${randomBytes(6).toString('hex')}`;
+  t.teardown(() => rm(fresh, { recursive: true, force: true }));
+  const { code, stderr } = await new Promise(resolve => {
+    const child = execFile(
+      process.execPath,
+      [serveScript, fresh],
+      (_error, _stdout, err) =>
+        resolve({ code: child.exitCode, stderr: String(err) }),
+    );
+  });
+  t.is(code, 1);
+  t.regex(
+    stderr,
+    /serve: Refusing to start a new state under a temporary directory/,
+  );
+  t.false(existsSync(fresh));
 });

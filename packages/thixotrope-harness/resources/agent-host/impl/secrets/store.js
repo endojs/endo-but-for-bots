@@ -146,6 +146,39 @@ export const decrypt = (key, sealed, aad) => {
 harden(decrypt);
 
 /**
+ * Whether `key` opens the bytes of a `secrets.enc` (scripts/preflight.mjs):
+ * a yes or no, never the content; the plain text is wiped.
+ * @param {Buffer} key
+ * @param {Buffer} raw
+ */
+export const secretsFileOpens = (key, raw) => {
+  try {
+    const envelope = JSON.parse(raw.toString('utf8'));
+    if (envelope?.format !== FILE_FORMAT) return false;
+    decrypt(key, Buffer.from(envelope.data, 'base64'), FILE_FORMAT).fill(0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+harden(secretsFileOpens);
+
+/**
+ * Whether `key` opens one whole line of `secrets-audit.log`.
+ * @param {Buffer} key
+ * @param {string} line
+ */
+export const auditLineOpens = (key, line) => {
+  try {
+    decrypt(key, Buffer.from(line, 'base64'), AUDIT_FORMAT).fill(0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+harden(auditLineOpens);
+
+/**
  * R7-25: 1-200 characters, no newline.
  * @param {unknown} description
  */

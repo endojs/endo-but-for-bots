@@ -33,14 +33,28 @@
  * has `heaps/runtime.json` takes its recorded crank budget as the floor
  * (its shutdown history is unknown).
  *
+ * - The CLI refuses to start a new state (absent or empty) under /tmp or
+ *   /private/tmp, which reboots and temp cleaners empty, unless
+ *   `--allow-tmp-state` says it is a disposable test state; an existing
+ *   one there is served with a warning. `serveHarness()` and
+ *   `spawnSupervisorChild()` (tests, templates) do not check.
+ *
  * Usage:
  *   node scripts/serve.mjs STATE [--crank-budget N] [--idle-sleep-ms N]
- *     [--snapshot-every N] [--max-delivery-attempts N]
+ *     [--snapshot-every N] [--max-delivery-attempts N] [--allow-tmp-state]
  * Stop with SIGINT or SIGTERM (or `thix stop STATE`).
+ * Check a state without changing it: `node scripts/preflight.mjs STATE`.
  */
 import './_init.mjs';
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  writeFile,
+} from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import url from 'node:url';
@@ -191,6 +205,8 @@ const parseMs = (name, value) => {
  * @property {number} [snapshotEveryDeliveries]
  * @property {number} [maxDeliveryAttempts] default: the caller's
  *   THIXOTROPE_MAX_DELIVERY_ATTEMPTS, else DEFAULT_MAX_DELIVERY_ATTEMPTS
+ * @property {boolean} [allowTmpState] the CLI may start a new state under
+ *   /tmp (`--allow-tmp-state`, disposable test states only)
  */
 
 /**
@@ -209,6 +225,7 @@ export const parseServeArgs = (argv, env = process.env) => {
   let snapshotEveryDeliveries;
   /** @type {number | undefined} */
   let maxDeliveryAttempts;
+  let allowTmpState = false;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const [flag, inline] = arg.startsWith('--') ? arg.split('=', 2) : [arg];
@@ -230,13 +247,14 @@ export const parseServeArgs = (argv, env = process.env) => {
         '--max-delivery-attempts',
         takeValue(),
       );
+    else if (arg === '--allow-tmp-state') allowTmpState = true;
     else if (arg.startsWith('-')) throw Error(`Unknown option ${arg}`);
     else if (statePath === undefined) statePath = path.resolve(arg);
     else throw Error(`Unexpected argument ${arg}`);
   }
   if (statePath === undefined)
     throw Error(
-      'Usage: serve.mjs STATE [--crank-budget N] [--idle-sleep-ms N] [--snapshot-every N] [--max-delivery-attempts N]',
+      'Usage: serve.mjs STATE [--crank-budget N] [--idle-sleep-ms N] [--snapshot-every N] [--max-delivery-attempts N] [--allow-tmp-state]',
     );
   if (crankBudget === undefined) {
     const fromEnv = env.THIXOTROPE_CRANK_BUDGET;
@@ -252,7 +270,84 @@ export const parseServeArgs = (argv, env = process.env) => {
     idleSleepMs,
     snapshotEveryDeliveries,
     maxDeliveryAttempts,
+    ...(allowTmpState ? { allowTmpState } : {}),
   };
+};
+
+/** Directories a reboot or a temp cleaner empties. */
+export const TMP_ROOTS = harden(['/tmp', '/private/tmp']);
+
+/**
+ * @param {string} file
+ * @param {string} root
+ */
+const isUnder = (file, root) =>
+  file === root || file.startsWith(`${root}${path.sep}`);
+
+/**
+ * The real path of `file`, or of its nearest existing ancestor joined with
+ * the rest (`/tmp` is a symlink to `/private/tmp` on macOS).
+ * @param {string} file
+ * @returns {Promise<string>}
+ */
+const realPathOf = async file => {
+  const absolute = path.resolve(file);
+  try {
+    return await realpath(absolute);
+  } catch {
+    const parent = path.dirname(absolute);
+    if (parent === absolute) return absolute;
+    return path.join(await realPathOf(parent), path.basename(absolute));
+  }
+};
+
+/**
+ * True when `file` (as given or once symlinks are resolved) is under one of
+ * `TMP_ROOTS`.
+ * @param {string} file
+ */
+export const isUnderTmp = async file => {
+  const candidates = [path.resolve(file), await realPathOf(file)];
+  return candidates.some(candidate =>
+    TMP_ROOTS.some(root => isUnder(candidate, root)),
+  );
+};
+
+/**
+ * A new state: the directory is absent or empty.
+ * @param {string} statePath
+ */
+export const isNewState = async statePath => {
+  try {
+    return (await readdir(statePath)).length === 0;
+  } catch (error) {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT')
+      return true;
+    throw error;
+  }
+};
+
+/**
+ * Refuse a new state under /tmp unless `allowTmpState`; warn for an
+ * existing one.
+ * @param {ServeOptions} options
+ * @param {(line: string) => void} [warn]
+ */
+export const checkStateLocation = async (
+  { statePath, allowTmpState = false },
+  warn = line => process.stderr.write(`${line}\n`),
+) => {
+  if (!(await isUnderTmp(statePath))) return;
+  if (await isNewState(statePath)) {
+    if (!allowTmpState)
+      throw Error(
+        `Refusing to start a new state under a temporary directory (${statePath}): a reboot or temp cleaner deletes it. Use a durable path, or pass --allow-tmp-state for a disposable test state.`,
+      );
+    return;
+  }
+  warn(
+    `serve: warning: the state ${statePath} is under a temporary directory; a reboot or temp cleaner deletes it`,
+  );
 };
 
 /**
@@ -748,6 +843,7 @@ const main = async argv => {
     return;
   }
   const options = parseServeArgs(argv);
+  await checkStateLocation(options);
   // Refuse in the parent too, before any process starts.
   await checkCrankBudget(options.statePath, options.crankBudget);
   const started = spawnSupervisorChild(options, {

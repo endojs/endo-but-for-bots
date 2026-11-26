@@ -978,8 +978,8 @@ realTest('[real-runtime] timeout, stop and sweep', async t => {
       join(env.workspace, 'owned'),
       join(env.home, 'owned'),
     ]) {
-      t.is(statSync(file).uid, getuid?.(), file);
-      t.is(statSync(file).gid, getgid?.(), file);
+      t.is(statSync(file).uid, getuid?.() ?? -1, file);
+      t.is(statSync(file).gid, getgid?.() ?? -1, file);
     }
   },
 );
