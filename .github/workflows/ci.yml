@@ -879,8 +879,9 @@ jobs:
             ~/.cargo/git
             target
           # The module's rebuilt std is keyed by the lockfile, the toolchain
-          # pin (its rust-src) and the recipe's flags, as in build-ironhorse-wasm.
-          key: ${{ runner.os }}-thixotrope-ironhorse-wasm-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'rust/engine/scripts/build-wasm.py') }}
+          # pin (its rust-src), the recipe's flags, as in build-ironhorse-wasm,
+          # and build.py, whose trim-paths profile setting std is built under.
+          key: ${{ runner.os }}-thixotrope-ironhorse-wasm-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'rust/engine/scripts/build-wasm.py', 'rust/thixotrope-ironhorse-wasm/build.py') }}
           restore-keys: |
             ${{ runner.os }}-thixotrope-ironhorse-wasm-
       - name: Install rust-src and the wasm target on the pinned toolchain
