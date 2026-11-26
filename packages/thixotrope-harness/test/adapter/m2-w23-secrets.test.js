@@ -258,9 +258,14 @@ test('store: a new incarnation reads the file back; the key file is guarded', as
   t.true(audit.length >= 6, 'the audit survives the restart');
 
   // Another key file cannot open it, and says nothing about the content.
+  const otherKey = join(dirs.root, 'other.key');
+  writeFileSync(otherKey, Buffer.alloc(32, 9), { mode: 0o600 });
   const other = makeSecretStore({
     file: dirs.files.file,
-    wrappingKey: makeWrappingKey({ keyFile: join(dirs.root, 'other.key') }),
+    wrappingKey: makeWrappingKey({
+      keyFile: otherKey,
+      stateDir: dirs.stateDir,
+    }),
   });
   await t.throwsAsync(other.ready(), {
     message: 'secrets.enc cannot be opened with this key file',
@@ -292,7 +297,10 @@ test('store: the audit file stays bounded', async t => {
   t.teardown(dirs.done);
   const store = makeSecretStore({
     file: dirs.files.file,
-    wrappingKey: makeWrappingKey({ keyFile: dirs.files.keyFile }),
+    wrappingKey: makeWrappingKey({
+      keyFile: dirs.files.keyFile,
+      stateDir: dirs.stateDir,
+    }),
     auditKeep: 8,
   });
   t.teardown(() => store.close());
@@ -358,7 +366,10 @@ test('seal: a box opens only with the adapter key; defects say nothing', async t
   const dirs = makeDirs();
   t.teardown(dirs.done);
   const seal = makeSealKeys({
-    wrappingKey: makeWrappingKey({ keyFile: dirs.files.keyFile }),
+    wrappingKey: makeWrappingKey({
+      keyFile: dirs.files.keyFile,
+      stateDir: dirs.stateDir,
+    }),
   });
   await seal.ready();
   const publicKey = seal.publicKey();
@@ -372,7 +383,10 @@ test('seal: a box opens only with the adapter key; defects say nothing', async t
   t.not(sealTo(publicKey, value).box, box.box);
   // Stable across incarnations: derived from the key file.
   const again = makeSealKeys({
-    wrappingKey: makeWrappingKey({ keyFile: dirs.files.keyFile }),
+    wrappingKey: makeWrappingKey({
+      keyFile: dirs.files.keyFile,
+      stateDir: dirs.stateDir,
+    }),
   });
   await again.ready();
   t.is(again.publicKey(), publicKey);

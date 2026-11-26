@@ -35,7 +35,9 @@ test('concurrent first loads of the key file all answer the same 32-byte key', a
     const keyFile = join(dir, `k${round}`, 'secrets.key');
     // eslint-disable-next-line no-await-in-loop
     const keys = await Promise.all(
-      Array.from({ length: 8 }, () => loadWrappingKey({ keyFile })),
+      Array.from({ length: 8 }, () =>
+        loadWrappingKey({ keyFile, stateDir: join(dir, `s${round}`) }),
+      ),
     );
     t.true(keys.every(key => key.length === 32));
     t.true(keys.every(key => key.equals(keys[0])));

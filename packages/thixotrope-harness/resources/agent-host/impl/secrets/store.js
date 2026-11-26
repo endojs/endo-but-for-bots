@@ -13,8 +13,9 @@
  *
  * The wrapping key is a 32-byte file outside the state directory
  * (`wrapping-key.js`: refused inside it, and refused when its mode lets the
- * group or others read it, created 0600 if absent); the store takes the
- * incarnation's one `WrappingKey`. `findSecretsFiles` says where both are.
+ * group or others read it; created 0600 only on a state's first run, never
+ * while a sealed file exists); the store takes the incarnation's one
+ * `WrappingKey`. `findSecretsFiles` says where both are.
  *
  * The audit log (R7-24) is a second file, `secrets-audit.log`, one line per
  * event, each line sealed on its own with the same key (deviation from
@@ -50,6 +51,7 @@ import { limits } from '../../../../guest/lib/limits.js';
 import { subscriptionLimits } from '../../../../guest/lib/subscription-limits.js';
 /* eslint-enable import/no-relative-packages */
 import { writeFileAtomic, writeFileAtomicSync } from '../files.js';
+import { isCredentialPath } from './wrapping-key.js';
 
 /** @import { WrappingKey } from './wrapping-key.js' */
 
@@ -75,6 +77,9 @@ harden(secretError);
  * Where the store keeps its files for a state directory, and where the
  * wrapping key is: `env[SECRETS_KEY_VARIABLE]` (absolute), else
  * `~/.config/thixotrope-harness/secrets-<first 16 hex of sha256(state)>.key`.
+ * `keyReadOnly` is true when the key is a systemd credential (a path under
+ * `env.CREDENTIALS_DIRECTORY`, e.g. `THIX_HARNESS_SECRETS_KEY=%d/wrapping-key`
+ * in the unit): it is then only ever read.
  *
  * @param {object} options
  * @param {string} options.stateDir
@@ -103,6 +108,7 @@ export const findSecretsFiles = ({ stateDir, env = {}, home }) => {
     file: join(state, 'agent-host', 'secrets.enc'),
     auditFile: join(state, 'agent-host', 'secrets-audit.log'),
     keyFile,
+    keyReadOnly: isCredentialPath(keyFile, env),
   });
 };
 harden(findSecretsFiles);

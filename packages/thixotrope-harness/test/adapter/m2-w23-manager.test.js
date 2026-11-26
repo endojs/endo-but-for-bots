@@ -78,7 +78,10 @@ const makeKit = () => {
       }),
     });
     const seal = makeSealKeys({
-      wrappingKey: makeWrappingKey({ keyFile: files.keyFile }),
+      wrappingKey: makeWrappingKey({
+        keyFile: files.keyFile,
+        stateDir: files.stateDir,
+      }),
     });
     const { sink } = desiredSpec;
     const secrets = makeSecretsOps({ store, seal, sink });

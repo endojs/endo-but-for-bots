@@ -79,7 +79,10 @@ const open = () => {
     }),
   });
   const seal = makeSealKeys({
-    wrappingKey: makeWrappingKey({ keyFile: files.keyFile }),
+    wrappingKey: makeWrappingKey({
+      keyFile: files.keyFile,
+      stateDir: files.stateDir,
+    }),
   });
   return { store, ops: makeSecretsOps({ store, seal, sink }) };
 };

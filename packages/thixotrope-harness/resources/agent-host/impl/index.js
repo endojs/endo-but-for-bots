@@ -243,6 +243,7 @@ export const makeAgentHostImpl = ({
       const wrappingKey = makeWrappingKey({
         keyFile: files.keyFile,
         stateDir: files.stateDir,
+        readOnly: files.keyReadOnly,
       });
       secretsMade = makeSecretsOps({
         store: makeSecretStore({

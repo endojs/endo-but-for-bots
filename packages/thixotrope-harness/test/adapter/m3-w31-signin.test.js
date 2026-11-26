@@ -10,6 +10,7 @@ import '../unit/_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import {
   existsSync,
@@ -18,6 +19,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { execPath } from 'node:process';
@@ -108,6 +110,10 @@ test('the file is encrypted at rest, mode 0600, under the wrapping key', async t
   t.is(statSync(signInFile(dirs.stateDir)).mode & 0o077, 0);
 
   // Another wrapping key cannot read it; the error carries no bytes.
+  mkdirSync(join(dirs.root, 'other'));
+  writeFileSync(join(dirs.root, 'other', 'k.key'), randomBytes(32), {
+    mode: 0o600,
+  });
   const other = makeSignInStore({
     stateDir: dirs.stateDir,
     env: { [SECRETS_KEY_VARIABLE]: join(dirs.root, 'other', 'k.key') },

@@ -99,6 +99,7 @@ export const makeSignInStore = ({ stateDir, env = {}, home, hooks = {} }) => {
       keyPromise = loadWrappingKey({
         keyFile: files.keyFile,
         stateDir: files.stateDir,
+        readOnly: files.keyReadOnly,
       });
       // A failed load is retried by the next call.
       keyPromise.catch(() => {
