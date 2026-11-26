@@ -4,6 +4,11 @@
 //! inherited `SIG_IGN` dispositions the host relies on), and as a worker it
 //! takes the shared lease and replaces itself with Node, so the pid the host
 //! spawned and later kills is the pid running the worker.
+//!
+//! Trust boundary: the Node binary (`THIXOTROPE_NODE`, else `node` on `PATH`)
+//! is not part of the pinned runtime identity, so whoever controls the
+//! daemon's environment controls which Node runs the worker. `NODE_OPTIONS` is
+//! dropped so that the environment cannot add code to that Node by accident.
 #![forbid(unsafe_code)]
 #[cfg(not(unix))]
 compile_error!("thixotrope-ironhorse-wasm-launcher relies on flock(2) and exec(2); Unix only");
@@ -83,6 +88,9 @@ fn exec_worker(mut args: impl Iterator<Item = OsString>) -> Result<(), String> {
         .filter(|node| !node.is_empty())
         .unwrap_or_else(|| "node".into());
     let error = Command::new(&node)
+        // `--require`, `--import`, `--loader` or `--inspect` in NODE_OPTIONS
+        // would load or expose code the pinned runtime identity never saw.
+        .env_remove("NODE_OPTIONS")
         .arg("--disable-warning=ExperimentalWarning")
         .arg(shell)
         .arg(format!("--lease-fd={}", lease.as_raw_fd()))

@@ -303,6 +303,8 @@ done
 if [ -e "/proc/$$/fd/$fd" ]; then
   echo "fd $(readlink "/proc/$$/fd/$fd")"
 fi
+echo "NODE_OPTIONS ${NODE_OPTIONS-unset}"
+echo "UNRELATED ${THIXOTROPE_TEST_UNRELATED-unset}"
 echo waiting
 read -r _line
 "#;
@@ -332,6 +334,8 @@ fn worker_execs_node_with_lease() {
         Command::new(&launcher)
             .args(&args)
             .env("THIXOTROPE_NODE", &node)
+            .env("NODE_OPTIONS", "--require=/nonexistent")
+            .env("THIXOTROPE_TEST_UNRELATED", "kept")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped()),
@@ -362,6 +366,9 @@ fn worker_execs_node_with_lease() {
     );
     #[cfg(target_os = "linux")]
     expected.push(format!("fd {}", lease.display()));
+    // NODE_OPTIONS is dropped; the rest of the environment passes through.
+    expected.push("NODE_OPTIONS unset".to_owned());
+    expected.push("UNRELATED kept".to_owned());
     expected.push("waiting".to_owned());
     // Everything on stdout came from the stand-in: the launcher wrote nothing.
     assert_eq!(seen[1..], expected[..]);
