@@ -3365,6 +3365,13 @@ impl Interp {
         let mut outer: Vec<FlatSource> = Vec::new();
         loop {
             while cur.source_index < cur.source_len {
+                // A descent reaches no meter check point, so a bounded run
+                // counts each step here: a nest whose levels repeat one array
+                // (`a = [a, a]`) doubles the visit per level and appends
+                // nothing.
+                if self.step_limit != u64::MAX {
+                    self.charge_bounded_native_work(0)?;
+                }
                 let present = match self.array_generic_next_present_index(
                     cur.source,
                     cur.source_index,
@@ -4668,6 +4675,13 @@ impl Interp {
         let mut open: Vec<(crate::value::SlotIndex, u32, u32, u32)> = vec![(src, len, 0, depth)];
         while let Some(top) = open.last_mut() {
             let (src, len, index, depth) = *top;
+            // Neither a hole nor a descent reaches a meter check point, so a
+            // bounded run counts each step here: a nest whose levels repeat
+            // one array (`a = [a, a]`) doubles the visit per level and
+            // appends nothing.
+            if self.step_limit != u64::MAX {
+                self.charge_bounded_native_work(0)?;
+            }
             if index >= len {
                 open.pop();
                 continue;

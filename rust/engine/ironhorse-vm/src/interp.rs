@@ -2850,16 +2850,20 @@ impl Interp {
     /// Run a program bytecode buffer to completion.
     /// Run under a dispatch-count ceiling: identical to [`Self::run`] but
     /// halts with [`Halt::StepLimit`] if the program dispatches `step_limit`
-    /// opcodes without completing. For un-metered callers (the decoder fuzz
+    /// opcodes without completing, or if its built-ins' loops charge what
+    /// that many opcodes would. For un-metered callers (the decoder fuzz
     /// harness) that must stay total on arbitrary/malformed bytecode without
-    /// wedging on a non-terminating dispatch cycle.
+    /// wedging on a non-terminating dispatch cycle or built-in walk.
     pub fn run_bounded(&mut self, code: &[u8], step_limit: u64) -> RunOutcome {
         // Scoped, not latched: the ceiling applies to
         // THIS run; a later plain `run` is unbounded again.
         let prev = self.step_limit;
+        let prev_native = self.bounded_native_raw;
         self.step_limit = step_limit;
+        self.bounded_native_raw = 0;
         let out = self.run(code);
         self.step_limit = prev;
+        self.bounded_native_raw = prev_native;
         out
     }
 

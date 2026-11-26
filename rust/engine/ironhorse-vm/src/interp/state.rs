@@ -350,6 +350,24 @@ pub struct Interp {
     /// self-targeting backward branch, an unbounded loop) aborts in bounded
     /// time rather than wedging the caller.
     step_limit: u64,
+    #[boot_new(0)]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Raw meter units a bounded run has charged at its built-ins' meter
+    /// check points. A built-in's loop dispatches nothing, so `step_limit`
+    /// alone does not bound it: `Array.prototype.includes.call({ length:
+    /// 2 ** 53 - 1 })` walks for days. A bounded run also halts with
+    /// [`Halt::StepLimit`] once this reaches what `step_limit` dispatches
+    /// would charge ([`Interp::charge_and_check`]). Zero, and unread, while
+    /// `step_limit` is unbounded.
+    bounded_native_raw: u64,
     #[boot_new(slots)]
     #[gc_root(none)]
     #[quiescent(retained)]

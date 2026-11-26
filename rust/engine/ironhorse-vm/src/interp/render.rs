@@ -309,16 +309,19 @@ impl Interp {
         // instructions, so opting in must not hand a thrown value unbounded
         // execution: `throw {toString(){ while(true){} }}` otherwise never
         // returns, and the in-repo harness suites run with `case_timeout` 0.
-        // A finite `step_limit` bounds dispatches AND, via the bounded-mode
-        // wedge guard (`dispatch.rs:193`), live slots at
+        // A finite `step_limit` bounds dispatches, built-in work and, via the
+        // bounded-mode wedge guard (`dispatch.rs:193`), live slots at
         // `BOUNDED_RUN_SLOT_CEILING` — so an allocating render trips
         // `Halt::StepLimit` instead of panicking through `heap_exhausted()`
         // and rewriting the run's verdict to `HeapExhausted`. Either way the
         // halt propagates below rather than becoming a string.
         let step_limit = self.step_limit;
+        let native = self.bounded_native_raw;
         self.step_limit = dispatched.saturating_add(RENDER_DISPATCH_BUDGET);
+        self.bounded_native_raw = 0;
         let rendered = self.to_string_units(code, value);
         self.step_limit = step_limit;
+        self.bounded_native_raw = native;
         self.meter.restore(meter);
         self.n_dispatched = dispatched;
         match rendered {
