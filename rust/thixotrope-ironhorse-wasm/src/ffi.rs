@@ -22,7 +22,7 @@ extern "C-unwind" {
     fn host_exec(sql_ptr: *const u8, sql_len: u32, params_ptr: *const u8, params_len: u32) -> i32;
     fn host_take(dst: *mut u8, cap: u32) -> u32;
     fn host_log(ptr: *const u8, len: u32);
-    fn host_random(dst: *mut u8, len: u32);
+    fn host_random(dst: *mut u8, len: u32) -> i32;
 }
 
 /// The `env` imports. The host contract (crate documentation) is what makes
@@ -54,10 +54,10 @@ impl Imports for HostImports {
         buffer
     }
 
-    fn random(&self, dst: &mut [u8]) {
+    fn random(&self, dst: &mut [u8]) -> bool {
         // SAFETY: `dst` is writable for exactly its length, which the host
         // fills and does not exceed.
-        unsafe { host_random(dst.as_mut_ptr(), dst.len() as u32) }
+        unsafe { host_random(dst.as_mut_ptr(), dst.len() as u32) == 0 }
     }
 }
 

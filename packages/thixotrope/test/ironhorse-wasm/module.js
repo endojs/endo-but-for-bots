@@ -56,13 +56,17 @@ const bootSources = await Promise.all(
   BOOT_PATHS.map(path => readFile(path, 'utf8')),
 );
 const hasNative = existsSync(NATIVE_WORKER);
+// The comparisons are this lane's strongest assertions: without the native
+// worker they fail, naming the build, rather than skip.
 const nativeTest = hasNative
   ? test.serial
-  : (/** @type {string} */ title, /** @type {any} */ fn) =>
-      test.serial.skip(
-        `${title} (skipped: no native worker at ${NATIVE_WORKER})`,
-        fn,
-      );
+  : (/** @type {string} */ title) =>
+      test.serial(title, t => {
+        t.fail(
+          `no native worker at ${NATIVE_WORKER}; build it with ` +
+            '`cargo build --locked --release -p thixotrope-ironhorse-worker`',
+        );
+      });
 
 /** @param {ExecutionContext} t */
 const tempDir = async t => {
@@ -659,7 +663,7 @@ nativeTest('deep recursion is an ordinary reply, as natively', async t => {
     findings.push(
       `${source}\n  wasm   ${reply.trim()}\n  native ${native.lines.at(-1)?.trim()}`,
     );
-    t.is(reply, native.lines.at(-1), source);
+    t.is(reply, native.lines.at(-1) ?? '', source);
   }
   t.log(findings.join('\n'));
 });
@@ -707,3 +711,150 @@ test.serial('a call back into the module poisons the instance', async t => {
   buffer.free();
   t.is(worker.exports.takeMessage(), poisoned.message);
 });
+
+/**
+ * Whether the database holds a committed machine: a non-fresh open over it
+ * is refused as empty when it does not. Leaves the instance closed.
+ *
+ * @param {Awaited<ReturnType<typeof startWasm>>['worker']} worker
+ */
+const holdsNoMachine = worker =>
+  worker.open({ fresh: false, profile: PROFILE, limits: LIMITS });
+
+test.serial('a failed boot leaves no committed machine', async t => {
+  t.timeout(300_000);
+  const dir = await tempDir(t);
+  const { worker } = await startWasm(t, join(dir, 'heap.sqlite'));
+  const tinyBudget = JSON.stringify({
+    ...JSON.parse(LIMITS),
+    bootstrapBudget: '100000',
+  });
+  for (const [limits, name, source, message] of [
+    [LIMITS, 'throws.js', "throw Error('boot broke')", /^boot throws\.js: /],
+    [tinyBudget, BOOT_PATHS[0], bootSources[0], /MeterAbort/],
+  ]) {
+    t.deepEqual(
+      worker.open({ fresh: true, profile: PROFILE, limits: String(limits) }),
+      { status: STATUS.OK, message: '' },
+    );
+    const boot = worker.boot(String(name), String(source));
+    t.is(boot.status, STATUS.ERROR);
+    t.regex(boot.message, /** @type {RegExp} */ (message));
+    // The opening's transaction rolled back with the boot: the store has
+    // no machine, and this instance has no worker.
+    t.deepEqual(holdsNoMachine(worker), {
+      status: STATUS.ERROR,
+      message: 'restore: Empty',
+    });
+  }
+  // The same instance opens fresh again and boots.
+  bootFresh(t, worker);
+  t.deepEqual(worker.request(line({ source: 'typeof harden' })), {
+    status: STATUS.OK,
+    message: result('function'),
+  });
+  t.is(worker.close().status, STATUS.OK);
+});
+
+test.serial('a failed boot checkpoint leaves no committed machine', async t => {
+  t.timeout(300_000);
+  const dir = await tempDir(t);
+  const { worker, database } = await startWasm(t, join(dir, 'heap.sqlite'));
+  t.is(
+    worker.open({ fresh: true, profile: PROFILE, limits: LIMITS }).status,
+    STATUS.OK,
+  );
+  BOOT_NAMES.forEach((_name, i) => {
+    t.is(worker.boot(BOOT_PATHS[i], bootSources[i]).status, STATUS.OK);
+  });
+  database.setFault(() => {
+    throw Error('the disk is full');
+  });
+  t.deepEqual(worker.ready(), {
+    status: STATUS.ERROR,
+    message: 'boot checkpoint: Io("the disk is full")',
+  });
+  database.setFault(undefined);
+  t.deepEqual(holdsNoMachine(worker), {
+    status: STATUS.ERROR,
+    message: 'restore: Empty',
+  });
+  // The worker was discarded, so the same instance opens fresh again.
+  bootFresh(t, worker);
+});
+
+test.serial('failed randomness fails the commit that needed it', async t => {
+  t.timeout(300_000);
+  const dir = await tempDir(t);
+  const empty = await startWasm(t, join(dir, 'empty.sqlite'));
+  empty.worker.failRandom(true);
+  /** @type {{ status: number, message: string } | undefined} */
+  let opened;
+  t.notThrows(() => {
+    opened = empty.worker.open({
+      fresh: true,
+      profile: PROFILE,
+      limits: LIMITS,
+    });
+  });
+  t.deepEqual(opened, {
+    status: STATUS.ERROR,
+    message: 'begin: TokenSource("the host\'s randomness failed")',
+  });
+  empty.worker.failRandom(false);
+  t.deepEqual(holdsNoMachine(empty.worker), {
+    status: STATUS.ERROR,
+    message: 'restore: Empty',
+  });
+
+  const { path } = await copyOf(t, wasmTemplate);
+  const one = await startWasm(t, path);
+  const before = manifest(one.database.db);
+  resume(t, one.worker);
+  one.worker.request(line({ source: 'globalThis.w = 1' }));
+  one.worker.failRandom(true);
+  /** @type {{ status: number, message: string } | undefined} */
+  let closed;
+  t.notThrows(() => {
+    closed = one.worker.close();
+  });
+  t.deepEqual(closed, {
+    status: STATUS.ERROR,
+    message: 'checkpoint: TokenSource("the host\'s randomness failed")',
+  });
+  t.deepEqual(manifest(one.database.db), before);
+  one.closeDatabase();
+  const two = await startWasm(t, path);
+  resume(t, two.worker);
+  t.deepEqual(two.worker.request(line({ source: 'typeof w' })), {
+    status: STATUS.OK,
+    message: result('undefined'),
+  });
+});
+
+test.serial(
+  'after a fatal crank, close lets the instance open again',
+  async t => {
+    t.timeout(120_000);
+    const { path } = await copyOf(t, wasmTemplate);
+    const { worker } = await startWasm(t, path);
+    resume(t, worker);
+    t.is(
+      worker.request(line({ source: 'for (;;) {}', budget: '100000' })).status,
+      STATUS.FATAL,
+    );
+    // The dead worker is still open until closed.
+    t.deepEqual(
+      worker.open({ fresh: false, profile: PROFILE, limits: LIMITS }),
+      { status: STATUS.ERROR, message: 'open: a worker is already open' },
+    );
+    const close = worker.close();
+    t.is(close.status, STATUS.ERROR);
+    t.regex(close.message, /^worker is dead after a failed crank: /);
+    resume(t, worker);
+    t.deepEqual(worker.request(line({ source: '6 * 7' })), {
+      status: STATUS.OK,
+      message: result('42'),
+    });
+  },
+);

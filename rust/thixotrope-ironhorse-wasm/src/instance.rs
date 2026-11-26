@@ -22,10 +22,8 @@ pub const ABI_VERSION: u32 = 1;
 /// The call succeeded; the message is its result (possibly empty).
 pub const STATUS_OK: i32 = 0;
 /// The call failed and changed nothing the host must keep; the message is
-/// the error text.
+/// the error text. Always rolled back.
 pub const STATUS_ERROR: i32 = 1;
-/// `ih_request` only: the request was `close`; no message.
-pub const STATUS_CLOSE: i32 = 1;
 /// An unwind was caught; the message is its text, and the instance is
 /// poisoned.
 pub const STATUS_UNWIND: i32 = 2;
@@ -36,6 +34,10 @@ pub const STATUS_FATAL: i32 = 3;
 /// worker is serving, the line is not UTF-8, or the worker is dead); the
 /// message is the error text.
 pub const STATUS_REFUSED: i32 = 4;
+/// `ih_request` only: the request was `close`; no message. Distinct from
+/// [`STATUS_ERROR`] so that one rule decides every commit: `0`, or this
+/// from `ih_request`.
+pub const STATUS_CLOSE: i32 = 5;
 
 /// The message of every call into a poisoned instance.
 pub const POISONED: &str =
@@ -121,9 +123,14 @@ impl<E: SqlExecutor + 'static> Instance<E> {
     /// Run `body` on the phase unless the instance is poisoned, leave its
     /// message pending and answer its status. A caught unwind poisons the
     /// instance: the machine is in an unknown state, so nothing may run or
-    /// be committed from it, and the worker is never touched again (not
-    /// even dropped). A call made while another is running (a host import
-    /// calling back into the module) poisons it the same way.
+    /// be committed from it. A crank, a boot or a checkpoint runs on the
+    /// worker in place, so an unwind out of one leaves the worker in the
+    /// phase, never touched again (not even dropped). The worker is moved
+    /// out and dropped only once a path has decided to discard it (a failed
+    /// boot, a failed boot checkpoint, a close); an unwind out of that drop
+    /// poisons like any other, and nothing is committed after it. A call
+    /// made while another is running (a host import calling back into the
+    /// module) poisons the instance the same way.
     fn call(&self, body: impl FnOnce(&mut Phase<E>) -> (i32, Vec<u8>)) -> i32 {
         let (status, message) = if self.poisoned.get() {
             (STATUS_UNWIND, POISONED.as_bytes().to_vec())
@@ -262,17 +269,22 @@ impl<E: SqlExecutor + 'static> Instance<E> {
 
     /// `ih_close`: checkpoint, then drop the session and the store. The
     /// worker is gone afterwards whether or not the checkpoint succeeded.
+    /// This is `Worker::close` in two steps, so that the checkpoint runs
+    /// while the worker is still in the phase (see [`Instance::call`]).
     pub fn close(&self) -> i32 {
         self.call(|phase| {
-            reported(match std::mem::replace(phase, Phase::Closed) {
-                Phase::Closed => Err("close: no worker is open".to_string()),
-                Phase::Open(open) => open
-                    .worker
-                    .close()
-                    .map(drop)
-                    .map(|()| Vec::new())
-                    .map_err(|e| e.to_string()),
-            })
+            reported((|| {
+                let Phase::Open(open) = phase else {
+                    return Err("close: no worker is open".to_string());
+                };
+                let checkpoint = open.worker.checkpoint();
+                let Phase::Open(open) = std::mem::replace(phase, Phase::Closed) else {
+                    return Err("close: no worker is open".to_string());
+                };
+                checkpoint.map_err(|e| e.to_string())?;
+                open.worker.into_store().map_err(|e| e.to_string())?;
+                Ok(Vec::new())
+            })())
         })
     }
 

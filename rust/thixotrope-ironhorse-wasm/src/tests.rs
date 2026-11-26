@@ -17,6 +17,7 @@ struct FakeImports {
     pending: RefCell<Vec<u8>>,
     seen: RefCell<Vec<(Vec<u8>, Vec<u8>)>>,
     short: Cell<bool>,
+    no_random: Cell<bool>,
 }
 
 impl Imports for &FakeImports {
@@ -31,10 +32,11 @@ impl Imports for &FakeImports {
         pending.truncate(if self.short.get() { len / 2 } else { len });
         pending
     }
-    fn random(&self, dst: &mut [u8]) {
+    fn random(&self, dst: &mut [u8]) -> bool {
         for (i, byte) in dst.iter_mut().enumerate() {
             *byte = i as u8 + 1;
         }
+        !self.no_random.get()
     }
 }
 
@@ -114,6 +116,11 @@ fn tokens_come_from_the_hosts_randomness() {
     let fake = FakeImports::default();
     let token = HostTokens(&fake).next_token().unwrap();
     assert_eq!(token.0, std::array::from_fn(|i| i as u8 + 1));
+    fake.no_random.set(true);
+    assert_eq!(
+        HostTokens(&fake).next_token(),
+        Err(StoreError::TokenSource("the host's randomness failed"))
+    );
 }
 
 // ---- the instance over real SQLite ----
@@ -131,11 +138,13 @@ impl CommitTokenSource for Counter {
     }
 }
 
-/// A RusqliteExecutor that panics on its `n`th statement once armed.
+/// A RusqliteExecutor that, once armed, panics on its `n`th statement
+/// (`countdown`), or fails it as a host failure would (`failing`).
 #[derive(Clone)]
 struct Panicky {
     inner: RusqliteExecutor,
     countdown: Rc<Cell<Option<u32>>>,
+    failing: Rc<Cell<Option<u32>>>,
 }
 
 impl SqlExecutor for Panicky {
@@ -146,6 +155,13 @@ impl SqlExecutor for Panicky {
             }
             self.countdown.set(Some(n - 1));
         }
+        if let Some(n) = self.failing.get() {
+            if n == 0 {
+                self.failing.set(None);
+                return Err(StoreError::Io("injected".into()));
+            }
+            self.failing.set(Some(n - 1));
+        }
         self.inner.exec(sql, params)
     }
 }
@@ -153,6 +169,9 @@ impl SqlExecutor for Panicky {
 struct Host {
     db: RusqliteExecutor,
     countdown: Rc<Cell<Option<u32>>>,
+    failing: Rc<Cell<Option<u32>>>,
+    /// A transaction held across calls, as a fresh worker's opening is.
+    held: Cell<bool>,
     instance: Instance<Panicky>,
 }
 
@@ -161,6 +180,8 @@ impl Host {
         Host {
             db,
             countdown: Rc::default(),
+            failing: Rc::default(),
+            held: Cell::new(false),
             instance: Instance::new(),
         }
     }
@@ -169,23 +190,40 @@ impl Host {
     /// status says so; answers the status and the pending message.
     fn tx(&self, commits: &[i32], call: impl FnOnce(&Instance<Panicky>) -> i32) -> (i32, String) {
         let conn = self.db.connection();
-        conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        if !self.held.get() {
+            conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        }
         let status = call(&self.instance);
-        conn.execute_batch(if commits.contains(&status) {
-            "COMMIT"
-        } else {
-            "ROLLBACK"
-        })
-        .unwrap();
+        if !self.held.get() {
+            conn.execute_batch(if commits.contains(&status) {
+                "COMMIT"
+            } else {
+                "ROLLBACK"
+            })
+            .unwrap();
+        }
         let mut message = vec![0; self.instance.message_len()];
         self.instance.copy_message(&mut message);
         (status, String::from_utf8(message).unwrap())
+    }
+
+    /// Hold one transaction across the calls `f` makes, committed only if
+    /// `f` answers true.
+    fn held(&self, f: impl FnOnce(&Host) -> bool) {
+        let conn = self.db.connection();
+        conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        self.held.set(true);
+        let commit = f(self);
+        self.held.set(false);
+        conn.execute_batch(if commit { "COMMIT" } else { "ROLLBACK" })
+            .unwrap();
     }
 
     fn open(&self, fresh: u32, lazy: u32) -> (i32, String) {
         let executor = Panicky {
             inner: self.db.clone(),
             countdown: self.countdown.clone(),
+            failing: self.failing.clone(),
         };
         self.tx(&[STATUS_OK], |i| {
             i.open(
@@ -296,6 +334,7 @@ fn arguments_are_checked() {
         let executor = Panicky {
             inner: host.db.clone(),
             countdown: host.countdown.clone(),
+            failing: host.failing.clone(),
         };
         let bad = host.tx(&[STATUS_OK], |i| {
             i.open(executor, Box::new(Counter(0)), 1, 0, Ok(&[0xc3]), Ok(b"{}"))
@@ -304,6 +343,7 @@ fn arguments_are_checked() {
         let executor = Panicky {
             inner: host.db.clone(),
             countdown: host.countdown.clone(),
+            failing: host.failing.clone(),
         };
         let bad = host.tx(&[STATUS_OK], |i| {
             i.open(
@@ -338,17 +378,81 @@ fn arguments_are_checked() {
 fn a_failed_boot_discards_the_worker() {
     on_engine_stack(|| {
         let host = Host::new(RusqliteExecutor::open_in_memory().unwrap());
-        assert_eq!(host.open(1, 0), ok(""));
-        let (status, message) = host.boot("throw 1");
-        assert_eq!(status, STATUS_ERROR);
-        assert!(message.starts_with("boot boot.js: "), "{message}");
-        assert_eq!(host.ready().0, STATUS_ERROR);
-        // The open's own commit (the bare machine) stands: the host chose
-        // to commit it in a transaction of its own.
+        // A fresh worker's opening is one transaction, rolled back here.
+        host.held(|host| {
+            assert_eq!(host.open(1, 0), ok(""));
+            let (status, message) = host.boot("throw 1");
+            assert_eq!(status, STATUS_ERROR);
+            assert!(message.starts_with("boot boot.js: "), "{message}");
+            // The worker is gone: nothing is open to be ready.
+            assert_eq!(
+                host.ready(),
+                (STATUS_ERROR, "ready: only once, after open".into())
+            );
+            false
+        });
+        // Nothing was committed, and the instance takes a new fresh open.
+        assert_eq!(host.open(0, 0), (STATUS_ERROR, "restore: Empty".into()));
+        host.held(|host| {
+            assert_eq!(host.open(1, 0), ok(""));
+            assert_eq!(host.boot("var n = 1;"), ok(""));
+            assert_eq!(host.ready(), ok(&ready_line()));
+            true
+        });
+        assert_eq!(host.request(r#"{"source":"n"}"#), result("1"));
+    });
+}
+
+#[test]
+fn a_failed_boot_checkpoint_discards_the_worker() {
+    on_engine_stack(|| {
+        let host = Host::new(RusqliteExecutor::open_in_memory().unwrap());
+        host.held(|host| {
+            assert_eq!(host.open(1, 0), ok(""));
+            assert_eq!(host.boot("var n = 1;"), ok(""));
+            host.failing.set(Some(0));
+            assert_eq!(
+                host.ready(),
+                (STATUS_ERROR, "boot checkpoint: Io(\"injected\")".into())
+            );
+            assert_eq!(
+                host.ready(),
+                (STATUS_ERROR, "ready: only once, after open".into())
+            );
+            false
+        });
+        assert_eq!(host.open(0, 0), (STATUS_ERROR, "restore: Empty".into()));
+        host.held(|host| {
+            assert_eq!(host.open(1, 0), ok(""));
+            assert_eq!(host.ready(), ok(&ready_line()));
+            true
+        });
+    });
+}
+
+#[test]
+fn a_failed_close_commits_nothing_and_closes() {
+    on_engine_stack(|| {
+        let host = Host::new(RusqliteExecutor::open_in_memory().unwrap());
+        host.held(|host| {
+            assert_eq!(host.open(1, 0), ok(""));
+            assert_eq!(host.boot("var n = 1;"), ok(""));
+            assert_eq!(host.ready(), ok(&ready_line()));
+            true
+        });
+        assert_eq!(host.request(r#"{"source":"n = 2"}"#), result("2"));
+        host.failing.set(Some(1));
         assert_eq!(
-            host.open(1, 0),
-            (STATUS_ERROR, "begin: NotEmpty { epoch: 1 }".into())
+            host.close(),
+            (STATUS_ERROR, "checkpoint: Io(\"injected\")".into())
         );
+        assert_eq!(
+            host.close(),
+            (STATUS_ERROR, "close: no worker is open".into())
+        );
+        assert_eq!(host.open(0, 0), ok(""));
+        assert_eq!(host.ready(), ok(&ready_line()));
+        assert_eq!(host.request(r#"{"source":"n"}"#), result("1"));
     });
 }
 

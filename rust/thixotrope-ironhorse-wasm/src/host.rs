@@ -19,8 +19,9 @@ pub trait Imports {
     /// `host_take`: copy up to `len` pending bytes into a fresh buffer,
     /// which is as long as what was copied.
     fn take(&self, len: usize) -> Vec<u8>;
-    /// `host_random`: fill `dst` from the host's cryptographic randomness.
-    fn random(&self, dst: &mut [u8]);
+    /// `host_random`: fill `dst` from the host's cryptographic randomness;
+    /// false if the host could not.
+    fn random(&self, dst: &mut [u8]) -> bool;
 }
 
 /// The length an answer from `host_exec` announces, or the length of the
@@ -73,14 +74,18 @@ impl<I: Imports> SqlExecutor for HostExecutor<I> {
 }
 
 /// Commit tokens from the host's randomness, in place of the engine's
-/// default source, which would draw from the WASI clock and std's keys.
+/// default source, which would draw from the WASI clock and std's keys. A
+/// failed fill is [`StoreError::TokenSource`]: the commit that needed the
+/// token fails, as an ordinary error, before it writes anything.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HostTokens<I>(pub I);
 
 impl<I: Imports> CommitTokenSource for HostTokens<I> {
     fn next_token(&mut self) -> Result<CommitToken, StoreError> {
         let mut token = [0u8; 16];
-        self.0.random(&mut token);
+        if !self.0.random(&mut token) {
+            return Err(StoreError::TokenSource("the host's randomness failed"));
+        }
         Ok(CommitToken(token))
     }
 }

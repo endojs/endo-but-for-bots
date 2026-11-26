@@ -3,10 +3,13 @@ import test from '@endo/ses-ava/test.js';
 
 import {
   ABI_VERSION,
+  EXPORTS,
+  MAX_RESULT_BYTES,
   STATUS,
   TAG,
   WASI_FUNCTIONS,
   WasiExit,
+  commits,
   decodeParams,
   encodeRows,
   makeExports,
@@ -358,7 +361,7 @@ test('host_log and host_random', t => {
   t.deepEqual(lines, ['panic: é', 'boom']);
   guest.memory.grow(1);
   const dst = guest.alloc(70_000);
-  imports.host_random(dst, 70_000);
+  t.is(imports.host_random(dst, 70_000), 0);
   t.deepEqual(fills, [65_536, 70_000 - 65_536]);
   t.true(new Uint8Array(guest.memory.buffer, dst, 70_000).every(b => b === 7));
 });
@@ -424,6 +427,8 @@ const makeFakeInstance = ({ version = 1, status = 0, message = 'm' } = {}) => {
   const calls = [];
   /** @type {Array<[number, number]>} */
   const freed = [];
+  /** Live guest allocations, by address, with their lengths. */
+  const live = new Map();
   /**
    * @param {number} ptr
    * @param {number} len
@@ -451,12 +456,20 @@ const makeFakeInstance = ({ version = 1, status = 0, message = 'm' } = {}) => {
     memory: guest.memory,
     ih_abi_version: () => version,
     /** @param {number} len */
-    ih_alloc: len => guest.alloc(len),
+    ih_alloc: len => {
+      const ptr = guest.alloc(len);
+      live.set(ptr, len);
+      return ptr;
+    },
     /**
      * @param {number} ptr
      * @param {number} len
      */
-    ih_free: (ptr, len) => freed.push([ptr, len]),
+    ih_free: (ptr, len) => {
+      if (live.get(ptr) !== len) throw Error(`bad free ${ptr} ${len}`);
+      live.delete(ptr);
+      freed.push([ptr, len]);
+    },
     ih_message_len: () => bytes.length,
     /**
      * @param {number} dst
@@ -476,7 +489,7 @@ const makeFakeInstance = ({ version = 1, status = 0, message = 'm' } = {}) => {
   const instance = /** @type {WebAssembly.Instance} */ (
     /** @type {unknown} */ ({ exports })
   );
-  return { instance, calls, freed };
+  return { instance, calls, freed, live };
 };
 
 test('makeExports marshals arguments, frees them and reads the message', t => {
@@ -522,7 +535,12 @@ test('a close request has no message; other statuses do', t => {
     status: STATUS.CLOSE,
     message: '',
   });
-  t.deepEqual(closing.boot('b', ''), { status: STATUS.ERROR, message: 'm' });
+  // Only a request's CLOSE has no message.
+  t.deepEqual(closing.boot('b', ''), { status: STATUS.CLOSE, message: 'm' });
+  const failing = makeExports(
+    makeFakeInstance({ status: STATUS.ERROR }).instance,
+  );
+  t.deepEqual(failing.request('{}'), { status: STATUS.ERROR, message: 'm' });
   const fatal = makeExports(
     makeFakeInstance({ status: STATUS.FATAL }).instance,
   );
@@ -538,4 +556,187 @@ test('makeExports refuses another ABI version', t => {
   t.throws(() => makeExports(makeFakeInstance({ version: 2 }).instance), {
     message: /^the module's ABI is version 2, not 1$/,
   });
+});
+
+test('one rule decides every commit', t => {
+  t.deepEqual(EXPORTS, ['open', 'boot', 'ready', 'request', 'close']);
+  t.is(STATUS.CLOSE, 5);
+  t.not(STATUS.CLOSE, STATUS.ERROR);
+  const statuses = [-1, 0, 1, 2, 3, 4, 5, 6];
+  for (const name of EXPORTS) {
+    for (const status of statuses) {
+      const expected =
+        status === STATUS.OK || (name === 'request' && status === STATUS.CLOSE);
+      t.is(commits(name, status), expected, `${name} answering ${status}`);
+    }
+  }
+  // A failed close never commits.
+  t.false(commits('close', STATUS.ERROR));
+  t.throws(() => commits('ih_close', 0), { message: /^no export ih_close/ });
+});
+
+test('guest allocations balance after every call', t => {
+  const { instance, live } = makeFakeInstance({ message: 'reply\n' });
+  const exports = makeExports(instance);
+  for (let i = 0; i < 10; i += 1) {
+    exports.open({ fresh: i % 2 === 0, profile: 'p', limits: '{}' });
+    exports.boot('boot.js', 'source');
+    exports.ready();
+    exports.request('{"source":"1"}');
+    exports.close();
+    t.is(exports.takeMessage(), 'reply\n');
+  }
+  t.is(live.size, 0);
+});
+
+test('a throwing random is a non-zero answer, never an exception', t => {
+  const guest = makeFakeGuest();
+  let fail = true;
+  const imports = makeHostImports({
+    getMemory: () => guest.memory,
+    exec: () => [],
+    random: bytes => {
+      if (fail) throw Error('no entropy');
+      bytes.fill(3);
+    },
+    log: () => {},
+  });
+  const dst = guest.alloc(16);
+  t.is(imports.host_random(dst, 16), 1);
+  fail = false;
+  t.is(imports.host_random(dst, 16), 0);
+  t.true(new Uint8Array(guest.memory.buffer, dst, 16).every(b => b === 3));
+  // A region outside memory fails the same way.
+  t.is(imports.host_random(guest.memory.buffer.byteLength - 4, 16), 1);
+});
+
+test('the text of any thrown value is read without throwing', t => {
+  const guest = makeFakeGuest();
+  /** @type {() => unknown} */
+  let thrown = () => null;
+  const imports = makeHostImports({
+    getMemory: () => guest.memory,
+    exec: () => {
+      throw thrown();
+    },
+    random: () => {},
+    log: () => {},
+  });
+  /** @param {number} code */
+  const pendingText = code => {
+    const len = -1 - code;
+    const dst = guest.alloc(len);
+    imports.host_take(dst, len);
+    return decoder.decode(new Uint8Array(guest.memory.buffer, dst, len));
+  };
+  const { proxy, revoke } = Proxy.revocable({}, {});
+  revoke();
+  const unreadable = 'a host error whose text cannot be read';
+  for (const [value, text] of /** @type {Array<[() => unknown, string]>} */ ([
+    [() => Object.create(null), unreadable],
+    [() => Symbol('sym'), 'Symbol(sym)'],
+    [() => proxy, unreadable],
+    [
+      () =>
+        Object.create(Error.prototype, {
+          message: {
+            get() {
+              throw Error('getter');
+            },
+          },
+        }),
+      unreadable,
+    ],
+    [
+      () => ({
+        toString() {
+          throw Error('toString');
+        },
+      }),
+      unreadable,
+    ],
+  ])) {
+    thrown = value;
+    let code = 0;
+    t.notThrows(() => {
+      code = imports.host_exec(0, 0, 0, 0);
+    });
+    t.true(code < 0);
+    t.is(pendingText(code), text);
+  }
+});
+
+test('sparse rows are refused, not misframed', t => {
+  // eslint-disable-next-line no-sparse-arrays
+  const holed = [[1, , 3], [2]];
+  t.throws(() => encodeRows(/** @type {any} */ (holed)), {
+    message: /^row 0 column 1: cannot encode a value of type undefined$/,
+  });
+  // eslint-disable-next-line no-sparse-arrays
+  const trailing = [[1, ,], [2]];
+  t.is(trailing[0].length, 2);
+  t.throws(() => encodeRows(/** @type {any} */ (trailing)), {
+    message: /^row 0 column 1: cannot encode/,
+  });
+  // eslint-disable-next-line no-sparse-arrays
+  const outer = [[1], , [2]];
+  t.throws(() => encodeRows(/** @type {any} */ (outer)), {
+    message: /^row 1 is not an array$/,
+  });
+});
+
+test('long error text is cut inside no character', t => {
+  const guest = makeFakeGuest();
+  guest.memory.grow(2);
+  /** @type {string} */
+  let text = '';
+  const imports = makeHostImports({
+    getMemory: () => guest.memory,
+    exec: () => {
+      throw Error(text);
+    },
+    random: () => {},
+    log: () => {},
+  });
+  // A cut at 65,536 bytes lands on the third byte of a three-byte
+  // character, and on the fourth of a four-byte one.
+  for (const [prefix, char, keep] of /** @type {const} */ ([
+    ['aa', '€', 21_844],
+    ['a', '\u{1F600}', 16_383],
+  ])) {
+    text = prefix + char.repeat(30_000);
+    const code = imports.host_exec(0, 0, 0, 0);
+    const expected = prefix + char.repeat(keep);
+    const bytes = encoder.encode(expected).length;
+    t.true(bytes < 65_536 && bytes > 65_536 - 4);
+    t.is(-1 - code, bytes);
+    const dst = guest.alloc(bytes);
+    t.is(imports.host_take(dst, bytes), bytes);
+    t.is(
+      new TextDecoder('utf-8', { fatal: true }).decode(
+        new Uint8Array(guest.memory.buffer, dst, bytes),
+      ),
+      expected,
+    );
+  }
+});
+
+test('a result longer than the cap is a failed statement', t => {
+  t.is(MAX_RESULT_BYTES, 2 ** 31 - 1);
+  const guest = makeFakeGuest();
+  const rows = [[Uint8Array.of(1, 2, 3)]];
+  const length = encodeRows(rows).length;
+  const at = (/** @type {number} */ maxResultBytes) =>
+    makeHostImports({
+      getMemory: () => guest.memory,
+      exec: () => rows,
+      random: () => {},
+      log: () => {},
+      maxResultBytes,
+    }).host_exec(0, 0, 0, 0);
+  t.is(at(length), length);
+  t.true(at(length - 1) < 0);
+  for (const bad of [-1, 1.5, 2 ** 31]) {
+    t.throws(() => at(bad), { message: /^maxResultBytes must be/ });
+  }
 });

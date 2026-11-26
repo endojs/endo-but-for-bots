@@ -20,15 +20,44 @@ export const ABI_VERSION = 1;
 /** The statuses the exports answer; see the crate documentation. */
 export const STATUS = Object.freeze({
   OK: 0,
+  /** An error; always rolled back. */
   ERROR: 1,
-  /** `ih_request` only: close was requested; there is no message. */
-  CLOSE: 1,
   UNWIND: 2,
   /** `ih_request` only: the crank failed; the message is the fatal line. */
   FATAL: 3,
   /** `ih_request` only: refused before anything ran. */
   REFUSED: 4,
+  /** `ih_request` only: close was requested; there is no message. */
+  CLOSE: 5,
 });
+
+/** The status-answering exports, by their `makeExports` method names. */
+export const EXPORTS = Object.freeze([
+  'open',
+  'boot',
+  'ready',
+  'request',
+  'close',
+]);
+
+/**
+ * Whether a status permits the host to commit the transaction around the
+ * call that answered it: `0`, or `CLOSE` from `request`. Every other status
+ * rolls back. A fresh worker's opening is one transaction from `open`
+ * through `ready`, committed only if each of those calls permits it.
+ *
+ * @param {string} exportName one of `EXPORTS`
+ * @param {number} status
+ */
+export const commits = (exportName, status) => {
+  if (!EXPORTS.includes(exportName)) {
+    throw RangeError(`no export ${exportName} answers a status`);
+  }
+  return (
+    status === STATUS.OK ||
+    (exportName === 'request' && status === STATUS.CLOSE)
+  );
+};
 
 /** The value tags of the wire encoding. */
 export const TAG = Object.freeze({ NULL: 0, NUMBER: 1, BLOB: 2, TEXT: 3 });
@@ -51,6 +80,9 @@ export const WASI_FUNCTIONS = Object.freeze([
 /** The most error text a failed statement hands the guest. */
 const MAX_ERROR_BYTES = 64 * 1024;
 
+/** The longest encoded result `host_exec` can announce: an i32's range. */
+export const MAX_RESULT_BYTES = 0x7fff_ffff;
+
 /**
  * A wasm `i32` that carries an address or a length, read as the unsigned
  * value it is.
@@ -63,9 +95,20 @@ const encoder = new TextEncoder();
 const strictDecoder = new TextDecoder('utf-8', { fatal: true });
 const lenientDecoder = new TextDecoder('utf-8');
 
-/** @param {unknown} error */
-const errorText = error =>
-  error instanceof Error ? error.message : String(error);
+/**
+ * The text of anything thrown. Total: a value that cannot be rendered (a
+ * null-prototype object, a revoked proxy, a throwing `message` getter)
+ * answers a fixed text instead of throwing out of the catch that asked.
+ *
+ * @param {unknown} error
+ */
+const errorText = error => {
+  try {
+    return error instanceof Error ? String(error.message) : String(error);
+  } catch {
+    return 'a host error whose text cannot be read';
+  }
+};
 
 /**
  * @typedef {null | number | bigint | string | ArrayBuffer | ArrayBufferView} Column
@@ -151,10 +194,14 @@ export const encodeRows = rows => {
   if (!Array.isArray(rows)) throw TypeError('rows must be an array');
   const out = makeWriter();
   out.u32(rows.length);
-  rows.forEach((row, r) => {
+  // Indexed loops, not `forEach`: a hole is visited, as `undefined`, so the
+  // counts written always match the values that follow them.
+  for (let r = 0; r < rows.length; r += 1) {
+    const row = rows[r];
     if (!Array.isArray(row)) throw TypeError(`row ${r} is not an array`);
     out.u32(row.length);
-    row.forEach((value, c) => {
+    for (let c = 0; c < row.length; c += 1) {
+      const value = row[c];
       const where = `row ${r} column ${c}`;
       if (value === null) {
         out.u8(TAG.NULL);
@@ -187,8 +234,8 @@ export const encodeRows = rows => {
         const kind = value === undefined ? 'undefined' : typeof value;
         throw TypeError(`${where}: cannot encode a value of type ${kind}`);
       }
-    });
-  });
+    }
+  }
   return out.done();
 };
 
@@ -265,20 +312,21 @@ const region = (memory, ptr, len) => {
  * @property {(sql: string, params: Param[]) => ReadonlyArray<ReadonlyArray<Column>>} exec
  *   runs one statement and answers its rows, or throws
  * @property {(bytes: Uint8Array) => void} random fills the view with
- *   cryptographic randomness
+ *   cryptographic randomness, or throws
  * @property {(line: string) => void} log takes one diagnostic line
  * @property {(bytes: Uint8Array) => unknown} [bindBlob] see `decodeParams`
+ * @property {number} [maxResultBytes] the longest encoded result to hand
+ *   over (default and ceiling `MAX_RESULT_BYTES`); a longer one is a failed
+ *   statement
  */
 
 /**
- * The `env` import object. A statement that throws (in decoding, in `exec`
- * or in encoding its rows) is answered `-1 - n` with its error text pending,
- * never as a JavaScript exception through the guest's frame. `host_take` and
- * `host_log` swallow their own failures too (a short copy is a failed
- * statement to the guest). `random` alone may throw: the host's randomness
- * failing is a host defect, and the guest cannot continue without tokens, so
- * the exception surfaces from the export call and the host drops the
- * instance.
+ * The `env` import object. No JavaScript exception ever crosses the guest's
+ * frame from it: a statement that throws (in decoding, in `exec` or in
+ * encoding its rows) is answered `-1 - n` with its error text pending;
+ * `random` throwing is `host_random` answering non-zero, which fails the
+ * commit that needed the token; `host_take` and `host_log` swallow their
+ * own failures (a short copy is a failed statement to the guest).
  *
  * @param {HostImportOptions} options
  */
@@ -288,7 +336,17 @@ export const makeHostImports = ({
   random,
   log,
   bindBlob = copyBlob,
+  maxResultBytes = MAX_RESULT_BYTES,
 }) => {
+  if (
+    !Number.isSafeInteger(maxResultBytes) ||
+    maxResultBytes < 0 ||
+    maxResultBytes > MAX_RESULT_BYTES
+  ) {
+    throw RangeError(
+      `maxResultBytes must be an integer from 0 to ${MAX_RESULT_BYTES}`,
+    );
+  }
   /** @type {Uint8Array} */
   let pending = new Uint8Array(0);
   return Object.freeze({
@@ -309,8 +367,10 @@ export const makeHostImports = ({
           { bindBlob },
         );
         const encoded = encodeRows(exec(sql, params));
-        if (encoded.length > 0x7fff_ffff) {
-          throw RangeError(`a result of ${encoded.length} bytes`);
+        if (encoded.length > maxResultBytes) {
+          throw RangeError(
+            `a result of ${encoded.length} bytes exceeds ${maxResultBytes}`,
+          );
         }
         pending = encoded;
         return encoded.length;
@@ -357,10 +417,15 @@ export const makeHostImports = ({
      * @param {number} len
      */
     host_random: (dst, len) => {
-      // `crypto.getRandomValues` fills at most 65,536 bytes per call.
-      const bytes = region(getMemory(), u32(dst), u32(len));
-      for (let at = 0; at < bytes.length; at += 65_536) {
-        random(bytes.subarray(at, at + 65_536));
+      try {
+        // `crypto.getRandomValues` fills at most 65,536 bytes per call.
+        const bytes = region(getMemory(), u32(dst), u32(len));
+        for (let at = 0; at < bytes.length; at += 65_536) {
+          random(bytes.subarray(at, at + 65_536));
+        }
+        return 0;
+      } catch {
+        return 1;
       }
     },
   });
@@ -512,8 +577,9 @@ export const makeWasiImports = ({ getMemory, random, nowNs, log }) => {
 /**
  * A wrapper over an instance's raw exports: arguments are copied into guest
  * buffers and freed after the call, and the answer is `{ status, message }`.
- * An exception from an export (a trap, or `random` failing) propagates
- * unchanged, without freeing anything: the host must drop the instance.
+ * An exception from an export (a trap, or a host callback that threw past
+ * the import shims) propagates unchanged, without freeing anything: the
+ * host rolls back and drops the instance, as after status 2.
  *
  * @param {WebAssembly.Instance} instance
  */

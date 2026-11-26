@@ -31,12 +31,15 @@
 //!   asks for exactly the announced length and treats a short copy as a
 //!   failed statement.
 //! - `host_log(ptr, len)`: one diagnostic line of UTF-8 text.
-//! - `host_random(dst, len)`: fill `len` bytes from the host's cryptographic
-//!   randomness. Every commit token comes from here.
+//! - `host_random(dst, len) -> i32`: fill `len` bytes from the host's
+//!   cryptographic randomness and answer `0`, or answer non-zero if it
+//!   could not. Every commit token comes from here; a failed fill fails the
+//!   commit that needed the token (`TokenSource`), an ordinary status `1`.
 //!
 //! An import reads or writes only the buffer it is given, never calls back
-//! into the module, and never lets a JavaScript exception propagate (it
-//! reports a failed statement through `host_exec`'s negative answer). Since
+//! into the module, and never lets a JavaScript exception propagate: a
+//! failed statement is `host_exec`'s negative answer, a failed fill
+//! `host_random`'s non-zero one. Since
 //! the module's memory can grow during any export, a host re-reads
 //! `memory.buffer` on every import call.
 //!
@@ -72,10 +75,11 @@
 //! | Status | Meaning |
 //! |---|---|
 //! | `0` | success; the message is the result: empty, the ready line, or the reply line |
-//! | `1` | an error, the message is its text; from `ih_request` only, `close` was requested and there is no message |
+//! | `1` | an error, the message is its text; always rolled back |
 //! | `2` | an unwind was caught, the message is its text; the instance is poisoned |
 //! | `3` | `ih_request` only: the crank failed, the message is the `fatal` reply line and the worker is dead |
 //! | `4` | `ih_request` only: refused before anything ran (not serving, close already requested, a line that is not UTF-8, a dead worker), the message is the text |
+//! | `5` | `ih_request` only: `close` was requested; there is no message |
 //!
 //! Text arguments must be UTF-8 (otherwise status `1`, or `4` from
 //! `ih_request`); a null pointer with a non-zero length is refused the same
@@ -99,13 +103,17 @@
 //! 4. `ih_ready()`: after a fresh open it first commits the booted heap
 //!    (the error text is `boot checkpoint: ...`, and a failure discards the
 //!    worker); then the message is the ready line. Once only.
-//! 5. `ih_request(line)` per line: `0` write the reply and continue; `1` stop
-//!    reading and go to 6; `3` write the fatal line and stop, without 6;
-//!    `4` stop, without 6.
+//! 5. `ih_request(line)` per line: `0` write the reply and continue; `5`
+//!    stop reading and go to 6; `3` write the fatal line and stop; `4` stop.
 //! 6. `ih_close()`: commit every crank since the last commit, then drop the
 //!    session and the store; the error text is the `WorkerError`'s. The
 //!    worker is gone whatever the status, and a new `ih_open` is allowed.
-//!    On a dead worker it answers `1`, committing nothing.
+//!
+//! After a status `3` or `4` from `ih_request` the worker stays open (dead,
+//! after `3`). Before any new `ih_open` the host either drops the instance
+//! or calls `ih_close`, which on a dead worker answers `1` and commits
+//! nothing; an `ih_open` while it is open answers `1` ("a worker is already
+//! open").
 //!
 //! The module holds one worker in a thread-local: it is built without the
 //! threads feature, so its memory is unshared and no two exports ever run at
@@ -118,26 +126,40 @@
 //! in an unknown state and nothing may be committed from it. Every later
 //! status-answering export answers `2` with a fixed message ([`POISONED`])
 //! without touching the worker. The allocator and message exports still
-//! work. The host drops the instance.
+//! work. The host rolls back and drops the instance.
+//!
+//! A trap, or any JavaScript exception out of an export call, means the
+//! same to the host as status `2`: roll back, call no other export on that
+//! instance (not even the allocator or the message functions), and drop it.
+//! The unwind that a trap or a foreign exception makes is not one the module
+//! catches: no Rust destructor ran, borrows may still be marked held, and
+//! the instance's own state, not only the machine's, is undefined.
 //!
 //! # The host's transaction
 //!
-//! The host runs every status-answering export call inside one host
+//! The host runs every status-answering export call inside a host
 //! transaction (`transactionSync` in a Durable Object; `BEGIN IMMEDIATE`
-//! and `COMMIT` over SQLite) and commits it only when the status is `0`, or
-//! `1` from `ih_request`; on every other status it rolls back. The module
-//! issues no transaction statements. `ih_open` may write the schema and the
-//! database stamp, and a fresh open writes the first commit; a request
-//! writes nothing until `ih_close` (a crank is committed at close, not per
+//! and `COMMIT` over SQLite). The rule is the same for every export: a
+//! status permits the commit only when it is `0`, or `5` from `ih_request`;
+//! on every other status, `1` included, the host rolls back. The module
+//! issues no transaction statements.
+//!
+//! The transactions are:
+//!
+//! - **A fresh worker's opening is one transaction**, which the host MUST
+//!   hold from a fresh `ih_open` through `ih_ready`, across every
+//!   `ih_boot`, and commit only if every one of those calls answered `0`.
+//!   A fresh open writes the first commit, which is the bare machine before
+//!   any boot source; committing it alone would leave a heap that never
+//!   booted, which a later non-fresh open would resume and serve.
+//! - Every other call, a non-fresh `ih_open` and its `ih_ready` included,
+//!   is a transaction of its own.
+//!
+//! `ih_open` may write the schema and the database stamp; a request writes
+//! nothing until `ih_close` (a crank is committed at close, not per
 //! request), and a lazy worker's requests read rows. A host that rolls back
 //! a successful call's transaction must drop the instance: the machine has
 //! advanced past what the database holds.
-//!
-//! A fresh open's commit is the bare machine, before any boot source, and a
-//! later fresh open over it is refused (`begin: NotEmpty`). A host that
-//! wants a failed boot to leave the database empty instead holds one
-//! transaction from a fresh `ih_open` through `ih_ready`, committing it only
-//! if every call answered `0`.
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
