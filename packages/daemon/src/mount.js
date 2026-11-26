@@ -8,6 +8,7 @@
 
 import { E } from '@endo/eventual-send';
 import { q } from '@endo/errors';
+import { makeCancelKit } from '@endo/cancel';
 import { makeExo } from '@endo/exo';
 import { makePromiseKit } from '@endo/promise-kit';
 import { encodeBase64 } from '@endo/base64';
@@ -590,6 +591,10 @@ harden(resolvePhysicalPath);
  *   the mount is never revocable. `whenRevoked` settles when `revoke()` runs,
  *   so an open stream can wake promptly rather than waiting on the next
  *   coincidental filesystem event.
+ * @property {import('@endo/cancel').Cancelled} [cancelled] A cancellation
+ *   token folded into every watcher opened by this mount or a derived face.
+ * @property {{ debounceMs?: number }} [watchDirectoryOptions] Advisory tuning
+ *   passed to `FilePowers.watchDirectory`.
  */
 
 /**
@@ -611,6 +616,8 @@ const makeMountExo = ctx => {
     snapshotFile,
     deniedSegments,
     revocation,
+    cancelled: mountCancelled,
+    watchDirectoryOptions,
   } = ctx;
 
   // Liveness gate shared by every method. A revocable mount carries a
@@ -1206,7 +1213,12 @@ const makeMountExo = ctx => {
       assertLive();
       await assertConfined(target, confinementRoot, filePowers);
 
-      const watcher = filePowers.watchDirectory(target);
+      const { cancelled, cancel: cancelStream } =
+        makeCancelKit(mountCancelled);
+      const events = filePowers.watchDirectory(target, {
+        cancelled,
+        ...watchDirectoryOptions,
+      });
       try {
         /** @type {Map<string, 'file' | 'directory'>} */
         const known = new Map();
@@ -1235,7 +1247,7 @@ const makeMountExo = ctx => {
         // the directory next happens to change (or forever, if it never
         // does). A plain (non-revocable) mount has no signal and just
         // iterates the watcher directly.
-        const eventIterator = watcher.events[Symbol.asyncIterator]();
+        const eventIterator = events[Symbol.asyncIterator]();
         /** @type {Promise<typeof revokedSentinel> | undefined} */
         const revokedSignal =
           revocation !== undefined
@@ -1291,7 +1303,7 @@ const makeMountExo = ctx => {
           await eventIterator.return?.();
         }
       } finally {
-        watcher.cancel();
+        cancelStream();
       }
     };
     return readerFromIterator(generate());
@@ -2006,6 +2018,10 @@ harden(makeReadableBlobView);
  * @param {{ revoked: boolean, whenRevoked: Promise<undefined> }} [opts.revocation]
  *   Liveness record shared across every derived face; `makeRevocableMount`
  *   supplies it. Undefined means the mount is never revocable.
+ * @param {import('@endo/cancel').Cancelled} [opts.cancelled] The mount
+ *   formula's cancellation token, folded into every watcher.
+ * @param {{ debounceMs?: number }} [opts.watchDirectoryOptions] Advisory
+ *   `watchDirectory` tuning passed through by `followNameChanges`.
  * @returns {EndoMount}
  */
 export const makeMount = ({
@@ -2016,6 +2032,8 @@ export const makeMount = ({
   snapshotFile = undefined,
   deniedSegments = undefined,
   revocation = undefined,
+  cancelled = undefined,
+  watchDirectoryOptions = undefined,
 }) => {
   const prefix = readOnly ? 'Read-only mount' : 'Mount';
   /** @type {MountContext} */
@@ -2031,6 +2049,8 @@ export const makeMount = ({
     snapshotFile,
     deniedSegments: resolveDeniedSegments(deniedSegments),
     revocation,
+    cancelled,
+    watchDirectoryOptions,
   };
 
   return makeMountExo(ctx);

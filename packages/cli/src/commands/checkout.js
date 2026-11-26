@@ -4,7 +4,7 @@ import os from 'os';
 
 import { E } from '@endo/eventual-send';
 import { checkoutTree } from '@endo/platform/fs/lite';
-import { makeTreeWriter } from '@endo/platform/fs/node';
+import { makeTreeWriter } from '@endo/platform/fs/node/tree-writer';
 
 import { withEndoAgent } from '../context.js';
 import { parsePetNamePath } from '../pet-name.js';
