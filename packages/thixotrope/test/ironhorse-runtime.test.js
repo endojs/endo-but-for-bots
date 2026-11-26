@@ -177,25 +177,66 @@ test('state written by one engine is refused by the other, before prepare or cop
   t.false(wasmRefusal.some(event => event.startsWith('copy')));
 });
 
-test('a changed, removed, added or renamed part is incompatible', async t => {
+/** @param {string} what */
+const partRefusal = what =>
+  new RegExp(
+    `^Incompatible Ironhorse runtime: ${what}; use the original runtime or migrate to a fresh state directory$`,
+  );
+const removedPart = (/** @type {string} */ name) =>
+  partRefusal(
+    `runtime\\.json names worker part "${name}" that this worker does not`,
+  );
+const addedPart = (/** @type {string} */ name) =>
+  partRefusal(`worker part "${name}" is not in runtime\\.json`);
+const changedPart = (/** @type {string} */ name) =>
+  partRefusal(`worker part "${name}" differs from runtime\\.json`);
+
+test('a changed, removed, added or renamed part is incompatible and named', async t => {
   const host = makeFakeHost({
     locked: wasmLocked(),
     extraFiles: { ...partFiles, '/launcher/extra.mjs': 'extra bytes' },
   });
   await acquire(t, host);
   host.setLocked(wasmLocked([shell, wasm]));
-  await refused(t, host, incompatible);
+  await refused(t, host, removedPart('abi\\.mjs'));
   host.setLocked(wasmLocked([shell, abi, wasm, '/launcher/extra.mjs']));
-  await refused(t, host, incompatible);
+  await refused(t, host, addedPart('extra\\.mjs'));
+  // A rename is a removal and an addition; saved parts are compared first,
+  // so the name runtime.json holds is the one reported, whichever sorts first.
   host.texts.set('/elsewhere/abi2.mjs', 'abi bytes');
   host.setLocked(wasmLocked([shell, '/elsewhere/abi2.mjs', wasm]));
-  await refused(t, host, incompatible);
+  await refused(t, host, removedPart('abi\\.mjs'));
+  host.texts.set('/elsewhere/aaa.mjs', 'abi bytes');
+  host.setLocked(wasmLocked([shell, '/elsewhere/aaa.mjs', wasm]));
+  await refused(t, host, removedPart('abi\\.mjs'));
   // Moving a part to another directory under the same name is no change.
   host.texts.set('/elsewhere/abi.mjs', 'abi bytes');
   host.setLocked(wasmLocked([shell, '/elsewhere/abi.mjs', wasm]));
   await acquire(t, host);
+  // Of two changed parts, the first in runtime.json's order is reported.
   host.texts.set(abi, 'other abi bytes');
+  host.texts.set(wasm, 'other module bytes');
   host.setLocked(wasmLocked());
+  await refused(t, host, changedPart('abi\\.mjs'));
+  host.texts.set(abi, 'abi bytes');
+  await refused(t, host, changedPart('module\\.wasm'));
+  // A differing worker keeps the generic refusal, even with a part changed.
+  host.texts.set(workerBinary, 'other worker bytes');
+  await refused(
+    t,
+    host,
+    /^Incompatible Ironhorse runtime: worker or bootstrap differs from runtime\.json; use the original runtime or migrate to a fresh state directory$/,
+  );
+});
+
+test('saved parts out of order keep the generic refusal', async t => {
+  const host = makeFakeHost({ locked: wasmLocked(), extraFiles: partFiles });
+  await acquire(t, host);
+  const manifest = JSON.parse(host.texts.get(manifestPath) ?? '');
+  host.texts.set(
+    manifestPath,
+    JSON.stringify({ ...manifest, parts: [...manifest.parts].reverse() }),
+  );
   await refused(t, host, incompatible);
 });
 

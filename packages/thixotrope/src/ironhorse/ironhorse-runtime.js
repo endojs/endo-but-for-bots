@@ -179,8 +179,35 @@ const checkSavedManifest = (saved, identity, executionLimits) => {
     worker !== identity.worker ||
     !Array.isArray(bootstrap) ||
     bootstrap.length !== identity.bootstrap.length ||
-    !bootstrap.every((digest, index) => digest === identity.bootstrap[index]) ||
-    savedParts.length !== ownParts.length ||
+    !bootstrap.every((digest, index) => digest === identity.bootstrap[index])
+  ) {
+    throw Error(incompatible);
+  }
+  // Name the first part that differs, saved parts first in their order, so
+  // an operator can tell which file changed.
+  const remedy =
+    'use the original runtime or migrate to a fresh state directory';
+  const ownDigests = new Map(ownParts);
+  const savedNames = new Set(savedParts.map(([name]) => name));
+  for (const [name, digest] of savedParts) {
+    if (!ownDigests.has(name))
+      throw Error(
+        `Incompatible Ironhorse runtime: runtime.json names worker part ${q(name)} that this worker does not; ${remedy}`,
+      );
+    if (ownDigests.get(name) !== digest)
+      throw Error(
+        `Incompatible Ironhorse runtime: worker part ${q(name)} differs from runtime.json; ${remedy}`,
+      );
+  }
+  for (const [name] of ownParts) {
+    if (!savedNames.has(name))
+      throw Error(
+        `Incompatible Ironhorse runtime: worker part ${q(name)} is not in runtime.json; ${remedy}`,
+      );
+  }
+  // The same parts in another order mean a manifest this runtime did not
+  // write, which the generic refusal has always covered.
+  if (
     !savedParts.every(
       ([name, digest], index) =>
         name === ownParts[index][0] && digest === ownParts[index][1],

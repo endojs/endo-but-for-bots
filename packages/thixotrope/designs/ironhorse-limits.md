@@ -61,6 +61,9 @@ A manifest with an older `format`, a different worker or bootstrap digest, diffe
 (names or digests), or a different delivery protocol is reported as incompatible, and one whose
 known limits are missing or not in canonical form, or whose `heapFormat` or `parts` is malformed,
 is reported as invalid.
+A worker, bootstrap or protocol difference is reported generically and before any part.
+A part difference names the part: the first of `runtime.json`'s parts, in its order, that the worker
+no longer names or whose digest differs, and failing that the first worker part `runtime.json` lacks.
 
 Raising limits does not clear existing worker failure metadata or automatically retry a failed vat.
 That recovery workflow remains separate.
