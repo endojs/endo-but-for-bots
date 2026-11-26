@@ -3,7 +3,8 @@
 product `DoStore` and `Worker` behind the harness's exports, with the store
 acceptance suite) as an unwinding wasm module, serve it from a SQLite-backed
 Durable Object in local workerd, and run the suite and the measurements
-against it. See README.md.
+against it; or serve the product module itself through the real
+`host-abi.mjs`. See README.md.
 
   python3 run.py build
   python3 run.py [options] suite [--parts sparse,metamorphic,...] [--no-tx]
@@ -11,6 +12,7 @@ against it. See README.md.
   python3 run.py [options] wake --container FILE --profile P [--wakes N] [--idle S]
   python3 run.py [options] sweep [--wakes N]
   python3 run.py [options] export --store ID --out FILE
+  python3 run.py [options] product [--module FILE] [--boot FILE ...] [--wakes N] [--evict abort|idle]
 
 The options go before the subcommand: --no-build reuses the last module,
 --json FILE saves the records it prints, --keep DIR keeps workerd's
@@ -18,6 +20,7 @@ directory. Needs the `workerd` binary ($WORKERD, or `workerd` on PATH) and
 the pinned Rust with rust-src and the wasm32-wasip1 target.
 """
 import argparse
+import gzip
 import http.client
 import importlib.util
 import json
@@ -42,6 +45,9 @@ ROOT = ENGINE.parent.parent
 # handful of WASI imports std reaches for (host/worker.js).
 WASM_TARGET = "wasm32-wasip1"
 MODULE = HERE / "target" / WASM_TARGET / "release/ih_wasm_worker_spike.wasm"
+PRODUCT_MODULE = ROOT / "target" / WASM_TARGET / "release/thixotrope_ironhorse_wasm.wasm"
+HOST_ABI = ROOT / "packages/thixotrope/src/ironhorse/wasm/host-abi.mjs"
+BOOT_DIR = ROOT / "packages/thixotrope/dist-ironhorse"
 SHADOW_STACK = 4 * 1024 * 1024
 # The product host's default limits (makeIronhorseLimits), which are the
 # engine's default ceilings.
@@ -107,10 +113,10 @@ def capnp_string(text):
 
 
 class Workerd:
-    """One workerd process serving the harness module with local-disk DO
-    storage."""
+    """One workerd process with local-disk DO storage: the harness module
+    (`product` false) or the product module (`product` a module path)."""
 
-    def __init__(self, binary, module, v8_flags=(), keep=None):
+    def __init__(self, binary, module, v8_flags=(), keep=None, product=None):
         self.dir = Path(keep) if keep else Path(tempfile.mkdtemp(prefix="ih-spike-workerd-"))
         self.keep = keep is not None
         self.process = None
@@ -120,12 +126,23 @@ class Workerd:
             (self.dir / "disk").mkdir(exist_ok=True)
             self.port = free_port()
             address = f"127.0.0.1:{self.port}"
-            config = (HERE / "host/config.capnp.in").read_text()
+            template = "host/product.capnp.in" if product else "host/config.capnp.in"
+            config = (HERE / template).read_text()
             config = config.replace("@ADDRESS@", address)
             config = config.replace("@DISK@", capnp_string(self.dir / "disk"))
             config = config.replace("@V8_FLAGS@", ", ".join(json.dumps(f) for f in v8_flags))
-            shutil.copyfile(HERE / "host/worker.js", self.dir / "worker.js")
-            shutil.copyfile(module, self.dir / "spike.wasm")
+            if product:
+                # Embedded from where they live. workerd resolves an embed
+                # path against the config file's directory and does not read
+                # an absolute one, so each is relative to that directory.
+                def embed(path):
+                    return capnp_string(os.path.relpath(Path(path).resolve(), self.dir.resolve()))
+                config = config.replace("@PRODUCT_JS@", embed(HERE / "host/product.js"))
+                config = config.replace("@HOST_ABI@", embed(HOST_ABI))
+                config = config.replace("@PRODUCT_WASM@", embed(product))
+            else:
+                shutil.copyfile(HERE / "host/worker.js", self.dir / "worker.js")
+                shutil.copyfile(module, self.dir / "spike.wasm")
             (self.dir / "config.capnp").write_text(config)
             self.log = open(self.dir / "workerd.log", "w")
             started = time.perf_counter()
@@ -502,6 +519,262 @@ def cmd_export(args, wd, records):
     return 0
 
 
+# The product command's requests, as the Node test of the module drives them.
+PRODUCT_FRAME = {"t": "f", "b64": "AAEC"}
+PRODUCT_REQUESTS = [
+    ("eval", json.dumps({"source": "globalThis.kept = 41; kept + 1"})),
+    ("deliver", json.dumps({
+        "op": "deliver",
+        "source": f"thixotropeSend({json.dumps(json.dumps(PRODUCT_FRAME))}); kept",
+        "drainBudget": "1000000",
+    })),
+    ("malformed", '{"source":'),
+    ("close-request", json.dumps({"op": "close"})),
+]
+READY_LINE = '{"features":["deliver-v1"],"op":"ready"}\n'
+
+
+def reply_of(value):
+    return json.dumps({"op": "result", "result": value}, separators=(",", ":")) + "\n"
+
+
+class Product:
+    """The product command's client: one call per route, each answer kept
+    as a record and checked against what the ABI says it must be."""
+
+    def __init__(self, wd, records, args):
+        self.wd, self.records, self.args = wd, records, args
+        self.failures = []
+
+    def call(self, step, route, body=None, **params):
+        t0 = time.perf_counter()
+        if body is None:
+            status, answer = self.wd.get(route, **params)
+        else:
+            status, answer = self.wd.post(route, body.encode() if isinstance(body, str) else body, **params)
+        wall_ms = round((time.perf_counter() - t0) * 1000, 1)
+        record = {"measure": "product-call", "step": step, "route": route, "http": status, "wall_ms": wall_ms}
+        for key in ("kind", "status", "message", "trap", "committed", "forcedRollback", "dropped", "ms", "syncMs",
+                    "execs", "rowsRead", "rowsWritten", "bytesBound", "bytesReturned", "memory", "log", "error",
+                    "name", "sourceBytes"):
+            if key in answer:
+                record[key] = answer[key]
+        emit(self.records, record)
+        return answer
+
+    def expect(self, step, condition, detail):
+        if not condition:
+            self.failures.append(f"{step}: {detail}")
+            emit(self.records, {"measure": "product-check", "step": step, "ok": False, "detail": detail})
+        return condition
+
+    def answer(self, step, route, status, message=None, committed=None, body=None, **params):
+        """A call whose status (and message, and commit) the ABI fixes."""
+        answer = self.call(step, route, body, **params)
+        self.expect(step, answer.get("status") == status, f"status {answer.get('status')!r}, not {status}: {answer}")
+        if message is not None:
+            ok = message(answer.get("message")) if callable(message) else answer.get("message") == message
+            self.expect(step, ok, f"message {answer.get('message')!r}")
+        if committed is not None:
+            self.expect(step, answer.get("committed") == committed, f"committed {answer.get('committed')!r}, not {committed}")
+        return answer
+
+    def digest(self, step):
+        status, answer = self.wd.get("/digest")
+        emit(self.records, {"measure": "product-digest", "step": step, **answer})
+        return answer
+
+    def evict(self, step):
+        """Reset the object (`ctx.abort()`, or an idle long enough for local
+        workerd to evict it), then show that the next request met a new
+        object: no instance and a young age."""
+        t0 = time.perf_counter()
+        if self.args.evict == "abort":
+            status, aborted = self.wd.get("/abort")
+        else:
+            status, aborted = 0, {}
+            idle(self.args.idle or 15)
+        evict_ms = round((time.perf_counter() - t0) * 1000, 1)
+        t0 = time.perf_counter()
+        status, memory = self.wd.get("/memory")
+        first_request_ms = round((time.perf_counter() - t0) * 1000, 1)
+        record = {
+            "measure": "product-evict",
+            "step": step,
+            "how": self.args.evict,
+            "evict_ms": evict_ms,
+            "abort_answer": aborted.get("error") if isinstance(aborted, dict) else None,
+            "object_first_request_ms": first_request_ms,
+            "object_age_ms": memory.get("objectAgeMs"),
+            "has_instance": memory.get("hasInstance"),
+        }
+        emit(self.records, record)
+        self.expect(step, memory.get("hasInstance") is False, "the object kept its instance")
+        return record
+
+    def open(self, step, fresh, lazy=False):
+        return self.answer(step, "/open", 0, "", committed=True, fresh=int(fresh), lazy=int(lazy),
+                           profile=self.args.profile, limits=self.args.limits)
+
+    def ready(self, step):
+        return self.answer(step, "/ready", 0, READY_LINE, committed=True)
+
+    def close(self, step):
+        return self.answer(step, "/close", 0, "", committed=True)
+
+
+def cmd_product(args, wd, records):
+    """The product module end to end in a Durable Object; see README.md."""
+    module = Path(args.module)
+    data = module.read_bytes()
+    emit(records, {
+        "measure": "product-module",
+        "path": str(module),
+        "bytes": len(data),
+        "gzip_bytes": len(gzip.compress(data, 9)),
+        "workerd_start_ms": wd.start_ms,
+        "host_abi": str(HOST_ABI),
+    })
+    p = Product(wd, records, args)
+    status, probe = wd.get("/probe")
+    emit(records, {"measure": "product-probe", **probe})
+
+    # 1. A fresh open, the real boot bundles, ready.
+    status, ensure = wd.get("/instance/ensure")
+    emit(records, {"measure": "product-instantiate", "step": "fresh", **ensure})
+    t0 = time.perf_counter()
+    p.open("fresh-open", fresh=True)
+    for path in args.boot:
+        source = Path(path).read_text()
+        p.answer(f"boot {Path(path).name}", "/boot", 0, "", committed=True, body=source, name=Path(path).name)
+    p.ready("fresh-ready")
+    emit(records, {"measure": "product-boot-total", "wall_ms": round((time.perf_counter() - t0) * 1000, 1),
+                   "instantiate_ms": ensure.get("instantiateMs")})
+    p.digest("after-boot")
+    status, types = wd.get("/types")
+    emit(records, {"measure": "product-key-types", **types})
+
+    # 2. Requests, then close.
+    replies = {
+        "eval": reply_of("42"),
+        "deliver": reply_of(json.dumps([PRODUCT_FRAME], separators=(",", ":"))),
+    }
+    for step, line in PRODUCT_REQUESTS:
+        if step == "malformed":
+            p.answer(step, "/request", 0, lambda m: isinstance(m, str) and m.startswith('{"message":') and '"op":"error"' in m,
+                     committed=True, body=line)
+        elif step == "close-request":
+            p.answer(step, "/request", 1, "", committed=True, body=line)
+        else:
+            p.answer(step, "/request", 0, replies[step], committed=True, body=line)
+    p.close("close")
+    committed = p.digest("after-close")
+
+    # 3. Wakes: evict, then a non-fresh open, eager and lazy.
+    for n in range(args.wakes):
+        for lazy in (False, True):
+            label = f"wake-{'lazy' if lazy else 'eager'}-{n}"
+            evicted = p.evict(f"{label} evict")
+            status, ensure = wd.get("/instance/ensure")
+            emit(records, {"measure": "product-instantiate", "step": label, **ensure})
+            opened = p.open(f"{label} open", fresh=False, lazy=lazy)
+            readied = p.ready(f"{label} ready")
+            reply = p.answer(f"{label} request", "/request", 0, reply_of("41"), committed=True,
+                             body=json.dumps({"source": "kept"}))
+            closed = p.close(f"{label} close")
+            emit(records, {
+                "measure": "product-wake",
+                "label": label,
+                "lazy": lazy,
+                "object_first_request_ms": evicted["object_first_request_ms"],
+                "object_age_ms": evicted["object_age_ms"],
+                "instantiate_ms": ensure.get("instantiateMs"),
+                "open_ms": opened.get("ms"),
+                "open_rows_read": opened.get("rowsRead"),
+                "open_rows_written": opened.get("rowsWritten"),
+                "open_bytes_returned": opened.get("bytesReturned"),
+                "ready_ms": readied.get("ms"),
+                "request_ms": reply.get("ms"),
+                "request_rows_read": reply.get("rowsRead"),
+                "wake_to_reply_ms": summed(ensure.get("instantiateMs"), opened.get("ms"), readied.get("ms"), reply.get("ms")),
+                "close_ms": closed.get("ms"),
+                "close_rows_written": closed.get("rowsWritten"),
+                "close_bytes_bound": closed.get("bytesBound"),
+                "sync_ms": closed.get("syncMs"),
+                "memory_after_request": reply.get("memory"),
+            })
+    committed = p.digest("after-wakes")
+
+    # 4. A rolled-back call leaves storage at the prior commit, and a new
+    # instance resumes that commit.
+    p.open("rollback open", fresh=False)
+    p.ready("rollback ready")
+    p.answer("rollback request", "/request", 0, reply_of("5"), committed=True, body=json.dumps({"source": "globalThis.y = 5"}))
+    wd.get("/rollback-next")
+    rolled = p.answer("rollback close", "/close", 0, "", committed=False)
+    p.expect("rollback close", rolled.get("dropped") is True, "the instance was not dropped")
+    after = p.digest("after-rollback")
+    p.expect("rollback digest", after.get("digest") == committed.get("digest"), "storage changed under a rolled-back close")
+    p.evict("rollback evict")
+    p.open("rollback resume open", fresh=False)
+    p.ready("rollback resume ready")
+    p.answer("rollback resume typeof y", "/request", 0, reply_of("undefined"), committed=True,
+             body=json.dumps({"source": "typeof y"}))
+    p.answer("rollback resume kept", "/request", 0, reply_of("41"), committed=True, body=json.dumps({"source": "kept"}))
+    p.close("rollback resume close")
+    committed = p.digest("after-rollback-resume")
+
+    # 5a. A fatal crank: status 3 with the fatal line, then refusals, and
+    # nothing committed.
+    p.open("fatal open", fresh=False)
+    p.ready("fatal ready")
+    p.answer("fatal set", "/request", 0, reply_of("2"), committed=True, body=json.dumps({"source": "kept = 2"}))
+    p.answer("fatal crank", "/request", 3,
+             lambda m: isinstance(m, str) and m.startswith('{"message":"guest crank halted') and m.endswith('"op":"fatal"}\n'),
+             committed=False, body=json.dumps({"source": "for (;;) {}", "budget": "100000"}))
+    p.answer("fatal refused", "/request", 4,
+             lambda m: isinstance(m, str) and m.startswith("worker is dead after a failed crank: "),
+             committed=False, body=json.dumps({"source": "kept"}))
+    p.answer("fatal close", "/close", 1,
+             lambda m: isinstance(m, str) and m.startswith("worker is dead after a failed crank: "), committed=False)
+    after = p.digest("after-fatal")
+    p.expect("fatal digest", after.get("digest") == committed.get("digest"), "storage changed after a fatal crank")
+    p.open("fatal reopen", fresh=False)
+    p.ready("fatal reopen ready")
+    p.answer("fatal reopen kept", "/request", 0, reply_of("41"), committed=True, body=json.dumps({"source": "kept"}))
+    p.close("fatal reopen close")
+    committed = p.digest("after-fatal-reopen")
+
+    # 5b. A host statement failure during the close: status 1 with the
+    # executor's text, nothing committed, and a new instance resumes the
+    # prior commit. The fault is armed on the third statement of the close,
+    # past the manifest read, among the writes.
+    p.open("fault open", fresh=False)
+    p.ready("fault ready")
+    p.answer("fault set", "/request", 0, reply_of("1"), committed=True, body=json.dumps({"source": "globalThis.z = 1"}))
+    wd.get("/fault", at=args.fault_at)
+    failed = p.answer("fault close", "/close", 1, f'checkpoint: Io("injected failure at statement {args.fault_at}")',
+                      committed=False)
+    after = p.digest("after-fault")
+    p.expect("fault digest", after.get("digest") == committed.get("digest"), "storage changed after a failed statement")
+    p.expect("fault close", failed.get("trap") is None, "the failed statement surfaced as an exception")
+    p.evict("fault evict")
+    p.open("fault resume open", fresh=False)
+    p.ready("fault resume ready")
+    p.answer("fault resume typeof z", "/request", 0, reply_of("undefined"), committed=True,
+             body=json.dumps({"source": "typeof z"}))
+    p.close("fault resume close")
+
+    log = wd.log_text()
+    emit(records, {
+        "measure": "product-summary",
+        "failures": p.failures,
+        "workerd_log_lines": len(log.splitlines()),
+        "workerd_log_tail": log.splitlines()[-20:],
+    })
+    return len(p.failures)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--no-build", action="store_true")
@@ -532,11 +805,32 @@ def main():
     p = sub.add_parser("export")
     p.add_argument("--store", type=int, default=1)
     p.add_argument("--out", required=True)
+    p = sub.add_parser("product")
+    p.add_argument("--module", default=str(PRODUCT_MODULE), help="the product module (rust/thixotrope-ironhorse-wasm/build.py)")
+    p.add_argument("--boot", action="append", help="a boot file (repeatable); default the two Thixotrope bundles")
+    p.add_argument("--profile", default="thixotrope-wasm-do")
+    p.add_argument("--wakes", type=int, default=1, help="wakes per mode, eager and lazy")
+    p.add_argument("--evict", choices=("abort", "idle"), default="abort", help="how the object is reset before a wake")
+    p.add_argument("--idle", type=float, default=15, help="seconds to idle with --evict idle")
+    p.add_argument("--fault-at", type=int, default=3, help="the statement of the close that fails")
     args = parser.parse_args()
     if args.command == "build":
         print(build())
         return
-    module = MODULE if args.no_build else build(quiet=True)
+    if args.command == "product":
+        args.boot = args.boot or [str(BOOT_DIR / "boot.js"), str(BOOT_DIR / "worker-peer.js")]
+        args.limits = json.dumps({
+            "crankBudget": str(CRANK_BUDGET),
+            "bootstrapBudget": str(BOOT_BUDGET),
+            "slotCeiling": SLOT_CEILING,
+            "chunkCeiling": CHUNK_CEILING,
+            "requestTimeoutMs": 60_000,
+        })
+        if not Path(args.module).exists():
+            raise SystemExit(f"no product module at {args.module}; run python3 rust/thixotrope-ironhorse-wasm/build.py")
+        module = None
+    else:
+        module = MODULE if args.no_build else build(quiet=True)
     if args.command == "suite":
         args.parts = [p for p in args.parts.split(",") if p]
     flags = [f for f in args.v8_flags.split(",") if f]
@@ -544,7 +838,8 @@ def main():
     global JSON_OUT
     if args.json:
         JSON_OUT = open(args.json, "w")
-    wd = Workerd(workerd_binary(), module, flags, keep=args.keep)
+    product = args.module if args.command == "product" else None
+    wd = Workerd(workerd_binary(), module, flags, keep=args.keep, product=product)
     try:
         commands = {
             "suite": cmd_suite,
@@ -552,6 +847,7 @@ def main():
             "wake": cmd_wake,
             "sweep": cmd_sweep,
             "export": cmd_export,
+            "product": cmd_product,
         }
         failures = commands[args.command](args, wd, records)
     finally:

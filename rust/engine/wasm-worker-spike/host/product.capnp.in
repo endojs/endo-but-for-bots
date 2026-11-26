@@ -1,0 +1,30 @@
+# The product module as a Worker with one SQLite-backed Durable Object class.
+# run.py fills in the socket address, the local-disk storage path, the V8
+# flags and the absolute paths of the three modules, each embedded from where
+# it lives: the harness's host/product.js, the real
+# packages/thixotrope/src/ironhorse/wasm/host-abi.mjs, and the module
+# rust/thixotrope-ironhorse-wasm/build.py built.
+using Workerd = import "/workerd/workerd.capnp";
+
+const config :Workerd.Config = (
+  services = [
+    (name = "product", worker = .product),
+    (name = "disk", disk = (path = "@DISK@", writable = true)),
+  ],
+  sockets = [ (name = "http", address = "@ADDRESS@", http = (), service = "product") ],
+  v8Flags = [ @V8_FLAGS@ ],
+);
+
+const product :Workerd.Worker = (
+  modules = [
+    (name = "product.js", esModule = embed "@PRODUCT_JS@"),
+    (name = "host-abi.mjs", esModule = embed "@HOST_ABI@"),
+    (name = "product.wasm", wasm = embed "@PRODUCT_WASM@"),
+  ],
+  compatibilityDate = "2026-09-01",
+  durableObjectNamespaces = [
+    (className = "Product", uniqueKey = "ironhorse-product-v1", enableSql = true),
+  ],
+  durableObjectStorage = (localDisk = "disk"),
+  bindings = [ (name = "PRODUCT", durableObjectNamespace = "Product") ],
+);
