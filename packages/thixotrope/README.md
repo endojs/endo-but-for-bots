@@ -970,6 +970,78 @@ holders' calls break loudly instead of jamming.
 `makeIronhorseEngine` is the supervisor's default engine, backed by SQLite heaps.
 Its build commands and configuration are described in [Ironhorse demos and CI tests](#ironhorse-demos-and-ci-tests).
 
+### The WebAssembly Ironhorse engine
+
+The same Ironhorse worker also runs as WebAssembly under Node: the core
+(`rust/thixotrope-ironhorse-core`) over the Durable Object store
+(`rust/engine/ironhorse-store-do`), compiled to one module
+(`rust/thixotrope-ironhorse-wasm`) whose ABI is specified in that crate's documentation.
+It exists so that one worker build runs both locally and on hosts that run WebAssembly but no
+native code, such as a Durable Object; locally it is a second engine for the same host,
+not a faster one.
+The host selects it by binary path alone: point `THIXOTROPE_IRONHORSE_WORKER` (or the
+`workerBinary` option) at the staged launcher instead of the native worker.
+
+Build and stage it with:
+
+```sh
+python3 rust/thixotrope-ironhorse-wasm/build.py --stage
+```
+
+That builds the module for `wasm32-wasip1`, checks its import and export lists, builds the
+native launcher, and installs four files in `target/thixotrope-ironhorse-wasm/` (or the directory
+given after `--stage`): the launcher `thixotrope-ironhorse-wasm-worker`, the Node shell
+`thixotrope-ironhorse-wasm-shell.mjs` (from `src/ironhorse/wasm/shell.mjs`), `host-abi.mjs` and
+`thixotrope_ironhorse_wasm.wasm`.
+The four belong together: the launcher finds the other three beside itself, the supervisor hashes
+all four into the runtime identity, and its private copy keeps them side by side.
+The build needs the repository's pinned Rust toolchain with `rust-src` and the `wasm32-wasip1`
+target (`rustup component add rust-src`, `rustup target add wasm32-wasip1`), since the recipe
+rebuilds the standard library with unwinding over WebAssembly exception handling.
+Running it needs Node 22.16.0 or later, for `node:sqlite` with `StatementSync#setReturnArrays`
+and exception handling without a flag; the shell refuses an older Node at startup.
+The launcher execs `node` from `PATH`, or `THIXOTROPE_NODE` when that is set.
+
+As a lock helper the launcher behaves as the native worker does; as a worker it takes the
+shared lease, then replaces itself with Node, so the process the host spawned and later
+kills is the one running the worker.
+The shell speaks the native worker's protocol on stdin and stdout, byte for byte, and fails
+the same way, with exit code 1 and one `worker failed: ...` line on stderr.
+
+The heap format differs.
+A native heap is an SQLite file in WAL mode in the native store's schema;
+a WebAssembly heap is an SQLite file in rollback-journal mode (`journal_mode=DELETE`,
+`synchronous=FULL`) in the `ih_*` tables of the Durable Object store, stamped `IRON`.
+The shell refuses a heap file of any other kind (a native heap, an unrelated database, a file
+that is not SQLite) without changing it.
+A state directory therefore belongs to one engine: its `runtime.json` records the heap format
+(`do-v1` for this engine), and the supervisor refuses the directory to the other engine before
+it touches any heap.
+To change engines, start a fresh state directory.
+
+Durability is the native engine's: a crank's effects are committed when the worker closes, not
+when the crank is answered, and the host recovers from its last snapshot plus its journal.
+A fresh heap is opened, booted and made ready in one transaction, so a boot that fails leaves no
+heap file and the next start boots fresh.
+
+Three explicit lanes test it, each needing the staged engine, the bundles and the native worker:
+
+```sh
+cargo build --locked --release -p thixotrope-ironhorse-worker
+yarn workspace @endo/thixotrope build:ironhorse-bundles
+python3 rust/thixotrope-ironhorse-wasm/build.py --stage
+# The 13 files of the host's Ironhorse suite, unmodified, under this engine, then the shell's own
+# tests and the runtime identity against both engines' real binaries
+yarn workspace @endo/thixotrope test:ironhorse:wasm
+# The module driven directly under Node, against the native worker
+yarn workspace @endo/thixotrope test:ironhorse:wasm-module
+```
+
+`THIXOTROPE_IRONHORSE_WASM_WORKER` overrides the staged launcher's path,
+`THIXOTROPE_IRONHORSE_NATIVE_WORKER` the native worker's, and `THIXOTROPE_IRONHORSE_WASM` the
+module the module lane loads.
+CI's `test-thixotrope-ironhorse-wasm` job runs both lanes.
+
 `makeXsEngine` is an alternative heap-snapshot engine: each incarnation is a `thixotrope-xs-worker`
 process (rust/thixotrope-xs-worker, a minimal runner on the `xsnap` crate)
 evaluating the worker peer bundle inside an XS machine, with real heap
