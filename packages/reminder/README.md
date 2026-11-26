@@ -25,9 +25,16 @@ repackaged as an unconfined plugin whose durable tracking lives on the platform
   `makeDirectory`, `remove`, `move`), so the backing may be a host directory, an
   in-memory tree, a daemon mount, or a database — a backend swap, not a plugin
   change. There is no `node:fs` and no daemon `filePowers`.
-- **Delivery is a direct eventual-send to a subscriber capability** resolved by
-  name through `powers`, carrying the one-shot response on each message. It
-  retains no durable capability, so it does not depend on SturdyRef modelling.
+- **Delivery is ordinary guest package mail addressed to `@self`.** Each firing
+  is sent through the tenant guest's existing `send` method as a self-addressed
+  package message carrying a single **capability-free JSON string** (the
+  `minion-reminder/v1` schema) and no attached values. The plugin drives the
+  one-shot response from the send outcome — `resolve()` only after the send
+  fulfills, `reschedule()` after a send failure — so the ephemeral response
+  never enters the mailbox. It retains no durable capability, adds no
+  `reminder-recipient` formula, and does not modify `EndoHandle`. The consumer
+  reads a filtered, deduplicated **projection** of its own mailbox, keyed by
+  `{ reminderId, messageNumber }`.
 
 ## Provisioning
 
@@ -37,10 +44,11 @@ runs in.
 
 - `E(powers).lookup('reminder-store')` -> a writable virtual-file-system
   **directory** backing the durable store.
-- `E(powers).lookup('reminder-recipient')` -> the **subscriber capability** the
-  service is bound to (one scheduler per recipient). Each reminder message is
-  delivered by `E(recipient).notify(message)`, with the one-shot
-  `ReminderResponse` attached.
+- `E(powers).send('@self', [payload], [], [])` -> ordinary guest package mail.
+  Each reminder message is delivered as a self-addressed package message carrying
+  a single capability-free JSON string and no attached values. The guest is its
+  own recipient; the plugin holds the one-shot `ReminderResponse` internally and
+  never serializes it. No `reminder-recipient` name is looked up.
 
 Initial `maxActive` / `minPeriodMs` (and an optional initial `paused: 'true'`)
 arrive via the `env` option of `makeUnconfined`; thereafter `ReminderControl`
@@ -49,7 +57,7 @@ authoritative** across restarts.
 
 ```
 E(host).makeUnconfined(workerName, '@endo/reminder', {
-  powersName,                       // a guest granting reminder-store + reminder-recipient
+  powersName,                       // a guest granting reminder-store + self-addressed mail
   resultName: ['@pins', 'reminder'], // pin it so it wakes on restart (see below)
 })
 ```
@@ -104,7 +112,7 @@ Each `Reminder` exposes `label` / `period` / `setPeriod` / `cancel` / `info` /
 
 ## Reschedule backoff
 
-When a recipient calls `reschedule()` on a message's response, the service
+When the delivery callback calls `reschedule()` after a send failure, the service
 re-delivers the *same* message after a jittered exponential backoff and holds the
 give-up deadline fixed at the original scheduled time + `messageTimeoutMs`, so a
 retry budget cannot drift the schedule forward. The backoff parameters are named
@@ -116,6 +124,9 @@ against one downstream ("Exponential Backoff and Jitter", AWS).
 
 ## The delivered message
 
+The in-memory message the scheduler core hands the delivery callback carries the
+ephemeral one-shot response:
+
 ```js
 {
   type: 'reminder-message',
@@ -125,13 +136,35 @@ against one downstream ("Exponential Backoff and Jitter", AWS).
   actualAt,            // absolute epoch ms it actually fired
   missedMessages,      // messages coalesced into this one (0 for a normal firing)
   annotation,          // { kind: 'count', count } | { kind: 'timestamps', scheduledTimes }
-  reminderResponse,    // one-shot exo: resolve() | reschedule()
+  reminderResponse,    // one-shot exo: resolve() | reschedule() — never serialized
 }
 ```
 
 `resolve()` arms the next period; `reschedule()` retries the same message after
 the backoff. Both are one-shot — whichever fires first consumes the delivery, and
 any later call (including after the timeout auto-resolved) is inert.
+
+### The package-mail payload
+
+Only the capability-free `minion-reminder/v1` fields are serialized into the
+self-addressed package message; `type` and `reminderResponse` are dropped
+(`encodeReminderMessage`, `src/mail.js`):
+
+```json
+{
+  "schema": "minion-reminder/v1",
+  "reminderId": "…", "label": "…", "periodMs": 30000,
+  "messageNumber": 1, "scheduledAt": 0, "actualAt": 0,
+  "missedMessages": 0, "annotation": { "kind": "count", "count": 1 }
+}
+```
+
+The consumer reads its own mailbox and calls `projectReminderEvents(messages)` to
+get a deduplicated event list keyed by `{ reminderId, messageNumber }`, so a
+retry after an ambiguous send outcome — which can leave two identical package
+messages in the mailbox — projects to exactly one event. `decodeReminderPackage`
+rejects any message that carries attached values, so only capability-free
+reminder mail is ever projected.
 
 ## Durable store layout
 
@@ -149,8 +182,10 @@ it does not rely on a direct `write` being atomic, since that varies by backing.
 
 ## Status
 
-Phases 1–3 of [`designs/endo-reminder.md`](../../designs/endo-reminder.md): the
-package and scheduler core, delivery and response on the subscriber-capability
-baseline, and integration/revival via the `@pins` recipe. The Phase 4 mailbox
-delivery upgrade (`send` + `storeValue`) is gated on SturdyRef modelling and is
-not built here; the subscriber-capability baseline carries all delivery.
+The package and scheduler core, delivery and response over ordinary guest
+package mail addressed to `@self`, the `minion-reminder/v1` package-message
+encoding with its deduplicated mailbox projection, and integration/revival via
+the `@pins` recipe. This is the delivery contract the minion.town, Chat, and
+Familiar consumers build on (design decisions 1–2, kriskowal 2026-08-13); it
+needs no `reminder-recipient` formula, no `EndoHandle` change, and no SturdyRef
+modelling.
