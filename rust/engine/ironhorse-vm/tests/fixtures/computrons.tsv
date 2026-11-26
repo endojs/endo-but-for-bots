@@ -1,4 +1,4 @@
-# ironhorse-meter-9 runtime cost corpus: label, source, halt, result, raw, computrons
+# ironhorse-meter-10 runtime cost corpus: label, source, halt, result, raw, computrons
 dispatch	1+2*3	return	7	804120	12
 slots	var a={x:1,y:2}; a.x+a.y	return	3	2247776	34
 default-key	var a={}; a.length=3; a.length	return	3	1886512	28
@@ -74,3 +74,4 @@ raw-json	JSON.stringify({a:JSON.rawJSON('1e1000')})	return	{"a":1e1000}	2346904	
 iterator-concat	Iterator.concat([1],[2,3]).toArray().join(',')	return	1,2,3	4385016	66
 uint8-base64	Uint8Array.fromBase64(new Uint8Array([1,2,3]).toBase64()).join(',')	return	1,2,3	4331208	66
 float16	Math.f16round(0.1)+new Float16Array([1.5])[0]	return	1.5999755859375	2723424	41
+new-eval	function f(a){var x=a;try{new eval('x')}catch(e){return e instanceof TypeError?x:0}} f(7)	return	7	5888536	89
