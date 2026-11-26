@@ -831,11 +831,78 @@ jobs:
       - name: Build real SQLite worker
         run: cargo build --locked --release -p thixotrope-ironhorse-worker
       - name: Test the worker's heap opening and crank admission
-        run: cargo test --locked --release -p thixotrope-ironhorse-worker -p thixotrope-ironhorse-core -p thixotrope-ironhorse-lease -p thixotrope-ironhorse-wasm-launcher
+        run: cargo test --locked --release -p thixotrope-ironhorse-worker -p thixotrope-ironhorse-core -p thixotrope-ironhorse-lease -p thixotrope-ironhorse-wasm-launcher -p thixotrope-ironhorse-wasm
       - name: Bundle SES and OCapN peer
         run: corepack yarn workspace @endo/thixotrope build:ironhorse-bundles
       - name: Test two demos and twelve adversarial persistence scenarios
         run: corepack yarn workspace @endo/thixotrope test:ironhorse
+
+  # The same host suite against the WebAssembly engine: the worker module run
+  # by Node through the staged launcher, plus the tests only that engine
+  # needs and the module's own lane, both of which compare against the
+  # native worker.
+  test-thixotrope-ironhorse-wasm:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-thixotrope-ironhorse-wasm']) }}
+    name: test-thixotrope-ironhorse-wasm
+    runs-on: ubuntu-latest
+    # The wasm lane runs the host's serial suite under the slower engine (40
+    # minutes on four shared cores, against 28 for the native lane), the
+    # module lane under a minute, and the cold builds rebuild std for wasm.
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: corepack enable
+      - name: Use Node.js
+        # The shell needs Node 22.16.0 or later; .node-version names the
+        # current LTS.
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: yarn
+      - name: Install dependencies
+        run: corepack yarn install --immutable
+      - name: Cache Cargo, the wasm module and the release workers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # The module's rebuilt std is keyed by the lockfile, the toolchain
+          # pin (its rust-src) and the recipe's flags, as in build-ironhorse-wasm.
+          key: ${{ runner.os }}-thixotrope-ironhorse-wasm-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'rust/engine/scripts/build-wasm.py') }}
+          restore-keys: |
+            ${{ runner.os }}-thixotrope-ironhorse-wasm-
+      - name: Install rust-src and the wasm target on the pinned toolchain
+        # rustup picks the channel from rust-toolchain.toml. As in
+        # build-ironhorse-wasm, rust-src's install-time mtimes are pinned to
+        # the toolchain's release date so that a cached -Zbuild-std std is
+        # not rebuilt on every fresh runner.
+        run: |
+          set -euo pipefail
+          rustup component add rust-src
+          rustup target add wasm32-wasip1
+          find "$(rustc --print sysroot)/lib/rustlib/src" -exec touch -h -d '2025-11-07T00:00:00Z' {} +
+      - name: Build, verify and stage the wasm engine
+        run: python3 rust/thixotrope-ironhorse-wasm/build.py --stage
+      - name: Build the native worker the comparisons run
+        run: cargo build --locked --release -p thixotrope-ironhorse-worker
+      - name: Bundle SES and OCapN peer
+        run: corepack yarn workspace @endo/thixotrope build:ironhorse-bundles
+      - name: Test the host's Ironhorse suite and the shell under the wasm engine
+        run: corepack yarn workspace @endo/thixotrope test:ironhorse:wasm
+      - name: Test the wasm module under Node against the native worker
+        run: corepack yarn workspace @endo/thixotrope test:ironhorse:wasm-module
 
   # Oracle-free suites share the same source/build-input change gate.
   test-ironhorse:

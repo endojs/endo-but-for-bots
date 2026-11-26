@@ -20,7 +20,8 @@ import tomllib
 JOBS = (
     "test", "cover", "lint", "familiar-bundle", "sandbox-drivers",
     "test-async-hooks", "test-hermes", "test-xs", "build-xsnap",
-    "test-thixotrope-ironhorse", "format-ironhorse", "test-ironhorse",
+    "test-thixotrope-ironhorse", "test-thixotrope-ironhorse-wasm",
+    "format-ironhorse", "test-ironhorse",
     "test-ironhorse-calibration", "compare-ironhorse-math",
     "test-ironhorse-oracle", "oracle-sanitizers", "fuzz-ironhorse",
     "cross-target-ironhorse", "build-ironhorse-wasm", "test-ocapn-python",
@@ -34,7 +35,7 @@ JS_JOBS = {
     "guile-interop", "viable-release", "depcheck", "check-action-pins", "package-uniformity",
 }
 RUST_JOBS = {
-    "build-xsnap", "test-thixotrope-ironhorse", "format-ironhorse",
+    "build-xsnap", "test-thixotrope-ironhorse", "test-thixotrope-ironhorse-wasm", "format-ironhorse",
     "test-ironhorse", "test-ironhorse-calibration", "compare-ironhorse-math",
     "test-ironhorse-oracle", "oracle-sanitizers", "fuzz-ironhorse",
     "cross-target-ironhorse", "build-ironhorse-wasm", "build-wasm",
@@ -60,6 +61,20 @@ CORE = {
 # worker and the wasm engine's launcher. A change that reaches either one
 # (their shared core and lease crates included) runs the host's tests.
 IRONHORSE_WORKERS = {"thixotrope-ironhorse-worker", "thixotrope-ironhorse-wasm-launcher"}
+# The inputs of the host's suite under the wasm engine, by path rather than
+# through the crate graph: every engine crate reaches the core, and running
+# this long job for every engine change is a cost not yet agreed. The engine
+# crate listed is the store the module is built over. Root and engine Cargo
+# configuration select it as a Rust job.
+IRONHORSE_WASM_INPUTS = (
+    "rust/thixotrope-ironhorse-wasm", "rust/thixotrope-ironhorse-wasm-launcher",
+    "rust/thixotrope-ironhorse-lease", "rust/thixotrope-ironhorse-core",
+    "rust/engine/ironhorse-store-do", "packages/thixotrope/src/ironhorse",
+    "packages/thixotrope/test/ironhorse", "packages/thixotrope/test/ironhorse-wasm",
+    "packages/thixotrope/ava.ironhorse.config.mjs",
+    "packages/thixotrope/ava.ironhorse-wasm.config.mjs",
+    "packages/thixotrope/ava.ironhorse-wasm-module.config.mjs",
+)
 # The engine members rust/engine/scripts/build-wasm.py builds for wasm; its
 # test holds this set to the script's list.
 WASM_CRATES = {
@@ -282,6 +297,8 @@ def classify(paths, graphs, all_jobs=False):
         )
         jobs["build-xsnap"] |= bool(core_crates & {"endo", "xsnap"})
         jobs["test-thixotrope-ironhorse"] |= bool(core_crates & IRONHORSE_WORKERS)
+        # The wasm module's native unit tests run in that job's cargo step.
+        jobs["test-thixotrope-ironhorse"] |= "thixotrope-ironhorse-wasm" in core_crates
         jobs["test-ironhorse"] |= bool(core_crates & CORE)
         jobs["test-ironhorse-calibration"] |= "ironhorse-vm" in core_crates
         jobs["test-ironhorse-oracle"] |= any(
@@ -421,6 +438,8 @@ def classify(paths, graphs, all_jobs=False):
             # `native_recursion_budget.rs` and `stack_height.rs` compile the
             # stack-lane corpus and painter.
             jobs["test-ironhorse"] = True
+        if not path.endswith(".md") and any(under(path, p) for p in IRONHORSE_WASM_INPUTS):
+            jobs["test-thixotrope-ironhorse-wasm"] = True
         if path == "packages/ocapn-noise/gen/ocapn-noise.wasm":
             jobs["build-wasm"] = True
         # The wasm build's own inputs that no crate owns: the recipe and its
