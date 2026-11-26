@@ -88,7 +88,7 @@ fn resumed_machines_halt_where_the_continuous_one_does() {
             .map_err(|(_, error)| error)
             .expect("begin"),
     );
-    let mut eager = resume_from_store(&mut *store.borrow_mut(), &sig()).expect("eager resume");
+    let mut eager = resume_from_store(&*store.borrow(), &sig()).expect("eager resume");
     assert_eq!(grow(eager.machine_mut(), ceiling), expected, "eager store");
     let mut lazy = resume_from_store_lazy(store, &sig()).expect("lazy resume");
     assert_eq!(grow(lazy.machine_mut(), ceiling), expected, "lazy store");
