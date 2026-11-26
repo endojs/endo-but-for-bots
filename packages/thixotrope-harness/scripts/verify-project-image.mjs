@@ -1,12 +1,14 @@
 // @ts-check
 import './_init.mjs';
 import { randomUUID } from 'node:crypto';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { getuid } from 'node:process';
 
-const [image, root] = process.argv.slice(2);
-if (!image || !root) {
+const [image, root, binary = 'docker'] = process.argv.slice(2);
+if (!image || !root || (binary !== 'docker' && binary !== 'podman')) {
   throw Error(
-    'Usage: verify-project-image.mjs repository@sha256:digest disposable-checkout-root',
+    'Usage: verify-project-image.mjs repository@sha256:digest disposable-checkout-root [docker|podman]',
   );
 }
 const { installGuestPrelude } = await import('./guest-prelude.js');
@@ -23,9 +25,9 @@ const env = {
   workspace: join(root, 'workspace'),
   home: join(root, 'home'),
   run: join(root, 'run'),
-  settings: { runtime: 'docker', image },
+  settings: { runtime: binary, image },
 };
-const runtime = makeOciRuntime({ binary: 'docker' });
+const runtime = makeOciRuntime({ binary });
 /** @param {string} script */
 const run = async script => {
   const result = await runtime.exec(env, ['sh', '-ec', script], {
@@ -41,6 +43,16 @@ const run = async script => {
 };
 await runtime.start(env);
 try {
+  if (binary === 'podman') {
+    // keep-id maps the container's uid 1000 to this user: what a command
+    // writes in the workspace belongs to the harness's user on the host.
+    await run('touch /workspace/.thix-owner-check && id -u');
+    const { uid } = await stat(join(root, 'workspace', '.thix-owner-check'));
+    if (uid !== getuid?.())
+      throw Error(
+        `Files written in the container belong to uid ${uid}, not ${getuid?.()}`,
+      );
+  }
   await run(
     'test "$(corepack yarn --version)" = 4.13.0 && test "$(yarn --version)" = 4.13.0',
   );
