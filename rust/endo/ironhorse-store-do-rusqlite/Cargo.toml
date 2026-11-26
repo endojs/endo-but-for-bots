@@ -1,0 +1,26 @@
+# A native statement executor for ironhorse-store-do's DoStore, over rusqlite,
+# so the Durable Object store runs the engine's store acceptance suite against
+# real SQLite (designs/thixotrope-wasm-worker.md § 8, phase 2). Deliberately
+# OUTSIDE the rust/engine workspace for the reason
+# rust/endo/ironhorse-store-sqlite/Cargo.toml gives: the engine crates are
+# forbid(unsafe_code) and zero-C, and this crate links the bundled SQLite the
+# daemon already ships (the same rusqlite version and features).
+[package]
+name = "ironhorse-store-do-rusqlite"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+rusqlite = { version = "0.31", features = ["bundled"] }
+ironhorse-snapshot = { path = "../../engine/ironhorse-snapshot" }
+ironhorse-store-do = { path = "../../engine/ironhorse-store-do" }
+
+[dev-dependencies]
+ironhorse-compile = { path = "../../engine/ironhorse-compile" }
+ironhorse-vm = { path = "../../engine/ironhorse-vm" }
+# The shared backend acceptance suite, instantiated against DoStore in
+# tests/store_suite.rs.
+ironhorse-snapshot = { path = "../../engine/ironhorse-snapshot", features = ["store-suite"] }
+# Many-chunk sections without megabytes of state (tests/do_store.rs).
+ironhorse-store-do = { path = "../../engine/ironhorse-store-do", features = ["test-support"] }

@@ -2853,6 +2853,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironhorse-store-do"
+version = "0.0.2"
+dependencies = [
+ "ironhorse-snapshot",
+]
+
+[[package]]
+name = "ironhorse-store-do-rusqlite"
+version = "0.1.0"
+dependencies = [
+ "ironhorse-compile",
+ "ironhorse-snapshot",
+ "ironhorse-store-do",
+ "ironhorse-vm",
+ "rusqlite",
+]
+
+[[package]]
 name = "ironhorse-store-sqlite"
 version = "0.1.0"
 dependencies = [
