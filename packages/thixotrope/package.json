@@ -44,6 +44,7 @@
     "build:ironhorse-bundles": "node scripts/bundle-ironhorse-worker.mjs",
     "demo:ironhorse": "node scripts/ironhorse-demo.mjs counter",
     "test:ironhorse": "ava --config ava.ironhorse.config.mjs",
+    "test:ironhorse:wasm-module": "ava --config ava.ironhorse-wasm-module.config.mjs",
     "demo:ironhorse:counter": "node scripts/ironhorse-demo.mjs counter",
     "demo:ironhorse:promise": "node scripts/ironhorse-demo.mjs promise",
     "thix": "node bin/thix.js",
