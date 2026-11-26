@@ -248,12 +248,58 @@ const drainReader = async reader => {
 };
 
 /**
- * @param {number} pid
- * @param {number} [timeoutMs]
+ * Describe the host processes still in a process group, so a cleanup
+ * failure shows what survived and in which state (`Z` zombie, `D`
+ * uninterruptible, ...).
+ *
+ * @param {number} pgid
+ * @returns {string}
  */
-const waitForProcessGroupGone = async (pid, timeoutMs = 3000) => {
+const describeProcessGroup = pgid => {
+  /** @type {string[]} */
+  const members = [];
+  let entries;
+  try {
+    entries = nodeFs.readdirSync('/proc');
+  } catch {
+    return 'members unknown';
+  }
+  for (const entry of entries) {
+    if (/^\d+$/.test(entry)) {
+      try {
+        const stat = nodeFs.readFileSync(`/proc/${entry}/stat`, 'utf8');
+        // Fields after the parenthesized comm: state ppid pgrp ...
+        const closeParen = stat.lastIndexOf(')');
+        const comm = stat.slice(stat.indexOf('(') + 1, closeParen);
+        const [state, ppid, pgrp] = stat.slice(closeParen + 2).split(' ');
+        if (Number(pgrp) === pgid) {
+          members.push(`${entry}(${comm}) state=${state} ppid=${ppid}`);
+        }
+      } catch {
+        // The process exited while we looked.
+      }
+    }
+  }
+  return members.length ? members.join(', ') : 'no members found';
+};
+
+/**
+ * Wait for a driver-owned host process group to disappear.
+ *
+ * Node reports the bwrap leader's exit before the kernel has finished
+ * with the rest of the group: bwrap's pid-namespace init stays in the
+ * group until the kernel has killed every process in the namespace and
+ * torn down its mount namespace, and then it lingers as a zombie until
+ * the host reaper collects it.  When the podman suite runs alongside,
+ * that teardown can take several seconds on a CI runner, so the bound
+ * is generous.  A process that escaped containment survives any bound.
+ *
+ * @param {number} pid
+ * @param {number} [timeoutMilliseconds]
+ */
+const waitForProcessGroupGone = async (pid, timeoutMilliseconds = 10_000) => {
   await null;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() < deadline) {
     try {
       process.kill(-pid, 0);
@@ -263,7 +309,9 @@ const waitForProcessGroupGone = async (pid, timeoutMs = 3000) => {
     // eslint-disable-next-line no-await-in-loop
     await new Promise(resolve => setTimeout(resolve, 25));
   }
-  throw new Error(`process group ${pid} survived bounded cleanup`);
+  throw new Error(
+    `process group ${pid} survived bounded cleanup (${timeoutMilliseconds}ms): ${describeProcessGroup(pid)}`,
+  );
 };
 
 test.serial('bwrap probe reports available with a version', async t => {
@@ -921,7 +969,7 @@ test.serial('bwrap slice has no unimplemented management methods', async t => {
 });
 
 test.serial('bwrap serializes spawn and dispose in both orderings', async t => {
-  t.timeout(10_000);
+  t.timeout(20_000);
   // eslint-disable-next-line @jessie.js/safe-await-separator
   if (!(await bwrapCheck(t))) return;
   const driver = makeBwrapDriver({ env: {} });
@@ -1009,10 +1057,49 @@ test.serial('bwrap keeps split UTF-8 stdout separate from stderr', async t => {
   t.deepEqual(status, { code: 0, signal: null });
 });
 
+test.serial('bwrap normal exit sweeps its process-group anchor', async t => {
+  t.timeout(20_000);
+  // eslint-disable-next-line @jessie.js/safe-await-separator
+  if (!(await bwrapCheck(t))) return;
+  /** @type {{ processIdentifier: number, signal: string | number | undefined }[]} */
+  const sweepCalls = [];
+  const driver = makeBwrapDriver({
+    env: {},
+    processKill: (processIdentifier, signal) => {
+      t.true(
+        process.kill(processIdentifier, 0),
+        'the process group must retain a member after its leader exits',
+      );
+      sweepCalls.push({ processIdentifier, signal });
+      return process.kill(processIdentifier, signal);
+    },
+  });
+  const { powers, tmpdirs } = makeStubScratchProvider();
+  const factory = makeSandboxFactory({
+    drivers: harden([driver]),
+    scratchProvider: powers,
+  });
+  const handle = await E(factory).make(
+    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+  );
+  t.teardown(async () => {
+    await E(handle).dispose();
+    for (const directory of tmpdirs)
+      nodeFs.rmSync(directory, { recursive: true, force: true });
+  });
+  const driverProcess = await E(handle).spawn(harden(['/bin/true']));
+  const processIdentifier = await E(driverProcess).pid();
+  t.deepEqual(await E(driverProcess).wait(), { code: 0, signal: null });
+  t.deepEqual(sweepCalls, [
+    { processIdentifier: -processIdentifier, signal: 'SIGKILL' },
+  ]);
+  await t.notThrowsAsync(() => waitForProcessGroupGone(processIdentifier));
+});
+
 test.serial(
   'bwrap output cap kills a soft-refusing group with a pipe-holding descendant',
   async t => {
-    t.timeout(10_000);
+    t.timeout(20_000);
     // eslint-disable-next-line @jessie.js/safe-await-separator
     if (!(await bwrapCheck(t))) return;
     const driver = makeBwrapDriver({ env: {} });
@@ -1050,7 +1137,7 @@ test.serial(
 test.serial(
   'bwrap timeout and repeated cancellation reap process groups',
   async t => {
-    t.timeout(15_000);
+    t.timeout(30_000);
     // eslint-disable-next-line @jessie.js/safe-await-separator
     if (!(await bwrapCheck(t))) return;
     const driver = makeBwrapDriver({ env: {} });
@@ -1101,7 +1188,7 @@ test.serial(
 );
 
 test.serial('bwrap parent death leaves no owned process group', async t => {
-  t.timeout(10_000);
+  t.timeout(20_000);
   // eslint-disable-next-line @jessie.js/safe-await-separator
   if (!(await bwrapCheck(t))) return;
   const scratch = nodeFs.mkdtempSync(
@@ -1788,6 +1875,204 @@ const prepareStubbedSlice = async (childProcess, spawn = true) => {
   if (spawn) await driver.spawn(slice, ['/bin/true'], {});
   return { driver, slice };
 };
+
+test('bwrap exit sweep propagates a non-ESRCH signal error', async t => {
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: false,
+  });
+  const refused = Object.assign(new Error('signal refused'), { code: 'EPERM' });
+  const driver = /** @type {any} */ (
+    makeBwrapDriver({
+      env: {},
+      childProcess,
+      processKill: () => {
+        throw refused;
+      },
+    })
+  );
+  const slice = await driver.prepareSlice(
+    makeStubSpec({ rootfs: { kind: 'host-bind' } }),
+  );
+  const proc = await driver.spawn(slice, ['/bin/true'], {});
+  const child = children[0];
+  t.teardown(() => child.emit('close', 0, null));
+  child.exitCode = 0;
+  child.emit('exit', 0, null);
+  t.is(await t.throwsAsync(proc.wait()), refused);
+});
+
+test('bwrap exit sweep tolerates ESRCH and resolves with the exit status', async t => {
+  // The mirror of the propagation case: an already-empty process group is
+  // the expected outcome of the sweep, so `ESRCH` is swallowed and
+  // `wait()` must still resolve with bwrap's own exit status.
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: false,
+  });
+  const gone = Object.assign(new Error('no such process'), { code: 'ESRCH' });
+  const driver = /** @type {any} */ (
+    makeBwrapDriver({
+      env: {},
+      childProcess,
+      processKill: () => {
+        throw gone;
+      },
+    })
+  );
+  const slice = await driver.prepareSlice(
+    makeStubSpec({ rootfs: { kind: 'host-bind' } }),
+  );
+  const proc = await driver.spawn(slice, ['/bin/true'], {});
+  const child = children[0];
+  t.teardown(() => child.emit('close', 0, null));
+  child.exitCode = 0;
+  child.emit('exit', 0, null);
+  t.deepEqual(await proc.wait(), { code: 0, signal: null });
+});
+
+/**
+ * Build an fs override that answers the daemon's own `/proc/<pid>/stat`
+ * read with `readStat` and defers every other call to the host fs.
+ *
+ * @param {(path: string) => string} readStat
+ */
+const makeStatOverrideFs = readStat =>
+  /** @type {any} */ ({
+    ...nodeFs,
+    readFileSync: (/** @type {any} */ path, /** @type {any[]} */ ...rest) =>
+      path === `/proc/${process.pid}/stat`
+        ? readStat(path)
+        : nodeFs.readFileSync(path, ...rest),
+  });
+
+test('bwrap spawn reports a failed daemon /proc stat read', async t => {
+  if (process.platform !== 'linux') {
+    t.pass('process identity is read only on Linux');
+    return;
+  }
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: false,
+  });
+  const driver = /** @type {any} */ (
+    makeBwrapDriver({
+      env: {},
+      childProcess,
+      fs: makeStatOverrideFs(() => {
+        throw new Error('proc unavailable');
+      }),
+    })
+  );
+  const slice = await driver.prepareSlice(
+    makeStubSpec({ rootfs: { kind: 'host-bind' } }),
+  );
+  await t.throwsAsync(driver.spawn(slice, ['/bin/true'], {}), {
+    message: /could not read \/proc\/.*\/stat: "proc unavailable"/,
+  });
+  t.is(children.length, 0);
+});
+
+test('bwrap spawn rejects a malformed daemon /proc stat line', async t => {
+  if (process.platform !== 'linux') {
+    t.pass('process identity is read only on Linux');
+    return;
+  }
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: false,
+  });
+  const driver = /** @type {any} */ (
+    makeBwrapDriver({
+      env: {},
+      childProcess,
+      fs: makeStatOverrideFs(() => '1 (node) S 0 1'),
+    })
+  );
+  const slice = await driver.prepareSlice(
+    makeStubSpec({ rootfs: { kind: 'host-bind' } }),
+  );
+  await t.throwsAsync(driver.spawn(slice, ['/bin/true'], {}), {
+    message: /could not read daemon process identity/,
+  });
+  t.is(children.length, 0);
+});
+
+test('bwrap spawn rejects a daemon /proc stat line with no comm terminator', async t => {
+  if (process.platform !== 'linux') {
+    t.pass('process identity is read only on Linux');
+    return;
+  }
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: false,
+  });
+  const driver = /** @type {any} */ (
+    makeBwrapDriver({
+      env: {},
+      childProcess,
+      fs: makeStatOverrideFs(() =>
+        Array.from({ length: 30 }, (_, i) => String(i)).join(' '),
+      ),
+    })
+  );
+  const slice = await driver.prepareSlice(
+    makeStubSpec({ rootfs: { kind: 'host-bind' } }),
+  );
+  await t.throwsAsync(driver.spawn(slice, ['/bin/true'], {}), {
+    message: /could not read daemon process identity/,
+  });
+  t.is(children.length, 0);
+});
+
+test('process-group anchor skips its watchdog without a /proc start time', async t => {
+  if (process.platform !== 'linux') {
+    t.pass('the anchor script is exercised against a real /bin/sh on Linux');
+    return;
+  }
+  /** @type {string[]} */
+  let anchorArguments = [];
+  const { childProcess: stub } = makeStubChildProcess({ closeOnKill: true });
+  const childProcess = {
+    /**
+     * @param {string} _program
+     * @param {string[]} spawnArguments
+     */
+    spawn: (_program, spawnArguments) => {
+      anchorArguments = spawnArguments;
+      return stub.spawn();
+    },
+  };
+  await prepareStubbedSlice(childProcess);
+  const script = anchorArguments[1];
+  t.is(typeof script, 'string');
+  // Run the captured script with the sentinel in place of a start time.
+  // A watchdog that fired at once would SIGKILL the group before the
+  // command printed.
+  const child = nodeSpawn(
+    '/bin/sh',
+    [
+      '-c',
+      script,
+      'anchor-test',
+      String(process.pid),
+      'not-applicable',
+      '/bin/sh',
+      '-c',
+      'sleep 1; echo survived',
+    ],
+    { detached: true, stdio: ['ignore', 'pipe', 'ignore'] },
+  );
+  let output = '';
+  child.stdout.on('data', chunk => {
+    output += chunk;
+  });
+  const exit = await new Promise(resolve => {
+    child.once('exit', (code, signal) => resolve({ code, signal }));
+  });
+  try {
+    process.kill(-(/** @type {number} */ (child.pid)), 'SIGKILL');
+  } catch {
+    // The group may already be empty.
+  }
+  t.deepEqual(exit, { code: 0, signal: null });
+  t.is(output.trim(), 'survived');
+});
 
 test('failed teardown retains its child until a later close permits cleanup', async t => {
   // Guards the hang: ownership ends only on 'close', so
