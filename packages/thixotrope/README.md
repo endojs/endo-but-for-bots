@@ -1024,7 +1024,7 @@ when the crank is answered, and the host recovers from its last snapshot plus it
 A fresh heap is opened, booted and made ready in one transaction, so a boot that fails leaves no
 heap file and the next start boots fresh.
 
-Three explicit lanes test it, each needing the staged engine, the bundles and the native worker:
+Two explicit lanes test it, each needing the staged engine, the bundles and the native worker:
 
 ```sh
 cargo build --locked --release -p thixotrope-ironhorse-worker
