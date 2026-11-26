@@ -37,6 +37,9 @@ module. The launcher finds the other three beside itself by those names, so
 pointing `THIXOTROPE_IRONHORSE_WORKER` at the staged launcher selects the
 engine. Each file is written to a temporary name in DIR and renamed over its
 final name, so a worker starting during a stage never reads a partial file.
+The four are replaced one at a time, not as a set: a host that starts
+workers from DIR during a stage can pair a new file with an old one, so
+stage while no host is acquiring that directory.
 """
 import argparse
 import hashlib
