@@ -218,7 +218,7 @@ impl HeapStore for ForeignCostTableStore {
             .windows(needle.len())
             .position(|w| w == needle)
             .expect("the fixture's meter section carries the current cost-table version");
-        bytes[at + needle.len() - 1] = b'0';
+        bytes[at + needle.len() - 1] = b'X';
         Ok(bytes)
     }
     fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
@@ -262,7 +262,12 @@ fn migrate_refuses_a_foreign_cost_table_before_any_restamp() {
     match migrate_store(&mut store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::CostTableMismatch { expected, found })) => {
             assert_eq!(expected, ironhorse_vm::COST_TABLE_VERSION);
-            assert_eq!(found, "ironhorse-meter-0");
+            // The current name with its last character replaced: a digit
+            // would be the current name again whenever the release ends in it.
+            let mut foreign = expected.clone();
+            foreign.pop();
+            foreign.push('X');
+            assert_eq!(found, foreign);
         }
         other => panic!("expected CostTableMismatch, got {other:?}"),
     }

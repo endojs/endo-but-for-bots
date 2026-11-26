@@ -57,4 +57,12 @@ pub const PINNED: &[(&str, &str)] = &[
         "ironhorse-meter-9",
         "4d9abebe68c732f045097da41de323467d6403019a672eb1249521cd476601a5",
     ),
+    // Same weights. A generic walk's read past 2^32 - 1 and an allocating
+    // method's result define mint no property-key name per index: the walk
+    // no longer pays a slot per name, and a result element is charged its
+    // slot whether or not its index name exists.
+    (
+        "ironhorse-meter-10",
+        "4d9abebe68c732f045097da41de323467d6403019a672eb1249521cd476601a5",
+    ),
 ];
