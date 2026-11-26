@@ -46,13 +46,18 @@ import {
 /** @import { Column, Param } from './host-abi.mjs' */
 
 /**
- * The oldest Node this shell runs on. `node:sqlite` loads without a flag
- * from 22.13.0, and `StatementSync#setReturnArrays`, which the row encoding
- * reads, exists from 22.16.0 (both from Node's changelog). The module's
- * exception handling uses the standard exnref encoding; Node 22.16.0 and
- * every later 22.x release carry the same V8 (12.4.254.21), which accepts
- * that encoding without a flag. Node 23 is refused by the feature check
- * below rather than by number where it lacks `setReturnArrays`.
+ * The oldest Node this shell runs on. From Node's bundled changelog:
+ * `node:sqlite` loads without a flag from 22.13.0, `StatementSync#setReturnArrays`,
+ * which the row encoding reads, exists from 22.16.0, and `--disable-sigusr1`,
+ * which the launcher passes, from 22.14.0. The module's exception handling
+ * uses the standard exnref encoding. Executed: the module compiles and runs
+ * on Node 22.23.5 (even with `--no-experimental-wasm-exnref`) and on 24.22.3.
+ * Inferred, not executed: that 22.16.0 through 22.23.4 accept it too, since
+ * Node's release index lists the same V8 (12.4.254.21) for all of them and
+ * their changelogs record no change to it; Node can patch its V8 without
+ * renumbering it, so a compile failure is reported as such at startup. Node
+ * 23 is refused by the feature check below rather than by number where it
+ * lacks `setReturnArrays`.
  */
 export const MIN_NODE_VERSION = '22.16.0';
 
@@ -287,7 +292,11 @@ export const makeExecutor = db => {
  * required, and `synchronous=FULL`. With `own`, the file must already be
  * this engine's: an SQLite database in rollback-journal mode whose
  * `ih_meta` holds the `IRON` stamp. A file that is not is refused before
- * any statement could write to it, and the database is closed again.
+ * any statement could write to it, and the database is closed again. One
+ * refused file is changed nonetheless: an unrelated rollback-journal
+ * database with a hot journal beside it is rolled back by SQLite itself
+ * when the stamp is read, as any SQLite reader would roll it back. (The
+ * native worker converts any file it opens to WAL.)
  *
  * @param {typeof DatabaseSync} Database
  * @param {string} path
@@ -451,7 +460,14 @@ export const main = async argv => {
         `Node ${process.version} lacks StatementSync#setReturnArrays; the wasm Ironhorse worker needs Node ${MIN_NODE_VERSION} or later`,
       );
     }
-    const module = await WebAssembly.compile(readFileSync(MODULE_URL));
+    let module;
+    try {
+      module = await WebAssembly.compile(readFileSync(MODULE_URL));
+    } catch (error) {
+      throw new WorkerFailure(
+        `Node ${process.version} cannot compile the worker module (it needs WebAssembly exception handling with exnref): ${/** @type {Error} */ (error).message}`,
+      );
+    }
 
     // As the native worker decides: a heap is fresh when its file does not
     // exist yet.
@@ -572,15 +588,27 @@ export const main = async argv => {
     } catch {
       // As above.
     }
+    /** Removals that failed, reported on the same line as the failure. */
+    const leftovers = [];
     if (unbooted) {
-      rmSync(unbooted, { force: true });
-      rmSync(`${unbooted}-journal`, { force: true });
+      for (const path of [unbooted, `${unbooted}-journal`]) {
+        try {
+          rmSync(path, { force: true });
+        } catch (removal) {
+          leftovers.push(
+            `; cannot remove the unbooted heap: ${/** @type {Error} */ (removal).message}`,
+          );
+        }
+      }
     }
     const text =
       error instanceof WorkerFailure
         ? error.message
         : `${/** @type {Error} */ (error)?.name ?? 'Error'}: ${/** @type {Error} */ (error)?.message ?? String(error)}`;
-    diagnose(`worker failed: ${text}`);
+    // One line whatever the text holds, as the native worker's Debug form is.
+    diagnose(
+      `worker failed: ${`${text}${leftovers.join('')}`.replace(/\r?\n/g, '\\n')}`,
+    );
     return 1;
   }
 };
@@ -600,5 +628,13 @@ const isMain = () => {
 
 if (isMain()) {
   // Every write was synchronous, so nothing is left buffered at exit.
-  void main(process.argv.slice(2)).then(code => process.exit(code));
+  void main(process.argv.slice(2)).then(
+    code => process.exit(code),
+    error => {
+      // `main` reports its own failures; this is the last resort that keeps
+      // a failing exit to one `worker failed:` line rather than a trace.
+      diagnose(`worker failed: ${String(error?.message ?? error)}`);
+      process.exit(1);
+    },
+  );
 }
