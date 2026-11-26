@@ -7,7 +7,7 @@
  * - the state exists; a warning when it, or the Secrets wrapping key, is
  *   under /tmp or /private/tmp (a reboot or temp cleaner deletes them);
  * - `harness-serve.json`: whether the last stop was clean;
- * - `workspace.json` and `heaps/runtime.json` are present and readable;
+ * - `workspace.json` and `runtime.json` are present and readable;
  * - the worker binary (`THIXOTROPE_IRONHORSE_WORKER`, else the repository's
  *   `target/release` build) and the boot bundles (`@endo/thixotrope`
  *   `dist-ironhorse/`) have the sha256 digests `runtime.json` pins;
@@ -171,11 +171,9 @@ export const preflight = async ({
   if (workspace !== undefined) report('ok', 'workspace.json', 'present');
 
   // The runtime pins: the worker binary and the boot bundles.
-  const runtime = await guarded('heaps/runtime.json', () =>
-    readJson(path.join('heaps', 'runtime.json')),
-  );
+  const runtime = await guarded('runtime.json', () => readJson('runtime.json'));
   if (runtime !== undefined) {
-    report('ok', 'heaps/runtime.json', `format ${runtime.format}`);
+    report('ok', 'runtime.json', `format ${runtime.format}`);
     const workerBinary =
       env.THIXOTROPE_IRONHORSE_WORKER ??
       path.resolve(

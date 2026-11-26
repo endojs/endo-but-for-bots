@@ -64,7 +64,7 @@ const makeState = async t => {
   writeFileSync(path.join(release, 'dist-ironhorse', 'worker-peer.js'), 'peer');
   writeFileSync(path.join(state, 'workspace.json'), '{"version":1}\n');
   writeFileSync(
-    path.join(state, 'heaps', 'runtime.json'),
+    path.join(state, 'runtime.json'),
     JSON.stringify({
       format: 2,
       worker: sha256('worker bytes'),
@@ -131,7 +131,7 @@ test('a well-formed state passes every check and is left unchanged', async t => 
     state: 'ok',
     'harness-serve.json': 'ok',
     'workspace.json': 'ok',
-    'heaps/runtime.json': 'ok',
+    'runtime.json': 'ok',
     'worker digest': 'ok',
     'boot bundles': 'ok',
     bundles: 'ok',

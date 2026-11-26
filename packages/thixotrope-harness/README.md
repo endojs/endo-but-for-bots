@@ -506,7 +506,7 @@ node scripts/preflight.mjs STATE
 `--allow-tmp-state` marks it as a disposable test state; an existing one there is served with a
 warning.
 `preflight.mjs` changes nothing.
-It checks that `workspace.json` and `heaps/runtime.json` are present, that the worker binary and
+It checks that `workspace.json` and `runtime.json` are present, that the worker binary and
 the boot bundles have the digests `runtime.json` pins, that every bundle `installations.json`
 records is in `bundles/`, and that the wrapping key is present and opens every sealed file.
 For the sealed files it prints only `ok` or `fail`.
@@ -539,7 +539,7 @@ absent meanwhile.
 
 - The state is the directory given to `serve.mjs`.
   It holds the heaps, journals and bundles, `workspace.json`, `installations.json`,
-  `heaps/runtime.json`, the session workspaces and the sealed files
+  `runtime.json`, the session workspaces and the sealed files
   `agent-host/secrets.enc`, `agent-host/secrets-audit.log` and `agent-host/gateway/signin.enc`.
   Keep it on a durable disk, never under `/tmp`.
   Its control socket path, `STATE/control.sock`, must stay under about 100 bytes.
@@ -565,7 +565,7 @@ absent meanwhile.
   (`harness-serve.json` then says `clean`), archive the directory, then start it again.
   Never copy a running state.
   A restore needs the state, its key, and the same worker binary and boot bundles
-  (`heaps/runtime.json` pins their digests); `preflight.mjs` checks all three before a start.
+  (`runtime.json` pins their digests); `preflight.mjs` checks all three before a start.
 
 ## Other scripts
 
