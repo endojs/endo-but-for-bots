@@ -30,8 +30,9 @@
  *   {"version":1,"status":"running"|"clean","crankBudget","floor","pid",...}
  * `floor` is the highest budget any crank since the last clean shutdown may
  * have been journaled under. With no record, a state directory that already
- * has `heaps/runtime.json` takes its recorded crank budget as the floor
- * (its shutdown history is unknown).
+ * has `runtime.json` (the Ironhorse manifest, at the state's top level)
+ * takes its recorded crank budget as the floor (its shutdown history is
+ * unknown).
  *
  * - The CLI refuses to start a new state (absent or empty) under /tmp or
  *   /private/tmp, which reboots and temp cleaners empty, unless
@@ -480,9 +481,7 @@ export const crankBudgetFloor = async statePath => {
       reason: `the last run (pid ${record.pid ?? '?'}) under crank budget ${record.crankBudget} did not shut down cleanly`,
     };
   }
-  const runtime = await readJsonMaybe(
-    path.join(statePath, 'heaps', 'runtime.json'),
-  );
+  const runtime = await readJsonMaybe(path.join(statePath, 'runtime.json'));
   const recorded = runtime?.limits?.crankBudget;
   if (recorded !== undefined && /^[0-9]+$/.test(String(recorded)))
     return {

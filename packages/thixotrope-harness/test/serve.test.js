@@ -207,9 +207,15 @@ test('after an unclean shutdown the budget may not go down, only stay or rise', 
 
 test('state run without the wrapper takes runtime.json as the floor', async t => {
   const dir = await scratch(t, 'sv');
+  // The core writes the manifest at STATE/runtime.json (acquireIronhorseRuntime
+  // is given the daemon state); a stray heaps/runtime.json is not it.
   await mkdir(path.join(dir, 'heaps'));
   await writeFile(
     path.join(dir, 'heaps', 'runtime.json'),
+    JSON.stringify({ limits: { crankBudget: '99000000000' } }),
+  );
+  await writeFile(
+    path.join(dir, 'runtime.json'),
     JSON.stringify({ limits: { crankBudget: '10000000' } }),
   );
   await t.throwsAsync(() => checkCrankBudget(dir, 5_000_000n), {
