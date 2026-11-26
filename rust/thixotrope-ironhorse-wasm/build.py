@@ -2,6 +2,7 @@
 """Build the Thixotrope Ironhorse wasm worker module and verify its surface.
 
     python3 rust/thixotrope-ironhorse-wasm/build.py
+    python3 rust/thixotrope-ironhorse-wasm/build.py --stage [DIR]
 
 Builds `thixotrope-ironhorse-wasm` for wasm32-wasip1 under the engine's wasm
 recipe (rust/engine/scripts/build-wasm.py, imported, never copied), locked
@@ -10,11 +11,23 @@ size and sha256, then parses the module's import and export sections and
 fails unless both are exactly the lists below: a new WASI import (a file
 call, a clock read) would otherwise surface only as a runtime error in the
 host, which answers every name it does not provide with ENOSYS.
+
+With `--stage`, it then builds the native launcher
+(`thixotrope-ironhorse-wasm-launcher`, release, locked) and installs the
+engine's four files side by side in DIR (default `target/thixotrope-ironhorse-wasm/`
+under the repository): the launcher `thixotrope-ironhorse-wasm-worker`, the
+Node shell as `thixotrope-ironhorse-wasm-shell.mjs`, `host-abi.mjs` and the
+module. The launcher finds the other three beside itself by those names, so
+pointing `THIXOTROPE_IRONHORSE_WORKER` at the staged launcher selects the
+engine. Each file is written to a temporary name in DIR and renamed over its
+final name, so a worker starting during a stage never reads a partial file.
 """
+import argparse
 import hashlib
 import importlib.util
 import os
 from pathlib import Path
+import shutil
 import shlex
 import subprocess
 import sys
@@ -54,6 +67,15 @@ IMPORTS = {
     ("wasi_snapshot_preview1", "proc_exit"),
 }
 
+# The staged names, which the launcher's PARTS and the runtime's part
+# hashing both rely on.
+LAUNCHER_PACKAGE = "thixotrope-ironhorse-wasm-launcher"
+LAUNCHER = "thixotrope-ironhorse-wasm-worker"
+SHELL = "thixotrope-ironhorse-wasm-shell.mjs"
+HOST_ABI = "host-abi.mjs"
+WASM_SOURCES = ROOT / "packages/thixotrope/src/ironhorse/wasm"
+DEFAULT_STAGE = ROOT / "target/thixotrope-ironhorse-wasm"
+
 KINDS = {0: "func", 1: "table", 2: "memory", 3: "global", 4: "tag"}
 
 
@@ -65,12 +87,14 @@ def recipe():
     return module
 
 
-def module_path():
+def target_dir():
     configured = os.environ.get("CARGO_TARGET_DIR")
     target = Path(configured) if configured else Path("target")
-    if not target.is_absolute():
-        target = ROOT / target
-    return target / TARGET / "release" / MODULE
+    return target if target.is_absolute() else ROOT / target
+
+
+def module_path():
+    return target_dir() / TARGET / "release" / MODULE
 
 
 class Reader:
@@ -159,7 +183,56 @@ def differences(label, found, expected):
     return lines
 
 
+def sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def install(source, directory, name, mode):
+    """Copy `source` to `directory/name` through a temporary file in the
+    same directory, synced before it is renamed over the final name."""
+    final = directory / name
+    temporary = directory / f".{name}.tmp-{os.getpid()}"
+    try:
+        with open(source, "rb") as reader, open(temporary, "wb") as writer:
+            shutil.copyfileobj(reader, writer)
+            writer.flush()
+            os.fsync(writer.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, final)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return final
+
+
+def stage(directory, module):
+    command = ["cargo", "build", "--locked", "--release", "-p", LAUNCHER_PACKAGE]
+    print(shlex.join(command), flush=True)
+    subprocess.run(command, cwd=ROOT, check=True)
+    directory = Path(directory).resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    files = [
+        (target_dir() / "release" / LAUNCHER, LAUNCHER, 0o755),
+        (WASM_SOURCES / "shell.mjs", SHELL, 0o644),
+        (WASM_SOURCES / HOST_ABI, HOST_ABI, 0o644),
+        (module, MODULE, 0o644),
+    ]
+    installed = [install(source, directory, name, mode) for source, name, mode in files]
+    dirfd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(dirfd)
+    finally:
+        os.close(dirfd)
+    print(f"staged {directory}")
+    for path in installed:
+        print(f"  sha256 {sha256(path)}  {path.name}")
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--stage", nargs="?", const=DEFAULT_STAGE, metavar="DIR",
+                        help="also build the launcher and stage the engine in DIR "
+                             "(default: target/thixotrope-ironhorse-wasm)")
+    args = parser.parse_args()
     build = recipe()
     missing = build.missing_components([TARGET])
     if missing:
@@ -186,6 +259,8 @@ def main():
         print(f"  import {module}.{name}")
     for name, kind in sorted(exports):
         print(f"  export {name} ({kind})")
+    if args.stage is not None:
+        stage(args.stage, path)
 
 
 if __name__ == "__main__":
