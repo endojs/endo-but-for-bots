@@ -12,6 +12,22 @@ fails unless both are exactly the lists below: a new WASI import (a file
 call, a clock read) would otherwise surface only as a runtime error in the
 host, which answers every name it does not provide with ENOSYS.
 
+The module's bytes do not depend on where it is built. Its sha256 is part of
+the runtime identity the host pins, so the same source, lockfile and
+toolchain must yield the same module in any checkout, under any CARGO_HOME
+and any rustup sysroot. Paths reach the module through panic locations
+(`file!()`, `#[track_caller]`) and assertion messages, std's among them
+since std is rebuilt from rust-src. So the build sets Cargo's
+`trim-paths = "all"` on the release profile (`-Ztrim-paths`, admitted by
+the recipe's RUSTC_BOOTSTRAP): Cargo remaps the workspace to `.`, registry
+sources to `index.crates.io-<hash>/<crate>-<version>` and the sysroot's
+rust-src, which -Zbuild-std compiles std from, to `/rustc/<commit>`, for
+every crate of the build, std's included. Cargo hands these remappings to
+rustc itself rather than through RUSTFLAGS, so no build-machine path is
+split on spaces or enters a fingerprint. After the build the module is
+searched for the checkout's root, CARGO_HOME and the sysroot, and the build
+fails, naming which, if any of them remains.
+
 With `--stage`, it then builds the native launcher
 (`thixotrope-ironhorse-wasm-launcher`, release, locked) and installs the
 engine's four files side by side in DIR (default `target/thixotrope-ironhorse-wasm/`
@@ -77,6 +93,11 @@ WASM_SOURCES = ROOT / "packages/thixotrope/src/ironhorse/wasm"
 DEFAULT_STAGE = ROOT / "target/thixotrope-ironhorse-wasm"
 
 KINDS = {0: "func", 1: "table", 2: "memory", 3: "global", 4: "tag"}
+
+# Cargo's path trimming, unstable in the pinned toolchain: the flag admits
+# the profile setting, which `--config` sets for this build only, over
+# whatever the environment or a config file says.
+TRIM_PATHS = ["-Ztrim-paths", '--config=profile.release.trim-paths="all"']
 
 
 def recipe():
@@ -174,6 +195,27 @@ def surface(data):
     return imports, exports
 
 
+def build_paths():
+    """This machine's paths that must not reach the module, by name: the
+    checkout's root, CARGO_HOME and the sysroot of the toolchain the build
+    uses, each as given and resolved through symbolic links."""
+    cargo_home = os.environ.get("CARGO_HOME") or os.path.join(os.path.expanduser("~"), ".cargo")
+    sysroot = subprocess.check_output(["rustc", "--print", "sysroot"], cwd=ROOT, text=True).strip()
+    named = []
+    for label, path in (("the checkout's root", ROOT), ("CARGO_HOME", cargo_home),
+                        ("the sysroot", sysroot)):
+        for form in dict.fromkeys((os.path.abspath(path), os.path.realpath(path))):
+            if form != os.sep:
+                named.append((label, form))
+    return named
+
+
+def leaks(data, named):
+    """The named paths that occur in the module followed by a separator, as
+    every path under them would."""
+    return [(label, path) for label, path in named if (path + os.sep).encode() in data]
+
+
 def differences(label, found, expected):
     lines = []
     for item in sorted(found - expected):
@@ -239,7 +281,7 @@ def main():
         raise SystemExit("the pinned toolchain lacks the recipe's components; from rust/engine run:\n  "
                          + "\n  ".join(missing))
     env = build.environment()
-    command = build.build_arguments(TARGET) + ["--locked", "-p", PACKAGE]
+    command = build.build_arguments(TARGET) + TRIM_PATHS + ["--locked", "-p", PACKAGE]
     print("RUSTC_BOOTSTRAP=1 RUSTFLAGS=" + shlex.quote(env["RUSTFLAGS"]) + " "
           + shlex.join(command), flush=True)
     subprocess.run(command, cwd=ROOT, env=env, check=True)
@@ -248,6 +290,14 @@ def main():
     print(path)
     print(f"{len(data)} bytes")
     print(f"sha256 {hashlib.sha256(data).hexdigest()}")
+    leaked = leaks(data, build_paths())
+    if leaked:
+        print("the module carries this machine's paths, so its bytes depend on where "
+              "it was built:", file=sys.stderr)
+        for label, leak in leaked:
+            print(f"  {label}: {leak}", file=sys.stderr)
+        sys.exit(1)
+    print("no build-machine path: the checkout's root, CARGO_HOME and the sysroot are absent")
     imports, exports = surface(data)
     problems = differences("import", imports, IMPORTS) + differences("export", exports, EXPORTS)
     if problems:
