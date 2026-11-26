@@ -707,7 +707,9 @@ test.serial(
 test.serial(
   'install CLI bundles the counter example and lists its application',
   async t => {
-    t.timeout(60_000);
+    // Starting a supervisor, bundling and installing takes about 47 s under
+    // the native engine and 70 s under the wasm engine on four shared cores.
+    t.timeout(120_000);
     const path = await mkdtemp('/tmp/thix-install-cli-');
     t.teardown(() => rm(path, { recursive: true, force: true }));
     const supervisor = await start(t, path);
