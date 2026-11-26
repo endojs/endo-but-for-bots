@@ -454,14 +454,14 @@ impl Interp {
     /// Whether `id` names one of a primitive string's own properties, its
     /// `length` or an index below it: read-only, so a write refuses.
     pub(in crate::interp) fn string_owns_key(&self, base: Slot, id: u16) -> bool {
-        match (base.value, self.scalar_key_text(id)) {
-            (Payload::String(off), Some(name)) => {
-                let length = self.str_content(off).len() / 2;
-                name == "length"
-                    || string_to_index(&name).is_some_and(|index| (index as usize) < length)
-            }
-            _ => false,
-        }
+        let Payload::String(off) = base.value else {
+            return false;
+        };
+        let Some(name) = self.scalar_key_text(id) else {
+            return false;
+        };
+        let length = self.str_content(off).len() / 2;
+        name == "length" || string_to_index(&name).is_some_and(|index| (index as usize) < length)
     }
 
     /// PutValue on a primitive base (ES2024 6.2.5.6): `ToObject(base).[[Set]]`
