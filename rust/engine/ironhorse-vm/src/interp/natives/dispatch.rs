@@ -5447,10 +5447,13 @@ impl Interp {
         Ok(NativeResult::Value(result))
     }
 
-    /// The iterator and generator methods of
-    /// [`Self::call_native_method_inner`], out of line (STACK-DEPTH-REFACTOR.md
-    /// A1): a re-entrant call through one of them carries this family's frame
-    /// and the thin dispatcher's, not the union of every method's.
+    /// The iterator and generator methods [`Self::call_native_method_inner`]
+    /// routes here, out of line (STACK-DEPTH-REFACTOR.md A1): a re-entrant
+    /// call through one of them carries this family's frame and the thin
+    /// dispatcher's, not the union of every method's.
+    /// `%IteratorHelperPrototype%.next` and the async generator methods have
+    /// functions of their own ([`Self::iterator_helper_next`],
+    /// [`Self::native_async_generator_method`]).
     #[inline(never)]
     fn native_method_iterator(
         &mut self,
