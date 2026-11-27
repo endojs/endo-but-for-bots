@@ -37,6 +37,7 @@ import {
 } from '../../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { formatInstant } from './quota-projection.js';
+import { signInTexts } from './SignIn.js';
 
 /** The form's own words (harness texts). */
 export const addMemberTexts = harden({
@@ -220,6 +221,7 @@ const RetireButton = ({ name, disabled, onRetire }) => {
  *   added?: { label: string, member: any },
  *   onDone?: () => void,
  *   call?: (fn: () => Promise<any>) => Promise<any>,
+ *   onSignInAgain?: (account: any) => void,
  * }} props
  */
 export const MemberStatus = ({
@@ -228,6 +230,7 @@ export const MemberStatus = ({
   added,
   onDone = () => {},
   call = fn => fn(),
+  onSignInAgain,
 }) => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -294,6 +297,19 @@ export const MemberStatus = ({
         ...failures.map(text =>
           h('div', { class: 'm4-error', 'data-failure': '' }, text),
         ),
+        failed && onSignInAgain !== undefined && account.provider !== undefined
+          ? h(
+              'button',
+              {
+                type: 'button',
+                class: 'm4-btn primary',
+                'data-action': 'sign-in-again',
+                'aria-label': signInTexts.againNamed(name),
+                onClick: () => onSignInAgain(account),
+              },
+              signInTexts.again,
+            )
+          : null,
         added !== undefined && isNew && first?.state === 'failed'
           ? h(
               'div',

@@ -21,6 +21,8 @@
  */
 import { E } from '@endo/far';
 
+import { subscriptionSignInLabel } from '../../../resources/agent-host/impl/gateway/protocol.js';
+
 /* eslint-disable import/no-relative-packages */
 import { subscriptionTexts } from '../../../guest/lib/subscription-texts.js';
 
@@ -63,6 +65,13 @@ export const REWATCH_LIMIT = 3;
  *   `Accounts.poolMembers`, additions included): only what an
  *   interrupted add leaves (m4-interfaces 10)
  * @property {(member: any) => Promise<void>} retireMember `PoolMember.retire()`
+ * @property {() => any} signInService the gateway's `SubscriptionSignIn`
+ *   (`GatewayPowers.extras` under `subscriptionSignInLabel`), or undefined
+ *   when this gateway offers none
+ * @property {(backend: any, label: string) => Promise<any>} memberOf the
+ *   active `PoolMember` of a pool whose label is `label` (the account
+ *   rows carry labels; the presence is what "sign in again" passes on),
+ *   or undefined
  */
 
 /** At most this many catalogue or member pages are read for the form. */
@@ -356,6 +365,20 @@ const makeFeed = powers => {
     },
     retireMember: async member => {
       await E(member).retire();
+    },
+    signInService: () =>
+      (powers.extras ?? []).find(
+        (/** @type {any} */ extra) => extra.label === subscriptionSignInLabel,
+      )?.service,
+    memberOf: async (backend, label) => {
+      const members = await E(await accounts()).poolMembers(backend);
+      const infos = await Promise.all(
+        members.map((/** @type {any} */ member) => E(member).describe()),
+      );
+      const index = infos.findIndex(
+        info => info.state === 'active' && info.label === label,
+      );
+      return index < 0 ? undefined : members[index];
     },
   });
 };

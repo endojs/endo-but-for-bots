@@ -7,7 +7,10 @@
  * Each pool offers "Add subscription" (`AddMember.js`); an add refreshes
  * that pool, so its list and graphs follow, and the new member shows its
  * first usage read result (`MemberStatus`), as every member shows its last
- * failed usage or model list read.
+ * failed usage or model list read. "Add account" (`SignIn.js`) signs a new
+ * Claude or ChatGPT account in from this page, into a pool (made when the
+ * provider has none); "Sign in again" on a member's row replaces its
+ * credential in place.
  */
 import { h } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
@@ -15,6 +18,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { AddMember, MemberStatus } from './AddMember.js';
 import { accountsFeed } from './feed.js';
 import { PoolQuotaHistory } from './PoolQuotaHistory.js';
+import { AddAccount, SignInAgain } from './SignIn.js';
 
 /** @import { FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
@@ -102,6 +106,11 @@ export const SubscriptionsPanel = ({ context, now = Date.now }) => {
     setAdded(next);
   };
   const { view, error: feedError } = feed ? feed.state() : {};
+  // The member being signed in again ("Sign in again" on its row).
+  /** @type {[{ pool: any, label: string } | undefined, (v: { pool: any, label: string } | undefined) => void]} */
+  const [again, setAgain] = useState(
+    /** @type {{ pool: any, label: string } | undefined} */ (undefined),
+  );
 
   // Keep request state tied to this opening and these connection powers.
   const requestToken = useRef(0);
@@ -179,6 +188,24 @@ export const SubscriptionsPanel = ({ context, now = Date.now }) => {
       text,
     );
 
+  /**
+   * After a sign-in: the pools again (a new pool), then their readings.
+   * @param {any} [backend]
+   */
+  const signedIn = async backend => {
+    if (!feed) return;
+    await context
+      .call(async () => {
+        await feed.registerPools();
+        await feed.refresh(backend);
+      })
+      .catch((/** @type {unknown} */ thrown) => setError(messageOf(thrown)));
+  };
+
+  /** @param {Record<string, any>} pool */
+  const signInAgainOf = pool => (/** @type {any} */ account) =>
+    setAgain({ pool, label: String(account.label) });
+
   /** @param {Record<string, any>} pool */
   const poolView = pool =>
     h(
@@ -223,7 +250,19 @@ export const SubscriptionsPanel = ({ context, now = Date.now }) => {
           added: added.get(pool.backend),
           call: context.call,
           onDone: () => markAdded(pool.backend, undefined),
+          onSignInAgain: signInAgainOf(pool),
         }),
+      feed && again !== undefined && again.pool.backend === pool.backend
+        ? h(SignInAgain, {
+            key: again.label,
+            feed,
+            pool,
+            label: again.label,
+            call: context.call,
+            onChanged: signedIn,
+            onClose: () => setAgain(undefined),
+          })
+        : null,
       pool.members.length === 0
         ? h('p', { class: 'm4-note' }, subscriptionsTexts.noMembers)
         : feed &&
@@ -232,6 +271,7 @@ export const SubscriptionsPanel = ({ context, now = Date.now }) => {
               pool,
               rev: Number(view?.rev ?? 0),
               now,
+              onSignInAgain: signInAgainOf(pool),
             }),
     );
 
@@ -250,6 +290,14 @@ export const SubscriptionsPanel = ({ context, now = Date.now }) => {
         refresh(undefined, true),
       ),
     ),
+    feed && view !== undefined
+      ? h(AddAccount, {
+          feed,
+          pools: view.pools,
+          call: context.call,
+          onChanged: signedIn,
+        })
+      : null,
     view === undefined
       ? h('p', { class: 'm4-note' }, subscriptionsTexts.loading)
       : view.pools.length === 0

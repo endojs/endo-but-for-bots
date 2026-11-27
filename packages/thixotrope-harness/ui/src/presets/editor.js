@@ -221,13 +221,25 @@ export const makePresetEditor = ({ powers }) => {
     const operator = powers.operator;
     catalog = await E(operator).getPresets();
     factory = await E(operator).getFactory();
-    const [configuration, backendObjects, inventory] = await Promise.all([
-      E(catalog).configuration(),
-      E(factory)
-        .listBackends()
-        .catch(() => []),
-      readInventory(E(operator).getInventory()).catch(() => []),
-    ]);
+    const [configuration, factoryBackends, pools, inventory] =
+      await Promise.all([
+        E(catalog).configuration(),
+        E(factory)
+          .listBackends()
+          .catch(() => []),
+        // Subscription pools are Backends too: one signed in from the
+        // Subscriptions panel ("Add account") is chosen here, though the
+        // factory's configured list (set by provisioning) may not name it.
+        E(E(E(operator).getSecrets()).subscriptions())
+          .listPools()
+          .then((/** @type {any} */ page) => page.pools)
+          .catch(() => []),
+        readInventory(E(operator).getInventory()).catch(() => []),
+      ]);
+    const backendObjects = [
+      ...factoryBackends,
+      ...[...pools].filter(pool => !factoryBackends.includes(pool)),
+    ];
     /** @type {PresetEntry[]} */
     const entries = await Promise.all(
       configuration.presets.map(

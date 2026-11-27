@@ -275,27 +275,31 @@
   padding: 0.1rem 0.5rem 0.1rem 0;
   text-align: left;
 }
-.m4-add-member {
+.m4-add-member,
+.m4-add-account {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 0.4rem;
 }
-.m4-add-member.open {
+.m4-add-member.open,
+.m4-add-account.open {
   max-width: 36rem;
   padding: 0.6rem 0.75rem;
   border: 1px solid var(--fl-border);
   border-radius: 0.5rem;
   background: var(--fl-surface);
 }
-.m4-add-member label {
+.m4-add-member label,
+.m4-add-account label {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
   width: 100%;
   font-size: 0.85rem;
 }
-.m4-add-member .m4-input {
+.m4-add-member .m4-input,
+.m4-add-account .m4-input {
   width: 100%;
   box-sizing: border-box;
 }
@@ -340,4 +344,77 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem;
+}
+/* "Add account" and "Sign in again" (SignIn.js). */
+.m4-add-account {
+  margin: 0.4rem 0;
+}
+.m4-add-account h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.m4-sign-in-form,
+.m4-sign-in-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+.m4-sign-in-providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 6px;
+}
+.m4-add-account label.m4-sign-in-choice {
+  flex-direction: row;
+  align-items: center;
+  width: auto;
+  gap: 0.3rem;
+}
+.m4-sign-in-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding-left: 1.3rem;
+  overflow-wrap: anywhere;
+}
+.m4-sign-in-list a.m4-btn {
+  display: inline-block;
+  margin-top: 0.25rem;
+  text-decoration: none;
+}
+.m4-sign-in-list .m4-row-form {
+  margin-top: 0.25rem;
+}
+.m4-sign-in-list .m4-row-form .m4-input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.m4-sign-in-code {
+  margin-top: 0.3rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.4rem;
+  letter-spacing: 0.12em;
+  user-select: all;
+}
+.m4-sign-in-fallback summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.m4-sign-in-fallback {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.m4-sign-in-file {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+}
+.m4-account-head .m4-btn {
+  margin-left: auto;
 }

@@ -10,6 +10,7 @@ import { CreditGraph, reportsNumericCredits } from './CreditGraph.js';
 import { accountBlocked, accountRows } from './labels.js';
 import { PoolOverviewGraph } from './PoolOverviewGraph.js';
 import { QuotaGraph, quotaGraphTexts } from './QuotaGraph.js';
+import { signInTexts } from './SignIn.js';
 
 /** How often an open view advances its clock. */
 const QUOTA_TICK_MS = 30_000;
@@ -74,8 +75,14 @@ const readHistory = async (feed, backend) => {
   return harden({ ...first, members });
 };
 
-/** @param {{ account: any, member: any, nowMs: number, expanded: boolean }} props */
-const IndividualSubscription = ({ account, member, nowMs, expanded }) => {
+/** @param {{ account: any, member: any, nowMs: number, expanded: boolean, onSignInAgain?: (account: any) => void }} props */
+const IndividualSubscription = ({
+  account,
+  member,
+  nowMs,
+  expanded,
+  onSignInAgain,
+}) => {
   const windows = member?.windows ?? [];
   const credits = reportsNumericCredits(account) ? member?.credits : undefined;
   return h(
@@ -90,6 +97,24 @@ const IndividualSubscription = ({ account, member, nowMs, expanded }) => {
       { class: 'm4-account-head' },
       h('span', { class: 'm4-account-label' }, account.label),
       h('span', { class: 'm4-secret-facts' }, account.provider),
+      onSignInAgain === undefined || account.state === 'retired'
+        ? null
+        : h(
+            'button',
+            {
+              type: 'button',
+              class:
+                account.state === 'unusable' ||
+                account.usageFailure?.code === 'REJECTED' ||
+                account.usageFailure?.code === 'CONSUMED'
+                  ? 'm4-btn primary'
+                  : 'm4-btn',
+              'data-action': 'sign-in-again',
+              'aria-label': signInTexts.againNamed(account.label),
+              onClick: () => onSignInAgain(account),
+            },
+            signInTexts.again,
+          ),
     ),
     h(
       'dl',
@@ -115,7 +140,7 @@ const IndividualSubscription = ({ account, member, nowMs, expanded }) => {
 /**
  * The quota history of one pool, asked again when `rev` moves.
  *
- * @param {{ feed: import('./feed.js').AccountsFeed, pool: any, rev: number, now?: () => number, tickMs?: number }} props
+ * @param {{ feed: import('./feed.js').AccountsFeed, pool: any, rev: number, now?: () => number, tickMs?: number, onSignInAgain?: (account: any) => void }} props
  */
 export const PoolQuotaHistory = ({
   feed,
@@ -123,6 +148,7 @@ export const PoolQuotaHistory = ({
   rev,
   now = Date.now,
   tickMs = QUOTA_TICK_MS,
+  onSignInAgain,
 }) => {
   const [state, setState] = useState(
     /** @type {{ history?: any, error?: string }} */ ({}),
@@ -203,6 +229,7 @@ export const PoolQuotaHistory = ({
               member,
               nowMs,
               expanded,
+              ...(onSignInAgain === undefined ? {} : { onSignInAgain }),
             });
           },
         ),
