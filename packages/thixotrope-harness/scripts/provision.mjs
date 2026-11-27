@@ -18,7 +18,11 @@ import './_init.mjs';
 import path from 'node:path';
 import url from 'node:url';
 
-import { makeProvision, sessionEntry } from './provision-steps.js';
+// Loaded after `_init.mjs` has locked down: a static import would be
+// evaluated before `_init.mjs`'s top-level await settles when this file is
+// the entry (sibling modules do not wait for it), and `@endo/far` (through
+// provision-steps.js) needs `assert` and `HandledPromise` from SES.
+const { makeProvision, sessionEntry } = await import('./provision-steps.js');
 
 /** The workspace provisioning uses unless told otherwise (the templates' `w`). */
 export const DEFAULT_WORKSPACE = 'w';

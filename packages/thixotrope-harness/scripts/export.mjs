@@ -59,16 +59,24 @@ import { performance } from 'node:perf_hooks';
 import readline from 'node:readline';
 import url from 'node:url';
 
-import { E, passStyleOf } from '@endo/far';
-
-/* eslint-disable import/no-relative-packages */
-import {
-  assertWorkspaceSeed,
-  workspaceSeedLabel,
-} from '../guest/lib/workspace-seed.js';
-import { limits } from '../guest/lib/limits.js';
-/* eslint-enable import/no-relative-packages */
-import { names } from './provision-steps.js';
+// Everything that needs the locked-down globals is imported after
+// `_init.mjs` has locked down: a static import would be evaluated before
+// `_init.mjs`'s top-level await settles when this file is the entry
+// (sibling modules do not wait for it), and `@endo/eventual-send` needs
+// `assert` and `HandledPromise` from SES.
+const [
+  { E, passStyleOf },
+  { assertWorkspaceSeed, workspaceSeedLabel },
+  { limits },
+  { names },
+] = await Promise.all([
+  import('@endo/far'),
+  // eslint-disable-next-line import/no-relative-packages
+  import('../guest/lib/workspace-seed.js'),
+  // eslint-disable-next-line import/no-relative-packages
+  import('../guest/lib/limits.js'),
+  import('./provision-steps.js'),
+]);
 
 /** Bytes kept free in an import chunk for its keys and envelope. */
 const CHUNK_SLACK = 2048;
