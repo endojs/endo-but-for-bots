@@ -153,6 +153,34 @@ const nameInUsePattern = /already in use/i;
  */
 const limitsPattern =
   /cgroup controller|(?:memory|pids|cpu)\.max|cgroup.*(?:permission denied|read-only file system)/i;
+/**
+ * A mount option the CLI refused: podman's "unknown mount option" and
+ * "invalid mount option", docker's "invalid tmpfs option". The option itself
+ * is told when it is a plain word (it is ours, never a host path).
+ */
+const mountOptionPattern =
+  /(?:unknown|invalid) (?:mount|tmpfs) option(?: "([^"\n]*)")?/i;
+const plainOptionPattern = /^[A-Za-z0-9_.=-]{1,64}$/;
+/**
+ * A diagnostic line that does not fail the call: logrus's text form
+ * (`time="..." level=warning msg="..."`) and its terminal form
+ * (`WARN[0000] ...`). Rootless podman warns, for instance, "Failed to add
+ * pause process to systemd sandbox cgroup: ... permission denied" whenever
+ * it starts a pause process without a user bus; that line must never be
+ * read as the cause of the failure (it matched `limitsPattern`).
+ */
+const diagnosticLinePattern =
+  /^(?:time="[^"]*"\s+)?level=(?:warning|info|debug|trace)\b|^(?:WARN|INFO|DEBU|TRAC)\[\d+\]/;
+
+/**
+ * The CLI's stderr without its diagnostic lines: what failed.
+ * @param {Uint8Array} bytes
+ */
+const errorTextOf = bytes =>
+  textOf(bytes)
+    .split('\n')
+    .filter(line => !diagnosticLinePattern.test(line.trim()))
+    .join('\n');
 const noContainerPattern =
   /no such container|no such object|no container with/i;
 /** `exec` into a container that is gone or stopped (the CLI's own error). */
@@ -295,6 +323,18 @@ export const makeOciRuntime = ({
       ? Math.max(controlTimeoutMs, defaultPodmanStartTimeoutMs)
       : controlTimeoutMs);
   let commands = 0;
+  /**
+   * A project's private scratch: `/tmp/thix`, 1536 MiB, exec, owned by the
+   * container user with mode 0700. Docker hands `uid=`/`gid=` to the kernel's
+   * tmpfs; podman (5.x) validates options itself and refuses them ("unknown
+   * mount option"), taking `U` instead (chown to the container's `--user`).
+   * Docker has no `U` (it passes unknown options on to the kernel), and the
+   * one form both take, a root-owned mode 1777 tmpfs, is not private: so
+   * the flag differs by binary.
+   */
+  const projectScratch = `/tmp/thix:rw,exec,nosuid,nodev,${
+    podman ? 'U' : 'uid=1000,gid=1000'
+  },mode=0700,size=1536m`;
 
   /**
    * The CLI could not be run at all; only the spawn's code is told (its
@@ -336,11 +376,22 @@ export const makeOciRuntime = ({
    * @param {CliResult} result
    */
   const failure = (what, result) => {
-    const stderr = textOf(result.stderr);
+    const stderr = errorTextOf(result.stderr);
     if (unreachablePattern.test(stderr)) {
       return publicError(
         environmentTextOf.runtimeFailed(
           `the ${binary} engine is not reachable`,
+        ),
+      );
+    }
+    const refusedOption = mountOptionPattern.exec(stderr);
+    if (refusedOption) {
+      const option = refusedOption[1];
+      return publicError(
+        environmentTextOf.runtimeFailed(
+          option !== undefined && plainOptionPattern.test(option)
+            ? `the ${binary} engine refused the mount option "${option}"`
+            : `the ${binary} engine refused a mount option`,
         ),
       );
     }
@@ -406,12 +457,7 @@ export const makeOciRuntime = ({
       '/tmp',
       // A nested supervisor needs private Unix sockets and executes a staged
       // worker from its state. Desktop bind mounts cannot chmod a Unix socket.
-      ...(env.project
-        ? [
-            '--tmpfs',
-            '/tmp/thix:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=0700,size=1536m',
-          ]
-        : []),
+      ...(env.project ? ['--tmpfs', projectScratch] : []),
       '--security-opt',
       'no-new-privileges',
       '--network',
@@ -448,7 +494,7 @@ export const makeOciRuntime = ({
       // eslint-disable-next-line no-await-in-loop -- at most two runs, in order
       const result = await control(args, runTimeoutMs);
       if (result.exitCode === 0) return;
-      const stderr = textOf(result.stderr);
+      const stderr = errorTextOf(result.stderr);
       if (imageMissingPattern.test(stderr)) {
         throw publicError(environmentTexts.imageRefused);
       }

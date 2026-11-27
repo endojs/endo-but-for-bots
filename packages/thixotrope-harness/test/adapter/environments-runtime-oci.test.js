@@ -328,10 +328,24 @@ for (const binary of /** @type {const} */ (['podman', 'docker'])) {
 
     const seeded = { ...envOf('e3'), project: true };
     await runtime.start(seeded);
-    t.true(
-      calls()[1].includes(
-        '/tmp/thix:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=0700,size=1536m',
-      ),
+    // Podman 5 refuses `uid=`/`gid=` ("unknown mount option") and chowns
+    // with `U`; docker hands `uid=`/`gid=` to the kernel's tmpfs.
+    const scratch =
+      binary === 'podman'
+        ? '/tmp/thix:rw,exec,nosuid,nodev,U,mode=0700,size=1536m'
+        : '/tmp/thix:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=0700,size=1536m';
+    const projectRun = calls()[1];
+    const tmpfsAt = projectRun.indexOf('/tmp');
+    t.deepEqual(projectRun.slice(tmpfsAt - 1, tmpfsAt + 3), [
+      '--tmpfs',
+      '/tmp',
+      '--tmpfs',
+      scratch,
+    ]);
+    t.deepEqual(
+      [...projectRun.slice(0, tmpfsAt + 1), ...projectRun.slice(tmpfsAt + 3)],
+      expectedRun(binary, seeded),
+      'only the scratch mount is added',
     );
 
     // Configured limits replace the defaults (W-12).
@@ -700,6 +714,56 @@ for (const binary of /** @type {const} */ (['podman', 'docker'])) {
           `the ${binary} engine cannot apply the memory, CPU or process limits (cgroup controllers not delegated)`,
         ),
       });
+    }
+  });
+
+  test(`${binary}: a diagnostic line about the pause process cgroup is not a limits failure`, async t => {
+    const { runtime, envOf, engine } = setUp(t, binary);
+    // Rootless podman prints this whenever it starts a pause process
+    // without a user bus; it used to match the limits pattern.
+    const pauseWarning =
+      'Failed to add pause process to systemd sandbox cgroup: dial unix /run/user/994/bus: connect: permission denied';
+    const cases = [
+      // The refusal that hid behind the warning on Tokyo (podman 5.8.6).
+      [
+        `time="2026-11-27T10:45:49+09:00" level=warning msg="${pauseWarning}"\nError: unknown mount option "uid=1000": invalid mount option\n`,
+        `the ${binary} engine refused the mount option "uid=1000"`,
+      ],
+      [
+        `WARN[0000] ${pauseWarning}\nError: unknown mount option "uid=1000": invalid mount option\n`,
+        `the ${binary} engine refused the mount option "uid=1000"`,
+      ],
+      // Docker's form of the same refusal.
+      [
+        'docker: Error response from daemon: invalid tmpfs option "U"\n',
+        `the ${binary} engine refused the mount option "U"`,
+      ],
+      // An option that is not a plain word is not told.
+      [
+        'Error: unknown mount option "/home/someone/x": invalid mount option\n',
+        `the ${binary} engine refused a mount option`,
+      ],
+      // A warning and an unclassified error: the generic failure.
+      [
+        `time="2026-11-27T10:45:49+09:00" level=warning msg="${pauseWarning}"\nError: something else\n`,
+        `${binary} run failed (exit 125)`,
+      ],
+      // A real limits refusal still says so after a warning.
+      [
+        `WARN[0000] ${pauseWarning}\nError: OCI runtime error: crun: the requested cgroup controller \`pids\` is not available\n`,
+        `the ${binary} engine cannot apply the memory, CPU or process limits (cgroup controllers not delegated)`,
+      ],
+    ];
+    for (const [stderr, reason] of cases) {
+      writeFileSync(
+        join(engine, 'script.json'),
+        JSON.stringify([{ when: ['run'], exitCode: 125, stderr }]),
+      );
+      // eslint-disable-next-line no-await-in-loop -- in order
+      const error = await t.throwsAsync(runtime.start(envOf('e1')), {
+        message: environmentTextOf.runtimeFailed(reason),
+      });
+      t.false(String(error?.message).includes('/run/user'), stderr);
     }
   });
 }
