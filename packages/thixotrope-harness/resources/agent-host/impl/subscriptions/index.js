@@ -736,6 +736,25 @@ export const makeSubscriptions = ({
     }),
     credentialOps,
     accounts,
+    /**
+     * The store accessor of an active member of a pool (its spec's or an
+     * addition), with its provider and label: what the browser's
+     * "sign in again" writes through (`sign-in-service.js`). Refused when
+     * `member` is not an active member of `backend`. Adapter-local: the
+     * accessor never leaves this process.
+     * @param {any} backend
+     * @param {any} member
+     */
+    memberAccess: async (backend, member) => {
+      const { info, provider, state } = await poolFacts(backend);
+      const extras = await withAdditions(backend, info, state);
+      const entry = [...state.members, ...extras.members].find(
+        candidate =>
+          candidate.member === member && candidate.state === 'active',
+      );
+      if (entry === undefined) throw Error('not an active member of this pool');
+      return harden({ provider, label: entry.label, access: accessOf(entry) });
+    },
     /** The adapter-kept pool additions (`pool-additions.js`; tests). */
     additions,
     /**

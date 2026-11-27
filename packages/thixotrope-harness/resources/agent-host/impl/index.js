@@ -42,6 +42,7 @@ import { makeWrappingKey } from './secrets/wrapping-key.js';
 import { makeSecretsOps } from './secrets/manager.js';
 import { makeGatewayService } from './gateway/index.js';
 import { gatewayExtension as speechExtension } from './gateway/extensions/speech.js';
+import { gatewayExtension as signInExtension } from './gateway/extensions/subscription-signin.js';
 // eslint-disable-next-line import/no-relative-packages -- guest/ is its own private package
 import { GATEWAY_KEY } from '../../../guest/lib/interfaces-m3.js';
 import { makeSubscriptions } from './subscriptions/index.js';
@@ -472,6 +473,19 @@ export const makeAgentHostImpl = ({
       {
         extension: speechExtension,
         powers: { readGrant: grant => secrets().readKey(grant) },
+      },
+      // The browser's subscription sign-in: the adapter's Accounts, the
+      // member accessor (sign in again) and the adapter's fetch; tokens
+      // are exchanged and written in this process only (D-6).
+      {
+        extension: signInExtension,
+        powers: {
+          signInPowers: harden({
+            accounts: () => subscriptions.accounts.accounts,
+            memberAccess: subscriptions.memberAccess,
+            ...(fetch === undefined ? {} : { fetch }),
+          }),
+        },
       },
     ],
   });

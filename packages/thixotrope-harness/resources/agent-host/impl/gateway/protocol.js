@@ -70,6 +70,13 @@ export const gatewayLimits = Object.freeze({
  */
 export const secretWriterLabel = 'secretWriter';
 
+/**
+ * The `GatewayPowers.extras` label of the subscription sign-in service
+ * (`GW/extensions/subscription-signin.js`): the Subscriptions panel's
+ * "Add account" and "Sign in again".
+ */
+export const subscriptionSignInLabel = 'subscriptionSignIn';
+
 /** WebSocket close codes the gateway uses (4000-4999: application). */
 export const closeCodes = Object.freeze({
   /** The operator rotated the sign-in secret. */
@@ -298,6 +305,21 @@ export const uiTextOf = Object.freeze({
  *   (`ExtensionPowers`, compared by the extension object's identity;
  *   m11-interfaces.md D-M11-22): reads a key through its `ReadGrant` in
  *   this process. Every other extension's context has no `readGrant`
+ * @property {SignInPowers} [signInPowers] only on the context of the
+ *   subscription sign-in extension (`GW/extensions/subscription-signin.js`,
+ *   listed by object in `extensionPowers` as the speech extension is)
+ */
+
+/**
+ * What the subscription sign-in extension needs of the adapter
+ * (`AH/index.js`): the adapter's `Accounts`, the store accessor of an
+ * active pool member (`AH/subscriptions/index.js` `memberAccess`), and the
+ * adapter's `fetch` (tests: a fake provider's).
+ *
+ * @typedef {object} SignInPowers
+ * @property {() => any} accounts
+ * @property {(pool: any, member: any) => Promise<{ provider: 'claude' | 'codex', label: string, access: any }>} memberAccess
+ * @property {typeof globalThis.fetch} [fetch]
  */
 
 /**
@@ -309,7 +331,7 @@ export const uiTextOf = Object.freeze({
  *
  * @typedef {object} ExtensionPowers
  * @property {GatewayExtension} extension
- * @property {{ readGrant?: (grant: any) => Promise<string> }} powers
+ * @property {{ readGrant?: (grant: any) => Promise<string>, signInPowers?: SignInPowers }} powers
  */
 
 /**

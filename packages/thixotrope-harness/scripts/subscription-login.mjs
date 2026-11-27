@@ -11,16 +11,15 @@
  * socket carry ciphertext only (D-6). Nothing is written to a file and no
  * token or value is printed or logged.
  *
- * - `signIn({ client, secret, provider, ... })`: the provider's
- *   authorization-code flow with PKCE (S256), as claude-sandbox
- *   `subscription-login.js` (1315bef86) does it: the authorization URL is
- *   handed to `prompt`, which answers the pasted `code#state`; the code is
- *   exchanged at the token endpoint (redirects refused, bounded answer) and
- *   the credential is written in the stored form (`credentials.js`), so the
- *   member's first round uses it and its renewal starts from it. Claude's
- *   endpoints and public client id are the reference's defaults; Codex has
- *   no reference sign-in flow, so its `authorizeUrl` and `redirectUri` must
- *   be given.
+ * - `signIn({ client, secret, provider, ... })`: Claude's
+ *   authorization-code flow with PKCE (S256): the authorization URL is
+ *   handed to `prompt`, which answers the pasted `code#state`; ChatGPT's
+ *   device-code flow (as `codex login --device-auth`): the verification
+ *   page and the one-time code are handed to `showDevice`, and the
+ *   sign-in finishes once the person approves. Either way the credential
+ *   is written in the stored form (`credentials.js`). The provider requests
+ *   are `AH/subscriptions/sign-in.js`'s (redirects refused, bounded
+ *   answers, time-boxed), the same the browser's "Add account" uses.
  * - `writeValue({ client, secret, value, expectedGeneration? })`: a UTF-8
  *   value of at most `secretValueBytes` (1,048,576 bytes), sealed and
  *   written. The Secrets panel sends a person here when a value is over
@@ -32,12 +31,10 @@
  * CLI (the Secret is named by label: the CLI boundary, F.2 c):
  *
  *   node scripts/subscription-login.mjs STATE --secret-label LABEL \
- *     (--value-file PATH | --sign-in claude|codex [--authorize-url URL]
- *      [--token-url URL] [--redirect-uri URL]) \
+ *     (--value-file PATH | --sign-in claude|codex) \
  *     [--expected-generation N] [--workspace w]
  */
 import './_init.mjs';
-import { createHash, randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -53,8 +50,7 @@ const [
   { E },
   { limits },
   { sealTo },
-  { codexAccountOf, formatCredential, jwtClaims },
-  { providerEndpoints },
+  signInFlows,
   { names },
   { secretsByLabel },
 ] = await Promise.all([
@@ -62,46 +58,22 @@ const [
   // eslint-disable-next-line import/no-relative-packages -- guest/ is its own private package
   import('../guest/lib/limits.js'),
   import('../resources/agent-host/impl/secrets/seal.js'),
-  import('../resources/agent-host/impl/subscriptions/credentials.js'),
-  import('../resources/agent-host/impl/subscriptions/index.js'),
+  import('../resources/agent-host/impl/subscriptions/sign-in.js'),
   import('./provision-steps.js'),
   import('./provision-steps/40-subscriptions.js'),
 ]);
+const {
+  claudeAuthorization,
+  claudeExchange,
+  codexAwaitApproval,
+  codexRequestCode,
+  parseCodePaste,
+  signInLimits,
+} = signInFlows;
 
-/** Token answers are small JSON; anything larger is refused. */
-const ANSWER_BYTES = 64 * 1024;
-/** The token exchange's time box (the reference's). */
-const EXCHANGE_TIMEOUT_MS = 30_000;
-
-/**
- * The providers' sign-in constants (claude-sandbox `subscription-login.js`,
- * 1315bef86). Codex: the token endpoint and client id of codex-sandbox
- * `subscription-auth.js`; no authorization page in the reference.
- */
-export const signInDefaults = harden({
-  claude: {
-    authorizeUrl: 'https://claude.com/cai/oauth/authorize',
-    tokenUrl: providerEndpoints.claude.tokenUrl,
-    redirectUri: 'https://platform.claude.com/oauth/code/callback',
-    clientId: providerEndpoints.claude.clientId,
-    scopes: harden([
-      'org:create_api_key',
-      'user:profile',
-      'user:inference',
-      'user:sessions:claude_code',
-      'user:mcp_servers',
-      'user:file_upload',
-    ]),
-  },
-  codex: {
-    authorizeUrl: undefined,
-    tokenUrl: providerEndpoints.codex.tokenUrl,
-    redirectUri: undefined,
-    clientId: providerEndpoints.codex.clientId,
-    scopes: harden(['openid', 'profile', 'email', 'offline_access']),
-  },
-});
-
+/** The providers' sign-in constants (`AH/subscriptions/sign-in.js`). */
+export const { signInDefaults } = signInFlows;
+harden(signInDefaults);
 /**
  * The Secrets manager through the control client.
  * @param {any} client
@@ -144,15 +116,22 @@ export const writeValue = async ({
 harden(writeValue);
 
 /**
- * A bounded JSON answer.
- * @param {Response} response
+ * Sleep `ms`, or less when `signal` aborts.
+ * @param {number} ms
+ * @param {AbortSignal} signal
  */
-const boundedJson = async response => {
-  const text = await response.text();
-  if (Buffer.byteLength(text, 'utf8') > ANSWER_BYTES)
-    throw Error('answer too large');
-  return JSON.parse(text);
-};
+const sleepUnless = (ms, signal) =>
+  new Promise(resolve => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        resolve(undefined);
+      },
+      { once: true },
+    );
+  });
 
 /**
  * Sign a member in and write its credential.
@@ -160,13 +139,13 @@ const boundedJson = async response => {
  * @param {any} options.client a control client on the harness workspace
  * @param {any} options.secret the member's `Secret` presence
  * @param {'claude' | 'codex'} options.provider
- * @param {(authorizationUrl: string) => Promise<string>} options.prompt
- *   shows the URL to the operator and answers the pasted `code#state`
- * @param {string} [options.authorizeUrl]
- * @param {string} [options.tokenUrl]
- * @param {string} [options.redirectUri]
- * @param {string} [options.clientId]
- * @param {readonly string[]} [options.scopes]
+ * @param {(authorizationUrl: string) => Promise<string>} [options.prompt]
+ *   Claude: shows the URL to the operator and answers the pasted
+ *   `code#state`
+ * @param {(device: { verificationUrl: string, userCode: string }) => void} [options.showDevice]
+ *   ChatGPT: shows the page to open and the one-time code to enter
+ * @param {typeof signInDefaults.claude} [options.claudeEndpoints] tests
+ * @param {typeof signInDefaults.codex} [options.codexEndpoints] tests
  * @param {number} [options.expectedGeneration]
  * @param {typeof globalThis.fetch} [options.fetch]
  * @param {() => number} [options.now]
@@ -177,107 +156,64 @@ export const signIn = async ({
   secret,
   provider,
   prompt,
-  authorizeUrl,
-  tokenUrl,
-  redirectUri,
-  clientId,
-  scopes,
+  showDevice = () => {},
+  claudeEndpoints = signInDefaults.claude,
+  codexEndpoints = signInDefaults.codex,
   expectedGeneration,
   fetch = globalThis.fetch,
   now = () => Date.now(),
 }) => {
-  const defaults = signInDefaults[provider];
-  if (defaults === undefined) throw Error('Unknown subscription provider');
-  const authorize = authorizeUrl ?? defaults.authorizeUrl;
-  const redirect = redirectUri ?? defaults.redirectUri;
-  if (authorize === undefined || redirect === undefined)
-    throw Error(
-      `A ${provider} sign-in needs --authorize-url and --redirect-uri`,
-    );
-  const oauthClient = clientId ?? defaults.clientId;
-  const scopeList = scopes ?? defaults.scopes;
-  const verifier = randomBytes(32).toString('base64url');
-  const challenge = createHash('sha256').update(verifier).digest('base64url');
-  // An independent OAuth state (M4-FIX): the URL is seen by the browser, its
-  // history and any proxy, so it never carries the PKCE verifier.
-  const state = randomBytes(32).toString('base64url');
-  const page = new URL(authorize);
-  page.search = new URLSearchParams({
-    code: 'true',
-    client_id: oauthClient,
-    response_type: 'code',
-    redirect_uri: redirect,
-    scope: scopeList.join(' '),
-    code_challenge: challenge,
-    code_challenge_method: 'S256',
-    // Checked on the paste; unrelated to the verifier.
-    state,
-  }).toString();
-  const reply = await prompt(page.href);
-  const parts = typeof reply === 'string' ? reply.trim().split('#') : [];
-  if (
-    parts.length !== 2 ||
-    !/^[A-Za-z0-9_-]{1,4096}$/.test(parts[0]) ||
-    parts[1] !== state
-  )
-    throw Error('Invalid authorization code or state; start a new sign-in');
-  /** @type {any} */
-  let token;
-  try {
-    const response = await fetch(tokenUrl ?? defaults.tokenUrl, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'authorization_code',
-        client_id: oauthClient,
-        code: parts[0],
-        state,
-        redirect_uri: redirect,
-        code_verifier: verifier,
-      }),
-      redirect: 'error',
-      credentials: 'omit',
-      signal: AbortSignal.timeout(EXCHANGE_TIMEOUT_MS),
+  /** @type {string} */
+  let value;
+  if (provider === 'claude') {
+    if (prompt === undefined) throw Error('A Claude sign-in needs a prompt');
+    const {
+      url: page,
+      state,
+      verifier,
+    } = claudeAuthorization({
+      endpoints: claudeEndpoints,
     });
-    if (!response.ok) {
-      await response.body?.cancel();
-      throw Error(`HTTP ${response.status}`);
+    const code = parseCodePaste(await prompt(page), state);
+    value = await claudeExchange({
+      code,
+      state,
+      verifier,
+      fetch,
+      now,
+      endpoints: claudeEndpoints,
+    });
+  } else if (provider === 'codex') {
+    const signal = AbortSignal.timeout(signInLimits.pendingMs);
+    const code = await codexRequestCode({
+      fetch,
+      now,
+      signal,
+      endpoints: codexEndpoints,
+    });
+    showDevice(
+      harden({
+        verificationUrl: code.verificationUrl,
+        userCode: code.userCode,
+      }),
+    );
+    try {
+      value = await codexAwaitApproval({
+        code,
+        fetch,
+        now,
+        signal,
+        sleep: sleepUnless,
+        endpoints: codexEndpoints,
+      });
+    } catch (error) {
+      if (signal.aborted)
+        throw Error('The code expired after 15 minutes; start again');
+      throw error;
     }
-    token = await boundedJson(response);
-  } catch {
-    throw Error('Sign-in failed; start a new sign-in');
+  } else {
+    throw Error('Unknown subscription provider');
   }
-  const expiresIn = Number(token?.expires_in);
-  if (
-    typeof token?.access_token !== 'string' ||
-    typeof token?.refresh_token !== 'string' ||
-    !(expiresIn > 0)
-  )
-    throw Error('Sign-in failed: the provider answered no usable tokens');
-  const accountId =
-    provider === 'codex'
-      ? (() => {
-          const claims = jwtClaims(token.access_token);
-          return claims && codexAccountOf(claims);
-        })()
-      : undefined;
-  const value = formatCredential(
-    harden({
-      provider,
-      accessToken: token.access_token,
-      refreshToken: token.refresh_token,
-      expiresAtMs: now() + expiresIn * 1000,
-      ...(accountId === undefined ? {} : { accountId }),
-      ...(provider === 'claude'
-        ? {
-            scopes:
-              typeof token.scope === 'string' && token.scope.trim() !== ''
-                ? token.scope.trim().split(/ +/)
-                : [...scopeList],
-          }
-        : {}),
-    }),
-  );
   return writeValue({
     client,
     secret,
@@ -330,9 +266,6 @@ const parse = argv => {
     '--secret-label',
     '--value-file',
     '--sign-in',
-    '--authorize-url',
-    '--token-url',
-    '--redirect-uri',
     '--expected-generation',
     '--workspace',
   ]);
@@ -394,19 +327,15 @@ const main = async () => {
           client,
           secret,
           provider,
-          ...(options['authorize-url'] === undefined
-            ? {}
-            : { authorizeUrl: options['authorize-url'] }),
-          ...(options['token-url'] === undefined
-            ? {}
-            : { tokenUrl: options['token-url'] }),
-          ...(options['redirect-uri'] === undefined
-            ? {}
-            : { redirectUri: options['redirect-uri'] }),
           ...expected,
           prompt: async page => {
             process.stderr.write(`Open this page and sign in:\n${page}\n`);
             return lines.question('Paste the code shown (code#state): ');
+          },
+          showDevice: ({ verificationUrl, userCode }) => {
+            process.stderr.write(
+              `Open ${verificationUrl} and enter this one-time code (it expires in 15 minutes): ${userCode}\nWaiting for you to approve...\n`,
+            );
           },
         });
       } finally {

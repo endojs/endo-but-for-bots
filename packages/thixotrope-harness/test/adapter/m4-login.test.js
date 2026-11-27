@@ -22,9 +22,11 @@ import {
   findSecret,
   readValueFile,
   signIn,
+  signInDefaults,
   writeValue,
 } from '../../scripts/subscription-login.mjs';
 import { startFakeOAuthServer } from '../fixtures/fake-oauth-server.mjs';
+import { startFakeSignInProvider } from '../fixtures/fake-signin-provider.mjs';
 import { makeStoreDirs, openStore } from './_m4-renewal.js';
 
 const { E, Far } = /** @type {any} */ (globalThis);
@@ -155,8 +157,11 @@ test('signIn: PKCE code exchange at the token endpoint writes a stored-form cred
     client: s.client,
     secret: s.secret,
     provider: 'claude',
-    authorizeUrl: oauth.authorizeUrl,
-    tokenUrl: oauth.tokenUrl,
+    claudeEndpoints: {
+      ...signInDefaults.claude,
+      authorizeUrl: oauth.authorizeUrl,
+      tokenUrl: oauth.tokenUrl,
+    },
     prompt: pasteFromPage(pages),
     fetch: async (url, init) => {
       tokenBodies.push(JSON.parse(String(init?.body)));
@@ -191,7 +196,7 @@ test('signIn: PKCE code exchange at the token endpoint writes a stored-form cred
   );
 });
 
-test('signIn refuses a paste whose state is not this sign-in, and a Codex sign-in without its pages', async t => {
+test('signIn refuses a paste whose state is not this sign-in', async t => {
   const s = await setup(t);
   const oauth = await startFakeOAuthServer();
   t.teardown(oauth.close);
@@ -200,22 +205,39 @@ test('signIn refuses a paste whose state is not this sign-in, and a Codex sign-i
       client: s.client,
       secret: s.secret,
       provider: 'claude',
-      authorizeUrl: oauth.authorizeUrl,
-      tokenUrl: oauth.tokenUrl,
+      claudeEndpoints: {
+        ...signInDefaults.claude,
+        authorizeUrl: oauth.authorizeUrl,
+        tokenUrl: oauth.tokenUrl,
+      },
       prompt: async () => 'somecode#notthestate',
     }),
-    { message: /Invalid authorization code or state/ },
-  );
-  await t.throwsAsync(
-    signIn({
-      client: s.client,
-      secret: s.secret,
-      provider: 'codex',
-      tokenUrl: oauth.tokenUrl,
-      prompt: pasteFromPage(),
-    }),
-    { message: /needs --authorize-url/ },
+    { message: /belongs to another sign-in/ },
   );
   t.is(oauth.requests().filter(r => r.path === '/token').length, 0);
   t.is(s.replaced.length, 0, 'nothing written');
+});
+
+test('signIn codex: the device-code flow shows the page and code, then writes the stored form, sealed', async t => {
+  const s = await setup(t);
+  const provider = await startFakeSignInProvider();
+  t.teardown(provider.close);
+  /** @type {{ verificationUrl: string, userCode: string }[]} */
+  const shown = [];
+  await signIn({
+    client: s.client,
+    secret: s.secret,
+    provider: 'codex',
+    codexEndpoints: provider.codex,
+    showDevice: device => shown.push(device),
+  });
+  t.is(shown.length, 1);
+  t.is(shown[0].verificationUrl, `${provider.base}/codex/device`);
+  const credential = parseCredential((await s.store.read('ka')).value, 'codex');
+  t.is(credential.accountId, 'acct-1');
+  t.is(s.replaced.length, 1);
+  t.false(
+    JSON.stringify(s.replaced).includes(credential.accessToken),
+    'sealed',
+  );
 });
