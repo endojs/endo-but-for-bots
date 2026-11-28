@@ -8,9 +8,16 @@ import test from 'ava';
 // This file stays separate from make-hardener.test.js so the accessor cannot
 // leak into the sibling test workers.
 const immutableBuffers = new WeakSet();
+const getByteLength = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  'byteLength',
+).get;
 // eslint-disable-next-line no-extend-native
 Object.defineProperty(ArrayBuffer.prototype, 'immutable', {
   get() {
+    // Like the genuine accessor, reject a receiver that is not an
+    // ArrayBuffer, such as a SharedArrayBuffer.
+    Reflect.apply(getByteLength, this, []);
     return immutableBuffers.has(this);
   },
   enumerable: false,
@@ -38,4 +45,13 @@ test('immutable-backed TypedArray takes the ordinary freeze path', t => {
   // `freezeTypedArray`. On an engine with genuine immutable ArrayBuffers the
   // elements are non-writable and this same path freezes without throwing.
   t.throws(() => h(a), { instanceOf: TypeError });
+});
+
+test('SharedArrayBuffer-backed TypedArray takes the freezeTypedArray carve-out', t => {
+  const h = makeHardener();
+  const a = new Uint8Array(new SharedArrayBuffer(1));
+  t.is(h(a), a);
+  t.false(Object.isExtensible(a));
+  a[0] = 7;
+  t.is(a[0], 7, 'indexed elements of a shared TypedArray stay writable');
 });

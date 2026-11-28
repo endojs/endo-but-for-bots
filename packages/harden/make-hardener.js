@@ -322,7 +322,13 @@ const isMutableTypedArray = object => {
     return true;
   }
   const buffer = apply(getTypedArrayBuffer, object, []);
-  return apply(getArrayBufferImmutable, buffer, []) !== true;
+  try {
+    return apply(getArrayBufferImmutable, buffer, []) !== true;
+  } catch {
+    // The getter throws for a buffer that is not an ArrayBuffer, which for a
+    // genuine TypedArray means a SharedArrayBuffer. That cannot be immutable.
+    return true;
+  }
 };
 
 /**
